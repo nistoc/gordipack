@@ -1,0 +1,27 @@
+{
+  "_comment": "Гордипак — впрыск времени в контекст агента. Реализует правило `timestamp-in-replies`. Слей эти два ключа в свой ~/.claude/settings.json -> \"hooks\". Команды написаны под PowerShell (shell:'powershell'); на *nix замени на date-эквивалент. Без этого hook агент НЕ видит реального времени и метки в ответах будут выдуманными.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "powershell",
+            "command": "$t = Get-Date -Format 'yyyy-MM-dd HH:mm:ss K'; @{ hookSpecificOutput = @{ hookEventName = 'UserPromptSubmit'; additionalContext = \"CURRENT_LOCAL_TIME=$t. Print this exact time at the START of your reply, and print the current time again at the END when you stop and wait for the user.\" } } | ConvertTo-Json -Compress"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "powershell",
+            "command": "$t = Get-Date -Format 'HH:mm:ss'; @{ hookSpecificOutput = @{ hookEventName = 'PreToolUse'; additionalContext = \"STEP_TIME=$t\" } } | ConvertTo-Json -Compress"
+          }
+        ]
+      }
+    ]
+  }
+}
