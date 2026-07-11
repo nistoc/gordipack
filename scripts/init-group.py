@@ -2,8 +2,8 @@
 init-group.py — Создаёт новую группу агентов (mezosync.db) по шаблону.
 
 Использование:
-    python init-group.py --name "atlas" --path "C:\guts\.atlas\.mezosync" --domain data-platform
-    python init-group.py --name "webapp" --path "C:\projects\app\.mezosync" --domain frontend-spa
+    python init-group.py --name "atlas" --path "C:\\guts\\.atlas\\.mezosync" --domain data-platform
+    python init-group.py --name "webapp" --path "C:\\projects\\app\\.mezosync" --domain frontend-spa
 """
 
 import argparse
