@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Горди — Live Viewer</title>
+    <style>
+        :root {
+            --bg: #1a1a2e;
+            --surface: #16213e;
+            --surface2: #0f3460;
+            --accent: #e94560;
+            --accent2: #533483;
+            --text: #eaeaea;
+            --text-muted: #a0a0b0;
+            --success: #4caf50;
+            --warning: #ff9800;
+            --border: #2a2a4a;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        h1 { color: var(--accent); margin-bottom: 8px; font-size: 1.5rem; }
+        .subtitle { color: var(--text-muted); margin-bottom: 20px; font-size: 0.9rem; }
+
+        .controls {
+            display: flex; gap: 12px; align-items: center;
+            margin-bottom: 20px; flex-wrap: wrap;
+        }
+        .controls input[type="file"] { color: var(--text); }
+        .controls button {
+            background: var(--accent2); color: var(--text); border: none;
+            padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 0.85rem;
+        }
+        .controls button:hover { background: var(--accent); }
+        .controls select {
+            background: var(--surface2); color: var(--text); border: 1px solid var(--border);
+            padding: 6px 12px; border-radius: 6px;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+        @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 16px;
+            overflow: hidden;
+        }
+        .card h2 {
+            font-size: 1rem; color: var(--accent); margin-bottom: 10px;
+            display: flex; align-items: center; gap: 8px;
+        }
+        .card h2 .badge {
+            background: var(--accent2); font-size: 0.7rem; padding: 2px 8px;
+            border-radius: 10px; color: var(--text);
+        }
+
+        .messages-list {
+            max-height: 400px; overflow-y: auto;
+            display: flex; flex-direction: column; gap: 8px;
+        }
+        .msg {
+            background: var(--surface2); border-radius: 8px; padding: 10px;
+            border-left: 3px solid var(--accent2);
+        }
+        .msg.high { border-left-color: var(--warning); }
+        .msg.critical { border-left-color: var(--accent); }
+        .msg-header {
+            display: flex; justify-content: space-between;
+            font-size: 0.75rem; color: var(--text-muted); margin-bottom: 4px;
+        }
+        .msg-role { font-weight: 600; color: var(--success); }
+        .msg-body { font-size: 0.85rem; white-space: pre-wrap; line-height: 1.4; }
+        .msg-tags { margin-top: 4px; }
+        .msg-tags span {
+            background: var(--accent2); font-size: 0.7rem; padding: 1px 6px;
+            border-radius: 4px; margin-right: 4px;
+        }
+
+        .rules-list, .tracks-list, .invariants-list {
+            max-height: 300px; overflow-y: auto;
+        }
+        .rule-item, .track-item, .inv-item {
+            background: var(--surface2); border-radius: 6px; padding: 8px;
+            margin-bottom: 6px; font-size: 0.83rem;
+        }
+        .rule-key { font-weight: 600; color: var(--warning); }
+        .track-status { font-size: 0.7rem; padding: 2px 6px; border-radius: 4px; }
+        .track-status.active { background: var(--success); color: #000; }
+        .track-status.paused { background: var(--warning); color: #000; }
+        .track-status.done { background: var(--text-muted); color: #000; }
+
+        .stats {
+            display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 16px;
+        }
+        .stat {
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: 8px; padding: 12px 20px; text-align: center;
+        }
+        .stat-value { font-size: 1.8rem; font-weight: 700; color: var(--accent); }
+        .stat-label { font-size: 0.75rem; color: var(--text-muted); }
+
+        #status { color: var(--text-muted); font-size: 0.8rem; margin-top: 12px; }
+        .empty { color: var(--text-muted); font-style: italic; padding: 20px; text-align: center; }
+    </style>
+</head>
+<body>
+    <h1>🐉 Горди — Live Viewer</h1>
+    <p class="subtitle">Просмотр состояния mezosync.db группы агентов</p>
+
+    <div class="controls">
+        <input type="file" id="dbFile" accept=".db,.sqlite,.sqlite3">
+        <button onclick="loadDB()">📂 Загрузить</button>
+        <button onclick="refresh()" id="btnRefresh" disabled>🔄 Обновить</button>
+        <select id="filterRole">
+            <option value="">Все роли</option>
+        </select>
+        <select id="filterTag">
+            <option value="">Все теги</option>
+        </select>
+    </div>
+
+    <div class="stats" id="stats"></div>
+
+    <div class="grid">
+        <div class="card" id="messagesCard">
+            <h2>💬 Messages <span class="badge" id="msgCount">0</span></h2>
+            <div class="messages-list" id="messagesList">
+                <div class="empty">Загрузите mezosync.db для просмотра</div>
+            </div>
+        </div>
+        <div class="card">
+            <h2>📋 Rules <span class="badge" id="rulesCount">0</span></h2>
+            <div class="rules-list" id="rulesList"></div>
+        </div>
+        <div class="card">
+            <h2>🎯 Tracks</h2>
+            <div class="tracks-list" id="tracksList"></div>
+        </div>
+        <div class="card">
+            <h2>🛡️ Invariants</h2>
+            <div class="invariants-list" id="invariantsList"></div>
+        </div>
+    </div>
+
+    <p id="status"></p>
+
+    <!-- sql.js (SQLite compiled to WASM) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/sql-wasm.js"></script>
+    <script>
+        let db = null;
+        let SQL = null;
+
+        async function initSQL() {
+            SQL = await initSqlJs({
+                locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/${file}`
+            });
+            document.getElementById('status').textContent = '✅ SQLite WASM загружен. Выберите .db файл.';
+        }
+
+        function loadDB() {
+            const fileInput = document.getElementById('dbFile');
+            const file = fileInput.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function() {
+                const data = new Uint8Array(reader.result);
+                db = new SQL.Database(data);
+                document.getElementById('btnRefresh').disabled = false;
+                refresh();
+                document.getElementById('status').textContent =
+                    `✅ Загружено: ${file.name} (${(file.size/1024).toFixed(1)} KB)`;
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        function query(sql) {
+            try {
+                return db.exec(sql);
+            } catch(e) {
+                console.warn('Query error:', sql, e);
+                return [];
+            }
+        }
+
+        function refresh() {
+            if (!db) return;
+            renderStats();
+            renderMessages();
+            renderRules();
+            renderTracks();
+            renderInvariants();
+            populateFilters();
+        }
+
+        function renderStats() {
+            const msgCount = query("SELECT COUNT(*) FROM messages")[0]?.values[0][0] || 0;
+            const roles = query("SELECT COUNT(DISTINCT writer_role) FROM messages")[0]?.values[0][0] || 0;
+            const tracks = query("SELECT COUNT(*) FROM tracks WHERE status='active'")[0]?.values[0][0] || 0;
+            const groupName = query("SELECT value FROM meta WHERE key='group_name'")[0]?.values[0][0] || '?';
+
+            document.getElementById('stats').innerHTML = `
+                <div class="stat"><div class="stat-value">${groupName}</div><div class="stat-label">Группа</div></div>
+                <div class="stat"><div class="stat-value">${msgCount}</div><div class="stat-label">Сообщений</div></div>
+                <div class="stat"><div class="stat-value">${roles}</div><div class="stat-label">Ролей</div></div>
+                <div class="stat"><div class="stat-value">${tracks}</div><div class="stat-label">Активных треков</div></div>
+            `;
+        }
+
+        function renderMessages() {
+            const roleFilter = document.getElementById('filterRole').value;
+            const tagFilter = document.getElementById('filterTag').value;
+
+            let sql = "SELECT id, writer_role, timestamp, body_md, tags, priority FROM messages";
+            const conditions = [];
+            if (roleFilter) conditions.push(`writer_role = '${roleFilter}'`);
+            if (tagFilter) conditions.push(`tags LIKE '%${tagFilter}%'`);
+            if (conditions.length) sql += " WHERE " + conditions.join(" AND ");
+            sql += " ORDER BY id DESC LIMIT 100";
+
+            const result = query(sql);
+            const list = document.getElementById('messagesList');
+            const count = document.getElementById('msgCount');
+
+            if (!result.length || !result[0].values.length) {
+                list.innerHTML = '<div class="empty">Нет сообщений</div>';
+                count.textContent = '0';
+                return;
+            }
+
+            const rows = result[0].values;
+            count.textContent = rows.length + (rows.length === 100 ? '+' : '');
+            list.innerHTML = rows.map(([id, role, ts, body, tags, priority]) => {
+                const parsedTags = safeParseTags(tags);
+                const tagsHtml = parsedTags.map(t => `<span>${t}</span>`).join('');
+                return `<div class="msg ${priority || ''}">
+                    <div class="msg-header">
+                        <span class="msg-role">${role}</span>
+                        <span>#${id} · ${ts}</span>
+                    </div>
+                    <div class="msg-body">${escapeHtml(body || '')}</div>
+                    ${tagsHtml ? `<div class="msg-tags">${tagsHtml}</div>` : ''}
+                </div>`;
+            }).join('');
+        }
+
+        function renderRules() {
+            const result = query("SELECT rule_key, body, locked_by, version FROM rules ORDER BY rule_key");
+            const list = document.getElementById('rulesList');
+            const count = document.getElementById('rulesCount');
+
+            if (!result.length) { list.innerHTML = '<div class="empty">Нет правил</div>'; return; }
+            const rows = result[0].values;
+            count.textContent = rows.length;
+            list.innerHTML = rows.map(([key, body, locked, ver]) =>
+                `<div class="rule-item">
+                    <span class="rule-key">${key}</span> (v${ver}, 🔒${locked})<br>
+                    ${escapeHtml(body)}
+                </div>`
+            ).join('');
+        }
+
+        function renderTracks() {
+            const result = query("SELECT track_id, title, status FROM tracks ORDER BY status, track_id");
+            const list = document.getElementById('tracksList');
+            if (!result.length) { list.innerHTML = '<div class="empty">Нет треков</div>'; return; }
+            list.innerHTML = result[0].values.map(([id, title, status]) =>
+                `<div class="track-item">
+                    <span class="track-status ${status}">${status}</span> <strong>${id}</strong>: ${escapeHtml(title)}
+                </div>`
+            ).join('');
+        }
+
+        function renderInvariants() {
+            const result = query("SELECT code, description, established_at FROM invariants ORDER BY code");
+            const list = document.getElementById('invariantsList');
+            if (!result.length) { list.innerHTML = '<div class="empty">Нет инвариантов</div>'; return; }
+            list.innerHTML = result[0].values.map(([code, desc, at]) =>
+                `<div class="inv-item"><strong>${code}</strong> (${at})<br>${escapeHtml(desc)}</div>`
+            ).join('');
+        }
+
+        function populateFilters() {
+            const roles = query("SELECT DISTINCT writer_role FROM messages ORDER BY writer_role");
+            const roleSelect = document.getElementById('filterRole');
+            const current = roleSelect.value;
+            roleSelect.innerHTML = '<option value="">Все роли</option>';
+            if (roles.length) {
+                roles[0].values.forEach(([r]) => {
+                    roleSelect.innerHTML += `<option value="${r}" ${r===current?'selected':''}>${r}</option>`;
+                });
+            }
+
+            // Collect all unique tags
+            const tagsResult = query("SELECT DISTINCT tags FROM messages WHERE tags != '[]'");
+            const allTags = new Set();
+            if (tagsResult.length) {
+                tagsResult[0].values.forEach(([t]) => {
+                    safeParseTags(t).forEach(tag => allTags.add(tag));
+                });
+            }
+            const tagSelect = document.getElementById('filterTag');
+            const currentTag = tagSelect.value;
+            tagSelect.innerHTML = '<option value="">Все теги</option>';
+            [...allTags].sort().forEach(tag => {
+                tagSelect.innerHTML += `<option value="${tag}" ${tag===currentTag?'selected':''}>${tag}</option>`;
+            });
+        }
+
+        function safeParseTags(raw) {
+            try { return JSON.parse(raw || '[]'); } catch { return []; }
+        }
+
+        function escapeHtml(text) {
+            return text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        }
+
+        // Filters
+        document.getElementById('filterRole').addEventListener('change', renderMessages);
+        document.getElementById('filterTag').addEventListener('change', renderMessages);
+
+        // Init
+        initSQL();
+    </script>
+</body>
+</html>

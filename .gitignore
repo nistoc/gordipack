@@ -1,3 +1,8 @@
+# Gordi — рабочие БД не версионируются (только schema/*.sql)
+*.db
+*.db-wal
+*.db-shm
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
