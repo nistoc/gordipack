@@ -157,14 +157,14 @@
     <p id="status"></p>
 
     <!-- sql.js (SQLite compiled to WASM) -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/sql-wasm.js"></script>
+    <script src="vendor/sql-wasm.js"></script>
     <script>
         let db = null;
         let SQL = null;
 
         async function initSQL() {
             SQL = await initSqlJs({
-                locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/${file}`
+                locateFile: file => `vendor/${file}`
             });
             document.getElementById('status').textContent = '✅ SQLite WASM загружен. Выберите .db файл.';
         }
