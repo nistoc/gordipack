@@ -179,7 +179,7 @@
                 const data = new Uint8Array(reader.result);
                 db = new SQL.Database(data);
                 document.getElementById('btnRefresh').disabled = false;
-                refresh();
+                render();
                 document.getElementById('status').textContent =
                     `✅ Загружено: ${file.name} (${(file.size/1024).toFixed(1)} KB)`;
             };
@@ -195,7 +195,8 @@
             }
         }
 
-        function refresh() {
+        // Полный перерендер из уже загруженного in-memory снимка.
+        function render() {
             if (!db) return;
             renderStats();
             renderMessages();
@@ -203,6 +204,23 @@
             renderTracks();
             renderInvariants();
             populateFilters();
+        }
+
+        // «Обновить» = ПЕРЕЧИТАТЬ файл с диска (File-объект держит живую ссылку),
+        // иначе видно только снимок на момент загрузки. Если файл не выбран — просто перерендер.
+        function refresh() {
+            const fileInput = document.getElementById('dbFile');
+            const file = fileInput.files[0];
+            if (!file) { render(); return; }
+            const reader = new FileReader();
+            reader.onload = function() {
+                db = new SQL.Database(new Uint8Array(reader.result));
+                render();
+                const t = new Date().toLocaleTimeString();
+                document.getElementById('status').textContent =
+                    `✅ Обновлено ${t}: ${file.name} (${(file.size/1024).toFixed(1)} KB)`;
+            };
+            reader.readAsArrayBuffer(file);
         }
 
         function renderStats() {
