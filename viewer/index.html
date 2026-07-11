@@ -156,23 +156,45 @@
 
     <p id="status"></p>
 
-    <!-- sql.js (SQLite compiled to WASM) -->
+    <!-- sql.js (SQLite compiled to WASM) + встроенный .wasm (base64) для работы под file:// -->
     <script src="vendor/sql-wasm.js"></script>
+    <script src="vendor/sql-wasm-b64.js"></script>
     <script>
         let db = null;
         let SQL = null;
 
+        function b64ToBytes(b64) {
+            const bin = atob(b64);
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            return bytes;
+        }
+
         async function initSQL() {
-            SQL = await initSqlJs({
-                locateFile: file => `vendor/${file}`
-            });
-            document.getElementById('status').textContent = '✅ SQLite WASM загружен. Выберите .db файл.';
+            const status = document.getElementById('status');
+            try {
+                // .wasm встроен как base64 (vendor/sql-wasm-b64.js) → передаём как wasmBinary,
+                // чтобы НЕ было fetch('.wasm') — под file:// браузер его блокирует.
+                const opts = {};
+                if (window.SQL_WASM_B64) {
+                    opts.wasmBinary = b64ToBytes(window.SQL_WASM_B64);
+                } else {
+                    opts.locateFile = file => `vendor/${file}`; // fallback: если открыто по http
+                }
+                SQL = await initSqlJs(opts);
+                status.textContent = '✅ SQLite WASM загружен. Выберите .db файл.';
+            } catch (e) {
+                status.textContent = '⛔ Ошибка загрузки SQLite WASM: ' + e.message;
+                console.error('initSQL failed:', e);
+            }
         }
 
         function loadDB() {
+            const status = document.getElementById('status');
+            if (!SQL) { status.textContent = '⛔ SQLite WASM ещё не готов (см. ошибку выше). Обнови страницу.'; return; }
             const fileInput = document.getElementById('dbFile');
             const file = fileInput.files[0];
-            if (!file) return;
+            if (!file) { status.textContent = '⚠️ Сначала выбери файл mezosync.db (Choose file).'; return; }
 
             const reader = new FileReader();
             reader.onload = function() {
