@@ -1,4 +1,4 @@
-"""
+r"""
 export-markdown.py — Экспорт содержимого mezosync.db в читаемый Markdown.
 
 Для владельца: быстрый обзор без SQLite-клиента.
