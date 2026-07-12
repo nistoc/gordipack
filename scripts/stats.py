@@ -12,10 +12,22 @@ stats.py — снимок статистики mezosync.db для COORD (пер�
 """
 
 import argparse
+import datetime
 import json
 import sqlite3
 import sys
 from pathlib import Path
+
+
+def utc_to_local(s):
+    """SQLite хранит datetime('now') в UTC; человеку показываем локальное (DST-safe, из системной tz)."""
+    if not s:
+        return "—"
+    try:
+        dt = datetime.datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
+        return dt.replace(tzinfo=datetime.timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    except (ValueError, TypeError):
+        return s
 
 
 def main():
@@ -124,8 +136,8 @@ def _print_human(s, since_min):
     mark = "⚠️" if d["open"] else "✅"
     print(f"   Ошибки DWERR: {mark} open={d['open']} / total={d['total']}")
     print()
-    print(f"   {'Роль':<8} {'Сообщ':>6} {'Отставание':>11}  Последняя нота")
-    print("   " + "-" * 52)
+    print(f"   {'Роль':<8} {'Сообщ':>6} {'Отставание':>11}  Последняя нота (локальное)")
+    print("   " + "-" * 56)
     # writer_role бывает в верхнем регистре, reader_role — в нижнем; сливаем по UPPER.
     per_role = {k.upper(): v for k, v in s["per_role"].items()}
     cursors = {k.upper(): v for k, v in s["cursors"].items()}
@@ -133,9 +145,10 @@ def _print_human(s, since_min):
         pr = per_role.get(r, {})
         cur = cursors.get(r, {})
         msgs = pr.get("messages", 0)
-        last = pr.get("last") or "—"
+        last = utc_to_local(pr.get("last"))
         behind = cur.get("behind", "—")
         print(f"   {r:<8} {msgs:>6} {str(behind):>11}  {last}")
+    print("   (метки БД хранятся в UTC; показаны в локальном времени)")
 
 
 if __name__ == "__main__":

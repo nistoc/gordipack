@@ -8,10 +8,22 @@ check-errors.py — COORD: быстрый сбор ошибок двойной �
 """
 
 import argparse
+import datetime
 import json
 import sqlite3
 import sys
 from pathlib import Path
+
+
+def utc_to_local(s):
+    """Метки БД в UTC → показываем локальное (DST-safe)."""
+    if not s:
+        return "—"
+    try:
+        dt = datetime.datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
+        return dt.replace(tzinfo=datetime.timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    except (ValueError, TypeError):
+        return s
 
 
 def main():
@@ -69,7 +81,7 @@ def _show_open(conn):
         tags_list = json.loads(tags) if tags else []
         tags_str = " ".join(f"[{t}]" for t in tags_list)
         prio_mark = "" if priority == "normal" else f" ⚠️{priority}"
-        print(f"  #{msg_id} [{writer}] {ts}{prio_mark} {tags_str}")
+        print(f"  #{msg_id} [{writer}] {utc_to_local(ts)}{prio_mark} {tags_str}")
         print(f"    {body[:200]}")
         print()
 
