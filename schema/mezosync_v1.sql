@@ -116,6 +116,17 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 
 ----------------------------------------------------------------------
+-- BROADCAST-ACK (общий канал: кто подтвердил объявление-CTA)
+-- Broadcast = сообщение с тегом "ALL" в messages; CTA — ещё и тег "CTA".
+----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS broadcast_acks (
+    message_id  INTEGER NOT NULL,
+    role        TEXT NOT NULL,
+    acked_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (message_id, role)
+);
+
+----------------------------------------------------------------------
 -- META (версия схемы, имя группы)
 ----------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS meta (
