@@ -116,6 +116,58 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 
 ----------------------------------------------------------------------
+-- BACKLOG (durable per-role задачи; переживают ребёрс агента)
+-- role = роль-владелец ('CORE'…) или 'SHARED' для общих задач.
+----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS backlog (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    role           TEXT NOT NULL,
+    title          TEXT NOT NULL,
+    body_md        TEXT DEFAULT '',                 -- rich markdown
+    status         TEXT NOT NULL DEFAULT 'open',    -- open|in_progress|blocked|in_review|done|dropped
+    priority       TEXT NOT NULL DEFAULT 'normal',  -- low|normal|high|critical
+    tags           TEXT DEFAULT '[]',               -- JSON array
+    parent_id      INTEGER,                         -- подзадача/эпик
+    parent_track   TEXT,                            -- tracks.track_id
+    rank           INTEGER,                         -- ручной порядок
+    blocked_reason TEXT,
+    created_by     TEXT NOT NULL DEFAULT 'coord',
+    created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_backlog_role ON backlog(role);
+CREATE INDEX IF NOT EXISTS idx_backlog_status ON backlog(status);
+
+-- История задачи (append-only) — трейл переживает любой перезапуск
+CREATE TABLE IF NOT EXISTS backlog_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    backlog_id  INTEGER NOT NULL,
+    at          TEXT NOT NULL DEFAULT (datetime('now')),   -- UTC
+    actor_role  TEXT NOT NULL,
+    event_type  TEXT NOT NULL,   -- created|status_change|comment|edited|test_added|test_result
+    from_status TEXT,
+    to_status   TEXT,
+    body_md     TEXT DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_backlog_events_bid ON backlog_events(backlog_id);
+
+-- Приёмочные тесты задачи (4 метода: agent|script|code|user_ui)
+CREATE TABLE IF NOT EXISTS backlog_tests (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    backlog_id     INTEGER NOT NULL,
+    title          TEXT NOT NULL,
+    method         TEXT NOT NULL,   -- agent|script|code|user_ui
+    spec_md        TEXT DEFAULT '',
+    command        TEXT,            -- для script|code
+    expected       TEXT,
+    status         TEXT NOT NULL DEFAULT 'pending',  -- pending|passing|failing|skipped
+    last_run_at    TEXT,
+    last_result_md TEXT,
+    created_by     TEXT NOT NULL DEFAULT 'coord'
+);
+CREATE INDEX IF NOT EXISTS idx_backlog_tests_bid ON backlog_tests(backlog_id);
+
+----------------------------------------------------------------------
 -- BROADCAST-ACK (общий канал: кто подтвердил объявление-CTA)
 -- Broadcast = сообщение с тегом "ALL" в messages; CTA — ещё и тег "CTA".
 ----------------------------------------------------------------------
