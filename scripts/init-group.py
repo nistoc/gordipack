@@ -13,7 +13,7 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).parent
 REPO_ROOT = SCRIPT_DIR.parent
-SCHEMA_FILE = REPO_ROOT / "schema" / "mezosync_v1.sql"
+SCHEMA_FILE = REPO_ROOT / "schema" / "mezosync_v2.sql"  # v2 (Фаза 4): +messages_history/messages_all/role_status/read_batches/stats_log, phoenix 7 секций
 UNIVERSAL_RULES = REPO_ROOT / "rules" / "universal.sql"
 DOMAIN_RULES_DIR = REPO_ROOT / "rules" / "domain-specific"
 
@@ -46,7 +46,7 @@ def main():
     # 1. Схема
     schema_sql = SCHEMA_FILE.read_text(encoding="utf-8")
     conn.executescript(schema_sql)
-    print("  ✅ Схема v1 применена")
+    print("  ✅ Схема v2 применена")
 
     # 2. Имя группы
     conn.execute("UPDATE meta SET value = ? WHERE key = 'group_name'", (args.name,))

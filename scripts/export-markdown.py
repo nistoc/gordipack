@@ -12,7 +12,7 @@ import argparse
 import json
 import sqlite3
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 def main():
@@ -22,14 +22,19 @@ def main():
     parser.add_argument("--last", type=int, default=100, help="Сколько последних сообщений")
     args = parser.parse_args()
 
-    conn = sqlite3.connect(args.db)
+    try:  # mode=rw: connect НЕ создаёт пустую БД-фантом при опечатке пути (П1 16.07)
+        conn = sqlite3.connect(f"file:{args.db}?mode=rw", uri=True)
+    except sqlite3.OperationalError:
+        raise SystemExit(f"ERR: БД не найдена: {args.db}")
     lines = []
 
     # Header
     group = conn.execute("SELECT value FROM meta WHERE key='group_name'").fetchone()
     group_name = group[0] if group else "?"
     lines.append(f"# 🐉 Горди — дамп группы «{group_name}»")
-    lines.append(f"> Экспорт: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
+    # UTC, явным суффиксом — правило timestamp-utc-in-sqlite v2 (владелец 2026-07-16):
+    # контур живёт в ОДНОЙ шкале. Метка без зоны неотличима от локальной.
+    lines.append(f"> Экспорт: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')} UTC\n")
 
     # Rules
     lines.append("## 📋 Правила\n")

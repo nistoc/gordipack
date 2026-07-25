@@ -16,15 +16,12 @@ from pathlib import Path
 
 
 def utc_to_local(s):
-    """Метки БД в UTC → показываем локальное (DST-safe)."""
-    if not s:
-        return "—"
-    try:
-        dt = datetime.datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
-        return dt.replace(tzinfo=datetime.timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S")
-    except (ValueError, TypeError):
-        return s
-
+    """UTC → UTC. Оставлено имя ради совместимости вызовов; конвертации БОЛЬШЕ НЕТ.
+    Правило timestamp-utc-in-sqlite v2 (владелец 2026-07-16): контур живёт в ОДНОЙ
+    шкале — UTC. Две шкалы брали налог вниманием и породили фантом «синк умер 2 часа
+    назад» (разница ровно 2ч была ЗОНОЙ, не лагом). Конвертация, которой нет, не может
+    быть забыта. Суффикс UTC печатаем явно: метка без зоны неотличима от локальной."""
+    return f"{s} UTC" if s else "—"
 
 def main():
     parser = argparse.ArgumentParser(description="Сбор и разрешение ошибок двойной записи")

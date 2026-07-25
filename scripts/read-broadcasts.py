@@ -24,13 +24,11 @@ from pathlib import Path
 
 
 def utc_to_local(s):
-    if not s:
-        return "—"
-    try:
-        dt = datetime.datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
-        return dt.replace(tzinfo=datetime.timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
-    except (ValueError, TypeError):
-        return s
+    """UTC → UTC. Имя оставлено ради совместимости вызовов; конвертации БОЛЬШЕ НЕТ.
+    Правило timestamp-utc-in-sqlite v2 (владелец 2026-07-16 12:12 UTC): одна шкала — UTC.
+    Суффикс UTC обязателен: метка без зоны неотличима от локальной.
+    Этот файл гард пропустил вместе со stats.py — подробности в stats.py:utc_to_local."""
+    return f"{s[:16]} UTC" if s else "—"
 
 
 def ensure_acks_table(conn):
@@ -95,7 +93,8 @@ def main():
 
 def _inbox(conn, role, show_all):
     rows = conn.execute(
-        "SELECT id, writer_role, timestamp, body_md, tags, priority FROM messages ORDER BY id ASC"
+        "SELECT id, writer_role, timestamp, body_md, tags, priority FROM messages "
+        "ORDER BY timestamp ASC, id ASC"
     ).fetchall()
     acked = {r[0] for r in conn.execute(
         "SELECT message_id FROM broadcast_acks WHERE role = ?", (role,))}
@@ -146,7 +145,8 @@ def _status(conn):
     # известные роли группы — из курсоров чтения (нормализуем к UPPER)
     roles = {r[0].upper() for r in conn.execute("SELECT reader_role FROM read_cursors")}
     ctas = [(mid, w, ts) for mid, w, ts, tags in conn.execute(
-        "SELECT id, writer_role, timestamp, tags FROM messages ORDER BY id ASC") if is_cta(tags)]
+        "SELECT id, writer_role, timestamp, tags FROM messages "
+        "ORDER BY timestamp ASC, id ASC") if is_cta(tags)]
 
     if not ctas:
         print("✅ Нет CTA-broadcast'ов.")

@@ -20,14 +20,23 @@ from pathlib import Path
 
 
 def utc_to_local(s):
-    """SQLite хранит datetime('now') в UTC; человеку показываем локальное (DST-safe, из системной tz)."""
-    if not s:
-        return "—"
-    try:
-        dt = datetime.datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
-        return dt.replace(tzinfo=datetime.timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S")
-    except (ValueError, TypeError):
-        return s
+    """UTC → UTC. Имя оставлено ради совместимости вызовов; конвертации БОЛЬШЕ НЕТ.
+
+    Правило timestamp-utc-in-sqlite v2 (владелец 2026-07-16 12:12 UTC): контур живёт в
+    ОДНОЙ шкале — UTC. Суффикс UTC печатаем явно: метка без зоны неотличима от локальной.
+
+    NB ДЛЯ ПРЕЕМНИКА — ЭТУ ФУНКЦИЮ ГАРД ПРОПУСТИЛ, и вот почему (обе ошибки мои, COORD):
+    ① искал места конвертации грепом с `head -12` — вывод обрезался, stats.py по алфавиту
+       шёл после read-*, и в список правки НЕ ПОПАЛ. Прямое нарушение собственного же
+       инварианта VERIFY-AT-SOURCE: «грепнул — читай ВСЕ попадания, не первое».
+    ② гард отсеивал ложняки через `grep -v "timezone.utc"` — а прежняя строка содержала
+       И astimezone(), И timezone.utc (в dt.replace(tzinfo=...)). Фильтр выбросил ровно
+       ту строку, которую гард искал ⇒ ГАРД, КОТОРЫЙ НЕ МОЖЕТ СРАБОТАТЬ (класс STUD).
+    Итог: гард отрапортовал «чисто», а локальное время жило дальше и всплыло только
+    потому, что человек ГЛАЗАМИ увидел 14:18 при стенных 12:33. Исключающий фильтр в
+    гарде опаснее отсутствия гарда: он даёт ложное спокойствие.
+    """
+    return f"{s} UTC" if s else "—"
 
 
 def main():
@@ -99,7 +108,20 @@ def collect(conn, since_min):
     cursors = {}
     try:
         max_id = _q1(conn, "SELECT MAX(id) FROM messages") or 0
-        for role, lr in conn.execute("SELECT reader_role, last_read_id FROM read_cursors ORDER BY reader_role"):
+        # В read_cursors живут ДУБЛИ ПО РЕГИСТРУ: живые 'COORD'/'ING'… и мёртвые
+        # 'coord'/'ing'… (last_read_id=0, реликт инициализации 2026-07-11 20:59).
+        # SQLite сортирует BINARY ⇒ uppercase раньше lowercase ('C'=67 < 'c'=99), и при
+        # слиянии через {k.upper(): v} мёртвый ноль ПЕРЕЗАТИРАЛ живой курсор ⇒ у всех
+        # behind = max_id − 0. Метрика, по которой решают о продвижении фазы, показывала
+        # ОБРАТНОЕ истине: скрывала и тех, кто уже перешёл, и тех, кто отстал.
+        # Нашёл ING (#2029) живым фактом: догнал курсор до 0 — метрика не заметила.
+        # ЛЕЧИМ КОРЕНЬ, А НЕ ДАННЫЕ (его же довод): удалить дубли — дисциплина, они
+        # вернутся при следующей инициализации и метрика снова тихо соврёт. Агрегируем
+        # в SQL по регистр-независимому ключу и берём МАКСИМУМ: ноль-дубль проигрывает
+        # живому курсору, а не затирает его.
+        for role, lr in conn.execute(
+                "SELECT UPPER(reader_role), MAX(last_read_id) FROM read_cursors "
+                "GROUP BY UPPER(reader_role) ORDER BY 1"):
             cursors[role] = {"read": lr, "behind": max_id - lr}
     except sqlite3.OperationalError:
         pass
