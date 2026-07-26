@@ -95,12 +95,37 @@ def fetch_unread(conn, role: str, all_msgs: bool = False):
 # ─────────────────────────────────────────────────────────────────────────────
 # index — R1 + R2: знать, что произошло, в пределах байтового бюджета
 # ─────────────────────────────────────────────────────────────────────────────
+def open_batch(conn, role):
+    """R16: непогашенный батч роли, если он есть.
+
+    ЗАЧЕМ (полевой факт opssre #2670): роль собрала ack одной командой, где хвост брался
+    подстановкой `$(read-messages … | tail -1)`. Подстановка САМА вызвала ридер — тот выдал
+    НОВЫЙ батч с НОВЫМ токеном и погасил прежний; ack отклонён. Контракт запрещает конвейер
+    вывода, но не запрещает вызвать ридер внутри команды ack — «тот же конвейер, только
+    незаметный». Механизм, поставленный против невнимательности, поймал внимательного.
+
+    Лечение — не очередной запрет, а свойство: пока батч не подтверждён, ридер ВОЗВРАЩАЕТ
+    ТОТ ЖЕ батч и ТОТ ЖЕ токен. Повторный вызов перестаёт быть разрушительным действием.
+    Побочно закрывает и половину F15 (STUD #2664): окно между «прочитал» и «подтвердил»
+    больше не теряет батч при обрыве сессии — он ждёт на месте и виден.
+    """
+    return conn.execute(
+        "SELECT token, last_id FROM read_batches WHERE role = ? "
+        "ORDER BY issued_at DESC, rowid DESC LIMIT 1", (role,)).fetchone()
+
+
 def cmd_index(conn, role, budget_kb, ack_conn=None):
     roles = known_roles(conn)
     last, rows = fetch_unread(conn, role)
     if not rows:
         print(f"[{role}] непрочитанного нет (cursor={last})")
         return
+
+    # R16: если батч уже выдан и не подтверждён — воспроизводим ЕГО, а не режем новый.
+    reissue = open_batch(conn, role)
+    if reissue:
+        prev_token, prev_last = reissue
+        rows = [r for r in rows if r[0] <= prev_last] or rows
 
     budget = budget_kb * 1024
     lines, spent, shown = [], 0, 0
@@ -124,14 +149,20 @@ def cmd_index(conn, role, budget_kb, ack_conn=None):
     batch_max = rows[shown - 1][0]
     mine = sum(1 for r in rows[:shown] if role in addressees(r[3], roles)[0])
 
-    half1, half2 = secrets.token_hex(3), secrets.token_hex(3)
-    if ack_conn is not None:
-        ack_conn.execute("INSERT INTO read_batches (token, role, last_id) VALUES (?,?,?)",
-                         (f"{half1}-{half2}", role, batch_max))
-        ack_conn.commit()
+    if reissue:
+        # Тот же токен, тот же диапазон: повторный вызов ничего не разрушает (R16).
+        half1, half2 = prev_token.split("-", 1)
+        batch_max = prev_last
+    else:
+        half1, half2 = secrets.token_hex(3), secrets.token_hex(3)
+        if ack_conn is not None:
+            ack_conn.execute("INSERT INTO read_batches (token, role, last_id) VALUES (?,?,?)",
+                             (f"{half1}-{half2}", role, batch_max))
+            ack_conn.commit()
 
     print(f"[индекс] {shown} нот из {len(rows)} непрочитанных, #{rows[0][0]}…#{batch_max} "
           f"(cursor={last}). Тебе адресовано в этом окне: {mine}. "
+          f"{'⟳ ПОВТОРНАЯ выдача того же неподтверждённого батча (R16). ' if reissue else ''}"
           f"Токен разрезан: ПЕРВАЯ половина {half1}, вторая — в ПОСЛЕДНЕЙ строке.")
     print(f"         бюджет {budget_kb} КБ · занято {spent/1024:.1f} КБ · "
           f"тела НЕ развёрнуты (это индекс, не лента)\n")

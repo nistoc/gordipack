@@ -10,32 +10,37 @@ bootstrap.py — поднять ПЕСОЧНИЦУ для прототипиро
 при активных писателях даёт РВАНЫЙ снимок (часть транзакций осталась в WAL). backup API
 берёт согласованный снимок под своей блокировкой чтения и не пишет в источник.
 
+v2 (2026-07-26): песочница воспроизводит СТРУКТУРУ живого контейнера —
+    <sandbox>/mezosync.db  +  <sandbox>/scripts/*.py
+Это не косметика: этап Э-Ж (устойчивость инструментов) проверяет поиск БД ОТ РАСПОЛОЖЕНИЯ
+СКРИПТА. На плоской копии такой укус нечестен — он прошёл бы по случайности.
+
 Использование:
-    python bootstrap.py                      # снять свежую песочницу (перезаписать)
-    python bootstrap.py --dest <путь.db>     # своя цель
-    python bootstrap.py --verify             # только проверить существующую песочницу
+    python bootstrap.py                 # снять свежую песочницу (БД + копии скриптов)
+    python bootstrap.py --verify        # только сверить существующую
+    python bootstrap.py --no-scripts    # только БД
 """
 import argparse
+import shutil
 import sqlite3
 import sys
 import os
 from pathlib import Path
 
-LIVE_DB = Path(r"C:\guts\.atlas\.mezosync\mezosync.db")
+LIVE_MEZO = Path(r"C:\guts\.atlas\.mezosync")
+LIVE_DB = LIVE_MEZO / "mezosync.db"
 # Песочница живёт ВНЕ контейнера C:\guts\.atlas НАРОЧНО: гард ⑤ («фантомные .db»)
-# рекурсивно сканирует весь контейнер. Полная копия его не краснит (он судит по
-# признаку «ноль таблиц»), но ПРОМЕЖУТОЧНАЯ пустая БД — закраснила бы, и уже у ВСЕХ
-# ролей сразу. Прототип не имеет права шуметь в чужих гардах.
-DEFAULT_DEST = Path(os.environ.get("MEZOSYNC_SANDBOX", "")) if os.environ.get("MEZOSYNC_SANDBOX") else \
-    Path.home() / ".mezosync-sandbox" / "mezosync_vnext.db"
+# рекурсивно сканирует весь контейнер. Полная копия его не краснит (он судит по признаку
+# «ноль таблиц»), но ПРОМЕЖУТОЧНАЯ пустая БД — закраснила бы, и уже у ВСЕХ ролей сразу.
+# Прототип не имеет права шуметь в чужих гардах.
+DEFAULT_ROOT = Path(os.environ.get("MEZOSYNC_SANDBOX") or (Path.home() / ".mezosync-sandbox"))
 
 
 def snapshot(live: Path, dest: Path) -> None:
     if not live.exists():
         sys.exit(f"ERR: живая БД не найдена: {live}")
     dest.parent.mkdir(parents=True, exist_ok=True)
-    # mode=ro — источник физически не может быть изменён этим процессом.
-    src = sqlite3.connect(f"file:{live}?mode=ro", uri=True, timeout=10)
+    src = sqlite3.connect(f"file:{live}?mode=ro", uri=True, timeout=10)   # источник неизменяем
     if dest.exists():
         dest.unlink()
     dst = sqlite3.connect(str(dest))
@@ -45,7 +50,18 @@ def snapshot(live: Path, dest: Path) -> None:
     dst.close()
 
 
-def verify(live: Path, dest: Path) -> int:
+def copy_scripts(live_scripts: Path, dest_scripts: Path) -> int:
+    """Копии рабочих скриптов — ИСХОДНЫЕ, без правок. Прототипы кладутся рядом отдельными
+    именами (*-vnext.py), чтобы сравнение «до/после» всегда было доступно в одном месте."""
+    dest_scripts.mkdir(parents=True, exist_ok=True)
+    n = 0
+    for p in sorted(live_scripts.glob("*.py")):
+        shutil.copy2(p, dest_scripts / p.name)
+        n += 1
+    return n
+
+
+def verify(live: Path, dest: Path, root: Path) -> int:
     """Песочница обязана быть ПОЛНОЙ копией: сверяем состав объектов и счётчики строк.
     Инвариант TEST-MUST-BE-ABLE-TO-FAIL: расхождение печатаем явно и возвращаем 1."""
     src = sqlite3.connect(f"file:{live}?mode=ro", uri=True)
@@ -72,10 +88,11 @@ def verify(live: Path, dest: Path) -> int:
         ok = False
         print("⛔ счётчики строк расходятся: " + "; ".join(diffs))
 
-    # Источник обязан остаться нетронутым: сверяем, что мы ничего не создали в нём.
     live_wal = live.with_suffix(".db-wal")
+    n_scripts = len(list((root / "scripts").glob("*.py"))) if (root / "scripts").exists() else 0
     print(f"{'✅' if ok else '⛔'} песочница {'сверена' if ok else 'РАСХОДИТСЯ'}: "
-          f"{len(tables)} таблиц, {sum(1 for _, t in o_src if t == 'view')} VIEW")
+          f"{len(tables)} таблиц, {sum(1 for _, t in o_src if t == 'view')} VIEW, "
+          f"{n_scripts} скриптов")
     print(f"   живая:     {live}  ({live.stat().st_size/1024:.0f} КБ)"
           f"{'  [WAL активен]' if live_wal.exists() else ''}")
     print(f"   песочница: {dest}  ({dest.stat().st_size/1024:.0f} КБ)")
@@ -87,15 +104,20 @@ def verify(live: Path, dest: Path) -> int:
 def main():
     ap = argparse.ArgumentParser(description="Песочница mezosync v-next")
     ap.add_argument("--live", default=str(LIVE_DB), help="живая БД (только чтение)")
-    ap.add_argument("--dest", default=str(DEFAULT_DEST), help="куда положить песочницу")
+    ap.add_argument("--root", default=str(DEFAULT_ROOT), help="корень песочницы")
     ap.add_argument("--verify", action="store_true", help="только сверить, не пересоздавать")
+    ap.add_argument("--no-scripts", action="store_true", help="не копировать скрипты")
     args = ap.parse_args()
-    live, dest = Path(args.live), Path(args.dest)
+    live, root = Path(args.live), Path(args.root)
+    dest = root / "mezosync.db"          # имя как в живом: прототипы ищут БД по имени
 
     if not args.verify:
         snapshot(live, dest)
         print(f"[snapshot] {live} → {dest}")
-    sys.exit(verify(live, dest))
+        if not args.no_scripts:
+            n = copy_scripts(LIVE_MEZO / "scripts", root / "scripts")
+            print(f"[scripts]  скопировано {n} шт. → {root / 'scripts'}")
+    sys.exit(verify(live, dest, root))
 
 
 if __name__ == "__main__":
