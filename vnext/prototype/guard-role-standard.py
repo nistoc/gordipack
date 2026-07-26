@@ -1,0 +1,480 @@
+# -*- coding: utf-8 -*-
+"""
+guard-role-standard.py — «ПЕРЕШЛА ЛИ РОЛЬ НА СТАНДАРТ», шаг 4 процедуры перехода.
+
+Появился потому, что определения не было: @TAXO реконструировала чек-лист из пяти признаков
+по чужим нотам (#2759), @STUD добавил шестой (#2760) — и списки РАЗОШЛИСЬ ещё до начала
+перехода. Пока определение живёт в головах, каждая роль проверяет то, что помнит.
+
+⚠️ ГЛАВНОЕ, ЧТО ЭТОТ ГАРД ГОВОРИТ О СЕБЕ САМ (требование @TAXO #2769, принято дословно):
+    ЗЕЛЁНЫЙ ЗДЕСЬ НЕ ЗНАЧИТ «СЛЕПОК ЧЕСТЕН».
+    Из шести признаков стандарта он ловит два уверенно, два частично, два не ловит вовсе.
+    Список — в шапке КАЖДОГО вывода, а не в документации: гард, молчащий о своих границах,
+    сам становится тем, что мы лечим.
+
+Почему пределы именно такие (замер @opssre #2772, оплачен его же долгом): секция учила
+относительному пути СЛОВАМИ — «относительный путь, байпас классификатора» — без единого
+литерала. Регексп прошёл мимо в тот же час, когда роль эту секцию правила.
+⇒ **Механическая проверка знает ФОРМУ и слепа к СМЫСЛУ, сказанному иначе.**
+
+READ-ONLY. Живую БД открывает `mode=ro`, скрипты только читает.
+
+    python guard-role-standard.py                 # все роли
+    python guard-role-standard.py --role PROTO    # одна
+    python guard-role-standard.py --strict        # 🟡 тоже роняет
+"""
+import argparse
+import re
+import sqlite3
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+LIVE = Path(r"C:\guts\.atlas\.mezosync\mezosync.db")
+SCRIPTS = Path(r"C:\guts\.atlas\.mezosync\scripts")
+
+# ① относительный ВЫЗОВ скрипта — ловится по литералу
+REL_CALL = re.compile(r"python\s+[.\\/]*\.?mezosync[\\/]scripts[\\/]", re.IGNORECASE)
+# ② --db преподаётся как обязательный: есть в примере вызова и рядом нет пометки о снятии
+DB_FLAG = re.compile(r"--db\s+\S+")
+DB_OK = re.compile(r"необязател|не обязател|снят|R15a|можно без", re.IGNORECASE)
+# ③ компенсаторы вокруг токена, отменённые R16
+TOKEN_COMP = re.compile(
+    r"(не зови ридер дважды|второй батч|порождает НОВЫЙ батч|подстановк\w* .{0,40}ack"
+    r"|половинки из РАЗНЫХ|обесценивает половинк)", re.IGNORECASE)
+# ⚠️ ОТЗЫВ РЯДОМ — не нарушение, а ПРАВИЛЬНО закрытый долг.
+# Калибровка 2026-07-26 09:56 UTC: первый прогон пометил @TAXO нарушением её же НАДГРОБИЕ
+# («…порождает ВТОРОЙ батч». **Механизм исчез**) — она отозвала компенсатор верно, а гард
+# потребовал бы «починить» уже починенное, то есть испортить. Это дословно класс @ING
+# (#2756): проверка не отличает ПРЕДУПРЕЖДЕНИЕ и ОТЗЫВ от ИНСТРУКЦИИ — там ложно-красное,
+# здесь ложно-жёлтое, корень один.
+REVOKED_NEAR = re.compile(
+    r"(механизм исчез|отозван|снят|больше не|не нужен|после R16|закрыт[оа]? R16"
+    r"|⛔|надгроб|устарел|неверен по механизму)", re.IGNORECASE)
+# ④ производный факт: конкретное значение, которое протухает за минуты
+DERIVED = [
+    (re.compile(r"курсор[а-я]*\s*[:=]?\s*\d{3,4}", re.I), "курсор числом"),
+    (re.compile(r"\bahead\s+\d+", re.I), "ahead числом"),
+    (re.compile(r"\bHEAD\s+[0-9a-f]{7,40}\b|\b[0-9a-f]{7}\b\s*·", re.I), "git-хэш"),
+    # «число ролей» УБРАНО отсюда: его точнее ловит признак ④+ (сверка с фактом).
+    # Оставлять оба — значит желтить роль за ВЕРНОЕ число, а гард, ругающий правду,
+    # обесценивает и свои настоящие срабатывания.
+    # Здесь остаются только величины, чью правильность проверить нечем и которые
+    # протухают за минуты: курсор, ahead, git-хэш.
+    # ⚠️ ПОРТЫ УБРАНЫ ИЗ ПРИЗНАКА — калибровка по первому же прогону (2026-07-26 09:55 UTC).
+    # Они давали 20+ срабатываний из 153 и все ложные: `:5300` не протухает, это постоянная
+    # рабочая реальность роли, а не производный факт вроде курсора или ahead. Признак,
+    # который шумит, роли перестают читать — и тогда он хуже отсутствующего.
+    # Это мой же класс: вечно-жёлтый гард контур уже лечил однажды.
+]
+POINTER = re.compile(r"перемерь|перемерять|посмотри сам|указател|см\.\s|запрос|реестр"
+                     r"|по расположению|не держу наизусть|замер(?:ом|ь)?\b|прогони",
+                     re.IGNORECASE)
+# ⚠️ ИНСТРУКЦИЯ-ЗАМЕР — НЕ ДОЛГ. Возражение @CORE (#2804), принято против собственного признака:
+# «`ahead 0` с „перемерь" рядом — это указание КАК мерить, а не утверждение о состоянии.
+# Убрать верный факт ради формы хуже, чем оставить: роль удалит рабочую измерительную строку,
+# чтобы погасить жёлтое, — ровно то, что мы лечим наоборот».
+# Признак ④ ловил СЛОВО «ahead», не смысл. Отличаем по соседству с командой измерения:
+# строка, где рядом стоит сам вызов git/скрипта, — рецепт, а не заявление о мире.
+MEASURE_CMD = re.compile(r"\bgit\b|rev-list|status -sb|\.py\b|curl|netstat|healthz?|/health",
+                         re.IGNORECASE)
+# ⑥ имена механизмов/скриптов, по которым ищем отставание учащей поверхности
+MECHS = ["read-messages", "write-message", "save-phoenix", "read-phoenix", "backlog",
+         "guard-all", "mezo_paths", "R15a", "R16"]
+
+VERDICT_HEADER = """\
+📋 ЧТО ЭТОТ ГАРД ЛОВИТ, А ЧТО НЕТ — читать ДО того, как поверить зелёному
+   ① относительный вызов скрипта .............. ЛОВИТ (литерал; словесную инструкцию — НЕТ)
+   ② --db преподаётся обязательным ............ ЛОВИТ
+   ③ компенсатор про токен, снятый R16 ........ ЧАСТИЧНО (по знакомым формулировкам)
+   ④ производный факт вместо указателя ........ ЧАСТИЧНО (курсор/хэш/порт/число ролей)
+   ⑤ проверка ПОСЛЕ правки по всем секциям .... НЕ ЛОВИТ — это процесс, а не текст
+   ⑥ учащая поверхность отстала от кода ....... ЛОВИТ ПО ВРЕМЕНИ (секция + механизм + оба времени)
+   ⑦ слово против примера в одной строке ...... ЛОВИТ (признак @opssre #2802: «сказано
+                                                относительным — показан абсолютный». Авто-замена
+                                                литералов сама плодит такие строки)
+   ⛔ НЕ ЛОВИТ ВООБЩЕ: «план состоит из выполненного» и «иммунизация против правды»
+      («увидишь 7 ролей — протухло» синтаксически безупречно). Это находят только чтением.
+"""
+
+
+def script_mtimes():
+    """⚠️ ВРЕМЯ ФАЙЛА — В UTC, а не в локальной зоне.
+
+    Поймано СОБСТВЕННОЙ самопроверкой 2026-07-26 09:57 UTC: `datetime.fromtimestamp` отдаёт
+    ЛОКАЛЬНОЕ время (11:24), а `phoenix.saved_at` пишется SQLite в UTC (09:57). Сравнение
+    давало «секция старше правки механизма» у ЗАВЕДОМО чистого слепка, созданного секунду
+    назад: признак ⑥ был бы вечно-жёлтым у всех и всегда, и роли перестали бы его читать.
+    Это ровно та болезнь двух шкал, ради которой контур ввёл правило «время ВЕЗДЕ UTC»
+    (фантом «синк умер 2 часа назад», где разница ровно в 2 часа была ЗОНОЙ, а не лагом).
+    ⇒ Гард, меряющий время, обязан сам жить в одной шкале с тем, что он меряет."""
+    out = {}
+    if SCRIPTS.is_dir():
+        for p in SCRIPTS.glob("*.py"):
+            out[p.stem] = datetime.fromtimestamp(
+                p.stat().st_mtime, timezone.utc).replace(tzinfo=None)
+    return out
+
+
+def mechanism_times(con):
+    """Когда механизм менялся: РЕЕСТР ВРЕЗОК, если он есть; иначе — время файла с оговоркой.
+
+    Реестр (`mechanism_changes`, схема v-next) — источник-событие: его пишет тот, кто врезал.
+    `mtime` — источник-свойство файла, и он ЛЖЁТ: сбрасывается копированием, восстановлением
+    из бэкапа и `git checkout`. Ровно так 2026-07-26 сломался гард «замороженные md» — красный
+    у всех навсегда при целом содержимом. Пока реестра в живой БД нет, работаем на mtime,
+    но ГОВОРИМ об этом вслух: молчаливый плохой источник опаснее названного.
+    """
+    try:
+        rows = con.execute(
+            "SELECT mechanism, MAX(changed_at) FROM mechanism_changes GROUP BY mechanism"
+        ).fetchall()
+        if rows:
+            out = {}
+            for mech, at in rows:
+                try:
+                    out[mech] = datetime.fromisoformat((at or "").replace("Z", ""))
+                except ValueError:
+                    pass
+            print(f"   источник времени механизмов: РЕЕСТР ВРЕЗОК ({len(out)} записей) ✅")
+            return out
+    except sqlite3.Error:
+        pass
+    print("   источник времени механизмов: mtime файлов ⚠️ — реестра врезок в этой БД нет.\n"
+          "     mtime сбрасывается копированием, восстановлением из бэкапа и git checkout:\n"
+          "     после реального отката признак ⑥ покраснеет у всех ролей сразу. Это известная\n"
+          "     граница, а не сюрприз — лечится таблицей mechanism_changes (схема v-next).")
+    return script_mtimes()
+
+
+def live_counts(con):
+    """Фактические числа, о которых слепки любят делать утверждения.
+
+    Добавлено 2026-07-26 10:10 UTC после перекрёстного чтения слепка COORD: он утверждает
+    «rules — 34 правила» и «invariants (10)» при фактических 42 и 12, а §rebirth зовёт читать
+    ленту «с курсора 2555» при фактическом 2789. Прежний признак ④ ловил ЛЮБОЕ число (шум),
+    этот ловит ЧИСЛО, КОТОРОЕ СЕЙЧАС НЕВЕРНО — а это уже не стилистика, а ложь о мире.
+    """
+    def one(sql, *a):
+        try:
+            return con.execute(sql, a).fetchone()[0]
+        except sqlite3.Error:
+            return None
+    return {
+        "правил": one("SELECT COUNT(*) FROM rules"),
+        "инвариантов": one("SELECT COUNT(*) FROM invariants"),
+        "ролей": one("SELECT COUNT(*) FROM read_cursors"),
+    }
+
+
+# ⚠️ Шаблоны — ТОЛЬКО конструкции КОЛИЧЕСТВА, и это калибровка по первому же прогону
+# (2026-07-26 10:10 UTC). Широкая форма «слово рядом с числом» дала «правил 4» из «Rule-4-дифф»
+# и «правил 8» из «правило 8» — то есть ПОРЯДКОВЫЙ номер читался как счётчик. Гард, путающий
+# «правило №4» с «правил 4 штуки», обвиняет роль во лжи там, где она точна, — и его перестают
+# читать. Ловим «34 правила» / «rules (34)» / «правил: 34», но не «Rule 4».
+# ⚠️ `(?<![\w#-])` — вторая калибровка (10:11 UTC). Без неё «L3 правила» (уровень L3 в чужом
+# перечне) читалось как «правил 3», а номера нот «#389-393» — как счётчик инвариантов.
+# Число, прилипшее к букве или к номеру, принадлежит ДРУГОМУ смыслу — и гард, который этого
+# не различает, обвиняет роль во лжи там, где она точна. Третий раз за час один и тот же
+# урок на одном инструменте: критерий знает форму, и каждую форму приходится ограничивать
+# отдельно. Это и есть цена проверки смысла формой — её надо платить честно, а не прятать.
+# ЧИСЛИТЕЛЬНЫЕ ПРОПИСЬЮ — четвёртая форма, которую пришлось ограничивать отдельно.
+# Найдена 2026-07-26 10:41 UTC перекрёстным чтением слепка @CORE: его §3 учил «„8 ролей" —
+# их ШЕСТЬ», то есть прививал преемнику недоверие к ВЕРНОМУ числу. Гард промолчал, потому что
+# число написано словом и стоит в отрицании — ни один цифровой шаблон туда не дотягивался.
+# 📌 Каждая новая форма стоит отдельного шаблона: это и есть цена проверки смысла формой.
+WORD_NUM = {"ноль": 0, "один": 1, "два": 2, "три": 3, "четыре": 4, "пять": 5, "шесть": 6,
+            "семь": 7, "восемь": 8, "девять": 9, "десять": 10, "одиннадцать": 11,
+            "двенадцать": 12}
+WORD_NUM_RX = re.compile(
+    r"(?<![\w-])(" + "|".join(WORD_NUM) + r")\b", re.I)
+
+
+def check_spelled_numbers(lines, counts, section):
+    """⛔ ОТКЛЮЧЁН 2026-07-26 10:42 UTC — ПОПЫТКА ПРОВАЛИЛАСЬ. Оставлен как честный отрицательный
+    результат: следующий не потратит на него время заново.
+
+    Замысел: ловить «„8 ролей" — их ШЕСТЬ» (находка в слепке @CORE), где число написано словом
+    и стоит в отрицании — цифровые шаблоны туда не дотягиваются.
+    Что вышло на первом же прогоне по живым слепкам:
+        🟡 «класс укусил ПЯТЬ ролей»          ← верное историческое утверждение
+        🟡 «четыре источника правды ВНЕ БД»    ← «четыре» относится к источникам, не к ролям
+        и ЦЕЛЕВУЮ строку («их ШЕСТЬ») не поймал вовсе — там число и сущность в РАЗНЫХ фразах.
+    ⇒ Признак связывал ЛЮБОЕ числительное с ЛЮБОЙ сущностью, упомянутой в той же строке.
+      Привязка числа к предмету — это разбор СМЫСЛА, а не близости слов; формой он не берётся.
+    ⇒ По собственному правилу («гард, ругающий правду, обесценивает и свои настоящие
+      срабатывания») выключен, а не оставлен шуметь. Строки с числами прописью остаются
+      в зоне перекрёстного чтения — там их и нашли.
+    """
+    out = []
+    for i, line in enumerate(lines, 1):
+        low = line.lower()
+        for key, real in counts.items():
+            if real is None or key[:5] not in low:
+                continue
+            m = WORD_NUM_RX.search(line)
+            if not m:
+                continue
+            said = WORD_NUM[m.group(1).lower()]
+            if said == real:
+                continue
+            ctx = " ".join(lines[max(0, i - 2):i + 2])
+            if REVOKED_NEAR.search(ctx) or "протух" in ctx.lower():
+                continue
+            out.append((f"§{section}:{i}",
+                        f"④+ ЧИСЛО ПРОПИСЬЮ НЕВЕРНО: «{m.group(1)}» про {key} → сейчас {real}",
+                        line.strip()[:90]))
+            break
+    return out
+
+
+STALE_NUM = [
+    (re.compile(r"(?<![\w#-])(\d{1,3})\s+правил[аои]?\b", re.I), "правил"),
+    (re.compile(r"\brules\s*[(:—-]\s*(\d{1,3})\b", re.I), "правил"),
+    (re.compile(r"\bправил\s*[:(]\s*(\d{1,3})\b", re.I), "правил"),
+    (re.compile(r"(?<![\w#-])(\d{1,3})\s+инвариант[аов]*\b", re.I), "инвариантов"),
+    (re.compile(r"\binvariants\s*[(:—-]\s*(\d{1,3})\b", re.I), "инвариантов"),
+    (re.compile(r"(?<![\w#-])(\d{1,2})\s+(?:живых\s+|активных\s+)?ролей\b", re.I), "ролей"),
+]
+
+
+def check_stale_numbers(lines, counts, section):
+    """Утверждение о количестве, разошедшееся с фактом. Тишина, когда число ВЕРНО.
+
+    ⚠️ Надгробие — НЕ нарушение. Замер @STUD (#2801): он честно написал «прежняя строка
+    „6 живых ролей" ПРОТУХЛА, их 8» — и гард покраснел на цифре ВНУТРИ опровержения.
+    Ушло, только когда он убрал литерал совсем. **Гард, краснеющий на честном надгробии,
+    обучает роль НЕ ПИСАТЬ надгробий** — а надгробие единственный способ снять компенсатор
+    видимо. Поэтому проверяем контекст на маркер отзыва, как для ③.
+    """
+    out = []
+    for i, line in enumerate(lines, 1):
+        for rx, key in STALE_NUM:
+            m = rx.search(line)
+            if not m or counts.get(key) is None:
+                continue
+            said, real = int(m.group(1)), counts[key]
+            if said != real:
+                ctx = " ".join(lines[max(0, i - 2):i + 2])
+                if REVOKED_NEAR.search(ctx) or "протух" in ctx.lower():
+                    break          # это надгробие снятому числу — правильная форма
+                out.append((f"§{section}:{i}", f"④+ ЧИСЛО НЕВЕРНО: «{key} {said}» → сейчас {real}",
+                            line.strip()[:90]))
+            break
+    return out
+
+
+# ⑦ «СЛОВО ПРОТИВ ПРИМЕРА» — признак предложен @opssre (#2802) и найден им на СЕБЕ:
+#     «зови ТОЛЬКО … ОТНОСИТЕЛЬНЫМ ПУТЁМ (python C:\guts\.atlas\...)»
+#      ^^^ слово говорит одно            ^^^ пример показывает обратное
+# Его утренний скрипт починил ЛИТЕРАЛ и не тронул СЛОВО. Артефакт стал выглядеть обновлённым —
+# и потому к нему больше не возвращались. ⇒ автоматическая замена литералов ПРОИЗВОДИТ такие
+# строки: инструмент починки является источником дефекта.
+# В отличие от ③④ это ловится механически — и вот оно, ловится.
+WORD_REL = re.compile(r"относительн|relative", re.I)
+WORD_ABS = re.compile(r"абсолютн|absolute", re.I)
+PATH_ABS = re.compile(r"[A-Za-z]:[\\/]")
+PATH_REL = re.compile(r"python\s+[.\\/]*\.?mezosync[\\/]")
+
+
+def check_word_vs_example(lines, section):
+    out = []
+    for i, line in enumerate(lines, 1):
+        rel_word, abs_word = bool(WORD_REL.search(line)), bool(WORD_ABS.search(line))
+        rel_path, abs_path = bool(PATH_REL.search(line)), bool(PATH_ABS.search(line))
+        if rel_word and abs_path and not rel_path:
+            out.append((f"§{section}:{i}", "⑦ СЛОВО против ПРИМЕРА: сказано «относительным», "
+                                          "показан АБСОЛЮТНЫЙ путь", line.strip()[:90]))
+        elif abs_word and rel_path and not abs_path:
+            out.append((f"§{section}:{i}", "⑦ СЛОВО против ПРИМЕРА: сказано «абсолютным», "
+                                          "показан ОТНОСИТЕЛЬНЫЙ путь", line.strip()[:90]))
+    return out
+
+
+def check_role(con, role, mtimes, verbose, counts=None):
+    rows = con.execute(
+        "SELECT section, body, saved_at FROM phoenix WHERE role=? ORDER BY section", (role,)
+    ).fetchall()
+    if not rows:
+        return None
+    red, yellow = [], []
+    for section, body, saved_at in rows:
+        lines = (body or "").splitlines()
+        if counts:
+            yellow.extend(check_stale_numbers(lines, counts, section))
+            # ⛔ check_spelled_numbers ОТКЛЮЧЁН — попытка провалилась, см. его docstring.
+        yellow.extend(check_word_vs_example(lines, section))
+        for i, line in enumerate(lines, 1):
+            where = f"§{section}:{i}"
+            if REL_CALL.search(line):
+                red.append((where, "① относительный вызов скрипта", line.strip()[:90]))
+            if DB_FLAG.search(line) and not DB_OK.search(line):
+                ctx = " ".join(lines[max(0, i - 3):i + 2])
+                if not DB_OK.search(ctx):
+                    yellow.append((where, "② --db без пометки «необязателен»",
+                                   line.strip()[:90]))
+            if TOKEN_COMP.search(line):
+                ctx = " ".join(lines[max(0, i - 3):i + 3])
+                if not REVOKED_NEAR.search(ctx):
+                    yellow.append((where, "③ компенсатор про токен (снят R16)",
+                                   line.strip()[:90]))
+            for rx, what in DERIVED:
+                if rx.search(line):
+                    ctx = " ".join(lines[max(0, i - 2):i + 3])
+                    # строка с командой измерения — РЕЦЕПТ, а не утверждение о мире (@CORE #2804)
+                    if not POINTER.search(ctx) and not MEASURE_CMD.search(line):
+                        yellow.append((where, f"④ производный факт: {what}", line.strip()[:90]))
+                    break
+    # ⑥ временна́я грань (@STUD #2773). ⚠️ Считается ОДНОЙ строкой на роль, а не по секциям:
+    # инструменты упоминает почти каждая секция, а скрипты правятся ежедневно ⇒ признак
+    # срабатывал у всех и на всём (первый прогон: он один дал ~40 из 153 жёлтых) и потому
+    # ничего не сообщал. Ценность не в «упомянул», а в «сколько секций отстало и насколько».
+    stale = []
+    for section, body, saved_at in rows:
+        try:
+            saved = datetime.fromisoformat((saved_at or "").replace("Z", ""))
+        except ValueError:
+            continue
+        for m in MECHS:
+            if m.lower() not in (body or "").lower():
+                continue
+            mt = mtimes.get(m) or mtimes.get("mezo_paths" if m in ("R15a", "R16") else m)
+            if mt and mt > saved + timedelta(minutes=1):
+                stale.append((section, m, mt, saved))
+                break
+    # ⚠️ Подача ⑥ — РЕЛЯЦИЯ, А НЕ ВЕРДИКТ, и по СЕКЦИЯМ, а не «×2» (замечание @STUD #2801:
+    # «единственная анонимная строка в выводе — роль по ней действовать не может»).
+    # Печатаем секцию + механизм + ОБА времени: роль сама решает, врёт ли её текст.
+    for section, mech, mt, saved in stale:
+        yellow.append((f"§{section}", "⑥ секция старше правки механизма",
+                       f"упоминает {mech} (правлен {mt:%m-%d %H:%M} UTC) — это ПОЗЖЕ сохранения "
+                       f"секции ({saved:%m-%d %H:%M} UTC). Перемерь это место."))
+    return red, yellow, len(rows)
+
+
+DIRTY = {
+    "identity": "PROTO — архитектор. Тулкit зови ОТНОСИТЕЛЬНОЙ формой:\n"
+                "python .mezosync/scripts/read-messages.py --db .mezosync/mezosync.db --role PROTO",
+    "rebirth": "1) python .mezosync/scripts/guard-all.py\n"
+               "2) ⚠️ НЕ вызывай ридер внутри ack: подстановка `$(...)` порождает ВТОРОЙ батч,\n"
+               "   склейка половинок из РАЗНЫХ выводов будет отклонена.\n"
+               "3) читать ленту: read-messages.py --db <db> --role PROTO",
+    "state": "курсор 2696 · ahead 12 · HEAD a1b2c3d · контур 7 ролей",
+}
+CLEAN = {
+    "identity": "PROTO — архитектор. Скрипты зови АБСОЛЮТНЫМ путём "
+                "(C:\\guts\\.atlas\\.mezosync\\scripts\\...); --db необязателен с 26.07 (R15a).",
+    "rebirth": "1) python C:\\guts\\.atlas\\.mezosync\\scripts\\guard-all.py\n"
+               "2) Повторный вызов ридера безопасен: до подтверждения отдаётся тот же батч (R16).\n"
+               "   Прежний запрет «не зови дважды» ⛔ отозван — механизм исчез.",
+    "state": "курсор — посмотри сам в read_cursors (протухает за минуты); "
+             "число ролей — указатель на правило role-roster-and-zones, наизусть не держу.",
+}
+
+
+def selftest():
+    """Доказательство чувствительности: слепок с ИЗВЕСТНЫМИ долгами обязан краснеть,
+    приведённый — молчать. Требование @TAXO (#2769): «порча, которую не удаётся навести,
+    не доказательство прочности, пока не названа причина, по которой её нельзя навести»."""
+    import tempfile
+    tmp = Path(tempfile.mkdtemp(prefix="guard-std-")) / "m.db"
+    con = sqlite3.connect(str(tmp))
+    con.execute("CREATE TABLE phoenix (role TEXT, section TEXT, body TEXT, saved_at TEXT)")
+    for role, data in (("DIRTY", DIRTY), ("CLEAN", CLEAN)):
+        for sec, body in data.items():
+            con.execute("INSERT INTO phoenix VALUES (?,?,?, datetime('now'))",
+                        (role, sec, body))
+    con.commit()
+    con.close()
+    con = sqlite3.connect(f"file:{tmp}?mode=ro", uri=True)
+    mt = script_mtimes()
+    ok = True
+    for role, want_red, want_yellow in (("DIRTY", True, True), ("CLEAN", False, False)):
+        red, yellow, _ = check_role(con, role, mt, False)
+        kinds = {w.split()[0] for _, w, _ in red + yellow}
+        got_red, got_yellow = bool(red), bool(yellow)
+        good = (got_red == want_red) and (got_yellow == want_yellow)
+        ok &= good
+        print(f"{'✅' if good else '🔴'} слепок {role}: 🔴 {len(red)} · 🟡 {len(yellow)} "
+              f"· признаки {sorted(kinds) or '—'} "
+              f"(ожидали {'красное' if want_red else 'тишину'})")
+        for where, what, line in red + yellow:
+            print(f"      {where:14} {what}")
+    con.close()
+    print(f"\n{'✅ ГАРД ЧУВСТВИТЕЛЕН' if ok else '🔴 ГАРД СЛЕП ИЛИ ШУМИТ'} — "
+          f"краснеет на известных долгах и молчит на приведённом слепке")
+    return 0 if ok else 1
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--selftest", action="store_true",
+                    help="доказать, что гард умеет краснеть (и молчать)")
+    ap.add_argument("--db", default=str(LIVE))
+    ap.add_argument("--role", default=None)
+    ap.add_argument("--strict", action="store_true", help="🟡 тоже считать провалом")
+    ap.add_argument("-v", "--verbose", action="store_true", help="печатать сами строки")
+    a = ap.parse_args()
+    if a.selftest:
+        return selftest()
+    db = Path(a.db)
+    if not db.exists():
+        print(f"⛔ ГАРД НЕ ПОСТАВЛЕН: БД не найдена: {db}")
+        return 2
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    mtimes = mechanism_times(con)
+    counts = live_counts(con)
+    if not mtimes:
+        print(f"⚠️ каталог скриптов не найден: {SCRIPTS} — признак ⑥ проверить нечем")
+
+    print(VERDICT_HEADER)
+    roles = [a.role.upper()] if a.role else [
+        r for r, in con.execute("SELECT DISTINCT role FROM phoenix ORDER BY role")]
+    total_red = total_yellow = 0
+    for role in roles:
+        res = check_role(con, role, mtimes, a.verbose, counts)
+        if res is None:
+            print(f"⚠️ {role}: слепка нет")
+            continue
+        red, yellow, nsec = res
+        total_red += len(red); total_yellow += len(yellow)
+        mark = "🔴" if red else ("🟡" if yellow else "✅")
+        print(f"{mark} {role:8} секций {nsec} · 🔴 {len(red)} · 🟡 {len(yellow)}")
+        for where, what, line in red:
+            print(f"      🔴 {where:22} {what}")
+            if a.verbose:
+                print(f"         «{line}»")
+        # ⚠️ СВЁРТКА ОБЯЗАНА НАЗЫВАТЬ ЧИСЛО И СТРОКИ. Найдено @opssre и @STUD 2026-07-26 10:20 UTC:
+        # прежняя дедупликация по (секция, признак) печатала ПЕРВОЕ срабатывание и молчала об
+        # остальных. @opssre прочёл мой слепок глазами, нашёл `--db` ТРИЖДЫ в §rebirth и решил,
+        # что гард их не видит — гард видел все три и показал одну.
+        # ⇒ Свёрнутая строка, не дающая способа найти конкретику, читается как «долг один».
+        # Это тот же класс, что P9: ответ выглядел успехом. Инструмент, скрывающий количество,
+        # обманывает не данными, а подачей.
+        groups = {}
+        for where, what, line in yellow:
+            sec = where.split(":")[0]
+            ln = where.split(":")[1] if ":" in where else None
+            groups.setdefault((sec, what), []).append((ln, line))
+        for (sec, what), items in groups.items():
+            lines_at = [i[0] for i in items if i[0]]
+            suffix = ""
+            if len(items) > 1:
+                suffix = f"  ×{len(items)}" + (f" (строки {', '.join(lines_at)})" if lines_at else "")
+            print(f"      🟡 {sec:22} {what}{suffix}")
+            if a.verbose:
+                for ln, line in items:
+                    print(f"         {('стр.' + ln) if ln else '   '} «{line}»")
+    con.close()
+    # «по 1 роли», а не «по 1 ролям» (@STUD #2801: вывод инструмента — тоже учащая поверхность)
+    word = "роли" if len(roles) == 1 else "ролям"
+    print(f"\nитог: 🔴 {total_red} · 🟡 {total_yellow} по {len(roles)} {word}")
+    print("⚠️ Зелёный НЕ означает «слепок честен» — см. шапку: два признака из шести "
+          "не проверяются вовсе.")
+    if total_red or (a.strict and total_yellow):
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
