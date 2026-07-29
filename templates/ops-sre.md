@@ -12,7 +12,8 @@
 ## Launcher (шаблон)
 ```
 Прочитай свой слепок из БД и работай по нему:
-  python .mezosync/scripts/read-phoenix.py --db .mezosync/mezosync.db --role OPSSRE
+  python <абсолютный путь>/.mezosync/scripts/read-phoenix.py --role OPSSRE
+  # путь к скрипту абсолютный; --db не нужен (резолвится от расположения скрипта)
 ```
 
 ## Обязанности (4 столпа)
