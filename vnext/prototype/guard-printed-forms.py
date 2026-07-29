@@ -1,0 +1,434 @@
+# -*- coding: utf-8 -*-
+"""
+guard-printed-forms.py — УЧАЩАЯ ПОВЕРХНОСТЬ ШИРЕ СЛЕПКА.
+
+Заведён 2026-07-27 по находке канарейки @STUD (#2861) и её замеру остатка (#2864),
+врезка @COORD `83e8882`. Повод дословно: `read-messages.py` печатал команду ack как
+`python read-messages.py --db <путь>` — то есть РАБОЧИЙ ВЫВОД, который роль читает КАЖДЫЙ
+цикл ленты (чаще, чем шапку `read-phoenix`!), учил сразу двум ОТОЗВАННЫМ формам:
+относительному вызову (F20: при уехавшем CWD молча пишет в чужую БД) и снятому `--db` (R15a).
+
+📌 Класс: **ВЕРШИНА УЧАЩИХ ПОВЕРХНОСТЕЙ БЫЛА НЕ ОДНА.** Гард соответствия
+(`guard-role-standard.py`) ищет форму в СЛЕПКАХ ролей и по регекспу `.mezosync/scripts` —
+поэтому не видел ни голого `python read-messages.py`, ни строк, которые скрипты ПЕЧАТАЮТ,
+ни ГЕНЕРАТОРА витрин (`export-channels.py`), плодящего отозванную форму в артефакты
+(замер @STUD: 20 вхождений в 8 файлах `coordination/generated/`).
+Ранжир @STUD принят как норма: **рабочий вывод > docstring > шапка слепка.**
+
+ЧТО ЭТОТ ГАРД ВИДИТ
+  · строковые литералы и f-строки в .py (то, что скрипт может НАПЕЧАТАТЬ или показать),
+    включая docstring — их читают так же, как вывод;
+  · готовые артефакты (.md витрины) — там форма уже вычислена генератором;
+  · две приметы: вызов скрипта мезосинка НЕ абсолютным путём · `--db` в печатаемой строке.
+
+ЧЕГО НЕ ВИДИТ (называю сам, чтобы зелёное не читалось шире, чем оно есть)
+  · форму, собранную из кусков в рантайме (`" ".join([...])`) — литерала нет, увидеть нечем;
+  · комментарии в коде: их роль не читает как инструкцию (и AST их не отдаёт);
+  · текст, приходящий из БД (ноты, слепки) — это зона `guard-role-standard.py`;
+  · СМЫСЛ: строку «⛔ так больше не зовут» отличаю от инструкции только по приметам отзыва
+    рядом (REVOKED_NEAR). Это тот же приблизительный детектор, что и в гарде слепков.
+
+Живой субстрат ТОЛЬКО ЧИТАЕТСЯ. Ничего не правит и не предлагает автопочинку.
+
+    python <абсолютный путь>/guard-printed-forms.py            # живые скрипты + витрины
+    python <абсолютный путь>/guard-printed-forms.py --selftest # доказать, что умеет краснеть
+"""
+import argparse
+import ast
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+SELF = Path(__file__).resolve()
+LIVE_SCRIPTS = Path(r"C:\guts\.atlas\.mezosync\scripts")
+LIVE_ARTIFACTS = Path(r"C:\guts\.atlas\atlas.archs\.mezosync\coordination\generated")
+
+# Вызов скрипта: «python <что-то до имени><имя>.py». Голое имя без `python` — это ссылка
+# в прозе («см. read-messages.py:310»), а не форма вызова: такие НЕ трогаем.
+CALL = re.compile(r"(?P<lead>python3?\s+)(?P<path>[^\s`'\"]{0,200}?)(?P<name>[\w.\-]+\.py)")
+# Путь ВЫЧИСЛЕН, а не написан: `{Path(__file__).resolve()}`, `{SELF}`, `{S}` и т.п.
+COMPUTED = re.compile(r"\{[^}]*(__file__|resolve\(\)|SELF|SCRIPTS|HERE|_DIR)[^}]*\}", re.I)
+ABS_LITERAL = re.compile(r"^(?:[A-Za-z]:[\\/]|[\\/])")
+DB_FLAG = re.compile(r"--db\b")
+# «Пометка при --db»: строка сама говорит, что флаг необязателен/для не-дефолтной БД.
+DB_OK = re.compile(r"необязателен|не обязателен|только для|не-дефолтн|песочниц|sandbox", re.I)
+# Отзыв/надгробие рядом: строка учит НЕ звать так. Калибровка взята у гарда слепков —
+# там первый прогон краснел на честном надгробии @TAXO, и это стоило доверия к гарду.
+REVOKED_NEAR = re.compile(
+    r"(⛔|⚠️|запрещ|НЕЛЬЗЯ|нельзя|не зови|отозван|снят|устарел|надгроб|больше не|"
+    r"прежн|раньше|было:|вместо|F20|R15a)", re.I)
+
+
+def materialize(path, name, scripts):
+    """Во что превратится напечатанный путь у РОЛИ. Две проекции, потому что роль зовёт
+    скрипты двумя разными инструментами:
+      · как есть            — PowerShell/cmd примут и обратные слэши;
+      · после bash-escape   — Bash-инструмент СЪЕДАЕТ `\\` как экранирование.
+    Вторая проекция и есть третий оборот класса у @COORD (#2871): напечатанный
+    `C:\\guts\\.atlas\\...` приезжал в Bash как `C:guts.atlas...` — файла нет, команда мертва.
+    Возвращает (как_есть, в_bash) или (None, None), если путь не материален."""
+    full = (path or "") + name
+    if "{" in full:
+        # ⚠️ Замена — ЛЯМБДОЙ, а не строкой: `re.sub` читает `\U` в `C:\Users\…` как escape
+        # и падает `bad escape \U`. Тот же класс, что ловим (обратный слэш съеден движком),
+        # поймал меня в САМОМ детекторе этого класса, через минуту после написания.
+        full = re.sub(r"\{[^}]*\}", lambda _: str(scripts), full)
+    if not ABS_LITERAL.match(full.strip()):
+        return None, None
+    as_is = Path(full.strip().replace("\\", "/"))
+    in_bash = Path(re.sub(r"\\(.)", r"\1", full.strip()))
+    return as_is, in_bash
+
+
+def classify(text, known, ctx, proven=(), scripts=None, observed=False):
+    """Приметы в ОДНОЙ печатаемой строке. Возвращает список (вид, фрагмент).
+
+    `proven` — имена переменных, ДОКАЗАННО вычисленных из `__file__` в этом же файле.
+    Без них `python {s}\\read-messages.py` спасался только приметой отзыва рядом — то есть
+    зелёное выпадало СЛУЧАЙНО (замер 2026-07-27 на живом `export-channels.py`: строка была
+    чиста по существу, а гард этого не знал). Зелёное по случайности — не зелёное.
+    """
+    out = []
+    for m in CALL.finditer(text):
+        path, frag = m.group("path"), text[max(0, m.start() - 30):m.end() + 60].strip()
+        if m.group("name") not in known:
+            # ⚠️ Имя может быть НЕ в списке именно потому, что оно СЛОМАНО: у @COORD escape
+            # съел слэш и `scripts\read-messages.py` стал `scriptsead-messages.py`. Гард,
+            # ищущий скрипт ПО ИМЕНИ, слеп ровно к тому дефекту, который ломает имя.
+            # ⇒ прежде чем отбросить как «чужой скрипт», проверяем путь на диске.
+            if scripts is not None and not REVOKED_NEAR.search(ctx):
+                as_is, _ = materialize(path, m.group("name"), scripts)
+                if as_is is not None and not as_is.exists():
+                    out.append(("🔴 E ПУТЬ НЕ СУЩЕСТВУЕТ — команда мертва как напечатана "
+                                "(имя, вероятно, СЛОМАНО escape'ом)", frag))
+            continue                                   # чужой скрипт — не наша поверхность
+        if REVOKED_NEAR.search(ctx):
+            continue                                   # это надгробие форме, а не инструкция
+        var = re.match(r"\{([\w.]+)[^}]*\}", path.strip())
+        if COMPUTED.search(path) or (var and var.group(1).split(".")[0] in proven):
+            pass                                       # ✅ путь берётся свойством — не разъедется
+        elif var:
+            # Шаблон: вердикт выносит НАБЛЮДЕНИЕ вывода, а не догадка о значении переменной.
+            if not observed:
+                out.append(("🟡 D ШАБЛОН — судится только ПРОГОНОМ (запусти без --no-run)",
+                            frag))
+        elif not path.strip():
+            out.append(("🔴 A ГОЛОЕ ИМЯ (F20: CWD уедет — попадёт в чужую БД)", frag))
+        elif ABS_LITERAL.match(path.strip()):
+            # ⚠️ КАЛИБРОВКА 2026-07-27 09:59 UTC. Было 🟡 «переживёт переезд ложью» — и после
+            # врезки @COORD `ae852cf` таких стало 55 из 59 жёлтых. Но АБСОЛЮТНЫЙ ПУТЬ — ровно
+            # то, чего требует стандарт (`role-migration-standard` ②, утверждён владельцем).
+            # Гард, желтящий предписанную канону форму, за один прогон превращается в фон,
+            # который перестают читать, — мой же класс «вечно-жёлтый гард» (153 срабатывания).
+            # Оговорка про переезд каталога верна, но это ограничение КАНОНА, и её место —
+            # в своде один раз, а не на каждой строке.
+            out.append(("🟢 B АБСОЛЮТНЫЙ ЛИТЕРАЛ — норма канона", frag))
+        else:
+            out.append(("🔴 A ОТНОСИТЕЛЬНЫЙ ПУТЬ (F20)", frag))
+        # ⭐ ПРИЗНАК E (заявка @COORD #2871): напечатанную команду ПРОГНАТЬ, а не прочитать.
+        # ⚠️ КАЛИБРОВКА 10:21 UTC по замеру @COORD (#2873): здесь E применяется ТОЛЬКО к
+        # литеральному пути. Шаблон со `{плейсхолдером}` судит НАБЛЮДЕНИЕ (см. observe): пока
+        # гард раскрывал `{s}` СВОИМИ руками, он мерил собственное представление о переменной —
+        # и после починки `as_posix()` краснел ×4 на исполнимом коде.
+        # 📌 Класс, названный @COORD и принятый: **проверка, ВОСПРОИЗВОДЯЩАЯ поведение вместо
+        # НАБЛЮДЕНИЯ его, наследует свои же допущения** — и выносит вердикт о них, а не о коде.
+        if scripts is not None and "{" not in (path or ""):
+            as_is, in_bash = materialize(path, m.group("name"), scripts)
+            if as_is is not None and not as_is.exists():
+                out.append(("🔴 E ПУТЬ НЕ СУЩЕСТВУЕТ — команда мертва как напечатана", frag))
+            elif in_bash is not None and not in_bash.exists():
+                out.append(("🔴 E НЕ ОТКРОЕТСЯ В BASH — `\\` съедается как escape "
+                            "(нужен `.as_posix()`)", frag))
+        tail = text[m.end():]
+        if DB_FLAG.search(tail) and not DB_OK.search(text) and not REVOKED_NEAR.search(text):
+            out.append(("🔴 C `--db` В ПЕЧАТАЕМОЙ СТРОКЕ (снят R15a — учит отозванному)", frag))
+    return out
+
+
+def literals(src):
+    """Все строковые литералы и f-строки файла как (номер строки, текст, РАНГ).
+    f-строку собираем с плейсхолдерами — по ним и видно, вычислен путь или написан.
+
+    РАНГ — ранжир @STUD (#2862), принятый контуром как норма: **рабочий вывод > docstring**.
+    Роль читает вывод ридера каждый цикл ленты; docstring — когда лезет разбираться.
+    Один список без ранга уравнял бы подвал витрины с примером в справке.
+      R1 — печатается в работе (внутри `print(...)`)   R2 — docstring и `help=`   R3 — прочее
+    """
+    try:
+        tree = ast.parse(src)
+    except SyntaxError as e:
+        return None, e, set()
+    # переменные, ДОКАЗАННО вычисленные из `__file__` (S = Path(__file__).resolve().parent)
+    proven = {t.id for n in ast.walk(tree) if isinstance(n, ast.Assign)
+              for t in n.targets if isinstance(t, ast.Name)
+              and "__file__" in ast.unparse(n.value)}
+    printed, docs = set(), set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "print":
+            printed |= {id(x) for x in ast.walk(node)}
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            first = node.body[0] if node.body else None
+            if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant):
+                docs.add(id(first.value))
+        if isinstance(node, ast.keyword) and node.arg == "help":
+            docs |= {id(x) for x in ast.walk(node)}
+    # ⚠️ ast.walk отдаёт куски f-строки ДВАЖДЫ: как части JoinedStr и как самостоятельные
+    # Constant. Первый прогон самопроверки от этого дал по 2 находки вместо 1 — счёт был бы
+    # завышен вдвое на всех f-строках. Отсюда: части JoinedStr исключаем поимённо.
+    inner = {id(v) for n in ast.walk(tree) if isinstance(n, ast.JoinedStr) for v in n.values}
+    rank = lambda n: "R1" if id(n) in printed else "R2" if id(n) in docs else "R3"
+    found = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in inner:
+            found.append((node.lineno, node.value, rank(node)))  # proven — общий на файл
+        elif isinstance(node, ast.JoinedStr):
+            parts = []
+            for v in node.values:
+                if isinstance(v, ast.Constant) and isinstance(v.value, str):
+                    parts.append(v.value)
+                elif isinstance(v, ast.FormattedValue):
+                    parts.append("{" + ast.unparse(v.value) + "}")
+            found.append((node.lineno, "".join(parts), rank(node)))
+    return found, None, proven
+
+
+def scan_py(path, known, scripts=None, observed=False):
+    src = path.read_text(encoding="utf-8", errors="replace")
+    lines = src.splitlines()
+    lits, err, proven = literals(src)
+    if err:
+        return [(0, "R1", "⚠️ НЕ РАЗОБРАН (SyntaxError) — файл НЕ проверен, "
+                          "зелёное на него не распространяется", str(err)[:80])]
+    hits = []
+    for lineno, text, rank in lits:
+        # РАЗБИВАЕМ ПО СТРОКАМ ЛИТЕРАЛА: многострочный docstring — один узел, и без этого
+        # каждая находка получала :1 (строку начала блока). Номер, по которому нельзя
+        # открыть место, — не адрес, а вид адреса.
+        for off, piece in enumerate(text.splitlines() or [text]):
+            real = lineno + off
+            ctx = " ".join(lines[max(0, real - 4):real + 2]) + " " + piece
+            for kind, frag in classify(piece, known, ctx, proven, scripts, observed):
+                hits.append((real, rank, kind, frag))
+    return hits
+
+
+def templates_of(generator, known):
+    """Формы, которые ПОРОЖДАЕТ генератор витрин, как регекспы: `{выражение}` → джокер.
+    Нужны, чтобы отличить подвал, напечатанный генератором (долг, чинится в одном месте),
+    от ЦИТАТЫ формы внутри тела ноты (история контура — её не переписывают)."""
+    if not generator.exists():
+        return []
+    lits, err, _pv = literals(generator.read_text(encoding="utf-8", errors="replace"))
+    if err:
+        return []
+    out = []
+    for _, text, _ in lits:
+        for piece in text.splitlines():
+            if not any(n in piece for n in known) or not CALL.search(piece):
+                continue
+            rx = "".join(".*" if p.startswith("{") else re.escape(p)
+                         for p in re.split(r"(\{[^}]*\})", piece) if p)
+            out.append(re.compile(rx))
+    return out
+
+
+def scan_md(path, known, templates=None, scripts=None):
+    """В витрине долгом считается ТОЛЬКО то, что напечатал генератор. Первый прогон
+    2026-07-27 дал 141 🔴 на 33 файлах — и это было ЛОЖНО: большинство вхождений сидело
+    в ТЕЛАХ НОТ, экспортированных в витрину. Требовать «починить» цитату 2026-07-10 —
+    значит требовать переписать историю. Гард, который считает историю долгом, шумит."""
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    hits, quoted = [], 0
+    for i, line in enumerate(lines, 1):
+        ctx = " ".join(lines[max(0, i - 3):i + 1])
+        found = classify(line, known, ctx, (), scripts)
+        if not found:
+            continue
+        if templates is not None and not any(t.search(line) for t in templates):
+            quoted += len(found)          # цитата в теле ноты — не долг, но считаем вслух
+            continue
+        hits += [(i, "R1", kind, frag) for kind, frag in found]
+    scan_md.quoted = getattr(scan_md, "quoted", 0) + quoted
+    return hits
+
+
+def observe(scripts, role="PROTO", timeout=25):
+    """НАБЛЮДЕНИЕ: запустить скрипты и разобрать то, что они РЕАЛЬНО печатают.
+
+    Это вторая половина признака E и главная его часть (@COORD #2873): гард обязан читать
+    ВЫВОД, а не догадываться, во что развернётся `{s}` в шаблоне. Пока он раскрывал
+    плейсхолдер сам, он выносил вердикт о собственном допущении.
+
+    ⚠️ ГРАНИЦА БЕЗОПАСНОСТИ: запускаем ТОЛЬКО `--help` (argparse печатает и выходит) и
+    read-only `read-phoenix --role`. Скрипт без argparse НЕ запускаем вовсе — у него `--help`
+    может уйти в основное действие, а гард не имеет права мутировать живое.
+    Возвращает (находки, сколько прогнано, сколько пропущено).
+    """
+    cmds, skipped = [], []
+    for p in sorted(scripts.glob("*.py")):
+        if "import argparse" not in p.read_text(encoding="utf-8", errors="replace"):
+            skipped.append(p.name)
+            continue
+        cmds.append((p.name + " --help", [sys.executable, str(p), "--help"]))
+    rp = scripts / "read-phoenix.py"
+    if rp.exists():                       # шапка воскресшего — печатается только так
+        cmds.append((f"read-phoenix.py --role {role}",
+                     [sys.executable, str(rp), "--role", role]))
+    hits = []
+    for label, argv in cmds:
+        try:
+            r = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8",
+                               errors="replace", timeout=timeout)
+        except (subprocess.TimeoutExpired, OSError) as e:
+            hits.append((label, f"⚠️ НЕ ПРОГНАН ({type(e).__name__}) — вывод НЕ наблюдался", ""))
+            continue
+        for line in ((r.stdout or "") + (r.returncode and (r.stderr or "") or "")).splitlines():
+            for m in CALL.finditer(line):
+                full = (m.group("path") or "") + m.group("name")
+                if "{" in full or not ABS_LITERAL.match(full.strip()):
+                    continue              # относительное/шаблонное ловит статика
+                as_is = Path(full.strip().replace("\\", "/"))
+                in_bash = Path(re.sub(r"\\(.)", r"\1", full.strip()))
+                if not as_is.exists():
+                    hits.append((label, "🔴 E НАПЕЧАТАННЫЙ ПУТЬ НЕ СУЩЕСТВУЕТ", line.strip()[:110]))
+                elif not in_bash.exists():
+                    hits.append((label, "🔴 E НАПЕЧАТАННОЕ НЕ ОТКРОЕТСЯ В BASH (`\\` = escape)",
+                                 line.strip()[:110]))
+    return hits, len(cmds), skipped
+
+
+def run(scripts, artifacts, quiet=False, do_run=True, role="PROTO"):
+    if not scripts.exists():
+        print(f"⛔ ГАРД НЕ ПОСТАВЛЕН: нет каталога скриптов {scripts}")
+        return 2
+    # ⚠️ Список имён ВЫЧИСЛЯЕТСЯ из каталога, а не пишется здесь: перечень скриптов —
+    # производный факт, а зашитый перечень протухает молча (мой же класс ④).
+    known = {p.name for p in scripts.glob("*.py")}
+    if not quiet:
+        print(f"[гард печатаемых форм] скрипты: {scripts} ({len(known)} шт) · витрины: "
+              f"{artifacts if artifacts.exists() else '— нет каталога, витрины НЕ проверены'}")
+        print("   вижу: литералы/f-строки .py + строки .md · приметы: не-абсолютный вызов · --db")
+        print("   НЕ вижу: форму, собранную в рантайме · комментарии · текст из БД\n")
+    obs_hits, obs_n, obs_skip = ([], 0, []) if not do_run else observe(scripts, role)
+    if do_run and not quiet:
+        print(f"── НАБЛЮДЕНИЕ: прогнано {obs_n} команд (--help + read-phoenix --role {role})"
+              + (f" · НЕ запускались (нет argparse): {', '.join(obs_skip)}" if obs_skip else ""))
+        for label, kind, line in obs_hits:
+            print(f"   {kind}\n      {label}:  {line}")
+        print(f"   {'🔴 ' + str(len(obs_hits)) + ' в НАПЕЧАТАННОМ' if obs_hits else '✅ напечатанное исполнимо'}\n")
+    tpl = templates_of(scripts / "export-channels.py", known)
+    scan_md.quoted = 0
+    targets = [(p, lambda p_, k, s=scripts, o=do_run: scan_py(p_, k, s, o))
+               for p in sorted(scripts.glob("*.py"))]
+    if artifacts.exists():
+        targets += [(p, lambda p_, k, t=tpl, s=scripts: scan_md(p_, k, t, s))
+                    for p in sorted(artifacts.rglob("*.md"))]
+    per_file, by_rank = [], {"R1": 0, "R2": 0, "R3": 0}
+    red = yellow = green = 0
+    for path, fn in targets:
+        all_hits = fn(path, known)
+        green += sum(1 for _, _, k, _ in all_hits if k.startswith("🟢"))
+        hits = [h for h in all_hits if not h[2].startswith("🟢")]   # соответствие не печатаем
+        if not hits:
+            continue
+        per_file.append((path, hits))
+        for _, rank, kind, _ in hits:
+            by_rank[rank] = by_rank.get(rank, 0) + (1 if kind.startswith("🔴") else 0)
+        red += sum(1 for _, _, k, _ in hits if k.startswith("🔴"))
+        yellow += sum(1 for _, _, k, _ in hits if k.startswith("🟡"))
+    for path, hits in per_file:
+        try:
+            shown = path.relative_to(path.parents[1])
+        except (ValueError, IndexError):
+            shown = path.name
+        print(f"── {shown}  ({len(hits)})")
+        for lineno, rank, kind, frag in hits:
+            print(f"   [{rank}] {kind}\n      :{lineno}  {frag[:110]}")
+    print(f"\n{'🔴' if red else '✅'} печатаемых форм: 🔴 {red} · 🟡 {yellow} "
+          f"· 🟢 {green} абсолютных (норма канона; при ПЕРЕЕЗДЕ каталога правятся руками — "
+          f"ограничение канона, не долг строки) · файлов затронуто {len(per_file)} из {len(targets)}")
+    print(f"   по рангу (ранжир @STUD): R1 рабочий вывод {by_rank['R1']} · "
+          f"R2 docstring/--help {by_rank['R2']} · R3 прочее {by_rank['R3']}"
+          + (f"\n   цитат формы в ТЕЛАХ НОТ витрин: {scan_md.quoted} — это ИСТОРИЯ, "
+             f"НЕ долг (переписывать нечего)" if scan_md.quoted else ""))
+    if red or obs_hits:
+        print("   ⇒ чинить у ИСТОЧНИКА: строку печатает скрипт ⇒ правится скрипт; "
+              "витрину печатает генератор ⇒ правится ГЕНЕРАТОР, а не N файлов на диске.")
+    return 1 if (red or obs_hits) else 0
+
+
+# Гард, который не умеет краснеть, — украшение (правило гейта TEST-MUST-BE-ABLE-TO-FAIL).
+SAMPLES = {
+    "dirty_bare.py": 'def f(role):\n    print(f"зови: python read-messages.py --role {role}")\n',
+    "dirty_rel_db.py": ('def f(db, role):\n    print(f"подтверди: python .mezosync/scripts/'
+                        'read-messages.py --db {db} --role {role} --ack X")\n'),
+    "clean_computed.py": ('from pathlib import Path\ndef f(role):\n'
+                          '    print(f"зови: python {Path(__file__).resolve()} --role {role}")\n'),
+    "tombstone.py": ('def f():\n    print("⛔ ОТОЗВАНО: python .mezosync/scripts/'
+                     'read-messages.py --db X — так больше не зовут")\n'),
+    "read-messages.py": "# существует, чтобы имя попало в известные\n",
+    # ⭐ образцы под признак E (три оборота класса у @COORD, #2871)
+    "dirty_broken_path.py": ('def f():\n    print("зови: python {S}scriptsread-messages.py '
+                             '--role X")\n'),          # ② escape съел слэш в шаблоне
+    "dirty_backslash.py": ('def f():\n    print("зови: python C:\\\\guts\\\\.atlas\\\\.mezosync'
+                           '\\\\scripts\\\\read-messages.py --role X")\n'),   # ③ Bash съест
+}
+EXPECT = {"dirty_bare.py": 1, "dirty_rel_db.py": 2, "clean_computed.py": 0, "tombstone.py": 0,
+          "dirty_broken_path.py": 1, "dirty_backslash.py": 1}
+
+
+def selftest():
+    import tempfile
+    tmp = Path(tempfile.mkdtemp(prefix="guard-printed-"))
+    (tmp / "scripts").mkdir()
+    for name, body in SAMPLES.items():
+        (tmp / "scripts" / name).write_text(body, encoding="utf-8")
+    arts = tmp / "generated"
+    arts.mkdir()
+    (arts / "sync.coord.md").write_text(
+        "Актуальный статус — в БД, зови:\n`python .mezosync/scripts/read-messages.py "
+        "--db <db> --role COORD`\n", encoding="utf-8")
+    known = {p.name for p in (tmp / "scripts").glob("*.py")}
+    ok = True
+    for name, want in EXPECT.items():
+        hits = scan_py(tmp / "scripts" / name, known, tmp / "scripts")
+        got = sum(1 for _, _, k, _ in hits if not k.startswith("🟢"))   # 🟢 = норма, не находка
+        good = got == want
+        ok &= good
+        print(f"{'✅' if good else '🔴'} {name:20} находок {got}, ожидалось {want}"
+              + ("" if good else "  ⇐ " + "; ".join(k for _, _, k, _ in hits)))
+    # витрина БЕЗ шаблонов генератора = «считаем всё» (прежнее поведение);
+    # с шаблонами — только порождённое им. Проверяем ОБА, иначе разделение недоказано.
+    md_all = scan_md(arts / "sync.coord.md", known)
+    good = len(md_all) == 2                        # относительный путь + --db
+    ok &= good
+    print(f"{'✅' if good else '🔴'} витрина .md, без шаблонов  находок {len(md_all)}, ожидалось 2")
+    scan_md.quoted = 0
+    md_tpl = scan_md(arts / "sync.coord.md", known, [re.compile(r"НИЧЕГО НЕ СОВПАДЁТ")])
+    good = len(md_tpl) == 0 and scan_md.quoted == 2
+    ok &= good
+    print(f"{'✅' if good else '🔴'} витрина .md, цитата в теле  долг {len(md_tpl)} (ждём 0), "
+          f"цитат {scan_md.quoted} (ждём 2) — история не долг")
+    print(f"\n{'✅ ГАРД ЧУВСТВИТЕЛЕН' if ok else '🔴 ГАРД СЛЕП ИЛИ ШУМИТ'} — краснеет на "
+          f"{sum(1 for v in EXPECT.values() if v)} грязных образцах, молчит на чистом и на надгробии")
+    print(f"   образцы оставлены: {tmp}")
+    return 0 if ok else 1
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--selftest", action="store_true", help="доказать, что гард умеет краснеть")
+    ap.add_argument("--scripts", default=str(LIVE_SCRIPTS))
+    ap.add_argument("--artifacts", default=str(LIVE_ARTIFACTS))
+    ap.add_argument("--no-run", action="store_true",
+                    help="не прогонять скрипты (без наблюдения шаблоны судить нечем)")
+    ap.add_argument("--role", default="PROTO", help="роль для read-only прогона read-phoenix")
+    a = ap.parse_args()
+    if a.selftest:
+        return selftest()
+    return run(Path(a.scripts), Path(a.artifacts), do_run=not a.no_run, role=a.role)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
