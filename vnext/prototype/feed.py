@@ -301,6 +301,12 @@ def main():
     ap.add_argument("--db", required=True)
     ap.add_argument("--role", required=True)
     ap.add_argument("--budget-kb", type=int, default=DEFAULT_BUDGET_KB)
+    # К-2, слово владельца 2026-08-05 UTC: «да, врезай — только чтение».
+    # Флаг доходит ТОЛЬКО до digest/read (см. ниже): index/ack его не получают
+    # по построению — не «не передали по невнимательности», а нет пути в коде.
+    ap.add_argument("--live-readonly", action="store_true",
+                    help="разрешить digest/read против ЖИВОЙ mezosync.db в режиме mode=ro. "
+                         "index/ack игнорируют флаг — они пишут.")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("index")
     sub.add_parser("digest")
@@ -317,9 +323,10 @@ def main():
         cmd_index(w, role, args.budget_kb, ack_conn=w)
         w.close()
     elif args.cmd == "digest":
-        c = connect(args.db); cmd_digest(c, role); c.close()
+        c = connect(args.db, live_readonly=args.live_readonly)
+        cmd_digest(c, role); c.close()
     elif args.cmd == "read":
-        c = connect(args.db)
+        c = connect(args.db, live_readonly=args.live_readonly)
         ids = [int(x) for x in args.ids.split(",")] if args.ids else None
         cmd_read(c, role, ids, args.all, args.budget_kb); c.close()
     elif args.cmd == "ack":

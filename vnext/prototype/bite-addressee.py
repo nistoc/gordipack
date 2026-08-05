@@ -128,20 +128,79 @@ def run_properties():
     _, _, bcast_all, _ = mig.parse_addressee("привет @ALL и @все и @ВСЕ", {"PROTO"})
     check("P8 broadcast по @ALL/@все/@ВСЕ", bcast_all is True)
 
+    # P9 — ФОРМА B: «<эмодзи> @КОМУ — текст» даёт to, и НЕ уходит в loose.
+    # Заведено 05.08 после вопроса владельца: парсер знал одну конвенцию из двух живых
+    # и терял 8 адресованных нот из 18 свежих, называя их «долгом адресации».
+    to_b, _, _, loose_b = mig.parse_addressee(
+        "🔓 @PROTO — РАЗМОРОЖЕН ЖИВЫМ СЛОВОМ ВЛАДЕЛЬЦА. Ниже — что ты пропустил.",
+        {"PROTO", "COORD"})
+    check("P9 форма B «@РОЛЬ — текст» даёт to, не долг", to_b == {"PROTO"} and not loose_b)
+
+    # P10 — форма B с НЕСКОЛЬКИМИ адресатами (реальный случай #2903/#2905)
+    to_multi, _, _, _ = mig.parse_addressee(
+        "🟢 @CORE @STUD @TAXO — ВЛАДЕЛЕЦ ДАЛ GO НА КОД.", {"CORE", "STUD", "TAXO", "PROTO"})
+    check("P10 форма B с несколькими адресатами", to_multi == {"CORE", "STUD", "TAXO"})
+
+    # P11 — РАЗЛИЧАЮЩИЙ тест: @РОЛЬ в СЕРЕДИНЕ текста формой B НЕ считается.
+    # Без него P9/P10 зелены и у «считать любой @РОЛЬ адресатом» — то есть не доказывают
+    # ничего (норма контура: тест обязан уметь покраснеть на мотивирующем случае).
+    to_mid, _, _, loose_mid = mig.parse_addressee(
+        "Разбирал код и заметил, что @TAXO вчера писала про то же самое.",
+        {"TAXO", "PROTO"})
+    check("P11 @РОЛЬ в середине текста — НЕ адресат (различающий тест)",
+          to_mid == set() and loose_mid == {"TAXO"})
+
+    # ── К-2: допуск read-only к ЖИВОЙ БД (слово владельца 2026-08-05) ──────────
+    # Проверяется СТРУКТУРА разрешения, а не «я посмотрел и вроде правильно»:
+    # пишущие команды не должны получать флаг ПО ПОСТРОЕНИЮ, а не по невнимательности.
+    import importlib.util as _ilu
+    _fs = _ilu.spec_from_file_location("feed", HERE / "feed.py")
+    _feed = _ilu.module_from_spec(_fs)
+    _fs.loader.exec_module(_feed)
+    src = (HERE / "feed.py").read_text(encoding="utf-8")
+
+    # P12 — index/ack вызывают connect(write=True) и НЕ передают live_readonly.
+    import re as _re
+    writers_ok = True
+    for cmd in ('"index"', '"ack"'):
+        blk = _re.search(rf'args\.cmd == {cmd}:(.*?)(?=\n    elif|\n\n)', src, _re.S)
+        if not blk or "live_readonly" in blk.group(1):
+            writers_ok = False
+    check("P12 index/ack НЕ получают live_readonly (нет пути в коде, не забывчивость)",
+          writers_ok)
+
+    # P13 — живой путь + write=True отвергается ДАЖЕ с live_readonly=True.
+    # Различающий тест к P12: без него P12 зелен и у кода, где флаг игнорируется вовсе.
+    p13 = False
+    try:
+        _feed.connect(str(_feed.LIVE_DB), write=True, live_readonly=True)
+    except SystemExit:
+        p13 = True
+    check("P13 connect(live, write=True, live_readonly=True) — всё равно ОТКАЗ", p13)
+
     return results
 
 
+FEED_FILE = HERE / "feed.py"
+
+# Мутант = (какой файл портим, чем портим). Два файла, потому что предмет укуса теперь
+# не только схема: К-2 — свойство КОДА (кто получает флаг доступа к живой БД).
 MUTANTS = {
-    "M1-kind-check-снят": lambda sql: sql.replace(
+    "M1-kind-check-снят": (SCHEMA_FILE, lambda s: s.replace(
         "kind        TEXT NOT NULL CHECK (kind IN ('to', 'cc'))",
-        "kind        TEXT NOT NULL"),
-    "M2-cascade-снят": lambda sql: sql.replace(
-        "REFERENCES messages(id) ON DELETE CASCADE", "REFERENCES messages(id)"),
+        "kind        TEXT NOT NULL")),
+    "M2-cascade-снят": (SCHEMA_FILE, lambda s: s.replace(
+        "REFERENCES messages(id) ON DELETE CASCADE", "REFERENCES messages(id)")),
+    # Ровно та ошибка, которую живой человек и допустит: флаг «протёк» в пишущую
+    # команду копипастом. Без этого мутанта P12/P13 зелены и у кода, где разрешение
+    # раздано всем подряд — то есть не доказывают ничего.
+    "M3-флаг-протёк-в-index": (FEED_FILE, lambda s: s.replace(
+        "        w = connect(args.db, write=True)\n",
+        "        w = connect(args.db, write=True, live_readonly=args.live_readonly)\n", 1)),
 }
 
 
 def run_selftest():
-    base_sql = SCHEMA_FILE.read_text(encoding="utf-8")
     clean = run_properties()
     clean_red = sum(1 for _, ok in clean if not ok)
     print(f"ЧИСТАЯ схема: {len(clean) - clean_red}/{len(clean)} — ожидание: все ✅")
@@ -150,23 +209,25 @@ def run_selftest():
         return 1
 
     survived = 0
-    for name, mutate in MUTANTS.items():
-        mutated = mutate(base_sql)
-        if mutated == base_sql:
-            print(f"⚠️ {name}: паттерн не найден в схеме — мутант не встал")
+    for name, (target, mutate) in MUTANTS.items():
+        orig = target.read_text(encoding="utf-8")
+        mutated = mutate(orig)
+        if mutated == orig:
+            print(f"⚠️ {name}: паттерн не найден в {target.name} — мутант НЕ ВСТАЛ "
+                  f"(это не 'поймал', а слепая клетка: считаю выжившим)")
+            survived += 1
             continue
-        orig = SCHEMA_FILE.read_text(encoding="utf-8")
-        SCHEMA_FILE.write_text(mutated, encoding="utf-8")
+        target.write_text(mutated, encoding="utf-8")
         try:
             res = run_properties()
             red = sum(1 for _, ok in res if not ok)
             caught = red > 0
-            print(f"{'✅' if caught else '🔴'} {name}: {'поймал' if caught else 'НЕ ПОЙМАЛ'} "
-                  f"({red}/{len(res)} красных)")
+            print(f"{'✅' if caught else '🔴'} {name} [{target.name}]: "
+                  f"{'поймал' if caught else 'НЕ ПОЙМАЛ'} ({red}/{len(res)} красных)")
             if not caught:
                 survived += 1
         finally:
-            SCHEMA_FILE.write_text(orig, encoding="utf-8")
+            target.write_text(orig, encoding="utf-8")
     print(f"\nИТОГ самопроверки: {len(MUTANTS) - survived}/{len(MUTANTS)} мутантов пойманы "
           f"(из {len(MUTANTS)}, число из len(MUTANTS), не литералом)")
     return 1 if survived else 0

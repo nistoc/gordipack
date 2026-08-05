@@ -43,7 +43,14 @@ HERE = Path(__file__).resolve().parent
 SCHEMA_FILE = HERE / "schema_vnext.sql"
 LIVE_DB = Path(r"C:\guts\.atlas\.mezosync\mezosync.db")
 
+# ФОРМА A: «[ПИШЕТ→КОМУ · FYI …]» — шапка со стрелкой.
 HEADER_RE = re.compile(r"^\W*\[?\s*(\w+)\s*→\s*([^\]·\n]+)", re.MULTILINE)
+# ФОРМА B: «<эмодзи> @КОМУ [@КОМУ…] — текст» в ПЕРВОЙ строке. Добавлена 2026-08-05
+# по вопросу владельца «корректно ли коллеги заполняют адресата»: на свежих нотах
+# парсер давал 8 «долгов» из 18 — и ВСЕ восемь несли совершенно явный `@РОЛЬ` сразу
+# после эмодзи. Конвенций живых ДВЕ, а знал я одну. Класс мой же, оплаченный дважды
+# за сутки: **измеритель проверяет свою модель предмета, а не предмет**.
+FORM_B_RE = re.compile(r"^[^\n@]{0,12}((?:@\w+[\s,/]*)+)[—\-–]")
 CC_RE = re.compile(r"\bcc\b[^\n]*", re.IGNORECASE)
 AT_ROLE_RE = re.compile(r"@(\w+)\b")
 BROADCAST_RE = re.compile(r"@ALL\b|@все\b|@ВСЕ\b")
@@ -63,6 +70,20 @@ def parse_addressee(body: str, known_roles: set) -> tuple:
             tok = tok.strip().upper()
             if tok in known_roles:
                 to.add(tok)
+
+    # ФОРМА B — равноправная живая конвенция, не запасной вариант: проверяется всегда,
+    # а не «если A не сработала». Нота может нести обе (замер 05.08: пересечений 0,
+    # но конструкция не должна на это опираться — конвенции живут независимо).
+    first_line = body.splitlines()[0] if body else ""
+    mb = FORM_B_RE.match(first_line)
+    if mb:
+        b_span = (0, mb.end(1))
+        for role in re.findall(r"@(\w+)", mb.group(1)):
+            role = role.upper()
+            if role in known_roles:
+                to.add(role)
+        if header_span is None:
+            header_span = b_span
 
     cc_span = None
     cm = CC_RE.search(body)
