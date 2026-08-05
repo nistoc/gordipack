@@ -38,13 +38,29 @@ LIVE_DB = Path(r"C:\guts\.atlas\.mezosync\mezosync.db")
 DEFAULT_BUDGET_KB = 24
 
 
-def connect(db: str, write: bool = False) -> sqlite3.Connection:
+def connect(db: str, write: bool = False, live_readonly: bool = False) -> sqlite3.Connection:
+    """Мандат PROTO: живой субстрат — только чтение. По умолчанию прототип отказывается
+    открывать боевой путь ВООБЩЕ (безопасный дефолт — ошибка НАРУЖУ, не тихий обход).
+
+    `live_readonly=True` — К-2 (05.08, находка RCC #2894/#2897): read-only команды
+    (`digest`/`read`) — чистый SELECT, курсор не двигают, батч не открывают (проверено
+    чтением строк cmd_digest/cmd_read + P-свойством в bite-addressee.py). Запрет их
+    держал не мандат, а НЕРАЗЛИЧЕНИЕ «эта команда пишет» и «эта команда не пишет» —
+    RCC строил ту же лестницу руками, непереносимо. Разрешение УЗКОЕ: только сюда,
+    только флагом, только `write=False`; `index`/`ack` живую БД по-прежнему не видят
+    (main() ниже вообще не пробрасывает live_readonly в их вызовы).
+    """
     p = Path(db)
-    if p.resolve() == LIVE_DB.resolve():
+    is_live = p.resolve() == LIVE_DB.resolve()
+    if is_live and not (live_readonly and not write):
         sys.exit("⛔ ОТКАЗ: это ЖИВАЯ mezosync.db. Прототип работает только по песочнице "
-                 "(vnext/sandbox/bootstrap.py). Мандат PROTO: живой субстрат — только чтение.")
+                 "(vnext/sandbox/bootstrap.py). Мандат PROTO: живой субстрат — только чтение. "
+                 "Read-only команды (digest/read) можно против живой БД флагом --live-readonly.")
     if not p.exists():
         sys.exit(f"ERR: БД не найдена: {p}. Подними песочницу: python vnext/sandbox/bootstrap.py")
+    if is_live:
+        print("⚠️  ЖИВАЯ mezosync.db, РЕЖИМ mode=ro — курсор и батч НЕ трогаются этим вызовом.",
+              file=sys.stderr)
     return sqlite3.connect(f"file:{p}?mode={'rw' if write else 'ro'}", uri=True, timeout=5)
 
 

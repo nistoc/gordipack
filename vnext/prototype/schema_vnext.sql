@@ -198,7 +198,8 @@ INSERT INTO schema_migrations (version, applied_by) VALUES
     ('002_role_entity', 'PROTO'),
     ('003_rule_status', 'PROTO'),
     ('004_presence', 'PROTO'),
-    ('005_phoenix_sections', 'PROTO');
+    ('005_phoenix_sections', 'PROTO'),
+    ('006_addressee_field', 'PROTO');
 
 -- ────────────────────────────────────────────────────────────────────────────
 -- ⑦ РЕЕСТР ВРЕЗОК — когда механизм менялся на самом деле
@@ -234,6 +235,78 @@ SELECT p.role, p.section, p.saved_at, m.mechanism, m.changed_at, m.summary,
 FROM phoenix p
 JOIN mechanism_changes m
   ON instr(lower(p.body), lower(m.mechanism)) > 0;
+
+-- ────────────────────────────────────────────────────────────────────────────
+-- ⑧ ЛЕНТА + АДРЕСАТ КАК ПОЛЕ  (F6/R3, этап Э-Б)
+-- Сегодня адресат живёт ПРОЗОЙ в теле: «[PROTO→COORD · FYI ALL]», «cc @TAXO @STUD»,
+-- часто разорвано на несколько строк. Замер #2775 (живые данные, 07-26): лично
+-- адресовано роли **1–20 %** прочитанного; у RCC исторически 18 нот из 482 (позже
+-- перемерено на 692/46 — тот же порядок). Единственный способ найти своё сегодня —
+-- прочитать ВСЁ тело: чтобы понять, что нота твоя, ты обязан её прочитать.
+--
+-- ⇒ Адресат переезжает в СХЕМУ: явная таблица `message_addressee` (many-to-many —
+--   роль может стоять и в to, и в cc у разных нот в один момент), НЕ JSON-колонка.
+--   Причина — запрос, ради которого всё затевается: «покажи адресованное мне» ОДНИМ
+--   индексируемым обращением. JSON-массив в SQLite такого дёшево не даёт: без JSON1
+--   фильтрация — LIKE-скан по каждой строке, то есть то же самое чтение всего.
+--
+-- ⚠️ ВТОРАЯ ПОЛОВИНА, БЕЗ КОТОРОЙ АДРЕСАТ ПОЛЕМ ВРЕДЕН (цена та же нота #2775):
+--   индекс 187 нот = 24 КБ против 10 тел = 23 КБ — индекс ПЛОТНЕЕ в 18.7 раза.
+--   «Читать ТОЛЬКО адресованное» = ослепнуть: канон/вехи/чужие уроки касаются всех
+--   и адресата не несут. Поэтому `broadcast=1` — ЯВНЫЙ канал «касается всех», а
+--   НЕ молчаливое отсутствие адресата (оно неотличимо от «забыл указать»,
+--   см. VIEW messages_unaddressed — это ДОЛГ данных, а не нормальный broadcast).
+--
+-- ⚠️ ЧЕСТНОСТЬ МИГРАЦИИ (урок AIA §3.1, дельта 04.08→05.08, «детектор не отличает
+--   употребление от упоминания»): регексп-разбор старой прозы (backfill) ошибается —
+--   пропускает адресата, разбитого переносом строки, путает упоминание роли в
+--   примере с адресацией ей. `addressed_by` делает эту разницу ВИДИМОЙ, а не
+--   молчаливой: поле, заполненное явно при записи, доверия заслуживает больше,
+--   чем восстановленное регекспом из истории.
+-- ────────────────────────────────────────────────────────────────────────────
+CREATE TABLE messages (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    writer_role TEXT NOT NULL REFERENCES roles(role),
+    timestamp   TEXT NOT NULL DEFAULT (datetime('now')),
+    body_md     TEXT NOT NULL,
+    tags        TEXT NOT NULL DEFAULT '[]',
+    priority    TEXT NOT NULL DEFAULT 'normal' CHECK (priority IN ('normal', 'high', 'critical')),
+    resolved    INTEGER NOT NULL DEFAULT 0,
+    broadcast   INTEGER NOT NULL DEFAULT 0,
+    -- 'field' — роль передала --to/--cc явно при записи; 'backfill' — восстановлено
+    -- регекспом `@РОЛЬ` из прозы при миграции старых нот. Разница ОБЯЗАНА быть видна.
+    addressed_by TEXT NOT NULL DEFAULT 'field' CHECK (addressed_by IN ('field', 'backfill'))
+);
+
+CREATE TABLE message_addressee (
+    message_id  INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    role        TEXT NOT NULL REFERENCES roles(role),
+    kind        TEXT NOT NULL CHECK (kind IN ('to', 'cc')),
+    PRIMARY KEY (message_id, role, kind)
+);
+-- Индекс под ИМЕННО тот запрос, ради которого всё затевалось.
+CREATE INDEX idx_addressee_role ON message_addressee (role, message_id);
+
+-- «Моя лента» одним обращением — то, чего сегодня нет вовсе (сегодня — regex по телу).
+CREATE VIEW messages_for_role AS
+SELECT m.id, m.writer_role, m.timestamp, m.body_md, m.tags, m.priority, m.resolved,
+       ma.kind AS my_reason
+FROM messages m
+JOIN message_addressee ma ON ma.message_id = m.id
+UNION ALL
+SELECT m.id, m.writer_role, m.timestamp, m.body_md, m.tags, m.priority, m.resolved,
+       'broadcast' AS my_reason
+FROM messages m
+WHERE m.broadcast = 1;
+
+-- Долг адресации, видимый СРАЗУ, а не найденный чтением: ни broadcast, ни адресата.
+-- Либо забыли указать (реальный долг), либо это скрытый broadcast, который контур
+-- сегодня не отличает от забытого поля — то есть та же дыра, которую чинит эта таблица.
+CREATE VIEW messages_unaddressed AS
+SELECT m.id, m.writer_role, m.timestamp
+FROM messages m
+LEFT JOIN message_addressee ma ON ma.message_id = m.id
+WHERE m.broadcast = 0 AND ma.message_id IS NULL;
 
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 INSERT INTO meta (key, value) VALUES
