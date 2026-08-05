@@ -200,7 +200,8 @@ INSERT INTO schema_migrations (version, applied_by) VALUES
     ('004_presence', 'PROTO'),
     ('005_phoenix_sections', 'PROTO'),
     ('006_addressee_field', 'PROTO'),
-    ('007_cursor_segments', 'PROTO');
+    ('007_cursor_segments', 'PROTO'),
+    ('008_message_closure', 'PROTO');
 
 -- ────────────────────────────────────────────────────────────────────────────
 -- ⑦ РЕЕСТР ВРЕЗОК — когда механизм менялся на самом деле
@@ -368,6 +369,61 @@ FROM cursor_segments GROUP BY role;
 CREATE VIEW cursor_gaps AS
 SELECT role, from_id, to_id, to_id - from_id + 1 AS notes, basis, authorized, note_id, at
 FROM cursor_segments WHERE kind = 'declared';
+
+-- ────────────────────────────────────────────────────────────────────────────
+-- ⑩ СРОЧНОСТЬ ГАСНЕТ ЗАКРЫТИЕМ ВОПРОСА, А НЕ ЧАСАМИ  (Э-Г, вариант B)
+-- Замер 2026-08-05: 403 ноты старше 01.08 несут high/critical — вопрос закрыт
+-- недели назад, пометка горит. Реакция адресата на high и normal ОДИНАКОВА
+-- (медианы 8.1 и 8.8 мин) ⇒ пометка не сортирует живое, но мусорит в долге:
+-- в непрочитанном ролей 20–36 % помечено high, и это в основном истёкшая срочность.
+--
+-- ⛔ ПОЧЕМУ НЕ «ИСТЕЧЕНИЕ ПО ВРЕМЕНИ» (я предлагал, владелец отверг — и он прав):
+--    контур останавливается на сутки и более (30.07–04.08 — семь суток тишины).
+--    Срок, отмеряемый КАЛЕНДАРЁМ, за такую паузу гасит ВСЕ пометки разом, включая
+--    настоящие: проснувшийся контур получает чистое поле и теряет реальную срочность.
+--    Это ровно класс «производное от календарного времени врёт, когда носитель
+--    остановился» — родня mtime, сброшенного копированием.
+--
+-- 🪤 И ПОЧЕМУ ПРЕЖНЕЕ ПОЛЕ `resolved` НЕ РАБОТАЛО (1 нота из 1483 — я объяснил это
+--    дисциплиной, и ошибся): его НЕЧЕМ поставить. Единственный писатель —
+--    `check-errors.py --resolve`, и он бьёт по `WHERE tags LIKE '%"DWERR"%'`, то есть
+--    только по ошибкам двойной записи Фазы 1–3. Для обычной ноты поле недоступно.
+--    ⇒ Незаполняемое поле — не лень ролей, а отсутствующий механизм. Проверять надо
+--    ДО вывода о дисциплине (формула AIA: «перед введением требования проверить,
+--    что его можно выполнить»).
+--
+-- ⇒ Закрытие — не булево, а СВЯЗЬ: какая нота какую закрыла. Булево «resolved=1»
+--   повторило бы класс, только что вылеченный в курсоре: факт без основания, который
+--   через месяц неотличим от потери. Здесь видно ЧЕМ закрыто, и закрыть молча нечем.
+-- ────────────────────────────────────────────────────────────────────────────
+CREATE TABLE message_closure (
+    message_id  INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    closed_by   INTEGER NOT NULL REFERENCES messages(id),   -- нота, которая закрыла
+    closed_role TEXT NOT NULL REFERENCES roles(role),
+    at          TEXT NOT NULL DEFAULT (datetime('now')),
+    -- Нота не закрывает сама себя: иначе «закрыто» ставится тем же ходом, что и вопрос,
+    -- и перестаёт что-либо значить.
+    CHECK (closed_by <> message_id)
+);
+
+-- СРОЧНОСТЬ — ПРОИЗВОДНАЯ, НЕ ХРАНИМАЯ. Хранится priority (что автор объявил),
+-- показывается urgency (что действует сейчас). Замер Э-А: хранимое производное
+-- протухает первым — поэтому вычисляем, а не пишем второе поле.
+CREATE VIEW message_urgency AS
+SELECT m.id, m.writer_role, m.timestamp, m.priority,
+       CASE WHEN c.message_id IS NOT NULL THEN 'normal' ELSE m.priority END AS urgency,
+       c.closed_by, c.closed_role, c.at AS closed_at
+FROM messages m LEFT JOIN message_closure c ON c.message_id = m.id;
+
+-- ⚠️ ВИТРИНА ДЛЯ РОЛИ: «что на тебе висит незакрытым». Показывается там, куда роль
+-- и так смотрит (вывод ридера), а не отдельной командой, которую надо не забыть.
+-- Забывание — это и есть механизм, который мы лечим, а не порок роли.
+CREATE VIEW open_high_for_role AS
+SELECT ma.role, m.id, m.writer_role, m.timestamp, m.priority
+FROM messages m
+JOIN message_addressee ma ON ma.message_id = m.id AND ma.kind = 'to'
+LEFT JOIN message_closure c ON c.message_id = m.id
+WHERE m.priority IN ('high', 'critical') AND c.message_id IS NULL;
 
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 INSERT INTO meta (key, value) VALUES
