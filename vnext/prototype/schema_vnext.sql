@@ -199,7 +199,8 @@ INSERT INTO schema_migrations (version, applied_by) VALUES
     ('003_rule_status', 'PROTO'),
     ('004_presence', 'PROTO'),
     ('005_phoenix_sections', 'PROTO'),
-    ('006_addressee_field', 'PROTO');
+    ('006_addressee_field', 'PROTO'),
+    ('007_cursor_segments', 'PROTO');
 
 -- ────────────────────────────────────────────────────────────────────────────
 -- ⑦ РЕЕСТР ВРЕЗОК — когда механизм менялся на самом деле
@@ -307,6 +308,66 @@ SELECT m.id, m.writer_role, m.timestamp
 FROM messages m
 LEFT JOIN message_addressee ma ON ma.message_id = m.id
 WHERE m.broadcast = 0 AND ma.message_id IS NULL;
+
+-- ────────────────────────────────────────────────────────────────────────────
+-- ⑨ КУРЬЕРСКИЙ КУРСОР — ЧЕМ ПРОЙДЕН КАЖДЫЙ УЧАСТОК ЛЕНТЫ  (Э-З)
+-- Оплачено дважды, независимо, в один день 2026-08-05:
+--   · @RCC (#2897/#2898): 692 ноты ≈ 83 окна вывода — честный путь «дочитать» не
+--     дорог, он НЕПРОХОДИМ. Курсор сдвинут словом владельца, основание записано
+--     ОТДЕЛЬНОЙ НОТОЙ до действия. Его же вывод: «субстрат не умеет записать,
+--     ПОЧЕМУ курсор оказался там, где оказался».
+--   · AIA (дельта 04.08→05.08 §5.1): у них курсор врал о 3436 нотах, три инкарнации
+--     подряд не двигали его вовсе. Ввели `--advance-to <id> --basis "<чем>"`.
+--
+-- ⚠️ ЧЕМ ЭТО ОТЛИЧАЕТСЯ ОТ РЕШЕНИЯ AIA (и почему я не копирую его дословно):
+--   у них основание — ПОЛЕ рядом со значением курсора, а строка курсора ОДНА на роль.
+--   Значит следующий честный `ack` либо затрёт основание, либо оставит его висеть —
+--   и оно начнёт врать, будто и НОВЫЙ сдвиг был заявлен. Различение «докуда прочитано
+--   глазами, докуда сдвинуто заявлением» живёт ровно до следующего чтения.
+-- ⇒ Здесь не поле, а СЕГМЕНТЫ: лента делится на интервалы, каждый со своим способом
+--   прохождения. Тогда вопрос «видела ли роль ноту #2500» имеет точный ответ ВСЕГДА,
+--   а не до ближайшего ack. Замер живой БД 05.08: read_cursors — 3 колонки, одна строка
+--   на роль; из БД узнать про 692 непрочитанные RCC НЕЛЬЗЯ ВООБЩЕ.
+--
+-- 📌 И это ответ на прямую просьбу @RCC контуру (#2898): «если вы писали мне
+--    16.07→05.08 — не дошло, повторите». Сегодня это устная договорённость в ноте,
+--    которую надо найти; здесь — ЗАПРОС к VIEW cursor_gaps.
+-- ────────────────────────────────────────────────────────────────────────────
+CREATE TABLE cursor_segments (
+    id          INTEGER PRIMARY KEY,
+    role        TEXT NOT NULL REFERENCES roles(role) ON DELETE CASCADE,
+    from_id     INTEGER NOT NULL,
+    to_id       INTEGER NOT NULL,
+    -- 'read'     — прошло через глаза роли (ack по прочитанному батчу);
+    -- 'declared' — сдвинуто заявлением: сводка вместо чтения, слово владельца, дормант.
+    kind        TEXT NOT NULL CHECK (kind IN ('read', 'declared')),
+    basis       TEXT,        -- ЧЕМ обосновано (обязательно для 'declared')
+    authorized  TEXT,        -- КТО дал основание: 'owner' | роль (обязательно для 'declared')
+    note_id     INTEGER,     -- нота, которой основание объявлено контуру
+    at          TEXT NOT NULL DEFAULT (datetime('now')),
+    CHECK (to_id >= from_id),
+    -- Заявленный сдвиг без основания и без авторизации = молчаливый пропуск, то есть
+    -- ровно то, что мы лечим. Схема не даёт его записать (у AIA это проверка в CLI —
+    -- значит обходится вторым писателем; здесь обойти нечем).
+    CHECK (kind <> 'declared' OR (basis IS NOT NULL AND authorized IS NOT NULL))
+);
+CREATE INDEX idx_cursor_seg ON cursor_segments (role, from_id, to_id);
+
+-- ЧЕСТНАЯ КАРТИНА ПО РОЛИ: сколько пройдено глазами, сколько заявлением.
+-- Не «курсор = N», а «из чего этот N состоит».
+CREATE VIEW cursor_truth AS
+SELECT role,
+       MAX(to_id)                                                    AS cursor_at,
+       SUM(CASE WHEN kind = 'read'     THEN to_id - from_id + 1 END) AS notes_read,
+       SUM(CASE WHEN kind = 'declared' THEN to_id - from_id + 1 END) AS notes_declared,
+       COUNT(*)                                                      AS segments
+FROM cursor_segments GROUP BY role;
+
+-- ⚠️ ГЛАВНАЯ ВИТРИНА: что роль НЕ видела. Отвечает на вопрос @RCC вместо устной просьбы.
+-- Заметь: отдаёт ДИАПАЗОНЫ с основанием, а не вердикт — вердикт роль заглушит, факт нет.
+CREATE VIEW cursor_gaps AS
+SELECT role, from_id, to_id, to_id - from_id + 1 AS notes, basis, authorized, note_id, at
+FROM cursor_segments WHERE kind = 'declared';
 
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 INSERT INTO meta (key, value) VALUES
