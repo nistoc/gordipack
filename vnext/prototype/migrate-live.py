@@ -368,11 +368,80 @@ def step4_message_thread(con: sqlite3.Connection, dry: bool) -> dict:
             "нот со ссылкой в прозе (НЕ взяты — решение ③)": prose}
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# ШАГ 5 — критерий «готово» + связь записки с задачей
+# ═════════════════════════════════════════════════════════════════════════════
+
+STEP5 = "005-task-criterion-and-link"
+
+
+def step5_task_criterion(con: sqlite3.Connection, dry: bool) -> dict:
+    """Критерий закрытия у карточки + связь записки с задачей.
+
+    Замер живой БД 14:43 UTC: карточек 72 (открытых 40), колонок со словом
+    done/criteria/accept — НИ ОДНОЙ. «Готово» решается мнением закрывающего.
+
+    ⚠️ СВЯЗЬ — ТАБЛИЦА, А НЕ КОЛОНКА task_id: 348 записок упоминают несколько номеров
+    карточек против 399 с одним. Одна колонка заставила бы выбрать одну из шести, и
+    остальные пять снова ушли бы в прозу — шаг не сделал бы ничего.
+
+    ⛔ ЧЕГО ЭТОТ ШАГ НАРОЧНО НЕ ДЕЛАЕТ — сторож закрытия (триггер, запрещающий закрыть
+       карточку без критерия). Он написан и проверен укусом, но МЕНЯЕТ ПОВЕДЕНИЕ живого
+       механизма: после включения существующие инструменты координатора перестанут
+       закрывать карточки. Такое не прячут в общий сценарий — включается отдельно
+       и отдельным словом.
+    📌 И честно про цену этого воздержания: без сторожа колонка рискует остаться пустой.
+       Ровно то, что случилось с полем `resolved` — 1 запись из 1483, потому что ставить
+       было нечем. Витрина `backlog_without_criterion` показывает долг, но витрину надо
+       позвать, а позвать — значит помнить. Выбор настоящий, и он не мой.
+    """
+    if not table_exists(con, "backlog"):
+        return {"пропущен": "таблицы backlog в этой базе нет"}
+
+    had_col = has_column(con, "backlog", "done_when")
+    had_tbl = table_exists(con, "message_task")
+
+    if not dry:
+        if not had_col:
+            con.execute("ALTER TABLE backlog ADD COLUMN done_when TEXT")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS message_task (
+                message_id  INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+                task_id     INTEGER NOT NULL REFERENCES backlog(id)  ON DELETE CASCADE,
+                linked_by   TEXT NOT NULL DEFAULT 'field' CHECK (linked_by IN ('field','backfill')),
+                PRIMARY KEY (message_id, task_id)
+            )""")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_message_task_task "
+                    "ON message_task (task_id, message_id)")
+        con.commit()
+
+    total = con.execute("SELECT COUNT(*) FROM backlog").fetchone()[0]
+    open_n = con.execute("SELECT COUNT(*) FROM backlog WHERE status='open'").fetchone()[0]
+    no_crit = (con.execute("SELECT COUNT(*) FROM backlog WHERE status='open' "
+                           "AND (done_when IS NULL OR TRIM(done_when)='')").fetchone()[0]
+               if has_column(con, "backlog", "done_when") else open_n)
+    links = (con.execute("SELECT COUNT(*) FROM message_task").fetchone()[0]
+             if table_exists(con, "message_task") else 0)
+    # ⚠️ КЛЮЧИ РАЗНЫЕ. В первом варианте оба факта писались под ключом "есть", и второй
+    #    молча затирал первый — в отчёте пропала целая строка, и заметить это можно было
+    #    только сравнив число строк. Отчёт, теряющий факт без единого признака потери, —
+    #    тот же класс, что молчаливый no-op проверки.
+    return {"колонка done_when была": had_col,
+            "колонка done_when есть": has_column(con, "backlog", "done_when"),
+            "таблица message_task была": had_tbl,
+            "таблица message_task есть": table_exists(con, "message_task"),
+            "карточек всего": total, "открытых": open_n,
+            "🔴 открытых БЕЗ критерия (весь долг сразу виден)": no_crit,
+            "связей записка↔задача записано": links,
+            "сторож закрытия": "НЕ включён — меняет поведение живых инструментов, нужно слово"}
+
+
 STEPS = [
     (STEP1, "реестр ролей (опора для пяти таблиц)", step1_roles),
     (STEP2, "messages: broadcast + addressed_by", step2_messages_columns),
     (STEP3, "честный курсор отрезками", step3_cursor_segments),
     (STEP4, "треды: ответ связан с вопросом полем", step4_message_thread),
+    (STEP5, "критерий «готово» + связь записки с задачей", step5_task_criterion),
 ]
 
 

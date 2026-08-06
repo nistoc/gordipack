@@ -202,7 +202,8 @@ INSERT INTO schema_migrations (version, applied_by) VALUES
     ('006_addressee_field', 'PROTO'),
     ('007_cursor_segments', 'PROTO'),
     ('008_message_closure', 'PROTO'),
-    ('009_message_thread', 'PROTO');
+    ('009_message_thread', 'PROTO'),
+    ('010_task_criterion', 'PROTO');
 
 -- ────────────────────────────────────────────────────────────────────────────
 -- ⑦ РЕЕСТР ВРЕЗОК — когда механизм менялся на самом деле
@@ -541,6 +542,85 @@ SELECT m.id, m.writer_role, m.timestamp,
 FROM messages m
 LEFT JOIN message_thread t ON t.message_id = m.id
 WHERE t.message_id IS NULL AND INSTR(m.body_md, '#') > 0;
+
+-- ────────────────────────────────────────────────────────────────────────────
+-- ⑫ ЗАДАЧА: КРИТЕРИЙ «ГОТОВО» + СВЯЗЬ ЗАПИСКИ С ЗАДАЧЕЙ  (Ш5, 2.7)
+-- Замер живой БД 2026-08-06 14:43 UTC: карточек 72 (открытых 40, закрытых 32).
+-- Колонок со словом done/criteria/accept — НИ ОДНОЙ. То есть «готово» сегодня
+-- решается мнением закрывающего, и проверить это решение нечем.
+--
+-- ⚠️ ПОЧЕМУ СВЯЗЬ «ЗАПИСКА ↔ ЗАДАЧА» — ОТДЕЛЬНАЯ ТАБЛИЦА, А НЕ КОЛОНКА task_id:
+--    замер по телам записок — 348 записок упоминают НЕСКОЛЬКО номеров карточек
+--    против 399 с одним. Почти половина. Одна колонка заставила бы выбрать одну
+--    карточку из шести (живой пример: записка про очередь #69/#70/#71/#72/#55/#58),
+--    а остальные пять снова ушли бы в прозу — то есть шаг не сделал бы ничего.
+--    ⚠️ Граница замера: считались короткие номера `#1..#999` регекспом, а он не
+--    отличает номер карточки от номера запроса на слияние. Это ГИПОТЕЗА о порядке
+--    величины, а не точный счёт; для выбора «одна колонка или таблица» её хватает,
+--    для отчёта о числе связей — нет.
+-- ────────────────────────────────────────────────────────────────────────────
+-- Карточка задачи. В живой БД таблица уже есть (72 строки) — там шаг перевода
+-- добавляет ОДНУ колонку; здесь она объявлена целиком, потому что это эталон схемы.
+CREATE TABLE backlog (
+    id          INTEGER PRIMARY KEY,
+    role        TEXT NOT NULL REFERENCES roles(role),
+    title       TEXT NOT NULL,
+    body_md     TEXT NOT NULL DEFAULT '',
+    status      TEXT NOT NULL DEFAULT 'open'
+                CHECK (status IN ('open', 'done', 'blocked', 'dropped')),
+    priority    TEXT NOT NULL DEFAULT 'normal',
+    -- 🆕 ПРОВЕРЯЕМОЕ условие закрытия. Не «описание», а то, что можно предъявить:
+    -- прогон, число, ответ владельца. Пустое — честный признак долга, см. витрину ниже.
+    done_when   TEXT,
+    created_by  TEXT NOT NULL DEFAULT 'coord',
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE message_task (
+    message_id  INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    task_id     INTEGER NOT NULL REFERENCES backlog(id)  ON DELETE CASCADE,
+    -- 'field' — роль указала при записи; 'backfill' — восстановлено из прозы.
+    linked_by   TEXT NOT NULL DEFAULT 'field' CHECK (linked_by IN ('field','backfill')),
+    PRIMARY KEY (message_id, task_id)
+);
+CREATE INDEX idx_message_task_task ON message_task (task_id, message_id);
+
+-- История карточки одним обращением — сегодня её собрать НЕЛЬЗЯ ВООБЩЕ.
+CREATE VIEW task_history AS
+SELECT mt.task_id, b.title, b.status, m.id AS message_id, m.writer_role, m.timestamp,
+       mt.linked_by
+FROM message_task mt
+JOIN backlog  b ON b.id = mt.task_id
+JOIN messages m ON m.id = mt.message_id;
+
+-- 🎯 ДОЛГ, ВИДИМЫЙ БЕЗ ЧТЕНИЯ: открытые карточки без проверяемого условия закрытия.
+-- ⚠️ TRIM С ЯВНЫМ НАБОРОМ СИМВОЛОВ, а не голый TRIM: в SQLite голый TRIM снимает
+--    ТОЛЬКО пробел. Критерий из одной табуляции прошёл бы за настоящий — поймано
+--    укусом 2026-08-06 14:46 UTC, до этого и сторож, и витрина верили табуляции.
+CREATE VIEW backlog_without_criterion AS
+SELECT id, role, title, priority, created_at
+FROM backlog
+WHERE status = 'open'
+  AND (done_when IS NULL
+       OR TRIM(done_when, ' ' || char(9) || char(10) || char(13)) = '');
+
+-- ⚠️ СТОРОЖ ЗАКРЫТИЯ — НАПИСАН, НО ВКЛЮЧАЕТСЯ ОТДЕЛЬНЫМ СЛОВОМ. Цена названа здесь,
+-- а не обнаружится при первом закрытии карточки:
+--   после включения карточку НЕЛЬЗЯ перевести в 'done' без критерия — включая
+--   существующие инструменты координатора, которые о критерии ничего не знают.
+-- Это меняет поведение живого механизма, поэтому в шаг перевода НЕ входит.
+-- 📌 Но и без него колонка мертва: незаполняемое поле — не лень ролей, а отсутствующий
+--    механизм (урок `resolved`: 1 запись из 1483, потому что ставить было нечем).
+--    ⇒ Выбор «включать или нет» — настоящий, а не формальный, и он владельца.
+CREATE TRIGGER backlog_done_needs_criterion
+BEFORE UPDATE OF status ON backlog
+WHEN NEW.status = 'done' AND OLD.status <> 'done'
+     AND (NEW.done_when IS NULL
+          OR TRIM(NEW.done_when, ' ' || char(9) || char(10) || char(13)) = '')
+BEGIN
+    SELECT RAISE(ABORT, 'карточку нельзя закрыть без критерия готовности: заполни done_when');
+END;
 
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 INSERT INTO meta (key, value) VALUES
