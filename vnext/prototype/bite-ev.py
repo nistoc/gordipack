@@ -119,12 +119,23 @@ def main():
                   "WHERE role='COORD'"))
 
     print("\n── ③ ВЕРСИЯ СХЕМЫ: вычисляется, а не хранится")
+    # 🪤 ЗДЕСЬ БЫЛО `applied == 5` — ЧИСЛО МИГРАЦИЙ ЗНАЧЕНИЕМ. Миграций стало 9, и укус
+    #    краснел молча, пока я не прогнал его по другому поводу (2026-08-06 14:41 UTC).
+    #    Это ровно тот класс, который сам укус и охраняет — «производное значением
+    #    протухает молча» — только в стороже, а не в схеме. Второй раз за сутки: сторож
+    #    у автора остаётся украшением, пока автор не станет его потребителем.
+    # ⇒ Проверяется не РАВЕНСТВО ЧИСЛУ, а СВОЙСТВО: версия вычисляется из журнала
+    #   (новая строка видна витрине СРАЗУ) и нигде не хранится копией.
     ver, applied = con.execute("SELECT version, applied FROM schema_version").fetchone()
     stored = con.execute("SELECT COUNT(*) FROM meta WHERE key='schema_version'").fetchone()[0]
-    ok = applied == 5 and stored == 0
+    con.execute("INSERT INTO schema_migrations (version, applied_by) VALUES ('999_probe','BITE')")
+    ver2, applied2 = con.execute("SELECT version, applied FROM schema_version").fetchone()
+    con.execute("DELETE FROM schema_migrations WHERE version='999_probe'")
+    ok = (stored == 0 and applied > 0 and applied2 == applied + 1 and ver2 == '999_probe')
     v.append(ok)
-    print(f"  {'✅' if ok else '🔴'} версия '{ver}' из {applied} миграций; "
-          f"хранимых копий в meta: {stored} (нужен 0 — хранимое производное и лжёт первым)")
+    print(f"  {'✅' if ok else '🔴'} версия '{ver}' из {applied} миграций; хранимых копий "
+          f"в meta: {stored} (нужен 0); новая строка журнала видна витрине сразу: "
+          f"{applied}→{applied2}, версия '{ver2}'")
     con.close()
 
     print("\n── 🔴 КОНТРОЛЬНЫЙ: FK БЕЗ `PRAGMA foreign_keys=ON` — УКРАШЕНИЕ")

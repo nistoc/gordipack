@@ -201,7 +201,8 @@ INSERT INTO schema_migrations (version, applied_by) VALUES
     ('005_phoenix_sections', 'PROTO'),
     ('006_addressee_field', 'PROTO'),
     ('007_cursor_segments', 'PROTO'),
-    ('008_message_closure', 'PROTO');
+    ('008_message_closure', 'PROTO'),
+    ('009_message_thread', 'PROTO');
 
 -- ────────────────────────────────────────────────────────────────────────────
 -- ⑦ РЕЕСТР ВРЕЗОК — когда механизм менялся на самом деле
@@ -460,6 +461,86 @@ FROM messages m
 JOIN message_addressee ma ON ma.message_id = m.id AND ma.kind = 'to'
 LEFT JOIN message_closure c ON c.message_id = m.id
 WHERE m.priority IN ('high', 'critical') AND c.message_id IS NULL;
+
+-- ────────────────────────────────────────────────────────────────────────────
+-- ⑪ ТРЕД: ОТВЕТ СВЯЗАН С ВОПРОСОМ ПОЛЕМ, А НЕ ПРОЗОЙ  (Ш4, 2.6)
+-- Конструкция предложена AIA; НУЖДА подтверждена НАШИМ замером, а не их опытом
+-- (окно #2500…#2956, 457 нот активной работы):
+--     83 % наших нот ссылаются на другие ПРОЗОЙ — 1413 ссылок, 3.7 на ноту.
+-- То есть связь у нас плотнее, чем у них, и вся она нечитаема машиной. Вопрос
+-- «какие вопросы ко мне без ответа» сегодня не запрос, а чтение глазами.
+--
+-- ⚠️ ПОЧЕМУ КОРЕНЬ ХРАНИТ NULL, А НЕ СОБСТВЕННЫЙ id (это не мелочь):
+--    id присваивается ПРИ вставке, поэтому «корень указывает на себя» требует второго
+--    UPDATE после INSERT. Второй ход можно забыть, и тогда корень молча станет сиротой,
+--    неотличимым от ноты вне треда. ⇒ корень = thread_id IS NULL, а «корень треда»
+--    ВЫЧИСЛЯЕТСЯ как COALESCE(thread_id, id). Хранимое производное протухает первым —
+--    тот же принцип, что у срочности и версии схемы.
+--
+-- ⚠️ ЧЕМ ЭТО ОТЛИЧАЕТСЯ ОТ УЖЕ ЛЕЖАЩЕГО РЯДОМ `message_closure` — иначе будут спорить:
+--    thread   = «к чему это относится»  (структура разговора)
+--    closure  = «вопрос закрыт»          (состояние вопроса)
+--    Ответ НЕ закрывает вопрос автоматически: «ответили, но не устроило» — реальное
+--    и частое состояние. Витрина ниже различает три, а не два.
+-- ────────────────────────────────────────────────────────────────────────────
+CREATE TABLE message_thread (
+    message_id  INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    -- НА ЧТО отвечаю. NULL = не ответ.
+    reply_to    INTEGER REFERENCES messages(id),
+    -- КОРЕНЬ обсуждения. NULL = эта нота и есть корень (см. оговорку выше).
+    thread_id   INTEGER REFERENCES messages(id),
+    -- ВИД записки. Без него тред не отличает «висит вопрос» от «идёт разговор».
+    -- NULL допустим НАМЕРЕННО: у перенесённых старых нот вида нет, и притворяться,
+    -- что он известен, — ровно то, что мы лечим.
+    kind        TEXT CHECK (kind IN ('question','answer','handover','status','decision')),
+    -- Откуда взята связь. 'field' — роль указала при записи; 'backfill' — восстановлено
+    -- из прозы. Та же честность, что у addressed_by: разбор регекспом ошибается,
+    -- и ошибка обязана быть ВИДНОЙ, а не молчаливой.
+    linked_by   TEXT NOT NULL DEFAULT 'field' CHECK (linked_by IN ('field','backfill')),
+    -- Нота не отвечает сама себе и не бывает корнем самой себе через поле: два способа
+    -- записать одно состояние — это два способа разойтись.
+    CHECK (reply_to  IS NULL OR reply_to  <> message_id),
+    CHECK (thread_id IS NULL OR thread_id <> message_id),
+    -- КОНТРАКТ: ответ без вопроса — не ответ. Единственный вид, который требует связи.
+    CHECK (kind <> 'answer' OR reply_to IS NOT NULL)
+);
+CREATE INDEX idx_thread_root  ON message_thread (thread_id);
+CREATE INDEX idx_thread_reply ON message_thread (reply_to);
+
+-- Разговор целиком, с вычисленным корнем. Ради этого всё и затевалось.
+CREATE VIEW thread_view AS
+SELECT COALESCE(t.thread_id, m.id) AS root_id,
+       m.id, m.writer_role, m.timestamp, t.reply_to, t.kind, t.linked_by
+FROM messages m LEFT JOIN message_thread t ON t.message_id = m.id;
+
+-- 🎯 ГЛАВНАЯ ВИТРИНА Ш4: что роль СПРОСИЛИ и чем это кончилось.
+-- Три состояния, а не два — потому что «ответили» и «закрыто» разные вещи:
+--     'висит'            — ответа нет вовсе
+--     'отвечено, не закрыто' — ответ есть, но вопрос никто не признал закрытым
+--     (закрытые сюда не попадают вовсе)
+CREATE VIEW open_questions_for_role AS
+SELECT ma.role, m.id, m.writer_role, m.timestamp, m.priority,
+       CASE WHEN a.n > 0 THEN 'отвечено, не закрыто' ELSE 'висит' END AS state,
+       COALESCE(a.n, 0) AS answers
+FROM messages m
+JOIN message_thread t  ON t.message_id = m.id AND t.kind = 'question'
+JOIN message_addressee ma ON ma.message_id = m.id AND ma.kind = 'to'
+LEFT JOIN message_closure c ON c.message_id = m.id
+LEFT JOIN (SELECT reply_to, COUNT(*) AS n FROM message_thread
+           WHERE kind = 'answer' GROUP BY reply_to) a ON a.reply_to = m.id
+WHERE c.message_id IS NULL;
+
+-- ⚠️ ГИПОТЕЗЫ, А НЕ ДАННЫЕ. Старые ноты переезжают БЕЗ треда (решение владельца ③
+-- «переносить как есть»), но 83 % из них ссылку прозой несут. Витрина ПОКАЗЫВАЕТ
+-- найденное регекспом, НЕ записывая: «#2775» в теле может быть и ответом, и просто
+-- упоминанием номера в примере — ровно наш незакрытый класс «употребление против
+-- упоминания». Кто захочет — свяжет руками, видя, на что опирается.
+CREATE VIEW thread_backfill_candidates AS
+SELECT m.id, m.writer_role, m.timestamp,
+       CAST(REPLACE(SUBSTR(m.body_md, INSTR(m.body_md, '#') + 1, 4), ' ', '') AS INTEGER) AS maybe_ref
+FROM messages m
+LEFT JOIN message_thread t ON t.message_id = m.id
+WHERE t.message_id IS NULL AND INSTR(m.body_md, '#') > 0;
 
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 INSERT INTO meta (key, value) VALUES

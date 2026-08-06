@@ -43,6 +43,7 @@
 
 import argparse
 import pathlib
+import re
 import sqlite3
 import sys
 
@@ -148,20 +149,51 @@ def step1_roles(con: sqlite3.Connection, dry: bool) -> dict:
             if r:
                 found.setdefault(r, set()).add(src)
 
+    # 🔴 СВЕРКА С ЖИВЫМ РЕЕСТРОМ — найдена прогоном на копии 2026-08-06 14:38 UTC.
+    # Первый вариант ставил всем ролям status='active' по умолчанию. В данных живут следы
+    # ролей, ЗАКРЫТЫХ владельцем (апоптоз 16.07): они писали ноты и имеют слепки. Шаг
+    # воскресил бы их как активные — и реестр, собранный «из данных», стал бы утверждать
+    # то, чего данные не говорят. Ровно наш класс: механизм делает не то, что о нём думают.
+    # ⇒ Статус НЕ УГАДЫВАЕТСЯ. Данные несут «роль встречалась», и только это записывается.
+    #   Живой состав знает правило role-roster-and-zones — оно и есть реестр; расхождение
+    #   с ним НАЗЫВАЕТСЯ в отчёте, а не чинится молча (решение владельца ③).
+    # ⚠️ ЦЕНА ПЕРВОГО ВАРИАНТА ЭТОГО РАЗБОРА, оплаченная прогоном на копии 14:39 UTC:
+    #    брал первое слово каждой строки на «·» — и «нашёл» роли ЯДРО, ВИДЖЕТЫ, ССЫЛКА,
+    #    `/V1/SEARCH`. Строки-пояснения в правиле начинаются тем же символом, что строки
+    #    реестра. Это мой собственный незакрытый класс «употребление против упоминания»,
+    #    и здесь он был опаснее обычного: разбор выдал УСПОКАИВАЮЩЕЕ «расхождений нет».
+    # ⇒ Разбор СТРОГИЙ (роль = заглавные латиницей + тире), и распознанное ПЕЧАТАЕТСЯ
+    #   целиком: если оно снова наберёт мусора, это будет видно в отчёте, а не спрятано
+    #   за словом «нет».
+    roster = set()
+    try:
+        row = con.execute("SELECT body FROM rules WHERE rule_key='role-roster-and-zones'").fetchone()
+        if row:
+            for line in row[0].splitlines():
+                m = re.match(r"^\s*·\s*([A-Za-z][A-Za-z0-9]{1,15})\s*[—–-]\s", line)
+                if m:
+                    roster.add(m.group(1).upper())
+    except sqlite3.Error:
+        pass
+
     before = con.execute("SELECT COUNT(*) FROM roles").fetchone()[0] if table_exists(con, "roles") else 0
 
     if not dry:
         con.execute("""
             CREATE TABLE IF NOT EXISTS roles (
                 role        TEXT PRIMARY KEY,
-                status      TEXT NOT NULL DEFAULT 'active'
-                            CHECK (status IN ('active', 'dormant', 'closed')),
+                -- 'unknown' — ДЕФОЛТ ПРИ ПЕРЕНОСЕ: след в данных не говорит о статусе.
+                -- Заполняется словом, а не выводом из наличия нот.
+                status      TEXT NOT NULL DEFAULT 'unknown'
+                            CHECK (status IN ('unknown', 'active', 'dormant', 'closed')),
                 seen_in     TEXT,
+                in_roster   INTEGER,      -- 1 — есть в живом реестре · 0 — нет · NULL — реестр не прочитан
                 created_at  TEXT NOT NULL DEFAULT (datetime('now'))
             )""")
         con.executemany(
-            "INSERT OR IGNORE INTO roles (role, seen_in) VALUES (?,?)",
-            [(r, ",".join(sorted(s))) for r, s in sorted(found.items())])
+            "INSERT OR IGNORE INTO roles (role, seen_in, in_roster) VALUES (?,?,?)",
+            [(r, ",".join(sorted(s)), (1 if r.upper() in roster else 0) if roster else None)
+             for r, s in sorted(found.items())])
         con.commit()
 
     after = con.execute("SELECT COUNT(*) FROM roles").fetchone()[0] if table_exists(con, "roles") else 0
@@ -170,8 +202,16 @@ def step1_roles(con: sqlite3.Connection, dry: bool) -> dict:
     for r in found:
         lower.setdefault(r.lower(), []).append(r)
     dupes = {k: v for k, v in lower.items() if len(v) > 1}
+    ghosts = sorted(r for r in found if roster and r.upper() not in roster)
+    silent = sorted(r for r in roster if r not in {f.upper() for f in found})
     return {"найдено ролей": len(found), "было": before, "стало": after,
-            "регистровые двойники": dupes or "нет", "состав": sorted(found)}
+            "регистровые двойники": dupes or "нет",
+            # печатается СОСТАВ, а не число: число «16 ролей» в прошлом прогоне скрыло,
+            # что четыре из них — не роли вовсе
+            "реестр распознан как": sorted(roster) if roster else "НЕ ПРОЧИТАН — сверки не было",
+            "🔴 в данных есть, в реестре НЕТ (следы закрытых — статус НЕ 'active')": ghosts or "нет",
+            "в реестре есть, в данных следов нет": silent or "нет",
+            "состав": sorted(found)}
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -270,10 +310,69 @@ def step3_cursor_segments(con: sqlite3.Connection, dry: bool) -> dict:
     return {"перенесено": dict(made), "отрезков в таблице": total}
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# ШАГ 4 — message_thread
+# ═════════════════════════════════════════════════════════════════════════════
+
+STEP4 = "004-message-thread"
+
+
+def step4_message_thread(con: sqlite3.Connection, dry: bool) -> dict:
+    """Треды. Связь «ответ → вопрос» полем вместо прозы.
+
+    Замер, ради которого шаг делается (окно #2500…#2956): 83 % нот ссылаются на другие
+    прозой, 1413 ссылок. Связь плотная — и вся нечитаема машиной.
+
+    🔴 РЕШЕНИЕ ③ ВЛАДЕЛЬЦА («переносить как есть») ЗДЕСЬ ЗНАЧИТ: старые ноты переезжают
+    БЕЗ треда вообще. Ни одной строки в message_thread не создаётся — притворяться, что
+    связи известны, нельзя: `#2775` в теле бывает и ответом, и упоминанием номера
+    в примере (наш незакрытый класс «употребление против упоминания», 5 подтверждений).
+    ⚠️ Следствие, называю до наката: сразу после шага витрина «вопросы ко мне без ответа»
+    будет ПУСТОЙ — не потому что вопросов нет, а потому что видов у старых нот нет.
+    Наполняется она только новыми записями. Это отсутствие данных, а не поломка.
+    📌 Гипотезы для ручной сшивки не теряются: VIEW thread_backfill_candidates показывает
+    найденные прозой ссылки, ничего не записывая.
+
+    Отдельная таблица, а не колонки в messages, — сознательно: у messages уже 9 колонок,
+    а треды нужны не каждой ноте. Плюс отдельную таблицу можно снести целиком при откате,
+    не пересоздавая messages (SQLite не умеет DROP COLUMN в старых версиях — тот же
+    капкан, из-за которого `rules` вынесена из этого сценария).
+    """
+    before = table_exists(con, "message_thread")
+    if not dry:
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS message_thread (
+                message_id  INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+                reply_to    INTEGER REFERENCES messages(id),
+                thread_id   INTEGER REFERENCES messages(id),
+                kind        TEXT CHECK (kind IN ('question','answer','handover','status','decision')),
+                linked_by   TEXT NOT NULL DEFAULT 'field' CHECK (linked_by IN ('field','backfill')),
+                CHECK (reply_to  IS NULL OR reply_to  <> message_id),
+                CHECK (thread_id IS NULL OR thread_id <> message_id),
+                CHECK (kind <> 'answer' OR reply_to IS NOT NULL)
+            )""")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_thread_root  ON message_thread (thread_id)")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_thread_reply ON message_thread (reply_to)")
+        con.commit()
+
+    total = con.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+    linked = (con.execute("SELECT COUNT(*) FROM message_thread").fetchone()[0]
+              if table_exists(con, "message_thread") else 0)
+    # Сколько связей ЛЕЖИТ В ПРОЗЕ и осталось невзятым — число называется вслух,
+    # чтобы «пусто в витрине» не читалось как «связей нет».
+    prose = con.execute(
+        "SELECT COUNT(*) FROM messages WHERE body_md LIKE '%#2%' OR body_md LIKE '%#1%'"
+    ).fetchone()[0]
+    return {"таблица была": before, "таблица есть": table_exists(con, "message_thread"),
+            "нот всего": total, "связей записано": linked,
+            "нот со ссылкой в прозе (НЕ взяты — решение ③)": prose}
+
+
 STEPS = [
     (STEP1, "реестр ролей (опора для пяти таблиц)", step1_roles),
     (STEP2, "messages: broadcast + addressed_by", step2_messages_columns),
     (STEP3, "честный курсор отрезками", step3_cursor_segments),
+    (STEP4, "треды: ответ связан с вопросом полем", step4_message_thread),
 ]
 
 
