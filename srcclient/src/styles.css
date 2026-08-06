@@ -1,0 +1,342 @@
+/*
+  Палитра намеренно та же, что в существующем viewer/index.html — чтобы два
+  просмотрщика одной базы не выглядели как два разных продукта.
+  CSS-фреймворка нет: набор экранов маленький, а лишняя зависимость в черновике
+  стоит дороже, чем сотня строк стилей.
+*/
+:root {
+  --bg: #1a1a2e;
+  --surface: #16213e;
+  --surface2: #0f3460;
+  --accent: #e94560;
+  --accent2: #533483;
+  --text: #eaeaea;
+  --muted: #a0a0b0;
+  --good: #4caf50;
+  --warn: #ff9800;
+  --border: #2a2a4a;
+  --gap: #ff9800;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.app { padding: 16px 20px 48px; max-width: 1600px; margin: 0 auto; }
+
+/* Страница с рейлами ВЫХОДИТ из общей рамки 1600px, и это не украшение.
+   Рамка была рассчитана на одно содержимое; когда рядом встаёт рейл, она становится
+   мала — и место отнимается у таблицы, то есть у колонок. Полоса рейлов должна иметь
+   ровно столько ширины, сколько нужно содержимому + рейлу; лишнее останется пустым. */
+.app--wide { max-width: none; }
+
+.header h1 { font-size: 1.3rem; color: var(--accent); margin: 0 0 4px; }
+
+.muted { color: var(--muted); }
+.small { font-size: 0.8rem; }
+.mono { font-family: 'Cascadia Mono', Consolas, monospace; }
+
+code { background: var(--surface2); padding: 1px 5px; border-radius: 4px; }
+
+/* ── шапка источника ─────────────────────────────────────────────────────── */
+.sourcebar {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin: 12px 0;
+}
+.sourcebar__row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.sourcebar__row--meta { margin-top: 6px; font-size: 0.8rem; }
+.sourcebar__label { color: var(--muted); }
+.sourcebar__select {
+  flex: 1 1 420px;
+  min-width: 260px;
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+.pill {
+  font-size: 0.72rem; padding: 2px 8px; border-radius: 10px;
+  border: 1px solid var(--border);
+}
+.pill--ro { background: rgba(76, 175, 80, 0.15); color: var(--good); border-color: var(--good); }
+
+.btn {
+  background: var(--accent2); color: var(--text); border: none;
+  padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 0.85rem;
+}
+.btn:hover:not(:disabled) { background: var(--accent); }
+.btn:disabled { opacity: 0.45; cursor: default; }
+.btn--ghost { background: transparent; border: 1px solid var(--border); }
+
+/* ── баннеры ─────────────────────────────────────────────────────────────── */
+.banner {
+  margin: 8px 0; padding: 8px 12px; border-radius: 8px;
+  border-left: 3px solid var(--border); background: var(--surface2);
+}
+.banner--warn { border-left-color: var(--warn); }
+.banner--error { border-left-color: var(--accent); }
+
+/* ── плитки ──────────────────────────────────────────────────────────────── */
+.stats { display: flex; gap: 12px; flex-wrap: wrap; margin: 12px 0; }
+.stat {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; padding: 10px 16px; min-width: 130px;
+}
+.stat__value { font-size: 1.6rem; font-weight: 600; }
+.stat__label { color: var(--muted); font-size: 0.78rem; }
+.stat__note { color: var(--muted); font-size: 0.72rem; margin-top: 4px; max-width: 260px; }
+.stat--warn { border-color: var(--warn); }
+.stat--warn .stat__value { color: var(--warn); }
+.stat--good .stat__value { color: var(--good); }
+.stat--unsupported { opacity: 0.65; border-style: dashed; }
+
+.measure--unsupported { color: var(--muted); font-size: 1rem; font-style: italic; }
+.measure__suffix { font-size: 0.8rem; color: var(--muted); }
+
+/* ── вкладки ─────────────────────────────────────────────────────────────── */
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin: 14px 0 0; }
+.tab {
+  background: transparent; border: none; border-bottom: 2px solid transparent;
+  color: var(--muted); padding: 8px 14px; cursor: pointer; font-size: 0.9rem;
+}
+.tab--active { color: var(--text); border-bottom-color: var(--accent); }
+
+.page { padding-top: 14px; }
+
+/* ── фильтры ─────────────────────────────────────────────────────────────── */
+.filters { display: flex; gap: 14px; align-items: end; flex-wrap: wrap; margin-bottom: 10px; }
+.filters label { display: flex; flex-direction: column; gap: 3px; font-size: 0.78rem; color: var(--muted); }
+.filters select, .filters input[type='search'] {
+  background: var(--surface2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; font-size: 0.85rem;
+}
+.filters .checkbox { flex-direction: row; align-items: center; gap: 6px; color: var(--text); font-size: 0.85rem; }
+
+/* ── таблица ─────────────────────────────────────────────────────────────── */
+.table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+.table th {
+  text-align: left; color: var(--muted); font-weight: 500; font-size: 0.75rem;
+  padding: 6px 8px; border-bottom: 1px solid var(--border);
+}
+.table td { padding: 7px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.row { cursor: pointer; }
+.row:hover { background: var(--surface); }
+.row--open { background: var(--surface); }
+/* Строка с незаданным критерием подсвечена слева — это то, ради чего страница. */
+.row--gap td:first-child { border-left: 3px solid var(--gap); }
+
+.chip {
+  display: inline-block; font-size: 0.72rem; padding: 1px 8px;
+  border-radius: 10px; background: var(--surface2); color: var(--text);
+}
+.chip--open { background: rgba(255, 152, 0, 0.18); color: var(--warn); }
+.chip--done { background: rgba(76, 175, 80, 0.18); color: var(--good); }
+.chip--blocked, .chip--p-critical { background: rgba(233, 69, 96, 0.2); color: var(--accent); }
+.chip--p-high { background: rgba(255, 152, 0, 0.18); color: var(--warn); }
+
+.badge { display: inline-block; font-size: 0.75rem; padding: 2px 8px; border-radius: 6px; }
+.badge--gap { background: rgba(255, 152, 0, 0.18); color: var(--warn); border: 1px solid var(--warn); }
+
+.criterion { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.tags { margin-left: 6px; display: inline-flex; gap: 4px; flex-wrap: wrap; }
+.tag { background: var(--accent2); font-size: 0.68rem; padding: 1px 6px; border-radius: 4px; }
+
+/* ── карточка задачи ─────────────────────────────────────────────────────── */
+.detail {
+  margin-top: 16px; background: var(--surface);
+  border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px;
+}
+.detail__head { display: flex; justify-content: space-between; align-items: center; }
+.detail__head h3 { margin: 0; color: var(--accent); font-size: 1rem; }
+.detail__meta { font-size: 0.8rem; margin-bottom: 10px; }
+.detail section, .rail__body section { margin-top: 12px; }
+.detail h5, .rail__body h5 { margin: 0 0 4px; color: var(--muted); font-size: 0.78rem; font-weight: 500; text-transform: uppercase; }
+
+.pre {
+  white-space: pre-wrap; word-break: break-word; background: var(--surface2);
+  padding: 10px; border-radius: 8px; font-family: 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.8rem; margin: 0; max-height: 420px; overflow: auto;
+}
+.pre--inline { max-height: 120px; }
+
+.events { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.events li { background: var(--surface2); border-radius: 6px; padding: 6px 8px; font-size: 0.8rem; }
+
+/* ── лента ───────────────────────────────────────────────────────────────── */
+.feed { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.note {
+  background: var(--surface); border: 1px solid var(--border);
+  border-left: 3px solid var(--accent2); border-radius: 8px; padding: 10px 12px; cursor: pointer;
+}
+.note--high { border-left-color: var(--warn); }
+.note--critical { border-left-color: var(--accent); }
+.note__head { display: flex; justify-content: space-between; font-size: 0.75rem; margin-bottom: 4px; }
+.note__role { font-weight: 600; color: var(--good); }
+.note__body { white-space: pre-wrap; font-size: 0.84rem; }
+.note__more { font-size: 0.75rem; margin-top: 4px; }
+
+.pager { display: flex; gap: 12px; align-items: center; justify-content: center; margin-top: 14px; }
+
+/* ── правила и схема ─────────────────────────────────────────────────────── */
+.rules { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.rule {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px 12px; cursor: pointer;
+}
+.rule__head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
+.rule__key { color: var(--warn); font-weight: 600; }
+.rule__body { font-size: 0.83rem; white-space: pre-wrap; }
+
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 1000px) { .cols { grid-template-columns: 1fr; } }
+
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; padding: 12px 14px; margin-bottom: 12px;
+}
+.card h4 { margin: 0 0 8px; color: var(--accent); font-size: 0.9rem; }
+
+.objects { list-style: none; padding: 0; margin: 0 0 10px; max-height: 420px; overflow: auto; }
+.objects li { padding: 4px 0; border-bottom: 1px solid var(--border); }
+
+.footer { margin-top: 32px; font-size: 0.78rem; text-align: center; }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   ПОЛОСА РЕЙЛОВ — горизонтальное рабочее место.
+
+   🔴 Ни один рейл не растягивается: `flex: 0 0 <своя ширина>`, и НИКОГДА `flex: 1`.
+   На широком экране лишнее место остаётся ПУСТЫМ ПОЛЕМ справа (полоса прижата к началу),
+   а не раздувает рейл до бессмысленной ширины. Не хватает места — полоса едет вбок,
+   и прежние рейлы уезжают целыми, а не сжимаются.
+   ───────────────────────────────────────────────────────────────────────────── */
+.railstrip {
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: flex-start;   /* лишнее — пустое поле, а не растянутый рейл */
+  align-items: stretch;
+  gap: 16px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 8px;
+  scroll-behavior: smooth;
+}
+
+.rail {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  max-height: calc(100vh - 230px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.rail__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface2);
+  flex: 0 0 auto;
+}
+
+.rail__title { margin: 0; font-size: 0.9rem; color: var(--accent); font-weight: 600; }
+.rail__actions { display: flex; align-items: center; gap: 10px; font-size: 0.8rem; }
+.rail__h4 { margin: 0 0 6px; font-size: 0.95rem; }
+
+/* Свой вертикальный скролл у каждого рейла: прокрутка одного не тащит соседний. */
+.rail__body { flex: 1 1 auto; overflow-y: auto; overflow-x: auto; padding: 12px; }
+
+/* Ручка ширины. Ширина запоминается — рабочее место настраивают один раз. */
+.rail__resize {
+  position: absolute;
+  top: 0; right: 0; bottom: 0;
+  width: 8px;
+  cursor: col-resize;
+  touch-action: none;
+}
+.rail__resize:hover, .rail__resize:active { background: var(--accent); opacity: 0.35; }
+
+/* Рейл живёт в полосе — прежние отступы страницы ему не нужны. */
+.page--rails .filters { margin-bottom: 10px; }
+
+/* 🔴 ФИКСИРОВАННАЯ РАСКЛАДКА КОЛОНОК — НЕ КОСМЕТИКА, А ГЛАВНОЕ МЕСТО ЭТОЙ ПРАВКИ.
+   Замер на живых данных 2026-08-06 17:14 UTC, ДО этой строки:
+       ширина рейла ......... 1180 px
+       ширина таблицы ....... 11 783 px   ← распёрлась содержимым
+       горизонтальный скролл  ПОЯВИЛСЯ
+   Причина: у критерия приёмки бывает 950 знаков в одну строку, и при обычной
+   раскладке браузер расширяет колонку под содержимое, пока таблица не станет
+   в десять раз шире рейла. Типы при этом зелёные, тесты тоже — колонки просто
+   уезжают за край, и человек их не видит. Ровно тот отказ, ради которого писан
+   канон рейлов. Фиксированная раскладка заставляет колонки держать заданную ширину,
+   а длинному тексту — переноситься или обрезаться многоточием. */
+.page--rails .table { font-size: 0.83rem; table-layout: fixed; width: 100%; }
+.page--rails .table td { word-break: break-word; overflow-wrap: anywhere; }
+
+/* Узкий экран: горизонтального места нет вовсе — рейлы становятся одним столбцом.
+   Держать жёсткие две колонки на узком окне значит вернуть ту самую давку,
+   только вызванную размером окна, а не кодом. */
+@media (max-width: 1100px) {
+  .railstrip { flex-wrap: wrap; overflow-x: visible; }
+  .rail {
+    flex: 1 1 100% !important;
+    max-width: 100% !important;
+    max-height: none;
+  }
+  .rail__resize { display: none; }
+  .rail__body { max-height: 70vh; }
+}
+
+/* ── строки-переключатели фильтров ────────────────────────────────────────────
+   Переключатели строкой, а не выпадающим списком: видно ВСЕ значения сразу и
+   сколько за каждым стоит. Список прячет и состав, и объём — а вопрос «у кого
+   больше всего задач без критерия» отвечается именно составом.
+   📌 Счётчики считаются по ПОЛНОМУ набору, не по отфильтрованному: иначе кнопка
+   показывала бы, сколько останется после неё самой. */
+.filterbar {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.filterbar__label {
+  color: var(--muted); font-size: 0.75rem; min-width: 3.4rem;
+  text-transform: uppercase; letter-spacing: 0.03em;
+}
+.fchip {
+  background: var(--surface2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 12px;
+  padding: 2px 10px; font-size: 0.78rem; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 5px;
+}
+.fchip:hover { border-color: var(--accent2); }
+.fchip--on { background: var(--accent2); border-color: var(--accent); }
+.fchip__n { color: var(--muted); font-size: 0.7rem; }
+.fchip--on .fchip__n { color: var(--text); }
+.fchip--open.fchip--on { background: rgba(255, 152, 0, 0.3); border-color: var(--warn); }
+.fchip--done.fchip--on { background: rgba(76, 175, 80, 0.28); border-color: var(--good); }
+
+/* ── сортировка по колонкам ──────────────────────────────────────────────────
+   Значок стоит у КАЖДОЙ сортируемой колонки, а не только у активной: иначе
+   человек не знает, что сортировка вообще есть, пока случайно не щёлкнет. */
+.th-sort { cursor: pointer; user-select: none; white-space: nowrap; }
+.th-sort:hover { color: var(--text); }
+.th-sort__mark { margin-left: 4px; opacity: 0.35; font-size: 0.7rem; }
+.th-sort--on { color: var(--text); }
+.th-sort--on .th-sort__mark { opacity: 1; color: var(--accent); }

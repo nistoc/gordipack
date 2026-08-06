@@ -221,3 +221,26 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ── Просмотрщик координационной базы: /src (.NET) и /srcclient (React) ──────
+# Продублировано в корне НАМЕРЕННО, хотя в обеих папках есть свои .gitignore:
+# локальный файл защищает только пока он на месте. Один `rm` — и артефакты сборки
+# поедут в ПУБЛИЧНЫЙ репозиторий молча. Два независимых заслона дешевле разбора.
+
+# .NET
+bin/
+obj/
+*.user
+appsettings.Local.json
+appsettings.*.Local.json
+
+# Node / Vite
+node_modules/
+dist/
+.vite/
+*.local
+npm-debug.log*
+yarn-error.log*
+
+# Локальный запуск просмотрщика: путь к чужой базе — не наше дело и не для публики
+.run/
