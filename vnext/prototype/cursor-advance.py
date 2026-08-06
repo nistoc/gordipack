@@ -65,9 +65,10 @@ def advance(con, role, to_id, kind, basis=None, authorized=None, note_id=None):
     cur = current(con, role)
     lo = cur + 1
 
-    # ① основание обязательно для заявленного сдвига
-    if kind == "declared" and not (basis and authorized):
-        return False, ("⛔ ОТКАЗ ①: заявленный сдвиг без основания или без авторизации. "
+    # ① основание обязательно для любого сдвига НЕ ГЛАЗАМИ ('declared' и 'born').
+    #    Рождение роли — тоже решение: у него есть автор и нота, которой оно объявлено.
+    if kind != "read" and not (basis and authorized):
+        return False, ("⛔ ОТКАЗ ①: сдвиг без чтения — без основания или без авторизации. "
                        "Сдвиг без чтения разрешён, но НЕ молча — назови --basis и --authorized.")
     # ② назад
     if to_id <= cur:
@@ -94,7 +95,9 @@ def advance(con, role, to_id, kind, basis=None, authorized=None, note_id=None):
                 (role, lo, to_id, kind, basis, authorized, note_id))
     con.commit()
     n = to_id - lo + 1
-    word = "ПРОЧИТАНО" if kind == "read" else "ЗАЯВЛЕНО (не читано)"
+    word = {"read": "ПРОЧИТАНО",
+            "declared": "ЗАЯВЛЕНО (не читано)",
+            "born": "ДО ЗАВЕДЕНИЯ РОЛИ (не долг — этих нот для неё не существовало)"}[kind]
     return True, f"✅ {role}: [{lo}..{to_id}] {n} нот — {word}"
 
 
@@ -105,17 +108,22 @@ def show(con, role):
     if not rows:
         print(f"[{role}] сегментов нет — лента не пройдена ни глазами, ни заявлением.")
         return
-    t = con.execute("SELECT cursor_at, notes_read, notes_declared, segments "
+    t = con.execute("SELECT cursor_at, notes_read, notes_declared, notes_before_birth, segments "
                     "FROM cursor_truth WHERE role = ?", (role,)).fetchone()
     print(f"[{role}] курсор #{t[0]} — но это НЕ «прочитано {t[0]} нот»:")
     print(f"   глазами ..... {t[1] or 0}")
     print(f"   заявлением .. {t[2] or 0}   ⇐ эти НЕ читаны, и это записано, а не подразумевается")
-    print(f"   сегментов ... {t[3]}")
+    # Печатаем строку рождения ТОЛЬКО когда она есть: у восьми старых ролей её нет,
+    # и вечный «до заведения: 0» приучал бы глаз пропускать эту строку у той роли,
+    # где она значима.
+    if t[3]:
+        print(f"   до заведения  {t[3]}   ⇐ НЕ ДОЛГ: роли не существовало, ей никто не писал")
+    print(f"   сегментов ... {t[4]}")
     print()
     for f, t2, kind, basis, auth, nid, at in rows:
-        mark = "👁 " if kind == "read" else "📄"
+        mark = {"read": "👁 ", "declared": "📄", "born": "🐣"}[kind]
         line = f"   {mark} [{f}..{t2}] {t2-f+1:5d} нот  {at[:16]}"
-        if kind == "declared":
+        if kind != "read":
             line += f"\n        основание: {basis}\n        разрешил: {auth}" + \
                     (f" · нота #{nid}" if nid else "")
         print(line)
@@ -124,6 +132,15 @@ def show(con, role):
     if gaps:
         print(f"\n   ⚠️ Писавшим этой роли: {gaps} нот в заявленных участках до неё НЕ ДОШЛИ. "
               f"Нужен ответ — повторите запрос свежей нотой.")
+    # 🔴 Для 'born' предупреждения НЕТ намеренно, и вот почему это не забывчивость:
+    # предупреждение требует ДЕЙСТВИЯ («повторите запрос»). До заведения роли писавших
+    # не было — требовать нечего и не с кого. Строка ниже — не призыв, а факт для
+    # читающего ленту: молчание новой роли по старым нотам значит «не видела».
+    born = con.execute("SELECT SUM(to_id - from_id + 1) FROM cursor_segments "
+                       "WHERE role = ? AND kind = 'born'", (role,)).fetchone()[0]
+    if born:
+        print(f"\n   🐣 Роль заведена на ноте #{t[0]}: {born} нот до неё для роли не существовало. "
+              f"Её молчание по ним — «не видела», а не «не ответила». Отвечать не на что.")
 
 
 def main():
@@ -131,7 +148,7 @@ def main():
     ap.add_argument("--db", required=True)
     ap.add_argument("--role", required=True)
     ap.add_argument("--to", type=int)
-    ap.add_argument("--kind", choices=("read", "declared"), default="declared")
+    ap.add_argument("--kind", choices=("read", "declared", "born"), default="declared")
     ap.add_argument("--basis")
     ap.add_argument("--authorized", help="'owner' или роль, давшая основание")
     ap.add_argument("--note", type=int, help="id ноты, где основание объявлено")

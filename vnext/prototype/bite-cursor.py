@@ -28,7 +28,7 @@ def fresh():
     con = sqlite3.connect(":memory:")
     con.execute("PRAGMA foreign_keys = ON")
     con.executescript(SCHEMA_FILE.read_text(encoding="utf-8"))
-    for r in ("RCC", "COORD", "PROTO"):
+    for r in ("RCC", "COORD", "PROTO", "CHROME", "STUD"):
         con.execute("INSERT INTO roles (role) VALUES (?)", (r,))
     # лента-заглушка до #2909 (голова как в живой БД на момент замера)
     for i in (1, 2204, 2500, 2896, 2897, 2909):
@@ -89,17 +89,57 @@ def run():
         p9 = True
     check("P9 CHECK не даёт записать declared без основания В ОБХОД CLI", p9)
 
+    # ── 🆕 ТРЕТИЙ ВИД 'born': РОЖДЕНИЕ РОЛИ ≠ ДОЛГ ────────────────────────────
+    # Живой повод: 06.08 завели роль CHROME (нота #2934), курсор сдвинули с нуля на
+    # голову. Двумя видами это записывалось только как 'declared' — и механизм
+    # печатал «2909 нот НЕ ДОШЛИ, повторите запрос» тем, кто ей никогда не писал.
+    con2 = fresh()
+    okb, mb = ca.advance(con2, "CHROME", 2909, "born",
+                         "роль заведена по слову владельца 06.08", "owner", 2934)
+    check("P10 рождение роли записывается видом 'born'", okb and "ДО ЗАВЕДЕНИЯ" in mb)
+
+    tb = con2.execute("SELECT notes_read, notes_declared, notes_before_birth "
+                      "FROM cursor_truth WHERE role='CHROME'").fetchone()
+    check("P11 'born' НЕ попадает в notes_declared — небывшее не складывается с пропущенным",
+          tb[1] is None and tb[2] == 2909)
+
+    gaps_c = con2.execute("SELECT COUNT(*) FROM cursor_gaps WHERE role='CHROME'").fetchone()[0]
+    check("P12 витрина «что не дошло» МОЛЧИТ о новорождённой (повторять некому и нечего)",
+          gaps_c == 0)
+
+    # Различающий тест: витрина не онемела вообще — на реальном долге она обязана говорить.
+    ca.advance(con2, "RCC", 2204, "read", None, None)
+    ca.advance(con2, "RCC", 2896, "declared", "сводка вместо ленты", "owner", 2898)
+    gaps_r = con2.execute("SELECT COUNT(*) FROM cursor_gaps WHERE role='RCC'").fetchone()[0]
+    check("P13 та же витрина ГОВОРИТ о реальном долге (P12 — различение, а не немота)",
+          gaps_r == 1)
+
+    okb2, mb2 = ca.advance(con2, "STUD", 100, "born", None, None)
+    check("P14 'born' без основания тоже отвергнут: рождение роли — решение, у него есть автор",
+          not okb2 and "ОТКАЗ ①" in mb2)
+
     return res
 
 
 MUTANTS = {
     "M1-CHECK-основания-снят": (SCHEMA_FILE, lambda s: s.replace(
-        "    CHECK (kind <> 'declared' OR (basis IS NOT NULL AND authorized IS NOT NULL))",
+        "    CHECK (kind = 'read' OR (basis IS NOT NULL AND authorized IS NOT NULL))",
         "    CHECK (1)")),
     "M2-отказ-назад-снят": (CA_FILE, lambda s: s.replace(
         "    if to_id <= cur:", "    if False:")),
     "M3-отказ-за-горизонт-снят": (CA_FILE, lambda s: s.replace(
         "    if to_id > h:", "    if False:")),
+    # 🆕 Главный мутант третьего вида: если 'born' попадёт в витрину «что не дошло»,
+    # механизм снова начнёт требовать невыполнимого у тех, кто роли не писал.
+    "M4-born-включён-в-витрину-долга": (SCHEMA_FILE, lambda s: s.replace(
+        "FROM cursor_segments WHERE kind = 'declared';",
+        "FROM cursor_segments WHERE kind IN ('declared', 'born');")),
+    # 🆕 И обратный: если 'born' сложить с 'declared' в одну колонку, новорождённая
+    # роль получит долг вчетверо больше, чем роль, реально не читавшая ленту.
+    "M5-born-сложен-с-declared": (SCHEMA_FILE, lambda s: s.replace(
+        "       SUM(CASE WHEN kind = 'declared' THEN to_id - from_id + 1 END) AS notes_declared,",
+        "       SUM(CASE WHEN kind IN ('declared','born') THEN to_id - from_id + 1 END) "
+        "AS notes_declared,")),
 }
 
 
