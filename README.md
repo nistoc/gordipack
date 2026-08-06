@@ -38,8 +38,8 @@ gordipack/
 │       └── frontend-spa.sql     ← SPA/UI проекты
 ├── templates/
 │   ├── README.md                ← как использовать архетипы
-│   ├── coordinator.md           ← координатор (3P / COORD / COORD-A)
-│   ├── repo-dev.md              ← владелец репо/сервиса (BE/FE/CORE/DIAL/...)
+│   ├── coordinator.md           ← координатор (3P / COORD / ORCH)
+│   ├── repo-dev.md              ← владелец репо/сервиса (BE/FE/CORE/CHAT/...)
 │   ├── domain-specialist.md     ← владелец знаний/канона (TAXO)
 │   ├── cross-integrator.md      ← мост между системами (S2S / RCC)
 │   ├── watchdog.md              ← read-only мониторинг (COST)
@@ -109,7 +109,7 @@ COORD каждой группы периодически проверяет cros
 |--------|------|----------|
 | **Atlas** (семантическая платформа) | COORD, CORE, ING, STUD, TAXO, RCC, **OPSSRE** | coordinator + 3×repo-dev + domain-specialist + cross-integrator + ops-sre |
 | **Dominal** (фитнес SaaS) | 3P, BE, FE, S2S, COST | coordinator + 2×repo-dev + cross-integrator + watchdog |
-| **AIA** (AI-ассистент) | COORD-A, ADMIN, DIAL, KNOW, LLMG, PRMT, SAUTH, SPACE, STUD-A | coordinator + 8×repo-dev |
+| **AIA** (AI-ассистент) | ORCH, OPS, CHAT, CAT, GW, REG, AUTH, WSP, UI | coordinator + 8×repo-dev |
 
 > Реестр ролей ЖИВОЙ (правило `role-roster-and-zones`): роли рождаются, спят по слову (дормант) и
 > закрываются (апоптоз). Пример: в Atlas EYE и GRF закрыты 16.07, OPSSRE заведён 25.07 — «спит по

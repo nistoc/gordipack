@@ -1,6 +1,6 @@
 # Архетип: COORDINATOR
 
-> Примеры: 3P (dominal), COORD (atlas), COORD-A (aia)
+> Примеры: 3P (dominal), COORD (atlas), ORCH (aia)
 
 ## Суть
 Координирует группу агентов. НЕ пишет доменный код. Ведёт треки, принимает работу,
