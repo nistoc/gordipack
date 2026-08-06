@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { api } from '../api';
 import { usePolling } from '../usePolling';
 import type { Overview, Task, TaskDetail } from '../types';
-import { fmtUtc } from '../format';
+import { fmtUtc, fmtUtcBare } from '../format';
 import { StatCard } from '../components/MeasureValue';
 import { Rail, RailStrip } from '../components/Rail';
 import { useUrlNumber } from '../useUrlState';
@@ -20,14 +20,19 @@ const STATUS_TITLE: Record<string, string> = {
  * ШИРИНЫ РЕЙЛОВ — СЧИТАНЫ ОТ СОДЕРЖИМОГО, А НЕ ВЗЯТЫ ДОЛЯМИ ОТ ЭКРАНА.
  *
  * Таблица несёт восемь колонок, семь из них с заданной шириной:
- *     # 4rem + статус 6 + важность 6 + роль 7 + критерий 13 + создано 10 + изменено 10 = 56rem = 896px
+ *     # 4rem + статус 6 + важность 6 + роль 7 + критерий 13 + создано 8.5 + изменено 8.5 = 53rem = 848px
  * плюс заголовок, которому нужно хотя бы ~280px, чтобы не рваться на каждом слове.
- * Отсюда пол 1180px: НИЖЕ ЭТОГО КОЛОНКИ НАЧНУТ ПРЯТАТЬСЯ.
- * Пол пересчитан 2026-08-06 17:24 UTC, когда добавилась колонка «создано»: ширины,
- * посчитанные один раз и оставленные при изменившемся содержимом, — это ровно тот
- * протухший замер, который контур ловит весь день.
+ * Отсюда пол 1130px: НИЖЕ ЭТОГО КОЛОНКИ НАЧНУТ ПРЯТАТЬСЯ.
+ *
+ * ЗАМЕР 2026-08-06 17:47 UTC, ПОЧЕМУ ШИРИНЫ УМЕНЬШИЛИСЬ. Прежний набор (даты по 10rem,
+ * ширина по умолчанию 1320) на окне 1265px давал полосу шире окна на 95px, и колонка
+ * «изменено» уходила за правый край — то есть колонка была добавлена и НЕ ВИДНА.
+ * Место съедал суффикс «UTC», повторённый в каждой из 82 ячеек; он переехал в ШАПКУ
+ * колонки, где сказан один раз и остаётся явным. Ширина по умолчанию посажена под
+ * типовое окно, а не под мой экран: колонка, которую надо доскроллить, для владельца
+ * не существует.
  */
-const TABLE_RAIL = { defaultWidth: 1320, minWidth: 1180, maxWidth: 1900 };
+const TABLE_RAIL = { defaultWidth: 1210, minWidth: 1130, maxWidth: 1900 };
 const DETAIL_RAIL = { defaultWidth: 560, minWidth: 380, maxWidth: 900 };
 
 type SortKey = 'gap' | 'id' | 'status' | 'priority' | 'role' | 'title' | 'criterion' | 'createdAt' | 'updatedAt';
@@ -39,8 +44,8 @@ const COLUMNS: Array<{ key: SortKey; title: string; width?: string }> = [
   { key: 'role', title: 'роль', width: '7rem' },
   { key: 'title', title: 'заголовок' },
   { key: 'criterion', title: 'критерий приёмки', width: '13rem' },
-  { key: 'createdAt', title: 'создано', width: '10rem' },
-  { key: 'updatedAt', title: 'изменено', width: '10rem' },
+  { key: 'createdAt', title: 'создано, UTC', width: '8.5rem' },
+  { key: 'updatedAt', title: 'изменено, UTC', width: '8.5rem' },
 ];
 
 /**
@@ -295,8 +300,8 @@ export function TasksPage({ overview, refreshMs }: { overview: Overview | null; 
                           ? <span className="criterion" title={t.doneWhen ?? ''}>{t.doneWhen}</span>
                           : <span className="badge badge--gap">критерий не задан</span>}
                     </td>
-                    <td className="mono muted">{fmtUtc(t.createdAt)}</td>
-                    <td className="mono muted">{fmtUtc(t.updatedAt)}</td>
+                    <td className="mono muted" title={fmtUtc(t.createdAt, true)}>{fmtUtcBare(t.createdAt)}</td>
+                    <td className="mono muted" title={fmtUtc(t.updatedAt, true)}>{fmtUtcBare(t.updatedAt)}</td>
                   </tr>
                 );
               })}

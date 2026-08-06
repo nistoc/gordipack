@@ -24,6 +24,17 @@ export function fmtUtc(value: string | null | undefined, withSeconds = false): s
   return `${iso.slice(0, 10)} ${iso.slice(11, withSeconds ? 19 : 16)} UTC`;
 }
 
+/**
+ * То же время БЕЗ суффикса — только для колонок таблицы, чья ШАПКА уже несёт
+ * «, UTC». Правило пояса не ослаблено: суффикс сказан один раз на колонку,
+ * а не сорок один раз в столбик. Вне такой колонки эту функцию звать нельзя —
+ * получится ровно та метка без пояса, от которой предостерегает шапка файла.
+ */
+export function fmtUtcBare(value: string | null | undefined): string {
+  const full = fmtUtc(value);
+  return full.endsWith(' UTC') ? full.slice(0, -4) : full;
+}
+
 /** «сколько назад» — грубо, для ощущения свежести, а не для отчёта. */
 export function ago(value: string | null | undefined, nowIso?: string | null): string {
   if (!value) return '';
