@@ -508,6 +508,65 @@ def step6_schema_version(con: sqlite3.Connection, dry: bool) -> dict:
                           "и это видно без чьей-либо сверки"}
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# ШАГ 7 — подсветка карточек без критерия приёмки
+# ═════════════════════════════════════════════════════════════════════════════
+
+STEP7 = "007-backlog-criterion-view"
+
+
+def step7_criterion_view(con: sqlite3.Connection, dry: bool) -> dict:
+    """Подсветка задач без критерия приёмки — слово владельца 2026-08-06 15:26 UTC:
+    «критерий обязателен; у старых, где его нет, — ПОДСВЕТИТЬ, а не блокировать».
+
+    🔴 ПОЧЕМУ ЭТО ОТДЕЛЬНЫЙ ШАГ, А НЕ ЧАСТЬ ПЯТОГО — И ЭТО МОЙ ПРОМАХ, НЕ УТОЧНЕНИЕ.
+    Шаг 005 завёл колонку `done_when` и таблицу связи, а витрину подсветки — НЕТ:
+    она существовала только в эталонной схеме прототипа. При этом я сам написал
+    контуру (#2989), что «витрина показывает долг», координатор повторил это в отчёте
+    о накате, третья роль сослалась на неё в разборе — и все трое говорили о механизме,
+    которого в рабочей базе не было.
+    > **Механизм, существующий в эталоне, пересказывается как существующий в системе.**
+    Проверяется одним запросом к списку витрин, и никто из троих его не сделал:
+    эталон читали как факт о мире.
+    ⇒ Шаг 005 уже помечен выполненным, и его повтор пропускается по построению.
+      Дополнять задним числом нечем — значит новый шаг, а не тихая правка старого.
+    """
+    if not table_exists(con, "backlog"):
+        return {"пропущен": "таблицы backlog в этой базе нет"}
+    if not has_column(con, "backlog", "done_when"):
+        return {"пропущен": "колонки done_when нет — сначала шаг 005"}
+
+    before = con.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='view' "
+                         "AND name='backlog_without_criterion'").fetchone()[0]
+    if not dry:
+        con.execute("DROP VIEW IF EXISTS backlog_without_criterion")
+        # TRIM с явным набором символов: голый TRIM в SQLite снимает только пробел,
+        # и критерий из одной табуляции считался бы настоящим (поймано укусом 14:46 UTC).
+        con.execute("""
+            CREATE VIEW backlog_without_criterion AS
+            SELECT id, role, title, priority, created_at
+            FROM backlog
+            WHERE status = 'open'
+              AND (done_when IS NULL
+                   OR TRIM(done_when, ' ' || char(9) || char(10) || char(13)) = '')
+            """)
+        con.commit()
+
+    open_n = con.execute("SELECT COUNT(*) FROM backlog WHERE status='open'").fetchone()[0]
+    lit = (con.execute("SELECT COUNT(*) FROM backlog_without_criterion").fetchone()[0]
+           if not dry and con.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='view' "
+                                      "AND name='backlog_without_criterion'").fetchone()[0]
+           else None)
+    return {"витрина была": bool(before),
+            "витрина есть": (not dry),
+            "открытых карточек": open_n,
+            "подсвечено (без критерия)": lit if lit is not None else "(сухой прогон)",
+            "⛔ запрет НЕ включён": "сторож закрытия остаётся выключенным — слово владельца "
+                                   "«подсветить, а не блокировать»",
+            "⚠️ чего витрина не делает": "её надо ПОЗВАТЬ. Подсветка сильнее там, куда роль "
+                                        "и так смотрит — в выводе списка карточек; это зона COORD"}
+
+
 MILESTONE = "v3"
 
 
@@ -540,6 +599,7 @@ STEPS = [
     (STEP4, "треды: ответ связан с вопросом полем", step4_message_thread),
     (STEP5, "критерий «готово» + связь записки с задачей", step5_task_criterion),
     (STEP6, "номер версии вычисляется, старый снят надгробием", step6_schema_version),
+    (STEP7, "подсветка карточек без критерия приёмки", step7_criterion_view),
 ]
 
 
