@@ -149,14 +149,38 @@ def run_phoenix(db, role=None):
     return red, yellow, len(rows)
 
 
-def run_messages(db, role=None):
-    """Та же проверка на публичной учащей поверхности — нотах (#2887, @COORD)."""
+def run_messages(db, role=None, since_hours=None):
+    """Та же проверка на публичной учащей поверхности — нотах (#2887, @COORD).
+
+    🪤 ОКНО СВЕЖЕСТИ (--since-hours) заведено 2026-08-06 под включение в общий прогон.
+    Причина — не удобство, а класс: ноты НЕ ПЕРЕПИСЫВАЮТСЯ (норма @TAXO #2904, правится
+    привычка, не прошлое). Значит историческое красное неустранимо по построению, и общий
+    прогон, включивший его, краснел бы вечно у роли, которая сегодня чиста. Красное,
+    которое объясняют словами «а, это старое», перестаёт быть красным за один день
+    (формулировка @RCC #2897).
+
+    ПОЧЕМУ 24 ЧАСА — ЗАМЕР ПО ВСЕМ ДЕВЯТИ РОЛЯМ 2026-08-06 14:00 UTC, не вкус:
+        всего красного в контуре ..... 19 меток у 4 ролей из 9 (у пяти — ноль)
+        по датам ..................... 18.07 ×1 · 25.07 ×1 · 26.07 ×12 · 28.07 ×2
+                                       06.08 ×1  ⇐ ЕДИНСТВЕННОЕ свежее
+        окно 24 ч даёт ............... 1 красное на весь контур, и оно настоящее
+                                       (нота #2958, поймана @COORD руками в тот же час)
+    ⇒ окно отделяет живой дефект от неустранимой истории в отношении 1 : 18.
+    Историю смотреть отдельным запросом — без --since-hours, как раньше.
+    """
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     q = "SELECT id, writer_role, body_md, timestamp FROM messages"
-    args = ()
+    conds, args = [], []
     if role:
-        q += " WHERE UPPER(writer_role)=UPPER(?)"
-        args = (role,)
+        conds.append("UPPER(writer_role)=UPPER(?)")
+        args.append(role)
+    if since_hours:
+        # сравниваем со временем БАЗЫ, а не машины: у ноты timestamp пишет БД, и своё
+        # «сейчас» брать неоткуда, кроме того же источника — иначе меряем разными часами
+        conds.append(f"timestamp >= datetime('now', '-{int(since_hours)} hours')")
+    if conds:
+        q += " WHERE " + " AND ".join(conds)
+    args = tuple(args)
     try:
         rows = con.execute(q + " ORDER BY id", args).fetchall()
     except sqlite3.OperationalError as e:
@@ -178,19 +202,27 @@ def run_messages(db, role=None):
     return red, yellow, len(rows)
 
 
-def run(db, role=None, skip_messages=False):
+def run(db, role=None, skip_messages=False, since_hours=None):
     p = run_phoenix(db, role)
     if p is None:
         return 2
     p_red, p_yellow, p_n = p
     m_red = m_yellow = m_n = 0
     if not skip_messages:
-        m = run_messages(db, role)
+        m = run_messages(db, role, since_hours=since_hours)
         if m is not None:
             m_red, m_yellow, m_n = m
     red, yellow = p_red + m_red, p_yellow + m_yellow
+    scope = f"ноты за последние {since_hours} ч" if since_hours else "ноты ЦЕЛИКОМ, включая историю"
     print(f"\n{'🔴' if red else '✅'} метка-под-UTC ИТОГО: 🔴 {red} · 🟡 {yellow} "
           f"· записей проверено {p_n + m_n} (phoenix {p_n} + messages {m_n if not skip_messages else 'пропущено'})")
+    # Охват называется ВСЕГДА, а не только при красном: «🔴 0» без границы читается как
+    # «у роли чисто», хотя значит «чисто в окне». Это признак ⑨ нашего же стандарта,
+    # применённый к собственному выводу.
+    print(f"   📏 охват: слепок целиком + {scope}")
+    if since_hours:
+        print(f"   ⚠️ ИСТОРИЯ НЕ ПРОВЕРЕНА этим прогоном — она неустранима (ноты не переписываются).")
+        print(f"      Посмотреть: тот же вызов БЕЗ --since-hours.")
     if red:
         print("   ⇒ фикс: `datetime.now(timezone.utc)`; самопроверка роли — «метка в теле ≈ saved_at/timestamp».")
         print("   ⚠️ Исторические ноты (уже отправленные) не переписываются — правь ПРИВЫЧКУ, не прошлое.")
@@ -259,9 +291,13 @@ def main():
     ap.add_argument("--db", default=str(LIVE_DB))
     ap.add_argument("--role")
     ap.add_argument("--skip-messages", action="store_true", help="только phoenix, без нот (быстрее)")
+    ap.add_argument("--since-hours", type=int, default=None,
+                    help="ноты только за последние N часов (для общего прогона: 24). "
+                         "Без флага — вся история, как раньше")
     ap.add_argument("--selftest", action="store_true")
     a = ap.parse_args()
-    return selftest() if a.selftest else run(Path(a.db), a.role, a.skip_messages)
+    return selftest() if a.selftest else run(Path(a.db), a.role, a.skip_messages,
+                                             since_hours=a.since_hours)
 
 
 if __name__ == "__main__":
