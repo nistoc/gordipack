@@ -1,6 +1,6 @@
 # Архетип: REPO-DEV (владелец репозитория / сервиса)
 
-> Примеры: BE/FE (dominal), CORE/STUD/ING (atlas), DIAL/KNOW/LLMG/PRMT/SAUTH/SPACE/STUD-A/ADMIN (aia)
+> Примеры: BE/FE (dominal), CORE/STUD/ING (atlas), CHAT/CAT/GW/REG/AUTH/WSP/UI/OPS (aia)
 
 ## Суть
 Владеет одним репо или сервисом. Пишет код, запускает тесты, отчитывается нотами.
@@ -43,7 +43,7 @@
 - НЕ коммитить координационные файлы
 
 ## Вариации
-- **Greenfield** (SPACE в aia): репо пуст → первый коммит = скаффолд по плану координатора
+- **Greenfield** (WSP в aia): репо пуст → первый коммит = скаффолд по плану координатора
 - **BFF/UI** (STUD, FE): дополнительный гейт — визуальная проверка (SPA-READY invariant)
-- **Shared-lib** (SAUTH): NuGet/npm-пакет → версионирование + changelog + совместимость
-- **Multi-service** (ADMIN): несколько мелких зон в одном репо → чёткие границы в треке
+- **Shared-lib** (AUTH): NuGet/npm-пакет → версионирование + changelog + совместимость
+- **Multi-service** (OPS): несколько мелких зон в одном репо → чёткие границы в треке

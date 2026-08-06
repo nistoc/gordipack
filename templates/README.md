@@ -5,8 +5,8 @@
 
 | Архетип | Суть | Примеры из проектов |
 |---------|------|---------------------|
-| `coordinator` | Координирует коллег, не пишет доменный код, ведёт треки/приёмку | 3P (dominal), COORD (atlas), COORD-A (aia) |
-| `repo-dev` | Владеет одним репо/сервисом, пишет код, отчитывается нотами | BE/FE (dominal), CORE/STUD/ING (atlas), DIAL/KNOW/LLMG/PRMT/SAUTH/SPACE/STUD-A/ADMIN (aia) |
+| `coordinator` | Координирует коллег, не пишет доменный код, ведёт треки/приёмку | 3P (dominal), COORD (atlas), ORCH (aia) |
+| `repo-dev` | Владеет одним репо/сервисом, пишет код, отчитывается нотами | BE/FE (dominal), CORE/STUD/ING (atlas), CHAT/CAT/GW/REG/AUTH/WSP/UI/OPS (aia) |
 | `domain-specialist` | Владеет знаниями/каноном, НЕ пишет продакшн-код | TAXO (atlas) |
 | `cross-integrator` | Мост между двумя системами/группами, переносит контракты | S2S (dominal), RCC (atlas) |
 | `watchdog` | Read-only мониторинг, алерты, эскалация. Не мутирует. | COST (dominal) |
