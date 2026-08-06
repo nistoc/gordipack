@@ -436,12 +436,110 @@ def step5_task_criterion(con: sqlite3.Connection, dry: bool) -> dict:
             "сторож закрытия": "НЕ включён — меняет поведение живых инструментов, нужно слово"}
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# ШАГ 6 — номер версии вычисляется, старый снимается надгробием
+# ═════════════════════════════════════════════════════════════════════════════
+
+STEP6 = "006-schema-version-computed"
+
+
+def step6_schema_version(con: sqlite3.Connection, dry: bool) -> dict:
+    """Номер версии перестаёт храниться строкой и начинает вычисляться (решение
+    владельца 2026-08-06 15:21 UTC).
+
+    🔴 ЗАМЕР, РАДИ КОТОРОГО ШАГ ДЕЛАЕТСЯ: в рабочей базе лежит `schema_version = '1.0'`
+    при фактической ВТОРОЙ версии, а после шагов 001…005 — при третьей. Номер отстал
+    на ДВЕ версии и всё это время выглядел достоверным. Строка в meta ничем не связана
+    с тем, что в базе есть.
+
+    ⚠️ СТАРАЯ СТРОКА НЕ УДАЛЯЕТСЯ И НЕ ЗАМЕНЯЕТСЯ МОЛЧА. Молчаливая замена '1.0'→'3.0'
+    неотличима от того, что значение было верным всё это время, — а оно врало полтора
+    месяца, и следующий, кто увидит там аккуратное число, снова ему поверит.
+    ⇒ Значение заменяется НАДГРОБИЕМ с датой, причиной и указанием, где смотреть.
+
+    📌 Рубеж версии — явная строка `v3` в журнале шагов, а не максимум номеров шагов:
+    `005-task-criterion…` — номер ШАГА, не версия СХЕМЫ, и читался бы как версия.
+    """
+    if not table_exists(con, "meta"):
+        return {"пропущен": "таблицы meta в этой базе нет"}
+
+    old = con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+    old_val = old[0] if old else None
+    had_milestone = con.execute(
+        "SELECT 1 FROM schema_migrations WHERE version='v3'").fetchone() is not None
+
+    tombstone = ("⛔ ОТОЗВАНО 2026-08-06 (шаг 006): это поле врало ДВЕ версии подряд "
+                 "('1.0' при фактической v2, затем v3) — хранимый номер ничем не связан "
+                 "с составом базы. Действующий источник: VIEW schema_version, "
+                 "вычисляется из журнала schema_migrations.")
+
+    if not dry:
+        # 🪤 «ПОСЛЕ РУБЕЖА» СЧИТАЕТСЯ ПО ПОРЯДКУ ЗАПИСИ (rowid), А НЕ ПО ВРЕМЕНИ.
+        #    Первый вариант сравнивал applied_at — и дал верный ноль ТОЛЬКО потому,
+        #    что рубеж и шаг 006 попали в одну секунду (проверено на копии 15:26:03).
+        #    Секундой позже вышла бы ложная тревога «1 шаг сверх рубежа».
+        #    Условие, которое держится на совпадении, а не на конструкции, —
+        #    это не условие. Порядок вставки не зависит от разрешения часов.
+        # 📌 И сам рубеж объявляется НЕ ЗДЕСЬ, а в конце прогона (declare_milestone):
+        #    версия собрана, когда применены все её шаги, включая этот.
+        con.execute("DROP VIEW IF EXISTS schema_version")
+        con.execute("""
+            CREATE VIEW schema_version AS
+            SELECT
+                (SELECT version FROM schema_migrations WHERE version GLOB 'v[0-9]*'
+                  ORDER BY rowid DESC LIMIT 1)                                    AS version,
+                (SELECT COUNT(*) FROM schema_migrations WHERE version NOT GLOB 'v[0-9]*') AS steps_total,
+                (SELECT COUNT(*) FROM schema_migrations m
+                  WHERE m.version NOT GLOB 'v[0-9]*'
+                    AND m.rowid > COALESCE((SELECT rowid FROM schema_migrations
+                                             WHERE version GLOB 'v[0-9]*'
+                                             ORDER BY rowid DESC LIMIT 1), 0))    AS steps_after_milestone
+            """)
+        if old_val is not None and not old_val.startswith("⛔"):
+            con.execute("UPDATE meta SET value=? WHERE key='schema_version'", (tombstone,))
+        con.commit()
+
+    return {"было в meta.schema_version": old_val,
+            "стало в meta.schema_version": "надгробие с датой, причиной и указателем"
+                                           if not dry else "(сухой прогон)",
+            "рубеж v3 в журнале был": had_milestone,
+            "витрина schema_version": "создана; рубеж объявляется в конце прогона",
+            "как читать": "«шагов после рубежа» больше нуля ⇒ версия объявлена не до конца, "
+                          "и это видно без чьей-либо сверки"}
+
+
+MILESTONE = "v3"
+
+
+def declare_milestone(con: sqlite3.Connection) -> str:
+    """Рубеж версии объявляется ПОСЛЕДНИМ — когда все её шаги применены.
+
+    Порядок здесь несущий, а не косметический: витрина считает «шаги сверх рубежа»
+    по порядку записи. Объяви рубеж раньше последнего шага — и он же покажет
+    расхождение, которого нет.
+    """
+    if not table_exists(con, "schema_migrations"):
+        return "журнала шагов нет — рубеж не объявлен"
+    missing = [v for v, _, _ in STEPS if not is_done(con, v)]
+    if missing:
+        return f"рубеж НЕ объявлен: не применены шаги {missing}"
+    con.execute("DELETE FROM schema_migrations WHERE version = ?", (MILESTONE,))
+    con.execute("INSERT INTO schema_migrations (version, note) VALUES (?,?)",
+                (MILESTONE, f"рубеж: версия {MILESTONE} = шаги "
+                            f"{STEPS[0][0][:3]}…{STEPS[-1][0][:3]}"))
+    con.commit()
+    row = con.execute("SELECT version, steps_total, steps_after_milestone "
+                      "FROM schema_version").fetchone()
+    return f"версия {row[0]} · шагов {row[1]} · сверх рубежа {row[2]}"
+
+
 STEPS = [
     (STEP1, "реестр ролей (опора для пяти таблиц)", step1_roles),
     (STEP2, "messages: broadcast + addressed_by", step2_messages_columns),
     (STEP3, "честный курсор отрезками", step3_cursor_segments),
     (STEP4, "треды: ответ связан с вопросом полем", step4_message_thread),
     (STEP5, "критерий «готово» + связь записки с задачей", step5_task_criterion),
+    (STEP6, "номер версии вычисляется, старый снят надгробием", step6_schema_version),
 ]
 
 
@@ -484,6 +582,8 @@ def main() -> int:
         if not args.dry:
             mark_done(con, ver, title)
             print(f"    ✅ записан в журнал шагов")
+    if not args.dry:
+        print(f"\n🔢 РУБЕЖ ВЕРСИИ: {declare_milestone(con)}")
     con.close()
     print("\n" + "─" * 78)
     print("Отчёт — ЧИСЛА до и после, а не слово «готово»: «готово» проверить нельзя, числа можно.")

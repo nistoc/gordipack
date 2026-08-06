@@ -126,16 +126,24 @@ def main():
     #    у автора остаётся украшением, пока автор не станет его потребителем.
     # ⇒ Проверяется не РАВЕНСТВО ЧИСЛУ, а СВОЙСТВО: версия вычисляется из журнала
     #   (новая строка видна витрине СРАЗУ) и нигде не хранится копией.
-    ver, applied = con.execute("SELECT version, applied FROM schema_version").fetchone()
+    ver, applied, after = con.execute(
+        "SELECT version, steps_total, steps_after_milestone FROM schema_version").fetchone()
     stored = con.execute("SELECT COUNT(*) FROM meta WHERE key='schema_version'").fetchone()[0]
     con.execute("INSERT INTO schema_migrations (version, applied_by) VALUES ('999_probe','BITE')")
-    ver2, applied2 = con.execute("SELECT version, applied FROM schema_version").fetchone()
+    ver2, applied2, after2 = con.execute(
+        "SELECT version, steps_total, steps_after_milestone FROM schema_version").fetchone()
     con.execute("DELETE FROM schema_migrations WHERE version='999_probe'")
-    ok = (stored == 0 and applied > 0 and applied2 == applied + 1 and ver2 == '999_probe')
+    # ⚠️ Проверяется НЕ равенство числу (оно протухает — этот укус уже так падал молча),
+    #    а СВОЙСТВА: версия не хранится копией · новый шаг виден витрине сразу ·
+    #    номер ВЕРСИИ не подменяется номером ШАГА · шаг сверх рубежа СТАНОВИТСЯ ВИДЕН.
+    ok = (stored == 0 and applied > 0
+          and applied2 == applied + 1        # журнал виден витрине немедленно
+          and ver2 == ver                    # номер версии НЕ съехал на номер шага
+          and after2 == after + 1)           # шаг сверх рубежа виден сам, без сверки
     v.append(ok)
-    print(f"  {'✅' if ok else '🔴'} версия '{ver}' из {applied} миграций; хранимых копий "
-          f"в meta: {stored} (нужен 0); новая строка журнала видна витрине сразу: "
-          f"{applied}→{applied2}, версия '{ver2}'")
+    print(f"  {'✅' if ok else '🔴'} версия '{ver}' из {applied} шагов, сверх рубежа {after}; "
+          f"хранимых копий в meta: {stored} (нужен 0); после чужого шага: "
+          f"шагов {applied}→{applied2}, сверх рубежа {after}→{after2}, версия '{ver2}' (не съехала)")
     con.close()
 
     print("\n── 🔴 КОНТРОЛЬНЫЙ: FK БЕЗ `PRAGMA foreign_keys=ON` — УКРАШЕНИЕ")
