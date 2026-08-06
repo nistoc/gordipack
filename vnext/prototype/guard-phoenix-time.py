@@ -249,12 +249,19 @@ SAMPLES = [
 
 
 def selftest():
+    # 🪤 СЧЁТЧИК СЛУЧАЕВ — норма STUD (#2991), взятая в пак 2026-08-06 15:06 UTC:
+    #    «прогон, не назвавший ЧИСЛО выполненных проверок, не считается прогоном».
+    #    Он поймал у себя прогон тестов, вернувший УСПЕХ, не выполнив НИ ОДНОГО теста:
+    #    «196 прошли» и «0 прошли» дают один и тот же код возврата.
+    #    Здесь то же самое было возможно: пустой SAMPLES дал бы гордое «✅ ГАРД ЧУВСТВИТЕЛЕН».
     ok = True
+    cases = 0
     for body, saved, want in SAMPLES:
         hits = check_section(body, saved)
         got = sum(1 for k, _, _ in hits if k.startswith("🔴"))
         good = got == want
         ok &= good
+        cases += 1
         print(f"{'✅' if good else '🔴'} 🔴={got} (ждём {want})  «{body[:45]}»  saved={saved[:16]}")
     # и отказ на пустой БД — молчание вместо отказа было дефектом соседнего инструмента
     tmp = Path(tempfile.mkdtemp(prefix="guard-ptime-")) / "m.db"
@@ -266,6 +273,7 @@ def selftest():
     rc = run(tmp)
     good = rc == 2
     ok &= good
+    cases += 1
     print(f"{'✅' if good else '🔴'} пустая БД (обе таблицы) → rc={rc} (ждём 2: отказ, а не «чисто»)")
     # messages видит СВОЙ класс отдельно от phoenix — не только «пришит к той же функции»
     tmp2 = Path(tempfile.mkdtemp(prefix="guard-ptime-")) / "m2.db"
@@ -279,8 +287,15 @@ def selftest():
     red, yellow, n = run_messages(tmp2, role=None)
     good = red == 1 and n == 1
     ok &= good
+    cases += 1
     print(f"{'✅' if good else '🔴'} messages ловит СВОЙ дефект (не только phoenix) → 🔴{red} нот={n}")
-    print(f"\n{'✅ ГАРД ЧУВСТВИТЕЛЕН' if ok else '🔴 ГАРД СЛЕП ИЛИ ШУМИТ'} — ловит зону "
+
+    # Ноль случаев — это КРАСНЫЙ, замаскированный под зелёный. Отказываем вслух.
+    if cases == 0:
+        print("\n⛔ ОТКАЗ: самопроверка не выполнила НИ ОДНОГО случая — это не «чисто»")
+        return 2
+    print(f"\n{'✅ ГАРД ЧУВСТВИТЕЛЕН' if ok else '🔴 ГАРД СЛЕП ИЛИ ШУМИТ'} — "
+          f"ВЫПОЛНЕНО {cases} случаев, провалено {0 if ok else 'есть'}: ловит зону "
           f"(+1 и +2 ч, дату-без-часов), молчит на честной метке/прошлом/не-целом сдвиге, "
           f"видит phoenix И messages по отдельности")
     return 0 if ok else 1

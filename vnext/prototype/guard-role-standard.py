@@ -556,21 +556,31 @@ def selftest():
     con.close()
     con = sqlite3.connect(f"file:{tmp}?mode=ro", uri=True)
     mt = script_mtimes()
+    # 🪤 СЧЁТ СЛУЧАЕВ — норма STUD (#2991): «прогон, не назвавший ЧИСЛО выполненных
+    #    проверок, не считается прогоном». Он поймал у себя прогон тестов, вернувший
+    #    УСПЕХ при НУЛЕ выполненных: «196 прошли» и «0 прошли» дают один код возврата.
+    #    Здесь то же было возможно — опустей DIRTY/CLEAN, вывод остался бы гордым.
     ok = True
+    cases = 0
     for role, want_red, want_yellow in (("DIRTY", True, True), ("CLEAN", False, False)):
         red, yellow, _ = check_role(con, role, mt, False)
         kinds = {w.split()[0] for _, w, _ in red + yellow}
         got_red, got_yellow = bool(red), bool(yellow)
         good = (got_red == want_red) and (got_yellow == want_yellow)
         ok &= good
+        cases += 1
         print(f"{'✅' if good else '🔴'} слепок {role}: 🔴 {len(red)} · 🟡 {len(yellow)} "
               f"· признаки {sorted(kinds) or '—'} "
               f"(ожидали {'красное' if want_red else 'тишину'})")
         for where, what, line in red + yellow:
             print(f"      {where:14} {what}")
     con.close()
+    if cases == 0:
+        print("\n⛔ ОТКАЗ: самопроверка не выполнила НИ ОДНОГО случая — это не «чисто»")
+        return 2
     print(f"\n{'✅ ГАРД ЧУВСТВИТЕЛЕН' if ok else '🔴 ГАРД СЛЕП ИЛИ ШУМИТ'} — "
-          f"краснеет на известных долгах и молчит на приведённом слепке")
+          f"ВЫПОЛНЕНО {cases} случаев: краснеет на известных долгах и молчит "
+          f"на приведённом слепке")
     return 0 if ok else 1
 
 
