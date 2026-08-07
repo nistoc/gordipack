@@ -5,6 +5,8 @@
   стоит дороже, чем сотня строк стилей.
 */
 :root {
+  color-scheme: light dark;
+
   --bg: #1a1a2e;
   --surface: #16213e;
   --surface2: #0f3460;
@@ -14,8 +16,44 @@
   --muted: #a0a0b0;
   --good: #4caf50;
   --warn: #ff9800;
+  --info: #5b8def;
   --border: #2a2a4a;
   --gap: #ff9800;
+
+  /* Подложки-намёки. Раньше эти же rgba() стояли россыпью по правилам — и любая
+     смена темы означала бы охоту за ними по всему файлу. Здесь они названы один раз,
+     и светлая тема переопределяет их вместе с остальной палитрой. */
+  --tint-warn: rgba(255, 152, 0, 0.18);
+  --tint-good: rgba(76, 175, 80, 0.18);
+  --tint-accent: rgba(233, 69, 96, 0.2);
+  --tint-info: rgba(91, 141, 239, 0.18);
+}
+
+/* СВЕТЛАЯ ТЕМА — переопределением палитры, а не вторым набором правил.
+   Просмотрщик открывают и на тёмном экране, и на светлом; тёмная вёрстка на белом
+   фоне браузера даёт нечитаемый серый по серому. Меняются ТОЛЬКО значения переменных:
+   разметка и правила остаются одни, и правка формы не может задеть одну тему и
+   пропустить другую. */
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f2f4f8;
+    --surface: #ffffff;
+    --surface2: #e9edf4;
+    --accent: #c2334c;
+    --accent2: #6b4aa0;
+    --text: #17182b;
+    --muted: #5c6377;
+    --good: #2e7d32;
+    --warn: #a95f00;
+    --info: #2f5fc4;
+    --border: #ccd3e0;
+    --gap: #a95f00;
+
+    --tint-warn: rgba(255, 152, 0, 0.16);
+    --tint-good: rgba(46, 125, 50, 0.13);
+    --tint-accent: rgba(194, 51, 76, 0.13);
+    --tint-info: rgba(47, 95, 196, 0.12);
+  }
 }
 
 * { box-sizing: border-box; }
@@ -72,13 +110,18 @@ code { background: var(--surface2); padding: 1px 5px; border-radius: 4px; }
 }
 .pill--ro { background: rgba(76, 175, 80, 0.15); color: var(--good); border-color: var(--good); }
 
+/* ⚠️ ЦВЕТ ТЕКСТА НА ЗАЛИТОЙ КНОПКЕ ЗАДАН ЯВНО, А НЕ УНАСЛЕДОВАН. Заливка здесь тёмная
+   в ОБЕИХ темах (сиреневый accent2), а `--text` в светлой теме тоже тёмный — унаследуй
+   его, и получится тёмное по тёмному. Замер светлой темы 2026-08-07 13:30 UTC: ровно
+   так и вышло, кнопка «Обновить сейчас» читалась с трудом. */
 .btn {
-  background: var(--accent2); color: var(--text); border: none;
+  background: var(--accent2); color: #fff; border: none;
   padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 0.85rem;
 }
 .btn:hover:not(:disabled) { background: var(--accent); }
 .btn:disabled { opacity: 0.45; cursor: default; }
-.btn--ghost { background: transparent; border: 1px solid var(--border); }
+/* У прозрачной кнопки заливки нет — ей белый текст был бы приговором на светлом фоне. */
+.btn--ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
 
 /* ── баннеры ─────────────────────────────────────────────────────────────── */
 .banner {
@@ -141,18 +184,21 @@ code { background: var(--surface2); padding: 1px 5px; border-radius: 4px; }
   display: inline-block; font-size: 0.72rem; padding: 1px 8px;
   border-radius: 10px; background: var(--surface2); color: var(--text);
 }
-.chip--open { background: rgba(255, 152, 0, 0.18); color: var(--warn); }
-.chip--done { background: rgba(76, 175, 80, 0.18); color: var(--good); }
-.chip--blocked, .chip--p-critical { background: rgba(233, 69, 96, 0.2); color: var(--accent); }
-.chip--p-high { background: rgba(255, 152, 0, 0.18); color: var(--warn); }
+.chip--open { background: var(--tint-warn); color: var(--warn); }
+.chip--done { background: var(--tint-good); color: var(--good); }
+.chip--blocked, .chip--p-critical { background: var(--tint-accent); color: var(--accent); }
+.chip--p-high { background: var(--tint-warn); color: var(--warn); }
+.chip--in_review { background: var(--tint-info); color: var(--info); }
+.chip--dropped { color: var(--muted); text-decoration: line-through; }
 
 .badge { display: inline-block; font-size: 0.75rem; padding: 2px 8px; border-radius: 6px; }
-.badge--gap { background: rgba(255, 152, 0, 0.18); color: var(--warn); border: 1px solid var(--warn); }
+.badge--gap { background: var(--tint-warn); color: var(--warn); border: 1px solid var(--warn); }
 
 .criterion { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .tags { margin-left: 6px; display: inline-flex; gap: 4px; flex-wrap: wrap; }
-.tag { background: var(--accent2); font-size: 0.68rem; padding: 1px 6px; border-radius: 4px; }
+/* Заливка тёмная в обеих темах ⇒ текст задан явно белым, а не унаследован (см. .btn). */
+.tag { background: var(--accent2); color: #fff; font-size: 0.68rem; padding: 1px 6px; border-radius: 4px; }
 
 /* ── карточка задачи ─────────────────────────────────────────────────────── */
 .detail {
@@ -239,7 +285,9 @@ code { background: var(--surface2); padding: 1px 5px; border-radius: 4px; }
   display: flex;
   flex-direction: column;
   min-width: 0;
-  max-height: calc(100vh - 230px);
+  /* Высоту меряет сама полоса и кладёт сюда переменной — см. RailStrip.
+     Запасное значение нужно на один кадр до первого замера, дальше не участвует. */
+  max-height: var(--rail-max-h, calc(100vh - 230px));
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -263,6 +311,65 @@ code { background: var(--surface2); padding: 1px 5px; border-radius: 4px; }
 
 /* Свой вертикальный скролл у каждого рейла: прокрутка одного не тащит соседний. */
 .rail__body { flex: 1 1 auto; overflow-y: auto; overflow-x: auto; padding: 12px; }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   ПОЛОСА БЕЗ ПОТОЛКА ВЫСОТЫ (режим 'natural', сейчас — доска задач).
+
+   🎯 Требование владельца 2026-08-07 13:46 UTC: «убери лимит максимальной высоты».
+   Колонка тянется ровно на своё содержимое, прокручивается СТРАНИЦА, а не каждая
+   колонка по отдельности.
+
+   ⚠️ `overflow: visible` у полосы — не небрежность, а условие работоспособности.
+      Оставь `overflow-x: auto` — и CSS обязан превратить вторую ось из `visible` в
+      `auto`: полоса станет прокручиваемой по вертикали, горизонтальная полоска уедет
+      на три экрана вниз (к концу самой длинной колонки), а `position: sticky` у
+      карточки задачи начнёт считаться от полосы вместо окна и замолчит. Поэтому
+      горизонталь отдана странице: её полоска всегда у нижнего края окна.
+   ───────────────────────────────────────────────────────────────────────────── */
+.railstrip--natural {
+  overflow: visible;
+  /* Колонка ровно своей высоты. При растяжении (stretch) роль с двумя задачами
+     получила бы карточку высотой с самую нагруженную роль — пустой столб в три экрана. */
+  align-items: flex-start;
+}
+
+.railstrip--natural .rail { max-height: none; }
+
+/* Колонка отдаёт прокрутку странице: своей у неё больше нет. */
+.railstrip--natural .rail--column { overflow: visible; }
+.railstrip--natural .rail--column .rail__body {
+  overflow: visible;
+  max-height: none;
+}
+
+/* 🔴 ШАПКА КОЛОНКИ ЛИПНЕТ К ВЕРХУ ОКНА — это плата за снятый потолок, а не украшение.
+   Без потолка низ длинной колонки лежит в трёх экранах от её заголовка: докрутив туда,
+   человек видит плитки и не видит, ЧЬИ они. Роль — единственное, что колонка сообщает,
+   и терять её при прокрутке значит терять смысл доски. */
+.railstrip--natural .rail--column .rail__head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  border-radius: 9px 9px 0 0;
+}
+
+/* 🎯 РЕЙЛ ОТКРЫТОЙ КАРТОЧКИ ВСТАЁТ НА ВЫСОТУ ВЫБРАННОЙ ПЛИТКИ.
+   Оба числа меряет доска (см. TasksBoard) и кладёт сюда переменными: отступ сверху —
+   чтобы глаз не прыгал от плитки к верху страницы, ограничение высоты — чтобы карточка
+   помещалась в окно целиком и прокручивалась внутри себя, а не уходила низом за край.
+
+   ⚠️ КАРТОЧКА НЕ ЛИПНЕТ К ВЕРХУ ОКНА (`sticky`), И ЭТО РЕШЕНИЕ, А НЕ УПУЩЕНИЕ. Липкая
+      карточка при первой же прокрутке отрывается от своей плитки и встаёт у верхнего
+      края — то есть перестаёт быть «на той же высоте», ради чего всё и делалось.
+      Карточка — сосед плитки: уезжает вместе с ней, возвращается вместе с ней. */
+.railstrip--natural .rail--detail {
+  margin-top: var(--detail-align, 0px);
+  max-height: var(--detail-maxh, none);
+  /* Своя ступень в стопке: у шапок колонок она есть (они липкие), и без неё липкая
+     шапка соседней колонки рисовалась бы поверх карточки при узких колонках. */
+  position: relative;
+  z-index: 3;
+}
 
 /* Ручка ширины. Ширина запоминается — рабочее место настраивают один раз. */
 .rail__resize {
@@ -303,6 +410,16 @@ code { background: var(--surface2); padding: 1px 5px; border-radius: 4px; }
   }
   .rail__resize { display: none; }
   .rail__body { max-height: 70vh; }
+
+  /* На узком окне колонки стоят одна под другой, и выравнивать карточку по плитке
+     не по чему: она и так следующая строка после своей колонки. Оставь отступ —
+     и получится дыра высотой в целую колонку. Доска обнуляет число сама (см. NARROW_PX
+     в TasksBoard), правило ниже страхует случай, когда окно сузили без пересчёта. */
+  .railstrip--natural .rail--detail {
+    margin-top: 0;
+    max-height: none;
+  }
+  .railstrip--natural .rail--column .rail__head { position: static; }
 }
 
 /* ── строки-переключатели фильтров ────────────────────────────────────────────
@@ -326,11 +443,137 @@ code { background: var(--surface2); padding: 1px 5px; border-radius: 4px; }
   display: inline-flex; align-items: center; gap: 5px;
 }
 .fchip:hover { border-color: var(--accent2); }
-.fchip--on { background: var(--accent2); border-color: var(--accent); }
+/* Залито тёмным в обеих темах ⇒ текст белый явно; ниже фишки со СВЕТЛОЙ подложкой
+   возвращают себе тёмный цвет по смыслу статуса. */
+.fchip--on { background: var(--accent2); border-color: var(--accent); color: #fff; }
 .fchip__n { color: var(--muted); font-size: 0.7rem; }
-.fchip--on .fchip__n { color: var(--text); }
-.fchip--open.fchip--on { background: rgba(255, 152, 0, 0.3); border-color: var(--warn); }
-.fchip--done.fchip--on { background: rgba(76, 175, 80, 0.28); border-color: var(--good); }
+.fchip--on .fchip__n { color: inherit; opacity: 0.8; }
+.fchip--open.fchip--on { background: var(--tint-warn); border-color: var(--warn); color: var(--warn); }
+.fchip--done.fchip--on { background: var(--tint-good); border-color: var(--good); color: var(--good); }
+.fchip--in_review.fchip--on { background: var(--tint-info); border-color: var(--info); color: var(--info); }
+.fchip--dropped.fchip--on { background: var(--surface2); border-color: var(--muted); color: var(--text); }
+
+/* Переключатель направления порядка. Отделён рамкой-акцентом и отступом: это не ещё
+   один признак сортировки в том же ряду, а действие над уже выбранным. */
+.fchip--dir {
+  margin-left: 10px;
+  border-style: dashed;
+  border-color: var(--accent2);
+  color: var(--muted);
+}
+.fchip--dir:hover { color: var(--text); }
+
+/* ── переключатель представления ─────────────────────────────────────────────
+   Доска и таблица стоят РЯДОМ и обе видны всегда: выпадающий список спрятал бы
+   сам факт, что второй вид существует. */
+.viewbar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: 12px 0 8px;
+}
+.warnnum { color: var(--warn); }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   ДОСКА ЗАДАЧ: колонка на роль, плитки сверху вниз.
+
+   Колонка — обычный рейл, поэтому раскладкой доски заведует полоса рейлов, и все её
+   правила действуют без исключений: своя ширина, тяга мышью, память ширины, никакого
+   растягивания на весь экран. Здесь только вид плитки и вид шапки колонки.
+   ───────────────────────────────────────────────────────────────────────────── */
+.board__note { margin: 0 0 8px; }
+
+.rail--column .rail__head { padding: 7px 10px; }
+.rail--column .rail__title {
+  font-family: 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.82rem; letter-spacing: 0.04em;
+  color: var(--text);
+}
+.rail--column .rail__body { padding: 8px; }
+
+.colcount { display: inline-flex; align-items: center; gap: 6px; font-size: 0.78rem; }
+.colcount__gap { color: var(--warn); white-space: nowrap; }
+
+.tiles { display: flex; flex-direction: column; gap: 8px; }
+
+.tile {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-left: 4px solid transparent;
+  border-radius: 8px;
+  padding: 7px 9px;
+  cursor: pointer;
+}
+.tile:hover { border-color: var(--accent2); }
+.tile--selected { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+
+/* 🔴 ПЛИТКА БЕЗ КРИТЕРИЯ ПРИЁМКИ — ТРИ НЕЗАВИСИМЫХ ПРИЗНАКА СРАЗУ: полоса слева,
+   подложка и подпись словами. Не украшательство: один признак цветом теряется на
+   чёрно-белом снимке и у части людей, один признак словом теряется в потоке плиток.
+   Ради этой заметности доска и заводилась. */
+.tile--gap { border-left-color: var(--gap); background: var(--tint-warn); }
+
+.tile__meta {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 0.72rem; color: var(--muted);
+}
+.tile__id { color: var(--muted); }
+.tile__age { margin-left: auto; white-space: nowrap; }
+/* Залежавшаяся карточка выделена НАСЫЩЕННОСТЬЮ, а не своим цветом: оранжевый на этой
+   доске уже значит «нет критерия приёмки», и второй смысл обесценил бы первый. */
+.tile__age--stale { color: var(--text); font-weight: 700; }
+
+.tile__title {
+  font-size: 0.86rem; line-height: 1.32; margin: 4px 0 6px; color: var(--text);
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+  overflow: hidden; overflow-wrap: anywhere;
+}
+
+.tile__criterion { font-size: 0.74rem; }
+.tile__criterion-text {
+  color: var(--muted);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; overflow-wrap: anywhere;
+}
+
+.tile__rel { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.tile__tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+
+.tile__blocked {
+  margin-top: 6px; padding: 3px 7px; border-radius: 6px;
+  font-size: 0.74rem; color: var(--accent); background: var(--tint-accent);
+}
+
+/* Связь с родительской карточкой. Кнопка, а не подпись: связь без перехода —
+   это сообщение «где-то есть родитель», после которого его всё равно ищут руками. */
+.reltag {
+  display: inline-block; font-size: 0.7rem; padding: 1px 7px; border-radius: 10px;
+  border: 1px solid var(--border); background: transparent; color: var(--text);
+  font-family: inherit;
+}
+.reltag--parent { cursor: pointer; border-color: var(--accent2); }
+.reltag--parent:hover { background: var(--accent2); color: #fff; }
+.reltag--children { color: var(--muted); }
+.reltag--track { color: var(--muted); }
+
+/* ── важность: длина полоски, а не длинное слово ──────────────────────────── */
+.prio { display: inline-flex; align-items: flex-end; gap: 2px; }
+.prio__pip {
+  display: block; width: 3px; height: 9px; border-radius: 1px;
+  border: 1px solid var(--muted); opacity: 0.35;
+}
+.prio__pip--on { opacity: 1; }
+.prio--critical .prio__pip--on { background: var(--accent); border-color: var(--accent); }
+.prio--high .prio__pip--on { background: var(--warn); border-color: var(--warn); }
+.prio--normal .prio__pip--on { background: var(--info); border-color: var(--info); }
+.prio--low .prio__pip--on { background: var(--muted); border-color: var(--muted); }
+
+/* ── статус: своя форма И свой цвет ───────────────────────────────────────── */
+.smark { font-size: 0.86rem; line-height: 1; }
+.smark--open { color: var(--warn); }
+.smark--in_review { color: var(--info); }
+.smark--blocked { color: var(--accent); }
+.smark--done { color: var(--good); }
+.smark--dropped { color: var(--muted); }
+.smark--unknown { color: var(--muted); }
 
 /* ── сортировка по колонкам ──────────────────────────────────────────────────
    Значок стоит у КАЖДОЙ сортируемой колонки, а не только у активной: иначе

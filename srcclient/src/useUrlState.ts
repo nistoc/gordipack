@@ -15,7 +15,22 @@ function readParam(key: string): string | null {
   return new URLSearchParams(window.location.search).get(key);
 }
 
-export function useUrlParam(key: string): [string | null, (v: string | null) => void] {
+/**
+ * Как правка адреса ложится в историю браузера.
+ *   'push'    — шаг, на который человек ждёт «назад»: открыл карточку, сменил представление.
+ *   'replace' — уточнение того же вида: дёрнул фильтр, переключил сортировку.
+ *
+ * 📌 Различие не косметическое. Если каждое нажатие фильтра пишет шаг истории, то «назад»
+ *    после десятка щелчков по фишкам десять раз перебирает фильтры вместо возврата на
+ *    прежнюю страницу — то есть кнопка перестаёт делать то, что обещает. Адрес при этом
+ *    остаётся единственным источником истины в обоих случаях: меняется только след в истории.
+ */
+type HistoryMode = 'push' | 'replace';
+
+export function useUrlParam(
+  key: string,
+  mode: HistoryMode = 'push',
+): [string | null, (v: string | null) => void] {
   const [value, setValue] = useState<string | null>(() => readParam(key));
 
   // Кнопки «назад»/«вперёд» меняют адрес мимо нас — подписываемся, иначе рейлы отстанут.
@@ -31,11 +46,31 @@ export function useUrlParam(key: string): [string | null, (v: string | null) => 
     if (current === next) return;
     if (next === null) url.searchParams.delete(key);
     else url.searchParams.set(key, next);
-    // Именно push, а не replace: открытие карточки — шаг, на который человек ждёт «назад».
-    window.history.pushState({}, '', url);
+    if (mode === 'replace') window.history.replaceState({}, '', url);
+    else window.history.pushState({}, '', url);
     setValue(next);
-  }, [key]);
+  }, [key, mode]);
 
+  return [value, set];
+}
+
+/**
+ * Значение из закрытого набора: адрес может содержать что угодно, включая мусор из
+ * чужой ссылки. Неизвестное значение падает на умолчание, а не превращает страницу
+ * в пустой экран без объяснения.
+ */
+export function useUrlEnum<T extends string>(
+  key: string,
+  allowed: readonly T[],
+  fallback: T,
+  mode: HistoryMode = 'push',
+): [T, (v: T) => void] {
+  const [raw, setRaw] = useUrlParam(key, mode);
+  const value = allowed.includes(raw as T) ? (raw as T) : fallback;
+  const set = useCallback(
+    (v: T) => setRaw(v === fallback ? null : v),
+    [setRaw, fallback],
+  );
   return [value, set];
 }
 

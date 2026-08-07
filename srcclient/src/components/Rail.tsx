@@ -45,9 +45,98 @@ function saveWidth(key: string, w: number) {
   }
 }
 
-export function RailStrip({ children, name }: { children: ReactNode; name: string }) {
+/** Сколько оставить под полосой: подвал плюс воздух. */
+const BOTTOM_GAP = 96;
+
+/**
+ * ЧЕМ ОГРАНИЧЕНА ВЫСОТА РЕЙЛОВ — и почему это ДВА разных режима, а не настройка.
+ *
+ *   'fit'     — полоса вписана в окно: рейл упирается в измеренный потолок, и дальше
+ *               прокручивается ВНУТРИ себя. Так живёт таблица: у неё одна «строка»
+ *               содержимого на всю полосу, и внутренняя прокрутка — единственная.
+ *
+ *   'natural' — потолка НЕТ ВОВСЕ: рейл ровно такой высоты, какого его содержимое,
+ *               а прокручивается СТРАНИЦА. Так живёт доска.
+ *
+ * 🔴 ПОЧЕМУ ДОСКЕ ПОТОЛОК ВРЕДЕН. Колонок девять, и у самой нагруженной роли карточек
+ *    вдесятеро больше, чем у самой свободной. С потолком каждая колонка получает СВОЮ
+ *    внутреннюю прокрутку: чтобы сравнить две роли — а доска заводилась ровно ради
+ *    сравнения — приходится прокручивать их по очереди, и обе разом в глаза не попадают
+ *    никогда. Плюс девять полос прокрутки на экране, каждая со своим положением, которое
+ *    не восстанавливается. Требование владельца 2026-08-07 13:46 UTC — снять потолок
+ *    именно на доске, таблицу не трогая.
+ *
+ * ⚠️ БЕЗ ПОТОЛКА ПОЛОСА ОБЯЗАНА ПЕРЕСТАТЬ БЫТЬ КОНТЕЙНЕРОМ ПРОКРУТКИ. Оставь ей
+ *    `overflow-x: auto` — и по правилу CSS вторая ось из `visible` станет `auto`: полоса
+ *    сделается прокручиваемой и по вертикали. Тогда, во-первых, горизонтальная полоска
+ *    прокрутки уедет вниз вместе с концом самой длинной колонки (за три экрана от глаз),
+ *    во-вторых, `position: sticky` у карточки задачи начнёт считаться от полосы, а не от
+ *    окна, и перестанет работать. Поэтому в 'natural' горизонтальная прокрутка отдаётся
+ *    СТРАНИЦЕ: её полоска всегда у нижнего края окна, и она одна на всё.
+ */
+export type StripHeightMode = 'fit' | 'natural';
+
+export function RailStrip({
+  children,
+  name,
+  heightMode = 'fit',
+}: {
+  children: ReactNode;
+  name: string;
+  heightMode?: StripHeightMode;
+}) {
   const stripRef = useRef<HTMLDivElement | null>(null);
   const rails = useRef(new Map<string, HTMLElement>());
+  const natural = heightMode === 'natural';
+
+  /**
+   * ВЫСОТА РЕЙЛОВ ИЗМЕРЯЕТСЯ, А НЕ УГАДЫВАЕТСЯ.
+   *
+   * 🔴 ЗАМЕР 2026-08-07 13:18 UTC, ПОЧЕМУ ЗДЕСЬ ПОЯВИЛСЯ КОД ВМЕСТО ОДНОЙ СТРОКИ CSS.
+   *    Прежде высота стояла числом: `max-height: calc(100vh - 230px)`. Число было верным
+   *    ровно для той раскладки, в которой его посчитали. Как только над полосой встали
+   *    переключатель вида и строки фильтров, полоса начиналась уже на 464-й точке, и
+   *    рейлы уходили НА 234 ТОЧКИ НИЖЕ НИЖНЕГО КРАЯ ОКНА: низ каждой колонки — вместе
+   *    с концом её собственной прокрутки — оказывался недостижим. Ни ошибки, ни
+   *    предупреждения: просто содержимое за краем, то есть ровно тот отказ, ради
+   *    которого писан канон рейлов.
+   *
+   *    Константа не «была неправильной» — она устарела молча, и устареет снова при
+   *    любой правке над полосой. Поэтому полоса теперь спрашивает у страницы, где она
+   *    начинается, а не помнит, где начиналась когда-то.
+   */
+  const [maxHeight, setMaxHeight] = useState<number | null>(null);
+
+  useLayoutEffect(() => {
+    const el = stripRef.current;
+    if (!el) return;
+    // В 'natural' потолка нет по определению: мерить его — значит завести переменную,
+    // которую никто не читает, и наблюдателя, который просыпается на каждый рост доски.
+    if (natural) {
+      setMaxHeight(null);
+      return;
+    }
+
+    let last = 0;
+    const measure = () => {
+      const top = el.getBoundingClientRect().top;
+      const next = Math.max(240, Math.round(window.innerHeight - top - BOTTOM_GAP));
+      // Порог в две точки — против дребезга: правка высоты меняет высоту страницы,
+      // та будит наблюдателя, и без порога пара близких значений мигала бы вечно.
+      if (Math.abs(next - last) < 2) return;
+      last = next;
+      setMaxHeight(next);
+    };
+
+    measure();
+    window.addEventListener('resize', measure);
+    const observer = new ResizeObserver(measure);
+    observer.observe(document.body);
+    return () => {
+      window.removeEventListener('resize', measure);
+      observer.disconnect();
+    };
+  }, [natural]);
 
   const register = useCallback((el: HTMLElement | null, id: string) => {
     if (el) rails.current.set(id, el);
@@ -59,12 +148,22 @@ export function RailStrip({ children, name }: { children: ReactNode; name: strin
     const strip = stripRef.current;
     if (!el || !strip) return;
     const a = el.getBoundingClientRect();
-    const b = strip.getBoundingClientRect();
+    /**
+     * ⚠️ С ЧЕМ СРАВНИВАТЬ «ВИДЕН ЛИ РЕЙЛ» — ЗАВИСИТ ОТ ТОГО, КТО ПРОКРУЧИВАЕТ.
+     * В 'fit' прокручивается полоса, и края видимого — её собственные края. В 'natural'
+     * прокручивается страница, а полоса шире окна и НИКОГДА себя не обрезает: сравнение
+     * с её краями всегда давало бы «всё видно», и рейл, уехавший за правый край ОКНА,
+     * молча не показывался бы. Один и тот же код при этом «работает» в обоих режимах —
+     * ровно тот отказ, который видно только глазами.
+     */
+    const b = natural
+      ? { left: 0, right: window.innerWidth }
+      : strip.getBoundingClientRect();
     // Обрезан хотя бы с одной стороны — подвинуть минимально, а не «в начало».
     if (a.left < b.left - 1 || a.right > b.right + 1) {
       el.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
     }
-  }, []);
+  }, [natural]);
 
   /**
    * Колесо над «тихим» местом двигает полосу вбок. Если под курсором есть что
@@ -74,6 +173,13 @@ export function RailStrip({ children, name }: { children: ReactNode; name: strin
   const onWheel = useCallback((e: React.WheelEvent) => {
     const strip = stripRef.current;
     if (!strip) return;
+    /**
+     * 🔴 В 'natural' КОЛЕСО НЕ ТРОГАЕМ ВООБЩЕ. Там полоса не прокручивается — прокручивается
+     * страница, и перехват означал бы `preventDefault()` на движении, которое взамен не
+     * делает ничего: колесо над доской просто перестало бы листать. Доска при этом выше
+     * трёх экранов, то есть листание — единственный способ её увидеть.
+     */
+    if (natural) return;
     if (e.deltaY === 0 || e.shiftKey) return;
     if (strip.scrollWidth <= strip.clientWidth + 1) return;
 
@@ -94,15 +200,19 @@ export function RailStrip({ children, name }: { children: ReactNode; name: strin
     }
     strip.scrollLeft += e.deltaY;
     e.preventDefault();
-  }, []);
+  }, [natural]);
 
   return (
     <Ctx.Provider value={{ register, revealRail }}>
       <div
         ref={stripRef}
-        className="railstrip"
+        className={`railstrip ${natural ? 'railstrip--natural' : ''}`}
         data-panel={`railstrip-${name}`}
+        data-height-mode={heightMode}
         onWheel={onWheel}
+        // Переменной, а не прямой высотой на рейле: инлайновый стиль победил бы правило
+        // узкого экрана, где рейлы намеренно тянутся во всю высоту.
+        style={maxHeight === null ? undefined : ({ '--rail-max-h': `${maxHeight}px` } as React.CSSProperties)}
       >
         {children}
       </div>
@@ -118,6 +228,8 @@ export function Rail({
   maxWidth,
   onClose,
   toolbar,
+  className,
+  revealOnMount = true,
   children,
 }: {
   id: string;
@@ -127,12 +239,38 @@ export function Rail({
   maxWidth: number;
   onClose?: () => void;
   toolbar?: ReactNode;
+  className?: string;
+  /**
+   * Показать рейл целиком сразу после появления.
+   *
+   * ⚠️ ВЫКЛЮЧАТЬ, КОГДА РЕЙЛОВ ПОЯВЛЯЕТСЯ СРАЗУ МНОГО. Уместно это ровно для рейла,
+   *    который человек ТОЛЬКО ЧТО открыл: он показал, куда смотрит. Когда одним махом
+   *    встают десять колонок доски, каждая просит показать себя, побеждает последняя —
+   *    и доска открывается прокрученной к самой правой роли, мимо начала. Умолчание
+   *    оставлено прежним, чтобы поведение карточки не поменялось молча.
+   */
+  revealOnMount?: boolean;
   children: ReactNode;
 }) {
   const ctx = useContext(Ctx);
   const ref = useRef<HTMLElement | null>(null);
   const [width, setWidth] = useState(() => loadWidth(id, defaultWidth, minWidth, maxWidth));
-  const drag = useRef<{ x: number; w: number } | null>(null);
+  /**
+   * Состояние перетаскивания. `last` — последняя ПОСЧИТАННАЯ ширина, и она здесь
+   * не для удобства.
+   *
+   * 🔴 ЗАМЕР 2026-08-07 13:26 UTC. Прежде отпускание кнопки сохраняло `width` из
+   *    состояния — то есть значение ТОГО кадра, в котором обработчик был создан.
+   *    Если последнее движение и отпускание попадали в одну порцию обновлений (быстрый
+   *    рывок мышью — обычное дело), кадр между ними не успевал случиться, и в память
+   *    ложилась ширина ДО перетаскивания: на экране колонка 440, в памяти 320, после
+   *    перезагрузки снова 320. Проверено прямой посылкой событий: сохранилось 320 при
+   *    показанных 440. Ошибка тихая — она видна только через перезагрузку, а на неё
+   *    списывают «не сохранилось, ну ладно».
+   *
+   *    Значение в ссылке не зависит от кадров вовсе, поэтому гонки больше нет.
+   */
+  const drag = useRef<{ x: number; w: number; last: number } | null>(null);
 
   useLayoutEffect(() => {
     ctx?.register(ref.current, id);
@@ -141,28 +279,32 @@ export function Rail({
 
   // Новый рейл показываем целиком: прежние уезжают влево, но НЕ сжимаются.
   useEffect(() => {
+    if (!revealOnMount) return;
     const t = setTimeout(() => ctx?.revealRail(id), 30);
     return () => clearTimeout(t);
-  }, [ctx, id]);
+  }, [ctx, id, revealOnMount]);
 
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
-    drag.current = { x: e.clientX, w: width };
+    drag.current = { x: e.clientX, w: width, last: width };
   };
 
   const onPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (!drag.current) return;
     const next = Math.min(maxWidth, Math.max(minWidth, drag.current.w + (e.clientX - drag.current.x)));
+    drag.current.last = next;
     setWidth(next);
   };
 
   const onPointerUp = (e: ReactPointerEvent<HTMLDivElement>) => {
-    if (!drag.current) return;
+    const d = drag.current;
+    if (!d) return;
     drag.current = null;
     try { (e.target as HTMLElement).releasePointerCapture(e.pointerId); } catch { /* уже отпущен */ }
-    saveWidth(id, width);
+    // Из ссылки, а не из состояния — см. объявление drag.
+    saveWidth(id, d.last);
   };
 
   // Клик по обрезанному рейлу открывает его целиком: человек показал, где хочет работать.
@@ -175,7 +317,7 @@ export function Rail({
   return (
     <section
       ref={ref as React.RefObject<HTMLElement>}
-      className="rail"
+      className={`rail ${className ?? ''}`}
       style={{ flex: `0 0 ${width}px`, maxWidth: `${maxWidth}px` }}
       data-panel={`rail-${id}`}
       data-rail-width={Math.round(width)}

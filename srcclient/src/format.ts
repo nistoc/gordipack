@@ -35,12 +35,50 @@ export function fmtUtcBare(value: string | null | undefined): string {
   return full.endsWith(' UTC') ? full.slice(0, -4) : full;
 }
 
+/**
+ * Метка времени → миллисекунды, ЯВНО считая её UTC, когда пояс не указан.
+ *
+ * 🔴 ЗАЧЕМ ОТДЕЛЬНАЯ ФУНКЦИЯ, А НЕ `new Date(value)`. База отдаёт время в виде
+ * '2026-08-07 13:04:41' — без пояса и через пробел. Такую строку движок браузера
+ * разбирает как МЕСТНОЕ время, то есть в поясе +02:00 карточка, заведённая минуту
+ * назад, получает возраст «2 часа 1 минута». Возраст — одно из полей, ради которых
+ * писана доска, и ошибка ровно на смещение пояса была бы не видна глазом: числа
+ * правдоподобные, просто неверные. Поэтому пояс здесь навязывается, а не угадывается.
+ */
+export function parseUtcMs(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const hasZone = /[+-]\d{2}:?\d{2}$|Z$/i.test(value);
+  const normalized = hasZone ? value : value.replace(' ', 'T') + 'Z';
+  const ms = new Date(normalized).getTime();
+  return Number.isNaN(ms) ? null : ms;
+}
+
+/**
+ * Возраст карточки в сутках (дробных) от момента заведения. null — если времени нет
+ * или оно не разобрано; ноль здесь был бы ложью («карточка заведена только что»).
+ */
+export function ageDays(createdAt: string | null | undefined, nowMs = Date.now()): number | null {
+  const then = parseUtcMs(createdAt);
+  if (then === null) return null;
+  return Math.max(0, (nowMs - then) / 86_400_000);
+}
+
+/** Возраст короткой подписью для плитки: «26 сут», «5 ч», «12 мин». */
+export function ageShort(createdAt: string | null | undefined, nowMs = Date.now()): string {
+  const days = ageDays(createdAt, nowMs);
+  if (days === null) return '—';
+  if (days >= 1) return `${Math.floor(days)} сут`;
+  const hours = days * 24;
+  if (hours >= 1) return `${Math.floor(hours)} ч`;
+  return `${Math.max(1, Math.floor(hours * 60))} мин`;
+}
+
 /** «сколько назад» — грубо, для ощущения свежести, а не для отчёта. */
 export function ago(value: string | null | undefined, nowIso?: string | null): string {
   if (!value) return '';
-  const then = new Date(value).getTime();
-  const now = nowIso ? new Date(nowIso).getTime() : Date.now();
-  if (Number.isNaN(then) || Number.isNaN(now)) return '';
+  const then = parseUtcMs(value);
+  const now = nowIso ? parseUtcMs(nowIso) : Date.now();
+  if (then === null || now === null) return '';
   const sec = Math.max(0, Math.round((now - then) / 1000));
   if (sec < 60) return `${sec} с назад`;
   const min = Math.round(sec / 60);
