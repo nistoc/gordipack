@@ -22,9 +22,6 @@ import { compareByGapThenPriority, isCriterionGap } from '../taskModel';
  */
 const COLUMN_RAIL = { defaultWidth: 320, minWidth: 240, maxWidth: 620 };
 
-/** Воздух между карточкой задачи и краем окна, когда карточку приходится поджимать. */
-const EDGE_GAP = 12;
-
 /**
  * Ниже этой ширины рейлы становятся одним столбцом (см. правило в styles.css), и
  * выравнивание теряет смысл: карточка задачи встаёт отдельной строкой под колонкой,
@@ -32,20 +29,12 @@ const EDGE_GAP = 12;
  */
 const NARROW_PX = 1100;
 
-/**
- * Ниже этого карточку не сжимаем, даже если места в окне меньше. Низкое окно — не повод
- * превратить карточку в щель: пусть лучше её низ уйдёт за край, чем на экране останется
- * рамка с шапкой и без содержимого.
- */
-const MIN_DETAIL_H = 320;
-
 export function TasksBoard({
   tasks,
   allTasks,
   selectedId,
   onSelect,
   detailRail,
-  detailPhase,
   order = compareByGapThenPriority,
   nowMs,
 }: {
@@ -57,19 +46,6 @@ export function TasksBoard({
   onSelect: (id: number | null) => void;
   /** Рейл открытой карточки. Ставится СРАЗУ ЗА колонкой её роли — см. ниже. */
   detailRail?: ReactNode;
-  /**
-   * Отпечаток СОДЕРЖИМОГО открытой карточки: меняется, когда карточка догрузилась
-   * с сервера и её высота стала настоящей.
-   *
-   * 🔴 ЗАЧЕМ ОТДЕЛЬНАЯ СТРОКА, А НЕ ОДИН `ResizeObserver` ПО РЕЙЛУ. Наблюдатель размера
-   *    будит браузер В ХОДЕ ОТРИСОВКИ КАДРА. Пока вкладку не показывают, кадров нет —
-   *    и наблюдатель молчит: замер 2026-08-07 15:59 UTC на неотрисовываемой вкладке дал
-   *    НОЛЬ срабатываний, выравнивание так и осталось посчитанным по высоте надписи
-   *    «читаю карточку…», то есть по пустоте. Наблюдатель оставлен как страховка на
-   *    поздние изменения размера, но ГЛАВНЫЙ повод пересчитать приходит сюда явным
-   *    значением — оно не зависит ни от кадров, ни от видимости вкладки.
-   */
-  detailPhase?: string;
   /**
    * Порядок плиток ВНУТРИ колонки. Порядок самих колонок он не трогает: колонки стоят
    * от самой нагруженной роли к самой свободной, и это ответ доски на свой вопрос
@@ -148,7 +124,6 @@ export function TasksBoard({
     : columns.length > 0 ? columns[columns.length - 1].role : null;
 
   const rootRef = useRef<HTMLDivElement | null>(null);
-  const hasDetail = detailRail !== null && detailRail !== undefined;
 
   /**
    * НА КАКОЙ ВЫСОТЕ НАЧИНАЕТСЯ РЕЙЛ ОТКРЫТОЙ КАРТОЧКИ — отступ сверху в точках.
@@ -164,106 +139,56 @@ export function TasksBoard({
    *    ниже бывают метки и связь с родителем. «Номер плитки × высоту» дало бы верный ответ
    *    ровно на однородных данных и молча мазало бы мимо на живых.
    */
-  const [detailBox, setDetailBox] = useState<{ offset: number; maxHeight: number | null }>(
-    { offset: 0, maxHeight: null },
-  );
+  const [detailOffset, setDetailOffset] = useState(0);
 
+  /**
+   * ⚠️ БЕЗ СПИСКА ЗАВИСИМОСТЕЙ — СЧИТАЕМ ПОСЛЕ КАЖДОЙ ОТРИСОВКИ, И ЭТО ЧЕСТНЕЕ СПИСКА.
+   *    Плитка уезжает по слишком многим поводам, чтобы перечислить их и не забыть ни один:
+   *    сменили порядок в колонках, дёрнули фильтр, доска перечиталась опросом и над
+   *    выбранной плиткой встала новая карточка, у соседней плитки заголовок перенёсся на
+   *    строку больше. Забытый повод не ломает экран заметно — карточка просто стоит «на
+   *    высоте», где выбранной плитки уже нет, и это читается как небрежная вёрстка, а не
+   *    как ошибка, то есть не чинится годами. Здесь два замера и сравнение числа: React
+   *    не перерисовывает, когда значение прежнее, а зависит оно только от плитки и полосы —
+   *    не от самой карточки, — поэтому схождение наступает сразу и петли не возникает.
+   */
   useLayoutEffect(() => {
-    const root = rootRef.current;
-    if (!root) return;
-    const reset = () => setDetailBox({ offset: 0, maxHeight: null });
-    if (selectedId === null) {
-      reset();
-      return;
-    }
-
     const align = () => {
       const host = rootRef.current;
       if (!host) return;
+      // Узкое окно — колонки стоят одна под другой, отступ превратился бы в дыру.
+      if (selectedId === null || window.innerWidth <= NARROW_PX) {
+        setDetailOffset(0);
+        return;
+      }
       const tile = host.querySelector<HTMLElement>(`[data-item="task-${selectedId}"]`);
-      const detail = host.querySelector<HTMLElement>('.rail--detail');
       const strip = host.querySelector<HTMLElement>('.railstrip');
       // Плитка могла не пройти фильтр — тогда выравнивать не по чему, и честнее
       // оставить карточку сверху, чем пристроить её к чужой плитке.
-      // Узкое окно — колонки стоят одна под другой, выравнивание бессмысленно.
-      if (!tile || !detail || !strip || window.innerWidth <= NARROW_PX) {
-        reset();
+      if (!tile || !strip) {
+        setDetailOffset(0);
         return;
       }
 
-      const winH = window.innerHeight;
-      const stripTop = strip.getBoundingClientRect().top;  // край полосы В ОКНЕ, с учётом прокрутки
-      const tileTop = tile.getBoundingClientRect().top;
-
       /**
-       * ⚠️ ВЫСОТА КАРТОЧКИ БЕРЁТСЯ СОБСТВЕННАЯ, А НЕ ИЗМЕРЕННАЯ ЛИНЕЙКОЙ ПО ЭКРАНУ.
-       *    Ниже мы сами ограничиваем высоту рейла — и если бы считали по видимой высоте,
-       *    ограничение вошло бы в собственный расчёт: уже, потом ещё уже, потом ещё.
-       *    Высота содержимого от ограничения не зависит, и петли поэтому нет.
+       * 🎯 ВЕСЬ РАСЧЁТ — ОДНА РАЗНОСТЬ: насколько верх плитки ниже верха полосы.
+       *
+       * 🔴 ОН НАМЕРЕННО НЕ СМОТРИТ НИ НА ОКНО, НИ НА ПРОКРУТКУ, НИ НА ВЫСОТУ КАРТОЧКИ.
+       *    Смотрел до 2026-08-07 14:24 UTC: карточка ограничивалась по высоте и
+       *    поджималась вверх, чтобы влезть в окно целиком. Владелец это отменил — внутри
+       *    карточки не должно быть полос прокрутки, а без них «влезть в окно» недостижимо
+       *    в принципе, сколько ни поджимай. Вместе с потолком ушла и зависимость от
+       *    прокрутки: отступ теперь чисто геометрический и верен при любом положении
+       *    страницы, а не только в тот миг, когда по плитке щёлкнули.
        */
-      const head = detail.querySelector<HTMLElement>('.rail__head');
-      const body = detail.querySelector<HTMLElement>('.rail__body');
-      const naturalH = (head?.offsetHeight ?? 0) + (body?.scrollHeight ?? 0) + 2;
-
-      /**
-       * 🔴 ТРИ ГРАНИЦЫ, МЕЖДУ КОТОРЫМИ ЖИВЁТ ВЕРХ КАРТОЧКИ.
-       *   1) не выше начала полосы — отрицательный отступ залез бы на строки фильтров;
-       *   2) не выше края окна;
-       *   3) не настолько низко, чтобы низ карточки ушёл под нижний край окна.
-       * Выравнивание по плитке — ПРЕДПОЧТЕНИЕ внутри этих границ, а не закон: выбери
-       * плитку у самого низа длинной колонки — и честно выровненная карточка показала бы
-       * одну свою шапку, а всё остальное осталось бы за краем экрана.
-       */
-      const ceiling = Math.max(EDGE_GAP, stripTop);
-      const wanted = Math.max(tileTop, ceiling);
-
-      /**
-       * СНАЧАЛА ПРОБУЕМ УДЕРЖАТЬ ТОЧНОЕ СОВПАДЕНИЕ ВЫСОТ, ПЛАТЯ ВЫСОТОЙ САМОЙ КАРТОЧКИ.
-       * Карточка не обязана быть во весь свой рост: длинное описание прокручивается
-       * внутри неё. Пока под плиткой остаётся сколько-нибудь пригодное место, совпадение
-       * сохраняется полностью — глазу не приходится искать, куда уехали подробности.
-       */
-      let topInWindow = wanted;
-      let room = winH - EDGE_GAP - topInWindow;
-
-      /**
-       * 🔴 И ТОЛЬКО ЕСЛИ МЕСТА МЕНЬШЕ, ЧЕМ НУЖНО НА ЧИТАЕМУЮ КАРТОЧКУ, — ПОДЖИМАЕМ ВВЕРХ.
-       *    Это и есть край из требования владельца: плитка у самого низа длинной колонки.
-       *    Замер 2026-08-07 16:09 UTC ДО этой ветки: карточка честно вставала на высоту
-       *    плитки (726) и уходила нижним краем на 96 точек ЗА нижнюю границу окна —
-       *    видно было три четверти рамки, а низ приходилось искать прокруткой. Совпадение
-       *    высот тут уступает: «видно целиком» важнее, чем «ровно напротив».
-       */
-      if (room < MIN_DETAIL_H) {
-        topInWindow = Math.max(ceiling, winH - EDGE_GAP - MIN_DETAIL_H);
-        room = winH - EDGE_GAP - topInWindow;
-      }
-
-      // Ниже 120 не опускаемся ни при каком окне: рамка без строки текста — не карточка.
-      const maxHeight = Math.max(120, Math.round(Math.min(naturalH, room)));
-
-      setDetailBox({ offset: Math.max(0, Math.round(topInWindow - stripTop)), maxHeight });
+      const offset = tile.getBoundingClientRect().top - strip.getBoundingClientRect().top;
+      setDetailOffset(Math.max(0, Math.round(offset)));
     };
 
     align();
-
-    /**
-     * Наблюдатель размера — СТРАХОВКА, а не главный повод пересчитать: он срабатывает в
-     * ходе отрисовки кадра, а на неотрисовываемой вкладке кадров нет. Главный повод
-     * приходит значением `detailPhase` из страницы задач (см. его описание).
-     */
-    const detail = root.querySelector<HTMLElement>('.rail--detail');
-    const observer = new ResizeObserver(align);
-    if (detail) observer.observe(detail);
     window.addEventListener('resize', align);
-    return () => {
-      observer.disconnect();
-      window.removeEventListener('resize', align);
-    };
-    // `order` в списке не ради самой сортировки, а ради выравнивания: сменив порядок,
-    // человек двигает плитку, и карточка обязана переехать за ней — иначе она останется
-    // «на высоте», где выбранной плитки уже нет.
-  }, [selectedId, hasDetail, detailPhase, order]);
+    return () => window.removeEventListener('resize', align);
+  });
 
   return (
     <div
@@ -273,12 +198,8 @@ export function TasksBoard({
       // Переменной, а не стилем на самом рейле: рейл создаётся страницей задач (он общий
       // с таблицей), и доска не должна лезть в его разметку — она лишь сообщает число,
       // которое правило CSS применит только в режиме доски.
-      data-detail-align={detailBox.offset}
-      data-detail-maxh={detailBox.maxHeight ?? ''}
-      style={{
-        '--detail-align': `${detailBox.offset}px`,
-        '--detail-maxh': detailBox.maxHeight === null ? 'none' : `${detailBox.maxHeight}px`,
-      } as React.CSSProperties}
+      data-detail-align={detailOffset}
+      style={{ '--detail-align': `${detailOffset}px` } as React.CSSProperties}
     >
       {columns.length === 0 && (
         <p className="muted" data-panel="board-empty">под фильтр не попало ни одной карточки</p>

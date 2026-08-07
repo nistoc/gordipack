@@ -472,15 +472,6 @@ export function TasksPage({ overview, refreshMs }: { overview: Overview | null; 
           selectedId={openId}
           onSelect={setOpenId}
           detailRail={detailRail}
-          /* Отпечаток содержимого карточки: пока она грузится, её высота — высота одной
-             строки «читаю карточку…», и выравнивать по ней значит выравнивать по пустоте.
-             Смена этой строки — сигнал доске пересчитать высоту заново. См. detailPhase. */
-          detailPhase={
-            openId === null
-              ? ''
-              : `${openId}:${detail.loading ? 'load' : 'ready'}:${detail.data?.bodyMd?.length ?? 0}`
-              + `:${detail.data?.events.length ?? 0}:${detail.data?.tests.length ?? 0}`
-          }
           order={boardOrder}
           nowMs={nowMs}
         />

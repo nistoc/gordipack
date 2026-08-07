@@ -183,6 +183,18 @@ export function RailStrip({
     if (e.deltaY === 0 || e.shiftKey) return;
     if (strip.scrollWidth <= strip.clientWidth + 1) return;
 
+    /**
+     * 🔴 НАД КАРТОЧКОЙ ЗАДАЧИ КОЛЕСО ВСЕГДА ОСТАЁТСЯ КОЛЕСОМ.
+     *
+     * У карточки с 2026-08-07 14:24 UTC нет ни потолка высоты, ни собственной прокрутки:
+     * она бывает в восемь тысяч точек и листается СТРАНИЦЕЙ. Перебор ниже ищет под
+     * курсором что-нибудь прокручиваемое по вертикали и, не найдя, отдаёт колесо
+     * горизонтали — то есть ровно над длинной карточкой листание вниз перестало бы
+     * работать, а вместо него полоса поехала бы вбок. Отказ тихий вдвойне: и колесо
+     * «отвечает», и полоса движется — просто не туда, куда человек смотрит.
+     */
+    if ((e.target as HTMLElement).closest?.('.rail--detail')) return;
+
     let node = e.target as HTMLElement | null;
     while (node && node !== strip) {
       const canScrollY = node.scrollHeight > node.clientHeight + 1;
