@@ -1,14 +1,14 @@
-namespace Gordi.Viewer.Api.Configuration;
+namespace Gordi.Periscope.Api.Configuration;
 
 /// <summary>
 /// Настройки просмотрщика. Читаются из трёх источников, приоритет снизу вверх:
-///   1. appsettings.json      — секция "Viewer"
+///   1. appsettings.json      — секция "Periscope"
 ///   2. переменные среды      — GORDI_DB, GORDI_DIR, GORDI_REFRESH_SECONDS, GORDI_PORT
 ///   3. аргументы запуска     — --db, --dir, --refresh, --port   (побеждают всё)
 /// </summary>
-public sealed class ViewerOptions
+public sealed class PeriscopeOptions
 {
-    public const string SectionName = "Viewer";
+    public const string SectionName = "Periscope";
 
     /// <summary>Путь к конкретному файлу базы. Если задан — он и есть активный источник.</summary>
     public string? Db { get; set; }

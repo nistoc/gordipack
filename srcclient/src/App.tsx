@@ -38,7 +38,7 @@ export default function App() {
     // у таблицы — то есть у колонок, которые человек пришёл смотреть.
     <div className={`app ${tab === 'tasks' ? 'app--wide' : ''}`} data-panel="app">
       <header className="header">
-        <h1>Просмотрщик координационной базы</h1>
+        <h1>Перископ</h1>
         <div className="muted">
           {overview.data?.groupName ? `группа: ${overview.data.groupName} · ` : ''}
           {health.data?.activeDbPath ?? 'база не выбрана'}

@@ -1,7 +1,7 @@
-using Gordi.Viewer.Api.Model;
+using Gordi.Periscope.Api.Model;
 using Microsoft.Data.Sqlite;
 
-namespace Gordi.Viewer.Api.Data;
+namespace Gordi.Periscope.Api.Data;
 
 /// <summary>Фильтры ленты.</summary>
 public sealed record MessageQuery(
@@ -551,7 +551,7 @@ public static class MezosyncReader
         return new SchemaReportDto(
             Present: present,
             ExpectedButMissing: ReferenceObjects.Where(o => !s.Has(o)).ToArray(),
-            PresentButUnknownToViewer: s.Objects.Keys.Where(k => !known.Contains(k))
+            PresentButUnknownToPeriscope: s.Objects.Keys.Where(k => !known.Contains(k))
                 .OrderBy(k => k, StringComparer.OrdinalIgnoreCase).ToArray(),
             Note: "«Ожидалось, но нет» — относительно эталона vnext/prototype/schema_vnext.sql. " +
                   "Это НЕ поломка: живая база и эталон расходятся законно, пока шаги перевода не применены. " +

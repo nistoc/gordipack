@@ -1,9 +1,9 @@
-using Gordi.Viewer.Api.Configuration;
-using Gordi.Viewer.Api.Data;
-using Gordi.Viewer.Api.Model;
+using Gordi.Periscope.Api.Configuration;
+using Gordi.Periscope.Api.Data;
+using Gordi.Periscope.Api.Model;
 using Microsoft.Extensions.Options;
 
-namespace Gordi.Viewer.Api.Services;
+namespace Gordi.Periscope.Api.Services;
 
 /// <summary>
 /// Фоновое перечитывание базы по таймеру. Это и есть «периодически берёт инфу».
@@ -21,10 +21,10 @@ namespace Gordi.Viewer.Api.Services;
 public sealed class SnapshotRefreshService(
     SourceRegistry sources,
     SnapshotStore store,
-    IOptions<ViewerOptions> options,
+    IOptions<PeriscopeOptions> options,
     ILogger<SnapshotRefreshService> log) : BackgroundService
 {
-    private readonly ViewerOptions _options = options.Value;
+    private readonly PeriscopeOptions _options = options.Value;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -74,7 +74,7 @@ public sealed class SnapshotRefreshService(
         using var c = sources.OpenActive();
         var caps = SchemaCapabilities.Probe(c);
 
-        var snapshot = new ViewerSnapshot(
+        var snapshot = new PeriscopeSnapshot(
             DbPath: path,
             Fingerprint: fingerprint,
             BuiltAtUtc: DateTimeOffset.UtcNow,

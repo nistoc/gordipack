@@ -1,10 +1,10 @@
-using Gordi.Viewer.Api.Configuration;
-using Gordi.Viewer.Api.Data;
-using Gordi.Viewer.Api.Model;
-using Gordi.Viewer.Api.Services;
+using Gordi.Periscope.Api.Configuration;
+using Gordi.Periscope.Api.Data;
+using Gordi.Periscope.Api.Model;
+using Gordi.Periscope.Api.Services;
 using Microsoft.Extensions.Options;
 
-namespace Gordi.Viewer.Api.Endpoints;
+namespace Gordi.Periscope.Api.Endpoints;
 
 public static class ApiEndpoints
 {
@@ -13,7 +13,7 @@ public static class ApiEndpoints
         var api = app.MapGroup("/api");
 
         // ── состояние сервиса ────────────────────────────────────────────────
-        api.MapGet("/health", (SourceRegistry sources, SnapshotStore store, IOptions<ViewerOptions> opt) =>
+        api.MapGet("/health", (SourceRegistry sources, SnapshotStore store, IOptions<PeriscopeOptions> opt) =>
         {
             var path = sources.ActivePath;
             var status = path is null ? "no-source" : store.LastError is not null ? "error" : "ok";
@@ -107,7 +107,7 @@ public static class ApiEndpoints
 
         // ── лента ────────────────────────────────────────────────────────────
         api.MapGet("/messages",
-            (SourceRegistry sources, SnapshotStore store, IOptions<ViewerOptions> opt,
+            (SourceRegistry sources, SnapshotStore store, IOptions<PeriscopeOptions> opt,
                 int? limit, int? offset, string? role, string? priority, string? search, string? source) =>
             {
                 if (sources.ActivePath is null) return NoSnapshot(store);

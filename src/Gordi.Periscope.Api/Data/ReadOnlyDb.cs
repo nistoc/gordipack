@@ -1,6 +1,6 @@
 using Microsoft.Data.Sqlite;
 
-namespace Gordi.Viewer.Api.Data;
+namespace Gordi.Periscope.Api.Data;
 
 /// <summary>
 /// ЕДИНСТВЕННОЕ место, где открывается соединение с базой. Открывается только на чтение.

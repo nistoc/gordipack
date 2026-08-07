@@ -1,6 +1,6 @@
-using Gordi.Viewer.Api.Configuration;
-using Gordi.Viewer.Api.Endpoints;
-using Gordi.Viewer.Api.Services;
+using Gordi.Periscope.Api.Configuration;
+using Gordi.Periscope.Api.Endpoints;
+using Gordi.Periscope.Api.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -12,7 +12,7 @@ var builder = WebApplication.CreateBuilder(args);
 //   · переменная среды — для ярлыка/скрипта, чтобы не повторять путь руками;
 //   · appsettings — для «моей обычной базы», которую открываешь каждый день.
 // Все три уже есть в самом ASP.NET Core, свой разбор командной строки не нужен.
-// Читаемые имена (--db, GORDI_DB) вместо канонических Viewer:Db — ниже отображением.
+// Читаемые имена (--db, GORDI_DB) вместо канонических Periscope:Db — ниже отображением.
 
 var envOverrides = new Dictionary<string, string?>();
 void FromEnv(string variable, string key)
@@ -21,23 +21,23 @@ void FromEnv(string variable, string key)
     if (!string.IsNullOrWhiteSpace(value)) envOverrides[key] = value;
 }
 
-FromEnv("GORDI_DB", "Viewer:Db");
-FromEnv("GORDI_DIR", "Viewer:Directory");
-FromEnv("GORDI_REFRESH_SECONDS", "Viewer:RefreshSeconds");
-FromEnv("GORDI_PORT", "Viewer:Port");
+FromEnv("GORDI_DB", "Periscope:Db");
+FromEnv("GORDI_DIR", "Periscope:Directory");
+FromEnv("GORDI_REFRESH_SECONDS", "Periscope:RefreshSeconds");
+FromEnv("GORDI_PORT", "Periscope:Port");
 builder.Configuration.AddInMemoryCollection(envOverrides);
 
 // Командная строка добавляется ПОСЛЕ переменных среды — значит побеждает.
 builder.Configuration.AddCommandLine(args, new Dictionary<string, string>
 {
-    ["--db"] = "Viewer:Db",
-    ["--dir"] = "Viewer:Directory",
-    ["--refresh"] = "Viewer:RefreshSeconds",
-    ["--port"] = "Viewer:Port"
+    ["--db"] = "Periscope:Db",
+    ["--dir"] = "Periscope:Directory",
+    ["--refresh"] = "Periscope:RefreshSeconds",
+    ["--port"] = "Periscope:Port"
 });
 
-builder.Services.Configure<ViewerOptions>(builder.Configuration.GetSection(ViewerOptions.SectionName));
-var options = builder.Configuration.GetSection(ViewerOptions.SectionName).Get<ViewerOptions>() ?? new ViewerOptions();
+builder.Services.Configure<PeriscopeOptions>(builder.Configuration.GetSection(PeriscopeOptions.SectionName));
+var options = builder.Configuration.GetSection(PeriscopeOptions.SectionName).Get<PeriscopeOptions>() ?? new PeriscopeOptions();
 
 // ⛔ Слушаем ТОЛЬКО петлевой адрес. Сервис отдаёт содержимое координационной базы
 //    без всякой аутентификации — на 0.0.0.0 это означало бы отдать её всей сети.
@@ -67,7 +67,7 @@ app.MapApi();
 // и склеивание двух режимов раздачи — отдельное решение, а не умолчание. См. README.
 app.MapGet("/", () => Results.Text(
     $"""
-     Gordi Viewer API — только чтение.
+     Gordi Periscope API — только чтение.
      Активная база: {app.Services.GetRequiredService<SourceRegistry>().ActivePath ?? "не задана (--db / --dir)"}
      Проверка: /api/health
      """, "text/plain; charset=utf-8"));

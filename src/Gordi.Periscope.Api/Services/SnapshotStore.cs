@@ -1,6 +1,6 @@
-using Gordi.Viewer.Api.Model;
+using Gordi.Periscope.Api.Model;
 
-namespace Gordi.Viewer.Api.Services;
+namespace Gordi.Periscope.Api.Services;
 
 /// <summary>
 /// Последний удачно собранный снимок и последняя ошибка сборки — рядом, а не вместо.
@@ -12,17 +12,17 @@ namespace Gordi.Viewer.Api.Services;
 /// </summary>
 public sealed class SnapshotStore
 {
-    private ViewerSnapshot? _snapshot;
+    private PeriscopeSnapshot? _snapshot;
     private string? _lastError;
     private DateTimeOffset? _lastRefreshUtc;
     private DateTimeOffset? _lastChangeUtc;
 
-    public ViewerSnapshot? Current => Volatile.Read(ref _snapshot);
+    public PeriscopeSnapshot? Current => Volatile.Read(ref _snapshot);
     public string? LastError => Volatile.Read(ref _lastError);
     public DateTimeOffset? LastRefreshUtc => _lastRefreshUtc;
     public DateTimeOffset? LastChangeDetectedUtc => _lastChangeUtc;
 
-    public void Publish(ViewerSnapshot snapshot, bool changed)
+    public void Publish(PeriscopeSnapshot snapshot, bool changed)
     {
         Volatile.Write(ref _snapshot, snapshot);
         Volatile.Write(ref _lastError, null);

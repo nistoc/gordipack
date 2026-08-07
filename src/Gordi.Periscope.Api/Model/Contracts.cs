@@ -1,4 +1,4 @@
-namespace Gordi.Viewer.Api.Model;
+namespace Gordi.Periscope.Api.Model;
 
 // ── Источники ────────────────────────────────────────────────────────────────
 
@@ -151,7 +151,7 @@ public sealed record SchemaObjectDto(string Name, string Type, IReadOnlyList<str
 public sealed record SchemaReportDto(
     IReadOnlyList<SchemaObjectDto> Present,
     IReadOnlyList<string> ExpectedButMissing,
-    IReadOnlyList<string> PresentButUnknownToViewer,
+    IReadOnlyList<string> PresentButUnknownToPeriscope,
     string Note);
 
 // ── Снимок ───────────────────────────────────────────────────────────────────
@@ -161,7 +161,7 @@ public sealed record SchemaReportDto(
 /// Лента сюда НЕ входит намеренно: 3021 запись × ~2.5 КБ тела ≈ 4 МБ —
 /// держать это в памяти ради страницы из 50 строк незачем, лента читается запросом.
 /// </summary>
-public sealed record ViewerSnapshot(
+public sealed record PeriscopeSnapshot(
     string DbPath,
     string Fingerprint,
     DateTimeOffset BuiltAtUtc,

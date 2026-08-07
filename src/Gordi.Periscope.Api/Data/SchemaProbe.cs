@@ -1,6 +1,6 @@
 using Microsoft.Data.Sqlite;
 
-namespace Gordi.Viewer.Api.Data;
+namespace Gordi.Periscope.Api.Data;
 
 /// <summary>
 /// Что в ЭТОЙ базе есть на самом деле: таблицы, представления, колонки.

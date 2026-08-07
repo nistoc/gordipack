@@ -2,7 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 
-namespace Gordi.Viewer.Api.Data;
+namespace Gordi.Periscope.Api.Data;
 
 /// <summary>
 /// Доступ к полям строки ПО ИМЕНИ, с честным «такой колонки тут нет».

@@ -1,10 +1,10 @@
-using Gordi.Viewer.Api.Configuration;
-using Gordi.Viewer.Api.Data;
-using Gordi.Viewer.Api.Model;
+using Gordi.Periscope.Api.Configuration;
+using Gordi.Periscope.Api.Data;
+using Gordi.Periscope.Api.Model;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Options;
 
-namespace Gordi.Viewer.Api.Services;
+namespace Gordi.Periscope.Api.Services;
 
 /// <summary>
 /// Какие базы видны и какая сейчас активна.
@@ -19,12 +19,12 @@ public sealed class SourceRegistry
 {
     private static readonly string[] Patterns = ["*.db", "*.sqlite", "*.sqlite3"];
 
-    private readonly ViewerOptions _options;
+    private readonly PeriscopeOptions _options;
     private readonly ILogger<SourceRegistry> _log;
     private readonly Lock _gate = new();
     private string? _activePath;
 
-    public SourceRegistry(IOptions<ViewerOptions> options, ILogger<SourceRegistry> log)
+    public SourceRegistry(IOptions<PeriscopeOptions> options, ILogger<SourceRegistry> log)
     {
         _options = options.Value;
         _log = log;
@@ -177,7 +177,7 @@ public sealed class SourceRegistry
             if (_copyPath is not null && fp == _copyFingerprint && File.Exists(_copyPath))
                 return _copyPath;
 
-            var dir = Path.Combine(Path.GetTempPath(), "gordi-viewer",
+            var dir = Path.Combine(Path.GetTempPath(), "gordi-periscope",
                 Math.Abs(source.GetHashCode()).ToString());
             Directory.CreateDirectory(dir);
             var target = Path.Combine(dir, Path.GetFileName(source));

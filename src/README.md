@@ -14,19 +14,19 @@
 - **Не открывает произвольные файлы по запросу из браузера.** Переключиться можно только
   на базы, найденные под корнем обхода, который задал человек при запуске.
 - **Не пул соединений.** Живое читающее соединение к базе в режиме WAL мешало бы пишущей
-  стороне усекать журнал — то есть просмотрщик влиял бы на работу контура.
+  стороне усекать журнал — то есть Перископ влиял бы на работу контура.
 
 ## Запуск
 
 ```bash
 # одна конкретная база
-dotnet run --project src/Gordi.Viewer.Api -- --db C:/путь/к/mezosync.db
+dotnet run --project src/Gordi.Periscope.Api -- --db C:/путь/к/mezosync.db
 
 # каталог: сервис найдёт в нём *.db и даст выбрать в интерфейсе
-dotnet run --project src/Gordi.Viewer.Api -- --dir C:/путь/к/каталогу
+dotnet run --project src/Gordi.Periscope.Api -- --dir C:/путь/к/каталогу
 
 # порт и период обновления
-dotnet run --project src/Gordi.Viewer.Api -- --db ... --port 5177 --refresh 10
+dotnet run --project src/Gordi.Periscope.Api -- --db ... --port 5177 --refresh 10
 ```
 
 Проверка, что поднялся: <http://127.0.0.1:5177/api/health>.
@@ -37,12 +37,12 @@ dotnet run --project src/Gordi.Viewer.Api -- --db ... --port 5177 --refresh 10
 
 | Источник | Пример | Когда удобен |
 |---|---|---|
-| `appsettings.json`, секция `Viewer` | `"Db": "C:/.../mezosync.db"` | «моя обычная база», открываю каждый день |
+| `appsettings.json`, секция `Periscope` | `"Db": "C:/.../mezosync.db"` | «моя обычная база», открываю каждый день |
 | переменные среды | `GORDI_DB`, `GORDI_DIR`, `GORDI_PORT`, `GORDI_REFRESH_SECONDS` | ярлык или скрипт запуска |
 | аргументы запуска | `--db`, `--dir`, `--port`, `--refresh` | разовый запуск над чужой базой |
 
 Своего разбора командной строки нет: всё это уже умеет сам ASP.NET Core, добавлено только
-отображение читаемых имён (`--db`) на канонические ключи (`Viewer:Db`).
+отображение читаемых имён (`--db`) на канонические ключи (`Periscope:Db`).
 
 ## Что отдаёт
 
@@ -93,7 +93,7 @@ dotnet run --project src/Gordi.Viewer.Api -- --db ... --port 5177 --refresh 10
 ## Сборка
 
 ```bash
-dotnet build src/Gordi.Viewer.Api
+dotnet build src/Gordi.Periscope.Api
 ```
 
 Зависимости — `Microsoft.Data.Sqlite.Core` + `SQLitePCLRaw.bundle_e_sqlite3` (а не мета-пакет
@@ -110,14 +110,14 @@ dotnet build src/Gordi.Viewer.Api
 ## Устройство
 
 ```
-src/Gordi.Viewer.Api/
+src/Gordi.Periscope.Api/
 ├── Program.cs                       конфигурация, петлевой адрес, регистрация служб
-├── Configuration/ViewerOptions.cs   настройки и их приоритет
+├── Configuration/PeriscopeOptions.cs   настройки и их приоритет
 ├── Data/
 │   ├── ReadOnlyDb.cs                ЕДИНСТВЕННОЕ место открытия базы (и отпечаток файла)
 │   ├── SchemaProbe.cs               что в этой базе реально есть
 │   ├── Row.cs                       чтение полей по имени с «такой колонки нет»
-│   └── MezosyncReader.cs            весь SQL просмотрщика
+│   └── MezosyncReader.cs            весь SQL Перископа
 ├── Model/Contracts.cs               формы ответов
 ├── Services/
 │   ├── SourceRegistry.cs            поиск баз, активный источник, граница выбора
@@ -128,7 +128,7 @@ src/Gordi.Viewer.Api/
 
 ## Чем это отличается от `viewer/index.html`
 
-Тот просмотрщик — одна страница на `sql.js`: файл базы выбирается руками, целиком грузится
+Тот Перископ — одна страница на `sql.js`: файл базы выбирается руками, целиком грузится
 в память браузера, «обновить» = перечитать файл заново. Он самодостаточен и работает офлайн
 без всякого сервера — и этим ценен.
 
