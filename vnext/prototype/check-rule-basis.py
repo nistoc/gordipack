@@ -91,23 +91,43 @@ def strong_when(body: str) -> bool:
     return False
 
 
+FIELDS = ("basis", "authorized", "source_ref", "expiry_kind")
+
+
+def has_fields(row) -> bool:
+    """Основание, записанное ПОЛЯМИ, — сильная форма: её не надо вычитывать из прозы."""
+    return all((row.get(f) or "").strip() for f in FIELDS)
+
+
 def audit(db: str):
     con = sqlite3.connect(f"file:{db.replace(chr(92), '/')}?mode=ro", uri=True)
     con.execute("PRAGMA query_only=ON")
-    rows = con.execute(
-        "SELECT rule_key, body, locked_by, version FROM rules ORDER BY rule_key").fetchall()
+    # 🪤 ПРОВЕРКА МЕРИЛА СТАРЫЙ СОСУД. 08.08 у правил завелись ПОЛЯ основания, я записал
+    # в них четыре правила по слову владельца — и проверка назвала их слепыми, потому что
+    # искала основание ПРОЗОЙ в теле. Данные переехали, прибор остался у прежней трубы.
+    # ⇒ Класс шире случая: заводя новый сосуд, ПЕРЕСЧИТАЙ ТЕХ, КТО МЕРИТ СТАРЫЙ. Иначе
+    #   починка выглядит как ухудшение, и её откатывают.
+    have = {r[1] for r in con.execute("PRAGMA table_info(rules)")}
+    cols = [f for f in FIELDS if f in have]
+    sel = ", ".join(["rule_key", "body", "locked_by", "version"] + cols)
+    raw = con.execute(f"SELECT {sel} FROM rules ORDER BY rule_key").fetchall()
     con.close()
+    rows = [dict(zip(["rule_key", "body", "locked_by", "version"] + cols, r)) for r in raw]
 
     out = []
-    for key, body, lock, ver in rows:
-        b = body or ""
+    for r in rows:
+        b = r.get("body") or ""
         who = bool(who_anchors(b))
         when = strong_when(b)
         where = bool(NOTE.search(b))
-        out.append({"key": key, "lock": lock or "—", "ver": ver,
-                    "who": who, "when": when, "where": where,
+        fields = has_fields(r)
+        out.append({"key": r["rule_key"], "lock": r.get("locked_by") or "—",
+                    "ver": r.get("version"),
+                    "who": who, "when": when, "where": where, "fields": fields,
                     "revoked": bool(REVOKED.match(b[:80])),
-                    "traceable": who or where})
+                    # Поля — САМА СИЛЬНАЯ форма: их не надо вычитывать из прозы, и по ним
+                    # можно СПРОСИТЬ базу. Проза остаётся годной, пока свод не переехал.
+                    "traceable": fields or who or where})
     return out
 
 
@@ -141,6 +161,12 @@ def main() -> int:
     print(f"   из них надгробий (отозваны) ............ {len(tombs)}"
           f"  — ничего не предписывают")
     print(f"✅ ЖИВЫХ ПРАВИЛ ........................... {len(alive)}  ← счёт идёт по ним")
+    print()
+    # Переезд прозы в поля мерим ОТДЕЛЬНОЙ строкой: пока она мала, «основание есть»
+    # означает «кто-то написал его в тексте», а не «базу можно спросить».
+    print(f"🎯 основание ПОЛЯМИ (можно СПРОСИТЬ базу) . {sum(r['fields'] for r in alive)}"
+          f" из {len(alive)}")
+    print("   — сильная форма: не надо вычитывать из прозы и не зависит от формулировки")
     print()
     print(f"названо КТО решил ......................... {sum(r['who'] for r in alive)}")
     print(f"названо КОГДА (дата рядом с припиской) .... {sum(r['when'] for r in alive)}")

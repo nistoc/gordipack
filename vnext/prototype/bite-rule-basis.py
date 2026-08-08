@@ -35,12 +35,22 @@ BLIND = ("контрольное слепое правило", "Просто т�
 
 
 def build(path: str, rules):
+    """rules: (ключ, тело, замок) либо (ключ, тело, замок, {поля основания})."""
     con = sqlite3.connect(path)
+    # Песочница обязана походить на живую базу СХЕМОЙ, а не только формой: 08.08 поля
+    # основания завелись в живой базе, а проверка искала основание прозой — и назвала
+    # слепыми четыре правила, у которых оно записано. Без этих колонок случай не воспроизвести.
     con.execute("""CREATE TABLE rules (id INTEGER PRIMARY KEY, rule_key TEXT, body TEXT,
-                   locked_by TEXT, version INTEGER, created_at TEXT, updated_at TEXT)""")
-    for i, (key, body, lock) in enumerate(rules, 1):
-        con.execute("INSERT INTO rules (id, rule_key, body, locked_by, version)"
-                    " VALUES (?,?,?,?,1)", (i, key, body, lock))
+                   locked_by TEXT, version INTEGER, created_at TEXT, updated_at TEXT,
+                   basis TEXT, authorized TEXT, source_ref TEXT,
+                   expiry_kind TEXT, expiry_cond TEXT)""")
+    for i, rule in enumerate(rules, 1):
+        key, body, lock = rule[0], rule[1], rule[2]
+        f = rule[3] if len(rule) > 3 else {}
+        con.execute("INSERT INTO rules (id, rule_key, body, locked_by, version,"
+                    " basis, authorized, source_ref, expiry_kind) VALUES (?,?,?,?,1,?,?,?,?)",
+                    (i, key, body, lock, f.get("basis"), f.get("authorized"),
+                     f.get("source_ref"), f.get("expiry_kind")))
     con.commit()
     con.close()
 
@@ -121,6 +131,25 @@ def main() -> int:
                    "Q1.2 (залочено владельцем 2026-07-02). Гейт перед коммитом: зелёные тесты.",
                    "owner"),
         "«залочено владельцем <дата>» слепым НЕ считается — это и КТО, и КОГДА", 1)
+
+    # ⑬ ОСНОВАНИЕ ПОЛЯМИ. Тело правила молчит НАМЕРЕННО: вся приписка живёт в полях.
+    # Ровно этот случай проверка провалила на живой базе 08.08 — данные переехали в новый
+    # сосуд, а прибор остался у старого, и починка выглядела как ухудшение.
+    FULL = {"basis": "замер: 403 записки старше недели несли пометку",
+            "authorized": "owner", "source_ref": "чат PROTO 2026-08-08 16:12 UTC",
+            "expiry_kind": "forever"}
+    ok &= with_control(
+        tmp, "⑬", ("основание-полями", "Сухой текст правила без единого слова о решении.",
+                   "owner", FULL),
+        "основание ПОЛЯМИ слепым НЕ считается, даже если проза молчит", 1)
+
+    # ⑭ ВСТРЕЧНЫЙ К ⑬: заполнено ЧАСТИЧНО. Три поля из четырёх — это не основание,
+    # а его половина: без «где сказано» пойти и прочесть нельзя. Без этого случая
+    # починка ⑬ засчитывала бы любую заполненную клетку.
+    ok &= with_control(
+        tmp, "⑭", ("основание-полями-частично", "Сухой текст правила без слова о решении.",
+                   "owner", {"basis": "довод", "authorized": "owner"}),
+        "поля заполнены ЧАСТИЧНО — основанием это НЕ считается (встречный к ⑬)", 2)
 
     # ⑫ ВСТРЕЧНЫЙ К ⑪: имя роли в тексте БЕЗ приписки решения основанием НЕ становится.
     # Без этого случая починка ⑪ сделала бы проверку беззубой: роли упоминаются в правилах
