@@ -4,6 +4,7 @@ import { usePolling } from './usePolling';
 import type { Health, Overview } from './types';
 import { SourceBar } from './components/SourceBar';
 import { StatCard } from './components/MeasureValue';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { TasksPage } from './pages/TasksPage';
 import { FeedPage } from './pages/FeedPage';
 import { RolesPage } from './pages/RolesPage';
@@ -75,12 +76,21 @@ export default function App() {
         ))}
       </nav>
 
+      {/*
+        Ловушка обёрнута ВОКРУГ АКТИВНОЙ СТРАНИЦЫ, а не вокруг всего приложения:
+        упавшая страница обязана падать одна. Вкладки при этом остаются на месте,
+        и человек уходит на соседнюю страницу вместо перезагрузки браузера.
+        `key={tab}` сбрасывает ловушку при смене вкладки — иначе сообщение об ошибке
+        одной страницы осталось бы висеть поверх другой, исправной.
+      */}
       <main>
-        {tab === 'tasks' && <TasksPage overview={overview.data} refreshMs={refreshMs} />}
-        {tab === 'feed' && <FeedPage refreshMs={refreshMs} />}
-        {tab === 'roles' && <RolesPage overview={overview.data} refreshMs={refreshMs} />}
-        {tab === 'rules' && <RulesPage refreshMs={refreshMs} />}
-        {tab === 'schema' && <SchemaPage overview={overview.data} refreshMs={refreshMs} />}
+        <ErrorBoundary key={tab} where={`страница «${TABS.find((t) => t.id === tab)?.title ?? tab}»`}>
+          {tab === 'tasks' && <TasksPage overview={overview.data} refreshMs={refreshMs} />}
+          {tab === 'feed' && <FeedPage refreshMs={refreshMs} />}
+          {tab === 'roles' && <RolesPage overview={overview.data} refreshMs={refreshMs} />}
+          {tab === 'rules' && <RulesPage refreshMs={refreshMs} />}
+          {tab === 'schema' && <SchemaPage overview={overview.data} refreshMs={refreshMs} />}
+        </ErrorBoundary>
       </main>
 
       <footer className="footer muted">

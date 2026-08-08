@@ -152,6 +152,15 @@ export interface Rule {
   bodyLength: number;
   bodyPreview: string;
   body: string | null;
+  expiryKind: string | null;      // forever | until_date | until_event | while_measured
+  expiryCond: string | null;
+  basis: string | null;
+  authorized: string | null;
+  sourceRef: string | null;
+  /** Правило отменено и больше НЕ действует. Считает сервис — см. RuleDto. */
+  revoked: boolean;
+  /** Чем установлено «отозвано»: поле статуса или шапка текста. */
+  revokedBasis: string | null;
 }
 
 export interface SchemaObject {
@@ -160,9 +169,18 @@ export interface SchemaObject {
   columns: string[];
 }
 
+/**
+ * ⚠️ ИМЕНА ПОЛЕЙ ЗДЕСЬ — ДОСЛОВНО ТЕ, ЧТО В `SchemaReportDto` (../src/Model/Contracts.cs).
+ *
+ * 🔴 Замер 2026-08-09 01:26 UTC: тут стояло `presentButUnknownToViewer`, а сервис
+ *    отдаёт `presentButUnknownToPeriscope`. Опечатка не даёт ни ошибки сборки, ни
+ *    предупреждения — TypeScript верит объявлению, а не ответу по сети, — и на живой
+ *    странице `undefined.length` роняет отрисовку, гася ВЕСЬ экран целиком.
+ *    Расхождение имени на одно слово стоило страницы «Схема» в полном молчании.
+ */
 export interface SchemaReport {
   present: SchemaObject[];
   expectedButMissing: string[];
-  presentButUnknownToViewer: string[];
+  presentButUnknownToPeriscope: string[];
   note: string;
 }

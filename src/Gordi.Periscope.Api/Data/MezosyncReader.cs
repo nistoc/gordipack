@@ -504,6 +504,21 @@ public static class MezosyncReader
 
     // ── правила ──────────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Надгробие — правило, отменённое владельцем. Тела таких правил НЕ удаляют: видно,
+    /// что было и почему отменили. Признак — ЯВНАЯ шапка в самом начале тела.
+    ///
+    /// ⚠️ Проверка нарочно узкая: якорь «в начале строки» плюс закрытый список слов.
+    ///    Свободный поиск «ОТОЗВАНО» где угодно в теле объявил бы отозванным ДЕЙСТВУЮЩЕЕ
+    ///    правило, которое лишь упоминает отмену соседнего, — а это ошибка в опасную
+    ///    сторону: приказ пропадает с глаз. Ошибка в другую сторону (отозванное не
+    ///    распознано) оставляет правило среди тематических, то есть не хуже прежнего
+    ///    плоского списка, где оно и лежало вперемешку.
+    /// </summary>
+    private static readonly System.Text.RegularExpressions.Regex TombstoneHead =
+        new(@"^\s*(?:⛔\s*)?(ОТОЗВАНО|ОТМЕНЕНО|ОТМЕНЁНО)\b",
+            System.Text.RegularExpressions.RegexOptions.Compiled);
+
     public static IReadOnlyList<RuleDto> ReadRules(SqliteConnection c, SchemaCapabilities s)
     {
         if (!s.Has("rules")) return [];
@@ -518,24 +533,48 @@ public static class MezosyncReader
         while (r.Read())
         {
             var body = Row.Str(r, m, "body") ?? "";
+            var status = hasStatus ? Row.Str(r, m, "status") : null;
+
+            // Порядок источников: поле статуса сильнее текста. Текст читаем ТОЛЬКО когда
+            // поля нет вовсе — иначе просмотрщик спорил бы с самой базой.
+            var (revoked, revokedBasis) = hasStatus
+                ? (IsRevokedStatus(status), IsRevokedStatus(status) ? $"поле статуса: '{status}'" : null)
+                : TombstoneHead.IsMatch(body)
+                    ? (true, "шапка «⛔ ОТОЗВАНО» в начале текста (поля статуса в этой базе нет)")
+                    : (false, (string?)null);
+
             list.Add(new RuleDto(
                 RuleKey: Row.Str(r, m, "rule_key") ?? "?",
                 // ⚠️ Если колонки статуса нет — НЕ пишем 'active'. В такой базе статус
                 //    живёт прозой в теле («⛔ ОТОЗВАНО» в шапке), и объявить правило
                 //    действующим за неё значит соврать ровно тем способом, ради которого
                 //    статус и переносили в поле.
-                Status: hasStatus ? Row.Str(r, m, "status") : null,
-                StatusNote: hasStatus ? null : "в этой базе у правил нет поля статуса — отзыв ищи в теле",
+                Status: status,
+                StatusNote: hasStatus ? null : "в этой базе у правил нет поля статуса — отзыв виден только по шапке текста",
                 Version: (int?)Row.Num(r, m, "version"),
                 LockedBy: Row.Str(r, m, "locked_by"),
                 UpdatedAt: Row.Str(r, m, "updated_at"),
                 BodyLength: body.Length,
                 BodyPreview: Row.Preview(body, 300),
-                Body: body));
+                Body: body,
+                ExpiryKind: Row.Str(r, m, "expiry_kind"),
+                ExpiryCond: Row.Str(r, m, "expiry_cond"),
+                Basis: Row.Str(r, m, "basis"),
+                Authorized: Row.Str(r, m, "authorized"),
+                SourceRef: Row.Str(r, m, "source_ref"),
+                Revoked: revoked,
+                RevokedBasis: revokedBasis));
         }
 
         return list;
     }
+
+    private static bool IsRevokedStatus(string? status) =>
+        status is not null &&
+        (status.Equals("revoked", StringComparison.OrdinalIgnoreCase) ||
+         status.Equals("cancelled", StringComparison.OrdinalIgnoreCase) ||
+         status.Equals("canceled", StringComparison.OrdinalIgnoreCase) ||
+         status.Equals("отозвано", StringComparison.OrdinalIgnoreCase));
 
     // ── схема ────────────────────────────────────────────────────────────────
 
