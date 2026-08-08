@@ -37,9 +37,13 @@ def load_live():
     return mod
 
 
-def build(msgs, cursor=None, phoenix=(), rules=()):
+def build(msgs, cursor=None, phoenix=(), rules=(), cards=()):
     path = os.path.join(tempfile.mkdtemp(prefix="bite-machine-"), "s.db")
     con = sqlite3.connect(path)
+    con.execute("""CREATE TABLE backlog (id INTEGER PRIMARY KEY, role TEXT, title TEXT,
+                   status TEXT, done_when TEXT)""")
+    for cid, st, title, crit in cards:
+        con.execute("INSERT INTO backlog VALUES (?, 'PROTO', ?, ?, ?)", (cid, title, st, crit))
     con.execute("""CREATE TABLE messages (id INTEGER PRIMARY KEY, writer_role TEXT,
                    timestamp TEXT, body_md TEXT, tags TEXT, priority TEXT)""")
     con.execute("CREATE TABLE read_cursors (reader_role TEXT PRIMARY KEY, last_read_id INTEGER)")
@@ -131,6 +135,24 @@ def main() -> int:
     ok &= case("⑦ база недоступна — блок ГОВОРИТ об этом, а не возвращает пустоту",
                "НЕ СОБРАН" in text4 and "НЕ «всё в порядке»" in text4,
                "третий исход отдельно: «не собрано» слитое с «чисто» и есть ложный ноль",
+               differ=True)
+
+    # ⑨⑩ МЕРА ① ВАРИАНТА А: список задач роли СОБИРАЕТСЯ, а не хранится прозой в слепке.
+    # Хранимая копия списка не может быть свежее самого списка — 08.08 в слепке PROTO стояли
+    # номера, часть которых уже закрыта ЧУЖОЙ рукой, и слепок об этом не знал.
+    db_cards = build([(1, "COORD", "2026-08-08 10:00", "текст")], cursor=0,
+                     cards=[(70, "open", "живая задача без критерия", ""),
+                            (71, "in_review", "задача на приёмке", "критерий назван"),
+                            (72, "done", "ЗАКРЫТАЯ — её быть не должно", "критерий")])
+    text5 = "\n".join(m.machine_block(db_cards, "PROTO"))
+    ok &= case("⑨ карточки СОБРАНЫ, и закрытая в список НЕ попала",
+               "#70" in text5 and "#71" in text5 and "#72" not in text5,
+               "открытые видны, закрытая отсеяна — иначе список растёт и его перестают читать",
+               differ=True)
+    ok &= case("⑩ карточка БЕЗ критерия приёмки названа ОТДЕЛЬНОЙ строкой",
+               "БЕЗ КРИТЕРИЯ" in text5 and "#70" in text5.split("БЕЗ КРИТЕРИЯ")[1]
+               and "#71" not in text5.split("БЕЗ КРИТЕРИЯ")[1],
+               "названа именно #70; #71 с критерием в эту строку попасть не имеет права",
                differ=True)
 
     ok &= case("⑧ граница «знает базу, не диск» печатается всегда",
