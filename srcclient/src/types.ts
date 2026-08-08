@@ -172,7 +172,7 @@ export interface SchemaObject {
 /**
  * ⚠️ ИМЕНА ПОЛЕЙ ЗДЕСЬ — ДОСЛОВНО ТЕ, ЧТО В `SchemaReportDto` (../src/Model/Contracts.cs).
  *
- * 🔴 Замер 2026-08-09 01:26 UTC: тут стояло `presentButUnknownToViewer`, а сервис
+ * 🔴 Замер 2026-08-08 23:26 UTC: тут стояло `presentButUnknownToViewer`, а сервис
  *    отдаёт `presentButUnknownToPeriscope`. Опечатка не даёт ни ошибки сборки, ни
  *    предупреждения — TypeScript верит объявлению, а не ответу по сети, — и на живой
  *    странице `undefined.length` роняет отрисовку, гася ВЕСЬ экран целиком.
