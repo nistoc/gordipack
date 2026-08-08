@@ -34,6 +34,11 @@ def main():
                         help="Секция слепка")
     parser.add_argument("--body", default=None, help="Текст слепка (или --file)")
     parser.add_argument("--file", default=None, help="Файл с текстом слепка")
+    # ⚠️ ФЛАГ, КОТОРЫЙ ОБЯЗАН БЫТЬ ЯВНЫМ. Сокращение секции в разы бывает законным
+    # (роль выбросила устаревшее), но должно быть НАЗВАНО, а не случиться молча.
+    parser.add_argument("--allow-shrink", action="store_true",
+                        help="разрешить сокращение секции в разы: сознательная чистка, "
+                             "а не потеря. Пустое тело не разрешает и он")
     args = parser.parse_args()
 
     if not args.body and not args.file:
@@ -53,6 +58,35 @@ def main():
         conn = sqlite3.connect(f"file:{args.db}?mode=rw", uri=True, timeout=5)
     except sqlite3.OperationalError:
         sys.exit(f"ERR: БД не найдена: {args.db}")
+    # ── 🩸 ЗАЩИТА ПАМЯТИ РОЛИ. Случай @RCC 2026-08-07 16:56 UTC, дословно: правил секцию
+    # скриптом, тот упал ПОСЛЕ открытия файла на запись, файл обнулился, инструмент принял
+    # пустоту и отчитался «OK phoenix/RCC/rebirth (0 chars)». Секция, которая учит преемника
+    # порядку пробуждения, пролежала пустой четыре минуты.
+    # 🪤 Класс: «OK ≠ сохранено», родня контурного «200 ≠ работает». И хуже: сторож живости
+    # слепков смотрит на ВРЕМЯ сохранения, а не на РАЗМЕР ⇒ обнулённая секция выглядит
+    # свежайшей. Пустой слепок неотличим от идеально свежего.
+    # ⚖️ Порога «не меньше 200 знаков», как предлагал @RCC, здесь НЕТ намеренно: секция
+    # launcher — законно ОДНА СТРОКА, и такой порог убил бы её. Поэтому два правила разных
+    # сортов: пустота запрещена ВСЕГДА, а обвал в разы — только против ПРЕЖНЕГО размера.
+    prev = conn.execute("SELECT length(body) FROM phoenix WHERE role=? AND section=?",
+                        (role, args.section)).fetchone()
+    was = prev[0] if prev else 0
+    now = len(body)
+
+    if not body.strip():
+        conn.close()
+        sys.exit(f"⛔ ОТКАЗ: тело секции ПУСТО (было {was} знаков).\n"
+                 f"   Пустых секций не бывает: слепок учит преемника, а пустота учит ничему —\n"
+                 f"   и при этом выглядит свежайшей, потому что сторож смотрит на ВРЕМЯ.\n"
+                 f"   👉 Проверь файл: скорее всего он обнулился при записи, а не опустел по смыслу.")
+
+    if was >= 400 and now * 4 < was and not args.allow_shrink:
+        conn.close()
+        sys.exit(f"⛔ ОТКАЗ: секция ужимается в {was / max(now, 1):.1f} раза "
+                 f"({was} → {now} знаков).\n"
+                 f"   Перезапись в разы — почти всегда авария записи, а не намерение.\n"
+                 f"   👉 Если чистка СОЗНАТЕЛЬНАЯ, скажи это словом: --allow-shrink")
+
     conn.execute("""
         INSERT INTO phoenix (role, section, body, saved_at)
         VALUES (?, ?, ?, datetime('now'))
@@ -66,7 +100,13 @@ def main():
 
     conn.commit()
     conn.close()
-    print(f"OK phoenix/{role}/{args.section} ({len(body)} chars)")
+    # 🎯 Размер печатается ДВУМЯ числами, «было → стало». Прежняя строка «OK … (0 chars)»
+    # читалась глазом как подтверждение: ноль стоял в той же строке, что и «OK», и не
+    # спорил с ним. Два числа спорят сами: 10489 → 0 не прочитаешь как успех.
+    delta = "первое сохранение" if was == 0 else f"было {was} → стало {now} знаков"
+    print(f"OK phoenix/{role}/{args.section} — {delta}"
+          + ("   ⚠️ сокращение разрешено словом --allow-shrink"
+             if args.allow_shrink and was > now else ""))
 
 
 if __name__ == "__main__":
