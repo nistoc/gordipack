@@ -1,26 +1,360 @@
 """
-write-message.py — CLI для агента: записать сообщение в mezosync.db.
+write-message.py — CLI для агента: записать сообщение в mezosync.db И в свой md-канал.
 
 Использование агентом (из Bash tool):
-    python write-message.py --db .mezosync/mezosync.db --role COORD --body "нота текст" --tags F-24,TRACK-NEWUX
-    python write-message.py --db .mezosync/mezosync.db --role CORE --body "коммит abc1234" --priority high
+    python <КОНТУР>/.mezosync/scripts/write-message.py --role COORD --body "нота текст" --tags F-24,TRACK-NEWUX
+    python <КОНТУР>/.mezosync/scripts/write-message.py --role CORE --body "коммит abc1234" --priority high
+
+ДВОЙНАЯ ЗАПИСЬ (правило sync.rules.md «Пиши И в md тоже», Фаза 3):
+Раньше этот скрипт писал ТОЛЬКО в SQLite — а md-половину каждая роль дописывала РУКАМИ.
+То есть двойная запись была КОНВЕНЦИЕЙ, а не механизмом: её держала память 8 ролей, и
+ничто не мешало ей истлеть. Она и истлела — молча, на 4 дня, в роли STUD (находка COORD
+#518, разбор STUD #1959; правило при этом ссылалось на export-markdown.py, который дописать
+канал роли физически не умеет — это дамп всей базы для владельца).
+Теперь обе половины пишет ОДИН вызов, и «пиши и в md» перестаёт зависеть от дисциплины.
+
+ПОРЯДОК ЖЁСТКИЙ: SQLite — PRIMARY, пишется ПЕРВЫМ и неприкосновенен. Ошибка md НЕ роняет
+запись в БД и НЕ даёт ненулевой exit: 8 ролей пишут в канал прямо сейчас, и падение из-за
+второй половины стоило бы дороже, чем сама дыра. При сбое md — громкое предупреждение с
+маркером DWERR (правило: «Ошибка скрипта → тег DWERR, и COORD ДОЛЖЕН на него реагировать»).
+До этой правки тег DWERR не мог сработать в принципе: писать в md было нечему.
 """
 
 import argparse
 import json
+import re
 import sqlite3
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
+
+# mezo_paths лежит рядом; каталог скрипта Python кладёт в sys.path[0] сам, поэтому импорт
+# работает независимо от того, откуда скрипт позвали (в этом и смысл R15a).
+from mezo_paths import resolve_db
+# ⚠️ Импорт ОБЁРНУТ намеренно — правка @TAXO (её замер живой эксплуатации 13:18:06 UTC):
+# она поймала этот файл в 15-секундном окне между записью вызова и записью модуля и получила
+# NameError. Её довод, и он мой же собственный: правило владельца велит ПРЕДУПРЕЖДАТЬ,
+# а не отказывать ⇒ отсутствие предупреждалки не вправе отказывать сильнее, чем она сама.
+# 📌 И класс, который она назвала точнее меня: правка общего инструмента НЕ АТОМАРНА —
+# между записью двух файлов есть окно, в котором инструмент синтаксически цел и функционально
+# мёртв. Объявить его нельзя: оно короче объявления. Лечится формой, а не дисциплиной.
+try:
+    from refs_check import warn_dangling   # предупреждение о «#N» вне чата (правило v3)
+except Exception:                          # noqa: BLE001 — любая поломка модуля дешевле потерянной ноты
+    def warn_dangling(*_a, **_k):
+        print("⚠️ проверка ссылок НЕ ВЫПОЛНЕНА: модуль refs_check недоступен", file=__import__("sys").stderr)
+
+# `[STUD POLL] 🕐 ПОСЛ. ПРОВЕРКА …` — heartbeat-строка роли. Ловим ЛЮБУЮ роль (не только свою):
+# файл принадлежит одной роли, а лишний якорь дешевле пропущенного.
+POLL_RE = re.compile(r"^\[[^\]\n]{1,20}POLL\]", re.M)
+
+# Каналы лежат НЕ рядом со скриптами: скрипты+БД в <контейнер>/.mezosync/, а sync.<роль>.md —
+# в репозитории atlas.archs. Путь выводим из --db (он есть у всех ролей и всегда верен),
+# а не из CWD: роли зовут скрипт из разных мест.
+MD_SUBPATH = ("atlas.archs", ".mezosync", "coordination")
+
+
+def default_md_dir(db_path: Path) -> Path:
+    """<контейнер>/.mezosync/mezosync.db → <контейнер>/atlas.archs/.mezosync/coordination"""
+    return db_path.resolve().parent.parent.joinpath(*MD_SUBPATH)
+
+
+def md_note(msg_id: int, role: str, tags_list, priority: str, body: str) -> str:
+    """Формат — как пишут роли руками: [время] (РОЛЬ) [...] + тело.
+
+    Время — UTC, ЯВНЫМ СУФФИКСОМ (правило timestamp-utc-in-sqlite v2, живое слово
+    владельца 2026-07-16 12:12 UTC: «все агенты ведут учёт времени только в UTC — и в
+    чатах, и в БД, и в sync»). v1 держала ДВЕ шкалы (SQLite=UTC, md/POLL=локальное) и
+    требовала конвертировать при каждом сравнении. Не удержалось: COORD увидел
+    max(timestamp)=10:11 при стенных 12:11 и едва не объявил «синк умер 2 часа назад» —
+    разница ровно 2ч была ЗОНОЙ, а не лагом. Конвертация, которой нет, не может быть
+    забыта. Суффикс UTC обязателен: метка без зоны неотличима от локальной.
+    Номер #id проставляем, чтобы половины были сверяемы: по нему любая роль сопоставит
+    строку md с записью в БД, а не поверит, что они соответствуют.
+    """
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M") + " UTC"
+    tags_str = f" [{' · '.join(tags_list)}]" if tags_list else ""
+    prio = f" ⚠️{priority}" if priority != "normal" else ""
+    return f"[{stamp}] ({role.upper()}) [SQLite #{msg_id}]{tags_str}{prio}\n{body.strip()}\n"
+
+
+def append_md(md_dir: Path, msg_id: int, role: str, tags_list, priority: str, body: str) -> Path:
+    """Дописать ноту в свой канал ПЕРЕД POLL-строкой. Бросает — вызывающий ловит → DWERR.
+
+    Ноты идут по ВОЗРАСТАНИЮ (новое снизу): проверено по факту — COORD/CORE/ING/TAXO ведут
+    файлы так. Инструмент общий ⇒ следует конвенции большинства, а не привычке одной роли.
+
+    НО «снизу» ≠ «в самый конец»: последняя строка файла — `[РОЛЬ POLL]`, и правило
+    sync.rules.md §«Heartbeat + таймер» требует держать её ПОСЛЕДНЕЙ. Это не оформление:
+    роль узнаёт статус соседа, читая последнюю строку его канала ⇒ смысл POLL держится на
+    ПОЗИЦИИ. Первая версия этой функции дописывала в конец и закапывала POLL — напоролся
+    EYE (#1984), независимо воспроизвёл CORE (#1986), третий голос TAXO (#1988). Их обход
+    («поднимать POLL руками после каждого вызова») — ровно та дисциплина, которую этот
+    скрипт и пришёл заменить механизмом.
+    Урок в код: ПОЗИЦИЯ — ЧАСТЬ КОНТРАКТА. Прежде чем «просто дописать в конец», спроси,
+    что стоит на последней строке. Тот же класс, что несущий `ORDER BY id` в гарде
+    read-messages.py:89 — выглядит косметикой, несёт смысл.
+    """
+    path = md_dir / f"sync.{role.lower()}.md"
+    if not path.exists():
+        raise FileNotFoundError(f"канал не найден: {path}")
+    text = path.read_text(encoding="utf-8")
+    note = md_note(msg_id, role, tags_list, priority, body)
+
+    polls = list(POLL_RE.finditer(text))
+    if polls:
+        # Вставляем перед ПОСЛЕДНЕЙ POLL-строкой — она остаётся последней строкой файла.
+        cut = polls[-1].start()
+        head = text[:cut].rstrip("\n")
+        tail = text[cut:]
+        new_text = f"{head}\n\n{note}\n{tail}"
+    else:
+        # POLL нет (файл ещё без heartbeat) — тогда «в конец» и есть правильное место.
+        sep = "" if text.endswith("\n\n") else ("\n" if text.endswith("\n") else "\n\n")
+        new_text = text + sep + note + "\n"
+
+    path.write_text(new_text, encoding="utf-8")
+    return path
+
+
+# Подпись роли в конце записки: «— PROTO 2026-08-08 16:04 UTC». Ловим ТОЛЬКО её:
+# цитаты чужих меток и упоминания времени внутри текста трогать НЕЛЬЗЯ — записка часто
+# приводит слово владельца с его временем, и «исправить» его значило бы подделать цитату.
+SIGN = re.compile(r"^([ \t]*[—–-]{1,3}[ \t]*[A-ZА-Я]{2,10}[ \t]+)"
+                  r"(\d{4}-\d{2}-\d{2}[ \t]+\d{2}:\d{2}(?::\d{2})?)([ \t]*UTC[ \t]*)$")
+
+
+def stamp_signature(body: str, role: str, now_utc: str):
+    """Проставить в подпись ВРЕМЯ ЗАПИСИ. → (тело, что произошло) — или (тело, None).
+
+    🎯 МЕХАНИЗМ ВМЕСТО ПРАВИЛА (слово владельца 2026-08-08 16:53 UTC): «время в записку
+    подставляет не роль, а инструмент — тогда ошибиться нечем».
+    🪤 ПОВОД, ЗАМЕРОМ: правило «время только UTC» написано подробно и известно всем — и всё
+    равно 08.08 ДВЕ РОЛИ ЗА ДВА ЧАСА подписали записки местным временем под буквами «UTC»
+    (+2 ч). Обе поймали себя сами, обе исправили отдельными записками. Класс живёт при
+    верном и известном правиле ⇒ его лечит не дисциплина.
+    ⚖️ И почему это не косметика: ошибку во времени НЕЛЬЗЯ поймать чтением. «16:51 UTC»
+    выглядит безупречно; расхождение видно только сверкой с базой. А неверное время тихо
+    ломает восстановление порядка событий — ровно то, ради чего лента и ведётся.
+    """
+    short = now_utc[:16]                       # «2026-08-08 16:55», без секунд
+    lines = body.rstrip("\n").split("\n")
+    for i in range(len(lines) - 1, -1, -1):
+        if not lines[i].strip():
+            continue
+        m = SIGN.match(lines[i])
+        if not m:
+            break                              # подписи нет — ищем только В КОНЦЕ, не по всему телу
+        was = m.group(2).strip()
+        if was.replace("\t", " ")[:16] == short:
+            return "\n".join(lines) + "\n", None
+        lines[i] = m.group(1) + short + m.group(3)
+        return "\n".join(lines) + "\n", f"подпись времени исправлена механизмом: {was} → {short} UTC"
+    lines += ["", f"— {role} {short} UTC"]
+    return "\n".join(lines) + "\n", f"подпись времени проставлена механизмом: {short} UTC"
+
+
+def _save_phoenix_alongside(args, db_path: Path) -> None:
+    """Сохранить память ТЕМ ЖЕ действием — и сказать вслух, если она отстала.
+
+    ⛔ Своей копии защит здесь НЕТ НАМЕРЕННО: зовётся ЖИВОЙ save-phoenix.py со всеми его
+       отказами (пустое тело · обвал в разы · сравнение содержимого). Вторая копия правила
+       разошлась бы с первой — этот класс контур ловил шесть раз за неделю на шести файлах.
+    """
+    import subprocess
+    here = Path(__file__).resolve().parent
+    for section in ("state", "plan"):
+        path = getattr(args, f"save_{section}", None)
+        if not path:
+            continue
+        out = subprocess.run(
+            [sys.executable, str(here / "save-phoenix.py"), "--db", str(db_path),
+             "--role", args.role, "--section", section, "--file", path],
+            capture_output=True, text=True, encoding="utf-8")
+        for line in ((out.stdout or "") + (out.stderr or "")).splitlines():
+            print(f"  {line}")
+        if out.returncode != 0:
+            # Отказ сохранения НЕ отменяет записку: она уже в базе, и соврать про это хуже.
+            print(f"⚠️ память (§{section}) НЕ сохранена — записка #уже записана, память НЕТ.",
+                  file=sys.stderr)
+
+    # Отставание называется ВСЛУХ и с числом — но только когда оно ЕСТЬ. Признак, который
+    # горит всегда, перестаёт значить что-либо: это довод COORD против вечно-жёлтого.
+    if getattr(args, "save_state", None) or getattr(args, "save_plan", None):
+        return
+    try:
+        con = sqlite3.connect(f"file:{str(db_path).replace(chr(92), '/')}?mode=ro", uri=True)
+        cols = {r[1] for r in con.execute("PRAGMA table_info(phoenix)")}
+        look = "confirmed_at" if "confirmed_at" in cols else "saved_at"
+        row = con.execute(
+            f"SELECT MAX(COALESCE({look}, saved_at)) FROM phoenix WHERE role=?",
+            (args.role,)).fetchone()
+        con.close()
+        if not row or not row[0]:
+            return
+        gap = (datetime.now(timezone.utc).replace(tzinfo=None)
+               - datetime.fromisoformat(row[0])).total_seconds() / 3600
+        if gap > 3:
+            print(f"\n⏳ ПАМЯТЬ РОЛИ {args.role} НЕ ПОДТВЕРЖДАЛАСЬ {gap:.0f} ч, а работа идёт.")
+            print("   Приложение может закрыться без предупреждения — тогда пропадёт то,")
+            print("   чего нет в базе. Сохранить ТЕМ ЖЕ вызовом:")
+            print("     write-message.py … --save-state <файл> [--save-plan <файл>]")
+    except Exception as exc:  # noqa: BLE001 — подсказка не имеет права ронять запись ноты
+        print(f"  (подсказку о памяти собрать не удалось: {exc.__class__.__name__})")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Записать сообщение в mezosync.db")
-    parser.add_argument("--db", required=True, help="Путь к mezosync.db")
+    parser = argparse.ArgumentParser(description="Записать сообщение в mezosync.db + md-канал")
+    # R15a: --db БОЛЬШЕ НЕ ОБЯЗАТЕЛЕН. Путь резолвится от расположения СКРИПТА (mezo_paths),
+    # а не от текущего каталога. Повод — три срабатывания за одну смену: CORE #2669 и ING #2673
+    # (`can't open file`, CWD уехал после dotnet/cd в под-репо; у ING это ЗАПИСАНО в слепке — и
+    # протекло дважды), COORD #2683 (укусило через 4 минуты после внесения класса в план).
+    # ⚠️ Тихий подкласс дороже громкого: PROTO #2691/#2693 — относительный --db не упал и не создал
+    # фантом, а МОЛЧА попал в другую живую БД (путь случайно совпал) и вернул честный «OK #2691».
+    # Абсолютные --db продолжают работать как раньше — обратная совместимость полная.
+    parser.add_argument("--db", default=None, help="Путь к mezosync.db (по умолчанию — рядом со скриптом)")
     parser.add_argument("--role", required=True, help="Роль писателя (COORD, CORE, ...)")
-    parser.add_argument("--body", required=True, help="Текст сообщения (markdown)")
+    parser.add_argument("--body", help="Текст сообщения (markdown). Для длинного текста — --file")
+    parser.add_argument("--file", help="Файл с текстом ноты (дифф ING #2036, применён 16.07 18:38 UTC). "
+                        "Причина: bash МОЛЧА ест бэктики в --body (подстановка команд) — покалечены "
+                        "броадкасты COORD #2023 и ING #2111. Файл минует shell-обработку целиком.")
     parser.add_argument("--tags", default="", help="Теги через запятую (F-24,TRACK-X)")
     parser.add_argument("--priority", default="normal", choices=["normal", "high", "critical"])
+    # ── ТРИ РУЧКИ К СОСУДАМ, ВНЕСЁННЫМ НАКАТОМ (замер @PROTO #3089: все три пусты при 90 нотах,
+    # потому что писать в них было нечем). Все НЕОБЯЗАТЕЛЬНЫЕ: старые вызовы ролей и слепков
+    # работают без единой правки — иначе ручка сломала бы то, ради чего заводилась.
+    # ⚠️ СПРАВКА ПРИВЕДЕНА К КОДУ по находке @TAXO #3101. Первая редакция обещала «адресат задан
+    # полем, а НЕ пересказан прозой» — а список адресатов как лежал в теле ноты, так и лежит:
+    # таблицы адресатов в базе НЕТ ВОВСЕ (шаг 002 накатил ПРИЗНАК, сосуд под имена не приехал).
+    # ⇒ Роль, прочитавшая ту справку, была бы уверена, что адресация стала структурной.
+    # Класс мой же, из #2869: учащая строка, ОБОГНАВШАЯ механизм, — такая же ложь, как отставшая.
+    # За семь часов второй экземпляр у меня: утром это была справка про --db.
+    # ✅ СОСУД ПРИЕХАЛ 2026-08-08 по слову владельца «сделай адресата полем» (11:50 UTC).
+    # Прежняя редакция ПРИНИМАЛА имя и ВЫБРАСЫВАЛА его: ставила лишь метку 'field'.
+    # Это ровно тот дефект, который ловит guard-printed-names: «флаг принимает значение,
+    # которое код только проверяет на истинность». Теперь имена доезжают до таблицы.
+    parser.add_argument("--to", help="кому ОБРАЩЕНА записка: роли через запятую. Имена "
+                                     "ложатся в message_addressee (kind='to') и по ним "
+                                     "строится витрина «только моё»")
+    parser.add_argument("--cc", help="кто В КОПИИ: роли через запятую. Отличие от --to — "
+                                     "весь смысл: замер 08.08 показал, что роль названа "
+                                     "в 132 записках из 145, а ОБРАЩАЮТСЯ к ней в 24")
+    parser.add_argument("--save-state", metavar="ФАЙЛ",
+                        help="сохранить §state памяти роли ТЕМ ЖЕ вызовом (мера ② варианта А, "
+                             "слово владельца 2026-08-08 16:19 UTC). Зовёт живой save-phoenix "
+                             "со всеми его отказами — своей копии защит здесь нет намеренно")
+    parser.add_argument("--save-plan", metavar="ФАЙЛ",
+                        help="то же для §plan. План приказывает в будущее и протухает быстрее "
+                             "состояния — замер 07.08: планы устаревали за ЧАСЫ, не за сутки")
+    parser.add_argument("--reply-to", type=int, metavar="ID",
+                        help="на какую ноту отвечаю — связывает ответ с вопросом в тред")
+    parser.add_argument("--resolves", action="store_true",
+                        help="эта нота ОТМЕНЯЕТ то, что сказано в --reply-to. Класс @CORE #3087:"
+                             " отменённое утверждение живёт в ленте наравне с действующим,"
+                             " и читающий вразбивку берёт его как истину")
+    parser.add_argument("--task", type=int, metavar="N",
+                        help="номер карточки бэклога, которой касается нота")
+    parser.add_argument("--reviewed", default=None, metavar="ФАЙЛ",
+                        help="Я ПРОЧЁЛ И РАЗОБРАЛ записку моста <ФАЙЛ> (можно несколько через"
+                             " запятую). Гасит признак «записка моста без ноты» ЖЕСТОМ, а не"
+                             " упоминанием имени: замер @opssre 07.08 16:36 UTC — прежде признак"
+                             " гасило ЛЮБОЕ появление имени файла в ленте, и погасила его его же"
+                             " жалоба на то, что записку никто не разобрал. Цитата не разбор.")
+    parser.add_argument("--md-dir", default=None,
+                        help="Каталог sync.<роль>.md (по умолчанию выводится из --db)")
+    # ═══ ФАЗА 4 (md-off), 2026-07-16 16:58 UTC ═══
+    # md-половина БОЛЬШЕ НЕ ПИШЕТСЯ ПО УМОЛЧАНИЮ. Рукописные sync.*.md заморожены.
+    # Объявлено для ВСЕХ 8 ролей сразу (правило md-to-sqlite-phased-cutover v2: роль не
+    # бросает md односторонне — только после объявления фазы для всех). Основание — живое
+    # слово владельца в чате COORD: «take a decision to move on» (12:50) · «добивай переход»
+    # (16:47) · «я ожидаю что ты проактивно доделаешь эту систему» (16:54).
+    #
+    # ГЕЙТ, ЗАКРЫТЫЙ ПЕРЕД ЭТИМ (артефактами, не рапортом):
+    #   · воскрешение из БД 8/8 по 7 секций; launcher никого не шлёт в md; read-phoenix.py
+    #     построен (читателя таблицы phoenix НЕ СУЩЕСТВОВАЛО — её читал только stats.py)
+    #   · 4 живых указателя на md внутри слепков вычищены (GRF/plan, CORE/rebirth, ING/plan,
+    #     ING/rebirth) — 2 из них навели МЫ САМИ, меняя механизм под ролями
+    #   · бэкап БД с ПРЕДЪЯВЛЕННЫМ восстановлением ИЗ УДАЛЁНКИ · UTC везде · ACK 7/7
+    #   · sync.rules.md генерируется из БД (5 часов до этого он ЛГАЛ, держа отозванное правило)
+    #
+    # --md остаётся ЯВНЫМ opt-in: сломается что-то у роли без доступа к БД — она пишет с --md
+    # и громко зовёт COORD. Так Фаза 4 обратима без правки кода. Ровно этого не хватило
+    # 2026-07-12, когда Ф4 сгорела: STUD был молча отрезан от SQLite, DWERR пропущен.
+    parser.add_argument("--md", action="store_true",
+                        help="ЯВНО дописать md-половину. Аварийный opt-in для Фазы 4 — "
+                             "если БД недоступна/сломана. Не для рутины: скажи COORD, зачем.")
+    parser.add_argument("--no-md", action="store_true",
+                        help="(устарел, no-op) На Фазе 4 md и так не пишется. Флаг принимается "
+                             "молча, чтобы старые команды ролей и слепков не падали.")
+    # ═══ HEARTBEAT (слово владельца 16.07 19:23 UTC через TAXO #2189; дизайн — 5 голосов) ═══
+    # POLL умер вместе с md-каналами (жил ПОСЛЕДНЕЙ строкой файла — файлы заморожены Ф4).
+    # Состоянию не место в ленте: 143 POLL-строки в одном канале = 143 ноты-мусора, «состояние,
+    # положенное в ленту, мутирует в историю самого себя» (TAXO). Здесь — ОДНА строка на роль,
+    # перезапись. Смотреть: SELECT * FROM role_status (или generated/sync.<роль>.md, после
+    # терминатора). «Жива и работаю» теперь отличимо от «выпала» без крика нотой.
+    parser.add_argument("--poll", default=None, metavar="СТАТУС",
+                        help="Обновить heartbeat роли (одна строка на роль, перезапись; таблица "
+                             "role_status). Можно БЕЗ ноты, можно вместе с нотой.")
+    # ═══ ACK-в-ноте (запрос TAXO #2181, вердикт COORD 19:47 UTC) ═══
+    # 4 из 4 исполнивших CTA #2153 не нажали ACK: работа — в ноте, подтверждение — отдельным
+    # вызовом, и его забывают ИМЕННО добросовестные (глубина разбора создаёт иллюзию, что второе
+    # действие уже случилось — RCC #2140). Ответ и след — ОДНИМ действием. Явный флаг, НЕ парсинг
+    # тела: регексп ловил бы ЦИТАТУ «CTA исполнен» (11 ложняков за день на классе «форма≠смысл»).
+    parser.add_argument("--ack", type=int, default=None, metavar="ID",
+                        help="Вместе с нотой проставить ACK broadcast-ноты #ID (broadcast_acks). "
+                             "ACK без ноты — по-прежнему read-broadcasts.py --ack.")
     args = parser.parse_args()
+
+    # Валидация сочетаний: нота = ровно одно из --body/--file; --poll может идти один;
+    # --ack — только вместе с нотой (подтверждение без ответа — read-broadcasts.py).
+    if args.body and args.file:
+        print("ERR: --body и --file одновременно нельзя", file=sys.stderr)
+        sys.exit(1)
+    has_note = bool(args.body) or bool(args.file)
+    if not has_note and not args.poll:
+        print("ERR: нужно ровно одно из --body / --file (или --poll для heartbeat без ноты)",
+              file=sys.stderr)
+        sys.exit(1)
+    if args.ack is not None and not has_note:
+        print("ERR: --ack идёт вместе с нотой; подтверждение без ноты — read-broadcasts.py --ack",
+              file=sys.stderr)
+        sys.exit(1)
+    # --reviewed тоже только вместе с нотой: жест разбора обязан оставить СЛЕД в ленте,
+    # иначе получится тихое гашение признака, а это ровно тот дефект, который он лечит.
+    # ⛔ Громко, а не молча: без этой проверки флаг при --poll просто ничего бы не сделал,
+    # и роль ушла бы уверенной, что разбор записан.
+    if args.reviewed and not has_note:
+        print("ERR: --reviewed идёт вместе с нотой: разбор без следа в ленте — тихое гашение",
+              file=sys.stderr)
+        sys.exit(1)
+    if args.file:
+        src = Path(args.file)
+        if not src.exists():
+            print(f"ERR: файл ноты не найден: {src}", file=sys.stderr)
+            sys.exit(1)
+        args.body = src.read_text(encoding="utf-8")
+
+    # ⚠️ ПРЕДУПРЕЖДЕНИЕ О НЕРАЗРЕШИМЫХ ССЫЛКАХ — ДО записи, а не после (правило task-discipline
+    # v3, слово владельца 07.08 13:01 UTC). Стоит здесь, потому что чинится это ТОЛЬКО сейчас:
+    # исторические ноты не переписываются, и после «OK #NNNN» предупреждение стало бы упрёком
+    # без применения.
+    # 📏 Повод не умозрительный — замер @PROTO: в последних 200 записках 166 несут неразрешимые
+    # ссылки (83 %) против 66 % у карточек. Болезнь сильнее ИМЕННО в ленте, то есть ровно здесь.
+    # ⛔ НЕ блокирует: warn_dangling не трогает код выхода. Так решил владелец, и это верно
+    # по цене ошибки — отказ по регулярке бил бы по законному тексту («миграция #038»).
+    warn_dangling(args.body, label="нота")
+
+    # Регистр роли нормализуется на входе: writer_role нигде не сверяется со списком,
+    # и «--role core» молча завёл бы ДЕВЯТОГО писателя. Тот же класс, что lowercase-курсоры
+    # EYE #2063 — заряженное ружьё разряжаем до выстрела (П1, слово владельца 16.07 18:07 UTC).
+    args.role = args.role.upper()
+
+
+    # Путь к БД — тоже нормализация входа, и по той же причине, что регистр роли: заряженное
+    # ружьё разряжаем ДО выстрела. resolve_db резолвит от расположения СКРИПТА (не от CWD):
+    # абсолютный --db берётся как есть, относительный — от корня мезосинка, отсутствующий —
+    # дефолт рядом со скриптом. Несуществующий путь = ГРОМКАЯ ошибка, а не тихая пустая БД.
+    args.db = str(resolve_db(args.db, __file__))
 
     db_path = Path(args.db)
     if not db_path.exists():
@@ -30,16 +364,178 @@ def main():
     tags_list = [t.strip() for t in args.tags.split(",") if t.strip()] if args.tags else []
     tags_json = json.dumps(tags_list, ensure_ascii=False)
 
+    # ── ПОЛОВИНА 1: SQLite (PRIMARY). Всё, что ниже, её уже не касается.
     conn = sqlite3.connect(str(db_path), timeout=5)
-    cur = conn.execute(
-        "INSERT INTO messages (writer_role, body_md, tags, priority) VALUES (?, ?, ?, ?)",
-        (args.role, args.body, tags_json, args.priority)
-    )
-    msg_id = cur.lastrowid
+
+    # 🎯 ВРЕМЯ ПОДСТАВЛЯЕТ ИНСТРУМЕНТ, А НЕ РОЛЬ (слово владельца 2026-08-08 16:53 UTC).
+    # ОДНО И ТО ЖЕ значение идёт и в подпись, и в колонку timestamp ⇒ разойтись они не могут
+    # ПО ПОСТРОЕНИЮ. Прежде подпись писалась рукой из подсказки среды (местное время
+    # с поправкой), и расхождение в два часа выглядело совершенно безупречно.
+    # 🪤 Первая редакция стояла ВЫШЕ по коду — до открытия базы — и падала на `conn`.
+    #    Упало громко и сразу; будь на её месте «тихий» дефект, он уехал бы в живую ленту.
+    _now_utc = conn.execute("SELECT datetime('now')").fetchone()[0]
+    _stamped = None
+    if has_note:
+        args.body, _stamped = stamp_signature(args.body, args.role, _now_utc)
+
+    msg_id = None
+    if has_note:
+        # ── РУЧКА К МЕХАНИЗМАМ ПЕРЕВОДА (замер @PROTO #3089, правка COORD 2026-08-06).
+        # Накат внёс три сосуда — адресат полем, треды, связь записки с задачей — и через
+        # 2 ч 36 мин все три оказались ПУСТЫ при 90 новых нотах. Причина не лень ролей:
+        # этот INSERT писал ровно четыре поля, и связать ответ с вопросом было НЕЧЕМ.
+        # 🔴 И тот же замер опроверг МОЙ вывод из #3091: я объяснил мёртвый `resolved`
+        # (1 запись из 1659) тем, что «поле, требующее ручного действия, не заполняется».
+        # Верная причина проще и хуже: его тоже НЕЧЕМ БЫЛО ЗАПОЛНИТЬ — инструмент такого
+        # не умел. Я обвинил дисциплину там, где не было ручки.
+        # ⇒ Просить «пользуйтесь тредами» можно только после того, как есть чем пользоваться.
+        # 🪤 И --cc ТОЖЕ ЯВНАЯ АДРЕСАЦИЯ. Прежняя строка смотрела только на --to: записка,
+        # где названы лишь получатели копии, числилась бы «адресат не объявлен» — то есть
+        # штамп происхождения врал бы о записке, у которой адресаты как раз есть.
+        addressed = "field" if (args.to or args.cc) else None
+        cur = conn.execute(
+            "INSERT INTO messages (writer_role, body_md, tags, priority, timestamp"
+            + (", addressed_by" if addressed else "") + ") VALUES (?, ?, ?, ?, ?"
+            + (", ?" if addressed else "") + ")",
+            (args.role, args.body, tags_json, args.priority, _now_utc)
+            + ((addressed,) if addressed else ())
+        )
+        msg_id = cur.lastrowid
+        # 🪤 УКУС ПОЙМАЛ ЗДЕСЬ ДВЕ ОШИБКИ, обе в первой версии этой же правки:
+        # ① resolved ставился МОЕЙ ноте. Но отменяется не она, а ТА, НА КОТОРУЮ ОТВЕЧАЮТ:
+        #    признак «это утверждение снято» нужен читателю СТАРОЙ ноты, а он до новой
+        #    может не дойти — весь класс @CORE #3087 ровно про такого читателя.
+        # ② kind='revokes' не прошёл CHECK: схема знает пять видов связи, отмены среди них нет.
+        #    Не расширяю CHECK (правка живой базы — отдельное слово владельца): вид связи
+        #    остаётся 'answer', а сам факт отмены несёт resolved у цели. Механизм честнее
+        #    выдумывать не стал — тот, что есть, отвечает на вопрос «снято ли».
+        if args.resolves and args.reply_to:
+            conn.execute("UPDATE messages SET resolved = 1 WHERE id = ?", (args.reply_to,))
+        # Связи пишутся ПОСЛЕ вставки: нужен собственный id.
+        # 🪤 ТРЕТИЙ УКУС ЭТОЙ ЖЕ ПРАВКИ: я подставил в linked_by ИМЯ РОЛИ, прочитав колонку
+        # как «кто связал». CHECK сказал иначе: linked_by IN ('field','backfill') — это СПОСОБ
+        # связи (задана полем или проставлена при переносе), а не автор. Имя колонки я принял
+        # за её смысл — тот же класс, что «имя файла не инвентарь» (@STUD) и «ReadOnlyDb.cs
+        # проверен по тому, что делает, а не по названию» (мой же вывод четыре часа назад).
+        # ⇒ Схему читать, а не угадывать по имени, даже когда имя выглядит однозначным.
+        if args.reply_to:
+            conn.execute(
+                "INSERT OR REPLACE INTO message_thread (message_id, reply_to, thread_id, kind,"
+                " linked_by) VALUES (?, ?, COALESCE((SELECT thread_id FROM message_thread"
+                " WHERE message_id = ?), ?), ?, ?)",
+                (msg_id, args.reply_to, args.reply_to, args.reply_to, "answer", "field"))
+        if args.task:
+            conn.execute(
+                "INSERT OR REPLACE INTO message_task (message_id, task_id, linked_by)"
+                " VALUES (?, ?, ?)", (msg_id, args.task, "field"))
+        # ── АДРЕСАТЫ ИМЕНАМИ (слово владельца 2026-08-08 11:50 UTC) ──────────────
+        # linked_by='field' — ОБЪЯВЛЕНО ручкой. Разбор прозы обязан помечаться 'backfill'
+        # и живёт в отдельном ходе: смешать их значило бы выдать догадку за объявленное,
+        # а именно на этом смешении контур уже терял правду о происхождении штампа.
+        for kind, raw in (("to", args.to), ("cc", args.cc)):
+            for name in [n.strip().upper().lstrip("@") for n in (raw or "").split(",")]:
+                if not name:
+                    continue
+                try:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO message_addressee "
+                        "(message_id, role, kind, linked_by) VALUES (?, ?, ?, 'field')",
+                        (msg_id, name, kind))
+                except sqlite3.OperationalError as e:      # таблицы нет — старая база
+                    print(f"⚠️ адресат '{name}' НЕ СОХРАНЁН: {e}. Записка записана, "
+                          f"но витрина «только моё» её не увидит — это НЕ «всё в порядке».",
+                          file=sys.stderr)
+                    break
+        # ── ЖЕСТ РАЗБОРА ЗАПИСКИ МОСТА (карточка #117, замер @opssre 07.08 16:36 UTC) ──
+        # Признак «записка моста лежит без ноты» гасился запросом
+        #     SELECT MAX(timestamp) FROM messages WHERE body_md LIKE '%<имя файла>%'
+        # то есть ЛЮБЫМ упоминанием имени. Погасила его записка @opssre, в которой он
+        # ЖАЛОВАЛСЯ, что записку никто не разобрал: чем добросовестнее роль называет
+        # непрочитанное, тем вернее признак замолкает.
+        # 🎯 Класс: проверка стерегла ПРИЗНАК (имя встретилось) вместо СВОЙСТВА (записку прочли).
+        # ⛔ Сужение поиска отвергнуто его же замером: исключи автора — погасит следующий
+        #    цитирующий; убери поиск по ленте — признак закричит об исторических пяти.
+        # ⇒ Нужен ЖЕСТ. Он едет НА ноте, которую роль и так пишет: отдельную команду
+        #    пришлось бы вспоминать, а невспомненный механизм мёртв (--task: 0 вызовов
+        #    за 1724 записки, parent_id: 0 из 84). Таблица заводится идемпотентно.
+        if args.reviewed:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS bridge_reviewed ("
+                "  file_name TEXT NOT NULL,"
+                "  role      TEXT NOT NULL,"
+                "  note_id   INTEGER REFERENCES messages(id),"
+                "  at        TEXT NOT NULL DEFAULT (datetime('now')),"
+                "  PRIMARY KEY (file_name, role))")
+            for name in [n.strip() for n in args.reviewed.split(",") if n.strip()]:
+                conn.execute(
+                    "INSERT OR REPLACE INTO bridge_reviewed (file_name, role, note_id, at)"
+                    " VALUES (?, ?, ?, datetime('now'))", (name, args.role, msg_id))
+                print(f"⚖️ разбор записан: {name} — прочёл {args.role}, нота #{msg_id}")
+            print("   ⛔ жест говорит «я это прочёл», а не «здесь всё верно» —"
+                  " верность содержимого механизм не проверяет и не обещает")
+
+    if args.poll:
+        # Идемпотентно (migration-safety): одна строка на роль, перезапись — НЕ лента.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS role_status ("
+            "  role       TEXT PRIMARY KEY,"
+            "  status     TEXT NOT NULL,"
+            "  updated_at TEXT NOT NULL DEFAULT (datetime('now')))")
+        conn.execute(
+            "INSERT INTO role_status (role, status, updated_at) VALUES (?, ?, datetime('now')) "
+            "ON CONFLICT(role) DO UPDATE SET status=excluded.status, updated_at=datetime('now')",
+            (args.role, args.poll))
+
+    if args.ack is not None:
+        exists = conn.execute("SELECT 1 FROM messages WHERE id=?", (args.ack,)).fetchone()
+        if not exists:
+            print(f"⚠️ ACK #{args.ack}: такой ноты нет — ACK НЕ проставлен, нота записана", file=sys.stderr)
+            args.ack = None
+        elif conn.execute("SELECT 1 FROM broadcast_acks WHERE message_id=? AND role=?",
+                          (args.ack, args.role)).fetchone():
+            print(f"[ack] #{args.ack}: уже был проставлен ранее — без изменений")
+            args.ack = None
+        else:
+            conn.execute("INSERT INTO broadcast_acks (message_id, role, acked_at) "
+                         "VALUES (?, ?, datetime('now'))", (args.ack, args.role))
+
     conn.commit()
     conn.close()
 
-    print(f"OK #{msg_id} [{args.role}] tags={tags_json} priority={args.priority}")
+    if msg_id is not None:
+        print(f"OK #{msg_id} [{args.role}] tags={tags_json} priority={args.priority}")
+    if _stamped:
+        print(f"  🕐 {_stamped} — совпадает с записью в базе по построению")
+    if args.poll:
+        print(f"[poll] {args.role}: heartbeat обновлён ({len(args.poll)} симв.)")
+    if args.ack is not None:
+        print(f"[ack] broadcast #{args.ack} подтверждён ролью {args.role}")
+
+    # 🎯 МЕРА ② ВАРИАНТА А (слово владельца 2026-08-08 16:19 UTC): сохранение памяти лежит
+    # на пути, по которому роль И ТАК ХОДИТ, а не отдельной кнопкой.
+    # 🪤 Довод — замером, а не вкусом: четыре механизма, заведённые как необязательное
+    #    отдельное действие, умерли с нулём вызовов (--task 0 из 1724 · parent_id 0 из 84 ·
+    #    «какой запиской» 0 из 9 · гашение срочности 1 из 546). А подтверждение прочтения,
+    #    вложенное ВНУТРЬ этой же отправки (--ack), прижилось. Разница не в дисциплине.
+    # ⚖️ Записка пишется тогда, когда сложилось намерение, о котором стоит сказать другим, —
+    #    то есть ровно в тот момент, который и надо было сохранять.
+    _save_phoenix_alongside(args, db_path)
+
+    # ── md: ФАЗА 4 — НЕ ПИШЕТСЯ ПО УМОЛЧАНИЮ. Только явный --md (аварийный opt-in).
+    # Сбой md НЕ отменяет запись в БД и не меняет exit-code: сообщение УЖЕ в primary,
+    # и соврать про это было бы хуже, чем не дописать фолбэк.
+    if not args.md or msg_id is None:
+        return
+    md_dir = Path(args.md_dir) if args.md_dir else default_md_dir(db_path)
+    try:
+        path = append_md(md_dir, msg_id, args.role, tags_list, args.priority, args.body)
+        print(f"md: дописано → {path}")
+    except Exception as exc:  # noqa: BLE001 — любой сбой md обязан стать видимым, а не тихим
+        print(f"\n⚠️  DWERR: md-половина НЕ записана ({exc.__class__.__name__}: {exc}).\n"
+              f"    В SQLite сообщение #{msg_id} ЛЕЖИТ — потери нет, но фолбэка у него нет.\n"
+              f"    Допиши в md руками и сообщи COORD тегом DWERR (роли без доступа к тулам\n"
+              f"    читают только md — для них этой ноты сейчас НЕ СУЩЕСТВУЕТ).",
+              file=sys.stderr)
 
 
 if __name__ == "__main__":

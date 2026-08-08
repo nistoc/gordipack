@@ -13,7 +13,13 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).parent
 REPO_ROOT = SCRIPT_DIR.parent
-SCHEMA_FILE = REPO_ROOT / "schema" / "mezosync_v2.sql"  # v2 (Фаза 4): +messages_history/messages_all/role_status/read_batches/stats_log, phoenix 7 секций
+# v3 (2026-08-08): схема СОБИРАЕТСЯ из живой базы (vnext/tools/gen-schema.py), а не пишется
+# рукой. Повод — замер: рукописная v2 отстала от живой на ПЯТЬ сосудов (основание правил
+# полями, возраст взгляда у памяти, имена адресатов, права роли, разгон сна), и заметить
+# это было нечем. Контур, собранный из v2 в тот день, не получал НИЧЕГО из сделанного
+# за смену и выглядел исправным: приёмки шаблона проверяют то, что в шаблоне ЕСТЬ.
+# ⚖️ Рукописная схема — вторая копия правды, а вторая копия расходится молча.
+SCHEMA_FILE = REPO_ROOT / "schema" / "mezosync_v3.sql"
 UNIVERSAL_RULES = REPO_ROOT / "rules" / "universal.sql"
 DOMAIN_RULES_DIR = REPO_ROOT / "rules" / "domain-specific"
 
@@ -46,7 +52,12 @@ def main():
     # 1. Схема
     schema_sql = SCHEMA_FILE.read_text(encoding="utf-8")
     conn.executescript(schema_sql)
-    print("  ✅ Схема v2 применена")
+    # 🪤 Здесь стояло «Схема v2 применена» — ВПЕЧАТАННЫМ ЧИСЛОМ. 2026-08-08 сборку перевели
+    # на v3, и надпись стала врать: она печатала имя, которого у механизма больше нет,
+    # и печатала уверенно. Поймано в первую же минуту — но только потому, что я не поверил
+    # надписи и спросил базу.
+    # ⇒ Имя берётся из ФАЙЛА, а не пишется рядом: пересказ имени — это вторая копия.
+    print(f"  ✅ Схема применена: {SCHEMA_FILE.name}")
 
     # 2. Имя группы
     conn.execute("UPDATE meta SET value = ? WHERE key = 'group_name'", (args.name,))

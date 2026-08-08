@@ -18,14 +18,45 @@ read-phoenix.py — предъявить роли её слепок ИЗ БД. �
 Секция launcher печатается последней, справочно.
 
 ЗАПУСК (это и есть содержимое launcher-строки владельца):
-    python read-phoenix.py --db <path> --role CORE
-    python read-phoenix.py --db <path> --role CORE --section state    # одна секция
-    python read-phoenix.py --db <path> --list                         # кто вообще есть
+    python <КОНТУР>/.mezosync/scripts/read-phoenix.py --role CORE
+    python <КОНТУР>/.mezosync/scripts/read-phoenix.py --role CORE --section state    # одна секция
+    python <КОНТУР>/.mezosync/scripts/read-phoenix.py --list                         # кто вообще есть
 """
 
 import argparse
 import sqlite3
 import sys
+from pathlib import Path
+
+from mezo_paths import resolve_db   # R15a: путь к БД — от расположения скрипта, не от CWD
+
+# ⚠️ Обёрнут по норме @TAXO (07.08 13:18 UTC): правка общего инструмента не атомарна.
+# Слепок — ПЕРВЫЙ экран воскресшей роли; сломать его дороже, чем не показать карточки.
+try:
+    from backlog_view import reminder_block       # открытые карточки роли (#112 ②)
+except Exception:                                 # noqa: BLE001
+    def reminder_block(*_a, **_k):
+        return ["⚠️ список открытых карточек НЕ ПОКАЗАН: модуль backlog_view недоступен"]
+
+# Машинный слой памяти — пункт 2.5, карточка #128, слово владельца 08.08 11:19 UTC.
+# Обёрнут по той же норме, что и карточки: слепок — первый экран воскресшей роли,
+# и сломать его дороже, чем не показать сводку. ⚠️ Отказ ГОВОРИТ О СЕБЕ строкой:
+# молчащий сборщик неотличим от сборщика, которому нечего сказать.
+try:
+    from machine_layer import machine_block
+except Exception:                                 # noqa: BLE001
+    def machine_block(*_a, **_k):
+        return ["⚠️ машинный слой НЕ СОБРАН: модуль machine_layer недоступен. "
+                "Это НЕ «всё в порядке» — положение в ленте и свежесть свода не проверены."]
+
+# Каталог ЭТОГО скрипта — им подставляется {s} в шапке CANON ниже. Печатать относительную форму
+# нельзя: шапка — ПЕРВЫЙ экран роли при каждом пробуждении, и роль копирует форму вызова из того,
+# что читает (замер PROTO #2694: канон → 24 копии в слепках; третий источник нашла TAXO #2697).
+# Относительный вызов падает при уехавшем CWD или, хуже, молча пишет в другую живую БД (F20).
+# .as_posix() — Bash-инструмент съедает обратный слэш: напечатанная команда падала
+# ('guts.atlas.mezosyncscriptsset-rule.py'). Замер PROTO #2872 — ЧЕТВЁРТЫЙ оборот класса,
+# и худший по месту: это ПЕРВЫЙ экран каждого воскресшего. Прямые слэши работают везде.
+SCRIPTS_DIR = Path(__file__).resolve().parent.as_posix()
 
 ORDER = ["identity", "rebirth", "sources", "state", "plan", "history", "launcher"]
 
@@ -45,25 +76,35 @@ TITLES = {
 # ARTIFACT-OUTLIVES-DECISION у меня и худший по МЕСТУ: привет, который получает каждый
 # новорождённый агент, был ЛОЖЬЮ — и звучал авторитетнее всего, что он прочтёт дальше.
 # ⇒ МЕНЯЕШЬ ФАЗУ/ПРАВИЛО — ПРАВЬ ЭТУ ШАПКУ ТЕМ ЖЕ ХОДОМ. Она не «документация», она инструкция.
-CANON = """
+# r-строка ОБЯЗАТЕЛЬНА: в путях Windows обратный слэш иначе съедается как escape —
+# `{s}/read-messages.py` печаталось как «scriptsead-messages.py» (\r), `\backlog.py` как
+# «scriptsacklog.py» (\b). Поймано замером сразу после правки 2026-07-26 (COORD): шапка —
+# первый экран роли, и она учила бы КОМАНДАМ, КОТОРЫХ НЕТ.
+CANON = r"""
 ═══════════════════════════════════════════════════════════════════════════════
 📌 КАНОН — ИСТОЧНИК ПРАВДЫ БД. ⛔ ФАЗА 4 (md-OFF) ДЕЙСТВУЕТ с 2026-07-16 16:58 UTC
 
-  правила      python .mezosync/scripts/set-rule.py --db <db> --list
+  ⚠️ ЗОВИ АБСОЛЮТНЫМ ПУТЁМ (ниже он уже такой). Относительная форма запрещена: при уехавшем
+     CWD она падает — или, хуже, МОЛЧА пишет в другую живую БД. В свой слепок пиши тоже абсолютную.
+     `--db` НЕОБЯЗАТЕЛЕН с 2026-07-26 (R15a: резолвится от расположения скрипта; норма владельца,
+     стандарт role-migration-standard ②). Примеры ниже — БЕЗ него, дефолт = живая mezosync.db.
+     Указывай --db ТОЛЬКО для не-дефолтной БД (напр. песочница).
+
+  правила      python {s}/set-rule.py --list
                ...--key <ключ> --show
-  инварианты   python .mezosync/scripts/set-registry.py --db <db> list invariant
-  лента        python .mezosync/scripts/read-messages.py --db <db> --role {role}
+  инварианты   python {s}/set-registry.py list invariant
+  лента        python {s}/read-messages.py --role {role}
                ⚠️ КОНТРАКТ с 16.07 (v2 18:45 UTC): чтение НЕ двигает курсор. Токен
                РАЗРЕЗАН: первая половина — в ПЕРВОЙ строке вывода, вторая — в ПОСЛЕДНЕЙ;
                подтверди склейкой: ... --ack <первая>-<вторая>. head прячет вторую,
                tail — первую: обе даёт только ПОЛНЫЙ вывод. Токен одноразовый.
                Незнакомая роль — ошибка, не тихий курсор; новую заводит явный --register.
-  broadcast    python .mezosync/scripts/read-broadcasts.py --db <db> --role {role}
-  бэклог       python .mezosync/scripts/backlog.py --db <db> list --role {role}
-  писать       python .mezosync/scripts/write-message.py --db <db> --role {role} --file <нота.md>
+  broadcast    python {s}/read-broadcasts.py --role {role}
+  бэклог       python {s}/backlog.py list --role {role}
+  писать       python {s}/write-message.py --role {role} --file <нота.md>
                (пишет ТОЛЬКО в БД — дефолт Ф4; длинное/бэктики — ТОЛЬКО --file, не --body;
                + --ack <id> тем же вызовом проставит ACK broadcast-ноты — ответ и след одним действием)
-  heartbeat    ... write-message.py --db <db> --role {role} --poll "статус одной строкой"
+  heartbeat    ... write-message.py --role {role} --poll "статус одной строкой"
                (одна строка на роль, перезапись — таблица role_status, НЕ лента; можно без ноты.
                Смотреть: SELECT * FROM role_status — или generated/sync.<роль>.md после терминатора)
 
@@ -87,11 +128,13 @@ CANON = """
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--db", required=True)
+    # R15a: --db не обязателен, резолвится от расположения СКРИПТА (не от CWD).
+    ap.add_argument("--db", default=None, help="Путь к mezosync.db (по умолчанию — рядом со скриптом)")
     ap.add_argument("--role")
     ap.add_argument("--section", choices=ORDER)
     ap.add_argument("--list", action="store_true", help="какие роли и секции есть")
     args = ap.parse_args()
+    args.db = str(resolve_db(args.db, __file__))
 
     try:  # mode=rw: connect НЕ создаёт пустую БД-фантом при опечатке пути (П1 16.07)
         conn = sqlite3.connect(f"file:{args.db}?mode=rw", uri=True)
@@ -130,7 +173,7 @@ def main():
 
     print(f"🔥 PHOENIX — слепок роли {role} (источник: mezosync.db, таблица phoenix)")
     if not args.section:
-        print(CANON.replace("{role}", role))
+        print(CANON.replace("{role}", role).replace("{s}", str(SCRIPTS_DIR)))
 
     for s in wanted:
         if s not in rows:
@@ -139,6 +182,35 @@ def main():
         body, saved = rows[s]
         print(f"\n{'─' * 79}\n## {TITLES[s]}   [сохранено {saved} UTC]\n")
         print(body.strip())
+
+        # ── §4½ ОТКРЫТЫЕ КАРТОЧКИ — ЖИВОЙ ЗАПРОС К БАЗЕ, А НЕ ТЕКСТ СЛЕПКА (#112 ②) ──
+        # ЗАЧЕМ: замер 07.08 — слов «карточка»/«бэклог» в слепках НОЛЬ. Роль после
+        # перезапуска о своих задачах не узнавала ничем, кроме чужого напоминания;
+        # то есть механизм долговременной памяти задач существовал ОТДЕЛЬНО от механизма
+        # долговременной памяти роли, и второй про первый не знал.
+        # ⚠️ ПЕЧАТАЕТСЯ ОТДЕЛЬНЫМ ЗАГОЛОВКОМ, А НЕ ВНУТРИ §4: §4 — то, что роль о себе
+        # ЗАПИСАЛА и что стареет; это — то, что в базе ПРЯМО СЕЙЧАС. Смешать их значило бы
+        # выдать свежее за сохранённое (и наоборот) — ровно тот класс, за который контур
+        # платит вторые сутки. Дата сохранения слепка стоит выше, у §4, и остаётся честной.
+        if s == "state":
+            lines = reminder_block(args.db, role)
+            print(f"\n{'─' * 79}\n## §4½ ОТКРЫТЫЕ КАРТОЧКИ   [живой запрос к базе, НЕ из слепка]\n")
+            if lines:
+                print("\n".join(lines))
+                print(f"\n   полностью: python {SCRIPTS_DIR}/backlog.py list --role {role}")
+            else:
+                print(f"   у роли {role} открытых карточек нет "
+                      f"(проверено запросом, а не молчанием слепка)")
+
+            # ── §4¾ МАШИННЫЙ СЛОЙ — СОБИРАЕТСЯ, А НЕ ХРАНИТСЯ ──────────────
+            # Продолжение той же мысли, что §4½, на остальные производные факты:
+            # положение в ленте, обращения ЛИЧНО, свежесть свода. Хранить их =
+            # дать им врать; не хранить = им НЕЧЕМ врать.
+            # ⛔ Блок НАМЕРЕННО не повторяет карточки: две витрины одного предмета
+            # расходятся молча, и роль верит той, что мягче.
+            print(f"\n{'─' * 79}\n## §4¾ МАШИННЫЙ СЛОЙ   "
+                  f"[собран этим вызовом, нигде не хранится]\n")
+            print("\n".join(machine_block(args.db, role)))
 
     if not args.section:
         miss = [s for s in ORDER if s not in rows]

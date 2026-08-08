@@ -2,8 +2,8 @@
 save-phoenix.py — CLI для агента: сохранить phoenix-слепок в mezosync.db.
 
 Использование:
-    python save-phoenix.py --db .mezosync/mezosync.db --role COORD --section state --body "текст слепка"
-    python save-phoenix.py --db .mezosync/mezosync.db --role COORD --section state --file phoenix-state.md
+    python <КОНТУР>/.mezosync/scripts/save-phoenix.py --role COORD --section state --body "текст слепка"
+    python <КОНТУР>/.mezosync/scripts/save-phoenix.py --role COORD --section state --file phoenix-state.md
 """
 
 import argparse
@@ -11,10 +11,13 @@ import sqlite3
 import sys
 from pathlib import Path
 
+from mezo_paths import resolve_db   # R15a: путь к БД — от расположения скрипта, не от CWD
+
 
 def main():
     parser = argparse.ArgumentParser(description="Сохранить phoenix-слепок")
-    parser.add_argument("--db", required=True, help="Путь к mezosync.db")
+    # R15a: --db не обязателен, резолвится от расположения СКРИПТА (не от CWD).
+    parser.add_argument("--db", default=None, help="Путь к mezosync.db (по умолчанию — рядом со скриптом)")
     parser.add_argument("--role", required=True, help="Роль (COORD, CORE, ...)")
     # launcher/rebirth/sources добавлены 2026-07-16: замер показал, что МЕХАНИЗМУ
     # ВОСКРЕШЕНИЯ РОЛИ НЕГДЕ ЖИТЬ В БД. У COORD/CORE/ING/STUD launcher'а в БД не было
@@ -41,36 +44,40 @@ def main():
                              "а не потеря. Пустое тело не разрешает и он")
     args = parser.parse_args()
 
+    # Регистр роли НОРМАЛИЗУЕТСЯ к верхнему (как в read-messages.py/read-phoenix.py): иначе
+    # `save-phoenix --role stud` завёл бы ВТОРОЙ слепок (role='stud' ≠ 'STUD' по UNIQUE(role,section)),
+    # а `read-phoenix --role STUD` вернул бы старый — роль МОЛЧА теряет свёртку, гарды зелёные.
+    # Латентная мина: найдена PROTO 2026-07-25 (#2665), подтверждена COORD замером, починка по слову владельца.
+    role = args.role.upper()
+    # Путь к БД — та же нормализация входа, что регистр роли (R15a).
+    args.db = str(resolve_db(args.db, __file__))
+
     if not args.body and not args.file:
         print("ERR: укажите --body или --file", file=sys.stderr)
         sys.exit(1)
 
     body = args.body if args.body else Path(args.file).read_text(encoding="utf-8")
 
-    # Регистр роли нормализуется ЗДЕСЬ ТОЖЕ. read-messages и read-phoenix уже приводят
-    # роль к UPPER; save-phoenix — НЕТ, и это «расщепление роли»: слепок, сохранённый как
-    # «core», не находится читателем, ищущим «CORE» (phoenix.role — часть PRIMARY KEY без
-    # COLLATE NOCASE, тот же класс, что 8 lowercase-курсоров-призраков EYE #2063).
-    # Нормализуем на входе — один регистр во всём контуре.
-    role = args.role.upper()
-
     try:  # mode=rw: connect НЕ создаёт пустую БД-фантом при опечатке пути (П1 16.07)
         conn = sqlite3.connect(f"file:{args.db}?mode=rw", uri=True, timeout=5)
     except sqlite3.OperationalError:
         sys.exit(f"ERR: БД не найдена: {args.db}")
-    # ── 🩸 ЗАЩИТА ПАМЯТИ РОЛИ. Случай @RCC 2026-08-07 16:56 UTC, дословно: правил секцию
-    # скриптом, тот упал ПОСЛЕ открытия файла на запись, файл обнулился, инструмент принял
-    # пустоту и отчитался «OK phoenix/RCC/rebirth (0 chars)». Секция, которая учит преемника
-    # порядку пробуждения, пролежала пустой четыре минуты.
+    # ── 🩸 ЗАЩИТА ПАМЯТИ РОЛИ. Правка @PROTO в шаблоне gordipack (17:02 UTC), перенесена
+    # в живой инструмент моей рукой — граница зон: шаблон его, `.mezosync/scripts` мои.
+    # Случай @RCC 07.08 16:56 UTC дословно: правил секцию скриптом, тот упал ПОСЛЕ открытия
+    # файла на запись, файл обнулился, инструмент принял пустоту и отчитался
+    # «OK phoenix/RCC/rebirth (0 chars)». Секция, которая учит преемника порядку
+    # пробуждения, пролежала пустой четыре минуты.
     # 🪤 Класс: «OK ≠ сохранено», родня контурного «200 ≠ работает». И хуже: сторож живости
     # слепков смотрит на ВРЕМЯ сохранения, а не на РАЗМЕР ⇒ обнулённая секция выглядит
     # свежайшей. Пустой слепок неотличим от идеально свежего.
     # ⚖️ Порога «не меньше 200 знаков», как предлагал @RCC, здесь НЕТ намеренно: секция
     # launcher — законно ОДНА СТРОКА, и такой порог убил бы её. Поэтому два правила разных
     # сортов: пустота запрещена ВСЕГДА, а обвал в разы — только против ПРЕЖНЕГО размера.
-    prev = conn.execute("SELECT length(body) FROM phoenix WHERE role=? AND section=?",
+    prev = conn.execute("SELECT body FROM phoenix WHERE role=? AND section=?",
                         (role, args.section)).fetchone()
-    was = prev[0] if prev else 0
+    prev_body = prev[0] if prev else None
+    was = len(prev_body) if prev_body is not None else 0
     now = len(body)
 
     if not body.strip():
@@ -87,11 +94,44 @@ def main():
                  f"   Перезапись в разы — почти всегда авария записи, а не намерение.\n"
                  f"   👉 Если чистка СОЗНАТЕЛЬНАЯ, скажи это словом: --allow-shrink")
 
-    conn.execute("""
-        INSERT INTO phoenix (role, section, body, saved_at)
-        VALUES (?, ?, ?, datetime('now'))
-        ON CONFLICT(role, section) DO UPDATE SET body = excluded.body, saved_at = excluded.saved_at
-    """, (role, args.section, body))
+    # 🎯 МЕРА ③ ВАРИАНТА А (слово владельца 2026-08-08 16:19 UTC): сравнивается СОДЕРЖИМОЕ,
+    # а не время. Если текст не изменился НИ НА ЗНАК — время сохранения НЕ ТРОГАЕМ.
+    # 🪤 Иначе «нажать сохранить, ничего не изменив» выглядит свежестью: ровно так гасился
+    #    сторож ⑥ (замер 07.08). Пересохранение — это ДЕЙСТВИЕ, а свежесть — СВОЙСТВО ТЕКСТА,
+    #    и подменять второе первым значит дать механизму способ врать без единой ошибки.
+    # ⚖️ Обратную половину (нетронутое, но по-прежнему верное, выглядит протухшим) чинит
+    #    сторож: он объявляет отставание только если роль РАБОТАЛА после сохранения.
+    has_confirmed = "confirmed_at" in {r[1] for r in conn.execute("PRAGMA table_info(phoenix)")}
+
+    if prev_body is not None and body == prev_body:
+        # Текст не изменился ⇒ возраст ТЕКСТА остаётся прежним. Но роль на него СМОТРЕЛА
+        # и подтвердила — это второй, отдельный факт, и он свежий.
+        if has_confirmed:
+            conn.execute("UPDATE phoenix SET confirmed_at = datetime('now') "
+                         "WHERE role=? AND section=?", (role, args.section))
+            conn.commit()
+        conn.close()
+        print(f"= phoenix/{role}/{args.section} — СОДЕРЖИМОЕ НЕ ИЗМЕНИЛОСЬ ({now} знаков).")
+        print("  Возраст ТЕКСТА не сдвинут: иначе пересохранение вслепую выглядело бы свежестью.")
+        print("  Возраст ВЗГЛЯДА обновлён: роль текст перечитала и подтвердила."
+              if has_confirmed else
+              "  ⚠️ колонки confirmed_at нет — прогони migrations/20260808-phoenix-confirmed-at.py")
+        return
+
+    if has_confirmed:
+        conn.execute("""
+            INSERT INTO phoenix (role, section, body, saved_at, confirmed_at)
+            VALUES (?, ?, ?, datetime('now'), datetime('now'))
+            ON CONFLICT(role, section) DO UPDATE SET body = excluded.body,
+                saved_at = excluded.saved_at, confirmed_at = excluded.confirmed_at
+        """, (role, args.section, body))
+    else:
+        conn.execute("""
+            INSERT INTO phoenix (role, section, body, saved_at)
+            VALUES (?, ?, ?, datetime('now'))
+            ON CONFLICT(role, section) DO UPDATE SET body = excluded.body,
+                saved_at = excluded.saved_at
+        """, (role, args.section, body))
 
     conn.execute("""
         INSERT INTO audit_log (actor_role, action, target, diff_md)
