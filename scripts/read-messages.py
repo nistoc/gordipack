@@ -489,10 +489,45 @@ def main():
                 conn.execute("UPDATE read_batches SET last_id = ? WHERE token = ?",
                              (batch_max, reissue[0]))
         else:
-            half1, half2 = secrets.token_hex(3), secrets.token_hex(3)
-            conn.execute(
-                "INSERT INTO read_batches (token, role, last_id, shown_max) VALUES (?, ?, ?, ?)",
-                (f"{half1}-{half2}", role, batch_max, batch_max))
+            # ── ГОНКА ПРИ ВЫДАЧЕ БАТЧА (карточка #150, слово владельца 2026-08-09 12:49) ──
+            # Прежде здесь было «спросили, есть ли батч → вставили новый» БЕЗ исключающей
+            # транзакции. Два процесса, стартовавшие одновременно, оба видели «батча нет»
+            # и оба вставляли ⇒ роль получала половинки токена ОТ РАЗНЫХ ВЫВОДОВ и не могла
+            # подтвердить прочитанное. Это не теория: приёмка bite-r16 (свойство P7) ловила
+            # отказ в 4 прогонах из 13 — и НИ РАЗУ в одиночку, потому что на свободной
+            # машине вызовы успевают разойтись во времени.
+            # 🎯 Лечим СВОЙСТВОМ, а не аккуратностью: замок стоит В БАЗЕ
+            # (ux_batch_race: UNIQUE(role, last_id) WHERE acked_at IS NULL), и второй
+            # вставки не может быть по построению. Здесь — вторая половина: проигравший
+            # гонку НЕ падает и НЕ выдумывает свой токен, а БЕРЁТ ЧУЖОЙ, уже записанный.
+            # ⚖️ Почему замок не строже («один неподтверждённый батч на роль»): такой
+            #    вариант проверен на копии живой базы и НЕ ВСТАЛ — он запретил бы законное,
+            #    брошенный вчера батч рядом с сегодняшним. Замерено ДО кода.
+            half1 = half2 = None
+            for attempt in (1, 2):
+                try:
+                    h1, h2 = secrets.token_hex(3), secrets.token_hex(3)
+                    conn.execute(
+                        "INSERT INTO read_batches (token, role, last_id, shown_max) "
+                        "VALUES (?, ?, ?, ?)", (f"{h1}-{h2}", role, batch_max, batch_max))
+                    half1, half2 = h1, h2
+                    break
+                except sqlite3.IntegrityError:
+                    # Кто-то опередил нас на тот же хвост — читаем ЕГО токен и работаем им.
+                    row = conn.execute(
+                        "SELECT token FROM read_batches WHERE role = ? AND last_id = ? "
+                        "AND acked_at IS NULL", (role, batch_max)).fetchone()
+                    if row:
+                        half1, half2 = row[0].split("-", 1)
+                        break
+                    # ⚠️ Строки нет — значит соперник её уже подтвердил и убрал. Пробуем
+                    #    ещё раз: тогда вставка законна. Второго круга не даём, чтобы
+                    #    молчаливый цикл не заменил собой отказ.
+            if half1 is None:
+                conn.rollback()
+                conn.close()
+                sys.exit("⛔ НЕ ВЫДАНО: батч на этот хвост заводится кем-то ещё прямо сейчас.\n"
+                         "   Это НЕ поломка и НЕ «нечего читать» — позови ту же команду снова.")
         conn.commit()
         print(f"[begin-of-batch] {len(rows)} нот, #{rows[0][0]}…#{batch_max} (cursor={last_read}). "
               f"Токен разрезан: ПЕРВАЯ половина {half1}, вторая — в ПОСЛЕДНЕЙ строке.")
