@@ -296,6 +296,35 @@ def scan_md(path, known, templates=None, scripts=None):
     return hits
 
 
+def scan_canon(path, known, scripts):
+    """КАНОН (CLAUDE.md контейнера) — самая читаемая учащая поверхность, и до 09.08 её
+    не читала НИ ОДНА проверка (карточка #56). Цена уже заплачена: 08.08 в каноне почти
+    сутки жил ОТМЕНЁННЫЙ запрет, и нашли его глазами, а не прибором.
+
+    🎯 Канон учит формам через СОКРАЩЕНИЕ, объявленное в нём же (`<s>` = путь). Судить
+    такую строку как написанную — красить исполнимое; не судить вовсе — слепнуть.
+    ⇒ Сокращения РАСКРЫВАЮТСЯ ПЕРЕД судом, и дальше работает общий classify:
+      · объявлено и ведёт в живое место → чисто (как вычисленный путь);
+      · НЕ объявлено → красное: читатель без определения получает мёртвую команду;
+      · объявлено, но место НЕ существует → красное признаком E — определение протухло,
+        и это хуже отсутствия: форма выглядит снабжённой ключом.
+    """
+    if not path.exists():
+        return None                                    # отсутствие канона — сказать вслух
+    text = path.read_text(encoding="utf-8", errors="replace")
+    defs = {}
+    for m in re.finditer(r"`?<([\w-]+)>`?\s*=\s*`?([A-Za-z]:[/\\][^\s`'\"]+)`?", text):
+        defs[m.group(1)] = m.group(2).rstrip("/\\")
+    hits = []
+    for i, line in enumerate(text.splitlines(), 1):
+        expanded = line
+        for name, root in defs.items():
+            expanded = expanded.replace(f"<{name}>/", root + "/").replace(f"<{name}>\\", root + "\\")
+        for kind, frag in classify(expanded, known, (), scripts):
+            hits.append((i, "R1", kind, frag))         # канон читается КАЖДЫМ — ранг рабочего вывода
+    return hits
+
+
 def observe(scripts, role="PROTO", timeout=25):
     """НАБЛЮДЕНИЕ: запустить скрипты и разобрать то, что они РЕАЛЬНО печатают.
 
@@ -474,6 +503,27 @@ def selftest():
     ok &= good
     print(f"{'✅' if good else '🔴'} витрина .md, цитата в теле  долг {len(md_tpl)} (ждём 0), "
           f"цитат {scan_md.quoted} (ждём 2) — история не долг")
+    # ── КАНОН (#56): три образца — чистый · без определения · мёртвое определение.
+    scripts_dir = tmp / "scripts"
+    live_root = str(scripts_dir).replace("\\", "/")
+    canon_cases = [
+        ("канон: сокращение объявлено и живо — чисто", 0,
+         f"Зови так (`<s>` = `{live_root}`):\n    python <s>/read-messages.py --role X\n"),
+        ("канон: сокращение НЕ объявлено — красное (читатель получит мёртвую команду)", 1,
+         "Зови так:\n    python <s>/read-messages.py --role X\n"),
+        ("канон: определение ведёт в НЕСУЩЕСТВУЮЩЕЕ место — красное (протухший ключ)", 1,
+         f"Зови так (`<s>` = `{live_root}-нет-такого`):\n    python <s>/read-messages.py --role X\n"),
+    ]
+    for j, (title, want, body) in enumerate(canon_cases):
+        cpath = tmp / f"canon{j}.md"
+        cpath.write_text(body, encoding="utf-8")
+        chits = scan_canon(cpath, known, scripts_dir)
+        got = sum(1 for _, _, k, _ in chits if k.startswith("🔴"))
+        good = got == want
+        ok &= good
+        print(f"{'✅' if good else '🔴'} {title}  находок {got}, ожидалось {want}"
+              + ("" if good else "  ⇐ " + "; ".join(k for _, _, k, _ in chits)))
+
     print(f"\n{'✅ ГАРД ЧУВСТВИТЕЛЕН' if ok else '🔴 ГАРД СЛЕП ИЛИ ШУМИТ'} — краснеет на "
           f"{sum(1 for v in EXPECT.values() if v)} грязных образцах, молчит на чистом и на надгробии")
     print(f"   образцы оставлены: {tmp}")
@@ -485,13 +535,30 @@ def main():
     ap.add_argument("--selftest", action="store_true", help="доказать, что гард умеет краснеть")
     ap.add_argument("--scripts", default=str(LIVE_SCRIPTS))
     ap.add_argument("--artifacts", default=str(LIVE_ARTIFACTS))
+    ap.add_argument("--canon", default=r"C:\guts\.atlas\CLAUDE.md",
+                    help="канон контейнера — самая читаемая учащая поверхность (#56). "
+                         "Глобальный CLAUDE.md пользователя НЕ сканируется — граница вслух")
     ap.add_argument("--no-run", action="store_true",
                     help="не прогонять скрипты (без наблюдения шаблоны судить нечем)")
     ap.add_argument("--role", default="PROTO", help="роль для read-only прогона read-phoenix")
     a = ap.parse_args()
     if a.selftest:
         return selftest()
-    return run(Path(a.scripts), Path(a.artifacts), do_run=not a.no_run, role=a.role)
+    rc = run(Path(a.scripts), Path(a.artifacts), do_run=not a.no_run, role=a.role)
+    # ── КАНОН: отдельной секцией ПОСЛЕ основного прогона, со своим счётом.
+    canon = Path(a.canon)
+    known = {p.name for p in Path(a.scripts).glob("*.py")}
+    hits = scan_canon(canon, known, Path(a.scripts))
+    if hits is None:
+        print(f"⚠️ КАНОН НЕ НАЙДЕН: {canon} — НЕ ПРОВЕРЕН (это не «чисто»)")
+        return rc
+    red = [(n, k, f) for n, _, k, f in hits if k.startswith("🔴")]
+    for n, k, f in red:
+        print(f"── КАНОН {canon.name}:{n}\n   [R1] {k}\n      {f[:110]}")
+    print(f"{'🔴' if red else '✅'} канон {canon.name}: 🔴 {len(red)} "
+          f"(сокращения, объявленные в файле, раскрыты перед судом; "
+          f"глобальный CLAUDE.md пользователя НЕ сканирован)")
+    return 1 if red else rc
 
 
 if __name__ == "__main__":
