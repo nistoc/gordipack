@@ -26,7 +26,7 @@ guard-printed-forms.py — УЧАЩАЯ ПОВЕРХНОСТЬ ШИРЕ СЛЕП
   · комментарии в коде: их роль не читает как инструкцию (и AST их не отдаёт);
   · текст, приходящий из БД (ноты, слепки) — это зона `guard-role-standard.py`;
   · СМЫСЛ: строку «⛔ так больше не зовут» отличаю от инструкции только по приметам отзыва
-    рядом (REVOKED_NEAR). Это тот же приблизительный детектор, что и в гарде слепков.
+    В ТОЙ ЖЕ СТРОКЕ (REVOKED_MARK). Это приблизительный детектор, и его ЕДИНИЦА — строка.
 
 Живой субстрат ТОЛЬКО ЧИТАЕТСЯ. Ничего не правит и не предлагает автопочинку.
 
@@ -53,9 +53,20 @@ ABS_LITERAL = re.compile(r"^(?:[A-Za-z]:[\\/]|[\\/])")
 DB_FLAG = re.compile(r"--db\b")
 # «Пометка при --db»: строка сама говорит, что флаг необязателен/для не-дефолтной БД.
 DB_OK = re.compile(r"необязателен|не обязателен|только для|не-дефолтн|песочниц|sandbox", re.I)
-# Отзыв/надгробие рядом: строка учит НЕ звать так. Калибровка взята у гарда слепков —
+# Отзыв/надгробие: строка учит НЕ звать так. Калибровка взята у гарда слепков —
 # там первый прогон краснел на честном надгробии @TAXO, и это стоило доверия к гарду.
-REVOKED_NEAR = re.compile(
+#
+# ⛔ ЕДИНИЦА ГАШЕНИЯ — ТА ЖЕ СТРОКА, А НЕ ОКРЕСТНОСТЬ. Переучено 09.08 (карточка #151,
+# цена — живая находка): прежде примета искалась по −4/+2 строкам ИСХОДНИКА вокруг, и
+# надгробие, отменяющее СОСЕДНЮЮ, ДРУГУЮ вещь, гасило настоящую находку. guard-all:596
+# печатал мёртвую в bash команду, а строкой ниже стояло «…признак БОЛЬШЕ НЕ ГАСИТ» —
+# про совсем другой признак. Гард узнал строку и промолчал.
+# 🎯 Класс: у соседства не спрашивают, О ЧЁМ оно ⇒ чем лучше документирован код, тем
+#    слепее сторож — объяснения отмен пишутся ровно рядом с формами вызова.
+# ⚖️ Обратный перегиб тоже оплачен (карточка #152): для КОДА той же строки мало — выражение
+#    разнесено синтаксисом. Общий различитель: единица суждения — СТРОКА ПРОЗЫ или
+#    ЗАКОНЧЕННОЕ ВЫРАЖЕНИЕ кода. Здесь судится напечатанная ПРОЗА ⇒ единица — строка.
+REVOKED_MARK = re.compile(
     r"(⛔|⚠️|запрещ|НЕЛЬЗЯ|нельзя|не зови|отозван|снят|устарел|надгроб|больше не|"
     r"прежн|раньше|было:|вместо|F20|R15a)", re.I)
 
@@ -101,8 +112,11 @@ def materialize(path, name, scripts):
     return as_is, in_bash
 
 
-def classify(text, known, ctx, proven=(), scripts=None, observed=False):
+def classify(text, known, proven=(), scripts=None, observed=False):
     """Приметы в ОДНОЙ печатаемой строке. Возвращает список (вид, фрагмент).
+
+    Гашение отзывом смотрит ТОЛЬКО в эту же строку (см. REVOKED_MARK): окрестность
+    исходника сюда больше не передаётся — у неё не спросишь, о чём она.
 
     `proven` — имена переменных, ДОКАЗАННО вычисленных из `__file__` в этом же файле.
     Без них `python {s}\\read-messages.py` спасался только приметой отзыва рядом — то есть
@@ -117,14 +131,14 @@ def classify(text, known, ctx, proven=(), scripts=None, observed=False):
             # съел слэш и `scripts\read-messages.py` стал `scriptsead-messages.py`. Гард,
             # ищущий скрипт ПО ИМЕНИ, слеп ровно к тому дефекту, который ломает имя.
             # ⇒ прежде чем отбросить как «чужой скрипт», проверяем путь на диске.
-            if scripts is not None and not REVOKED_NEAR.search(ctx):
+            if scripts is not None and not REVOKED_MARK.search(text):
                 as_is, _ = materialize(path, m.group("name"), scripts)
                 if as_is is not None and not as_is.exists():
                     out.append(("🔴 E ПУТЬ НЕ СУЩЕСТВУЕТ — команда мертва как напечатана "
                                 "(имя, вероятно, СЛОМАНО escape'ом)", frag))
             continue                                   # чужой скрипт — не наша поверхность
-        if REVOKED_NEAR.search(ctx):
-            continue                                   # это надгробие форме, а не инструкция
+        if REVOKED_MARK.search(text):
+            continue                                   # надгробие ЭТОЙ строке, не соседней
         var = re.match(r"\{([\w.]+)[^}]*\}", path.strip())
         if COMPUTED.search(path) or (var and var.group(1).split(".")[0] in proven):
             pass                                       # ✅ путь берётся свойством — не разъедется
@@ -161,14 +175,14 @@ def classify(text, known, ctx, proven=(), scripts=None, observed=False):
                 out.append(("🔴 E НЕ ОТКРОЕТСЯ В BASH — `\\` съедается как escape "
                             "(нужен `.as_posix()`)", frag))
         tail = text[m.end():]
-        if DB_FLAG.search(tail) and not DB_OK.search(text) and not REVOKED_NEAR.search(text):
+        if DB_FLAG.search(tail) and not DB_OK.search(text) and not REVOKED_MARK.search(text):
             out.append(("🔴 C `--db` В ПЕЧАТАЕМОЙ СТРОКЕ (снят R15a — учит отозванному)", frag))
 
     # ── ПРИЗНАК F: КОМАНДА ЧУЖОГО ИНСТРУМЕНТА С ОБРАТНЫМИ СЛЭШАМИ ─────────────────────
     # ⚖️ Судим то же СВОЙСТВО, что и у своих вызовов («откроется ли у того, кто скопирует»),
     # а не принадлежность инструмента. Надгробия и контрпримеры не трогаем — они учат,
     # как НЕ надо, и «починить» их значило бы стереть предупреждение, оставив вид починки.
-    if not REVOKED_NEAR.search(ctx):
+    if not REVOKED_MARK.search(text):
         for m in OTHER_TOOL.finditer(text):
             out.append((f"🔴 F ЧУЖОЙ ИНСТРУМЕНТ (`{m.group('tool')}`) С `\\` — НЕ ОТКРОЕТСЯ "
                         f"В BASH, нужен прямой слэш",
@@ -225,7 +239,6 @@ def literals(src):
 
 def scan_py(path, known, scripts=None, observed=False):
     src = path.read_text(encoding="utf-8", errors="replace")
-    lines = src.splitlines()
     lits, err, proven = literals(src)
     if err:
         return [(0, "R1", "⚠️ НЕ РАЗОБРАН (SyntaxError) — файл НЕ проверен, "
@@ -237,8 +250,9 @@ def scan_py(path, known, scripts=None, observed=False):
         # открыть место, — не адрес, а вид адреса.
         for off, piece in enumerate(text.splitlines() or [text]):
             real = lineno + off
-            ctx = " ".join(lines[max(0, real - 4):real + 2]) + " " + piece
-            for kind, frag in classify(piece, known, ctx, proven, scripts, observed):
+            # Окрестность исходника в суждении НЕ участвует (#151): у неё не спросишь,
+            # о чём её надгробие. Судится ровно та строка, которую роль прочтёт.
+            for kind, frag in classify(piece, known, proven, scripts, observed):
                 hits.append((real, rank, kind, frag))
     return hits
 
@@ -271,8 +285,7 @@ def scan_md(path, known, templates=None, scripts=None):
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     hits, quoted = [], 0
     for i, line in enumerate(lines, 1):
-        ctx = " ".join(lines[max(0, i - 3):i + 1])
-        found = classify(line, known, ctx, (), scripts)
+        found = classify(line, known, (), scripts)
         if not found:
             continue
         if templates is not None and not any(t.search(line) for t in templates):
@@ -397,6 +410,17 @@ SAMPLES = {
                           '    print(f"зови: python {Path(__file__).resolve()} --role {role}")\n'),
     "tombstone.py": ('def f():\n    print("⛔ ОТОЗВАНО: python .mezosync/scripts/'
                      'read-messages.py --db X — так больше не зовут")\n'),
+    # ⭐ САМ СЛУЧАЙ КАРТОЧКИ #151: живая инструкция, а СТРОКОЙ НИЖЕ — надгробие про ДРУГОЕ.
+    # Прежний гард (гашение по −4/+2 строкам исходника) на этом молчал: guard-all:596
+    # печатал мёртвую команду, соседняя строка несла «…БОЛЬШЕ НЕ ГАСИТ» про другой признак,
+    # и находка гасла. Роль копировала команду из вывода сторожа — места наибольшего доверия.
+    "dirty_tomb_next_line.py": (
+        'def f():\n'
+        '    print("подтверди: python .mezosync/scripts/read-messages.py --ack X")\n'
+        '    print("⛔ упоминание имени признак БОЛЬШЕ НЕ ГАСИТ: цитата не разбор")\n'),
+    # ⚖️ ВСТРЕЧНЫЙ к нему: надгробие В ТОЙ ЖЕ строке, что и форма, гасит по-прежнему —
+    # tombstone.py выше. Без пары «соседняя не гасит · своя гасит» починка либо шумит
+    # на истории, либо слепнет на соседстве.
     "read-messages.py": "# существует, чтобы имя попало в известные\n",
     # ⭐ образцы под признак E (три оборота класса у @COORD, #2871)
     "dirty_broken_path.py": ('def f():\n    print("зови: python {S}scriptsread-messages.py '
@@ -413,6 +437,7 @@ SAMPLES = {
                             'и переживёт чат")\n'),           # ПРОЗА о пути, не команда
 }
 EXPECT = {"dirty_bare.py": 1, "dirty_rel_db.py": 2, "clean_computed.py": 0, "tombstone.py": 0,
+          "dirty_tomb_next_line.py": 1,          # #151: соседнее надгробие НЕ гасит
           "dirty_broken_path.py": 1, "dirty_backslash.py": 1,
           "dirty_other_tool.py": 1, "clean_other_tool.py": 0, "clean_prose_tool.py": 0}
 

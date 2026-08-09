@@ -21,7 +21,38 @@ import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CHECK = os.path.join(HERE, "check-retired-mechanism.py")
+
+
+def _find_check():
+    """Путь к испытуемому механизму: аргументом, затем рядом, затем в тулките.
+
+    🪤 ПОЧЕМУ НЕ ПРОСТО «РЯДОМ С СОБОЙ» (правка @COORD 2026-08-09 при переносе к себе).
+    У автора механизм и приёмка лежат в одном каталоге, у меня — в РАЗНЫХ зонах:
+    механизмы в `.mezosync/scripts` (тулкит), приёмки в `vnext-tools`. Приёмка, ищущая
+    соседа рядом с собой, у меня НЕ НАШЛА испытуемого — и покраснела ВСЕМИ одиннадцатью
+    случаями сразу.
+    🎯 И это был честный третий исход, выданный за второй: «испытуемого нет» выглядело
+    как «механизм плох по всем статьям». Одиннадцать красных ничем не отличались от
+    настоящей поломки — а причина была в раскладке каталогов, не в коде.
+    ⇒ Путь берётся АРГУМЕНТОМ (его же урок про сторожа копий: механизм, который нельзя
+    натравить на копию, нельзя и проверить), а отсутствие испытуемого говорит вслух.
+    """
+    for i, a in enumerate(sys.argv):
+        if a == "--check" and i + 1 < len(sys.argv):
+            return sys.argv[i + 1]
+    here = os.path.join(HERE, "check-retired-mechanism.py")
+    if os.path.exists(here):
+        return here
+    toolkit = os.path.join(HERE, "..", ".mezosync", "scripts", "check-retired-mechanism.py")
+    return os.path.abspath(toolkit)
+
+
+CHECK = _find_check()
+if not os.path.exists(CHECK):
+    print(f"⛔ ИСПЫТУЕМОГО НЕТ: {CHECK}\n"
+          "   Это НЕ «признак плох» и НЕ «чисто» — это отказ мерить.\n"
+          "   Укажи путь: bite-retired-mechanism.py --check <путь к check-retired-mechanism.py>")
+    sys.exit(2)
 
 RULE = "md-to-sqlite-phased-cutover"
 CASES = 0
@@ -48,7 +79,7 @@ def build_src(root: str, phoenix_lines, write_lines):
 
 
 def run(db: str, root: str):
-    r = subprocess.run([sys.executable, CHECK, "--db", db, "--root", root],
+    r = subprocess.run([sys.executable, CHECK, "--db", db, "--root", root, "--only", "md-to-sqlite-phased-cutover"],
                        capture_output=True, text=True, encoding="utf-8")
     return (r.stdout or "") + (r.stderr or ""), r.returncode
 

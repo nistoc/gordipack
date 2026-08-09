@@ -61,6 +61,34 @@ RETIRED = [
         # где роль читает это как ИНСТРУКЦИЮ (не история кода, а то, что исполняют)
         "источники": ["read-phoenix.py", "write-message.py"],
     },
+    # ── ВТОРАЯ ЗАПИСЬ, внесена @COORD 2026-08-09 по предложению @PROTO (записка #3470 ②).
+    # 🎯 И она ДРУГОГО ВИДА, что важнее самой записи: снят не МЕХАНИЗМ (у него есть имя,
+    # которое можно найти подстрокой), а ПРЕДПИСАНИЕ — «push только по слову владельца».
+    # У предписания имени нет: оно живёт разными словами в разных файлах, и ловится
+    # не именем, а ФОРМОЙ. Поэтому здесь «формы», а не «механизм».
+    # ⚠️ Формы сужены ЗАМЕРОМ, а не сочинены: первая редакция (push + любое «нет» в пределах
+    # 60 знаков) дала 4 попадания, из которых ОДНО было прозой о прошлом. Признак, кричащий
+    # на прозе, перестают читать — мой урок ⑧ того же дня (25 ложных из 26).
+    {
+        "предписание": "запрет отправлять код без отдельного слова владельца",
+        "что это": "push разрешён всем ролям с 2026-08-08 15:56 UTC («пушить можно»)",
+        "правило": "no-push-without-owner",
+        "версия_сверки": 2,
+        "снято": "2026-08-08 15:56 UTC, слово владельца",
+        "формы": [
+            r"push\s*[-—:]*\s*(?:только|нет\b|НЕТ\b)",
+            r"push[^\n]{0,25}(?:запрещ|нельзя|не\s+разреш)",
+            r"(?:только|лишь)\s+по\s+слову[^\n]{0,30}push",
+            r"push[^\n]{0,30}по\s+(?:живому\s+)?слову",
+            r"лечит\s+только\s+слово\s+владельца[^\n]{0,20}push",
+        ],
+        # ⛔ Разрушающее (force push, drop, reset --hard) НЕ снято — rule8-destructive живо.
+        # Строки про НЕГО обязаны выживать, иначе признак сотрёт действующую защиту.
+        "не_трогать": r"force|--force|reset\s+--hard|drop\b|удал|destructive|разруш",
+        "источники": ["read-phoenix.py", "write-message.py", "unsaved.py",
+                      "backup-db.py", "export-channels.py", "guard-scripts-drift.py",
+                      "guard-all.py", "read-messages.py", "save-phoenix.py"],
+    },
 ]
 
 # пометка снятия. Словарь сведён с формами, которыми контур ПОЛЬЗУЕТСЯ на деле (замер по
@@ -97,6 +125,15 @@ def units(text: str):
         yield start, "\n".join(buf)
 
 
+def _title(item: dict) -> str:
+    """Имя предмета для вывода: у механизма оно есть, у предписания — нет.
+
+    Обе записи обязаны читаться одинаково внятно: роль, увидевшая отчёт, не должна
+    гадать, флаг перед ней или отменённое правило.
+    """
+    return item.get("механизм") or item.get("предписание", "?")
+
+
 def scan(root: Path, item: dict):
     """Строки источников, называющие механизм. Возвращает (учат, помечены).
 
@@ -106,15 +143,33 @@ def scan(root: Path, item: dict):
     ⇒ Приёмка на собственных образцах не доказывает ничего про чужой материал.
     """
     teaches, marked, missing = [], [], []
-    needle = re.compile(re.escape(item["механизм"]) + r"(?![\w-])")
+    # ── ДВА ВИДА ПРЕДМЕТА, и различие не косметическое:
+    #    · МЕХАНИЗМ имеет ИМЯ ⇒ ищется точным совпадением (и `--md` не ловит `--md-dir`);
+    #    · ПРЕДПИСАНИЕ имени не имеет ⇒ ищется набором ФОРМ, и потому обязано нести
+    #      «не_трогать»: снятие запрета на отправку НЕ снимает запрет на разрушающее,
+    #      а формы у них соседние. Без этого признак стёр бы действующую защиту,
+    #      приняв её за пережиток снятого.
+    if "механизм" in item:
+        needle = re.compile(re.escape(item["механизм"]) + r"(?![\w-])")
+    else:
+        needle = re.compile("|".join(item["формы"]), re.IGNORECASE)
+    keep = re.compile(item["не_трогать"], re.IGNORECASE) if item.get("не_трогать") else None
     for name in item["источники"]:
         p = root / name
         if not p.exists():
             missing.append(name)
             continue
         for n, unit in units(p.read_text(encoding="utf-8")):
-            if not needle.search(unit):
+            hit = needle.search(unit)
+            if not hit:
                 continue
+            # Действующую защиту не трогаем: смотрим ТУ ЖЕ строку, где сработала форма,
+            # а не всю единицу — иначе длинное выражение со словом «force» где-то внизу
+            # прикрыло бы настоящее предписание выше.
+            if keep:
+                line_of_hit = unit[:hit.end()].splitlines()[-1]
+                if keep.search(line_of_hit):
+                    continue
             head = unit.strip().splitlines()[0].strip()
             (marked if MARK.search(unit) else teaches).append((name, n, head))
     return teaches, marked, missing
@@ -125,6 +180,16 @@ def main() -> int:
     ap.add_argument("--db", default=r"C:\guts\.atlas\.mezosync\mezosync.db")
     ap.add_argument("--root", default=r"C:\guts\.atlas\.mezosync\scripts",
                     help="каталог источников-инструкций")
+    # ── ⑨ ПРОВЕРИТЬ ОДНУ ЗАПИСЬ ПЕРЕЧНЯ (ключ правила). Добавлено @COORD 2026-08-09.
+    # 🪤 ПОВОД — Я СЛОМАЛ ЧУЖУЮ ПРИЁМКУ, ДОБАВИВ ВТОРУЮ ЗАПИСЬ. Приёмка @PROTO строит базу
+    # с ОДНИМ правилом (своим); вторая запись не нашла своего правила ⇒ перечень объявил себя
+    # устаревшим ⇒ КОД 2 НА ВСЕХ ОДИННАДЦАТИ случаях, включая заведомо зелёные.
+    # 🎯 И краснота эта не говорила НИЧЕГО о предмете: одиннадцать «не принято» выглядели
+    # приговором признаку, а означали «мерить отказываюсь». Отказ мерить, выданный за приговор,
+    # — тот же класс, что мы ловим весь день, только пришедший с моей стороны.
+    # ⇒ Приёмка ОДНОЙ записи не должна зависеть от того, сколько записей завели рядом.
+    ap.add_argument("--only", default=None,
+                    help="сверять только запись с этим ключом правила (для приёмок)")
     a = ap.parse_args()
 
     db, root = Path(a.db), Path(a.root)
@@ -138,28 +203,32 @@ def main() -> int:
         return 2
 
     stale, red, green = [], [], []
-    for item in RETIRED:
+    scope = [i for i in RETIRED if i["правило"] == a.only] if a.only else RETIRED
+    if a.only and not scope:
+        print(f"⛔ в перечне нет записи для правила «{a.only}» — сверять нечего. Это НЕ «чисто»")
+        return 2
+    for item in scope:
         row = conn.execute("SELECT version FROM rules WHERE rule_key=?",
                            (item["правило"],)).fetchone()
         # ── ОТКАЗ ②: предмета больше нет. Источники НЕ называем — они не виноваты.
         if row is None:
-            stale.append(f"{item['механизм']}: правило «{item['правило']}» ИСЧЕЗЛО из свода")
+            stale.append(f"{_title(item)}: правило «{item['правило']}» ИСЧЕЗЛО из свода")
             continue
         if row[0] != item["версия_сверки"]:
-            stale.append(f"{item['механизм']}: правило «{item['правило']}» переписано "
+            stale.append(f"{_title(item)}: правило «{item['правило']}» переписано "
                          f"(сверка против v{item['версия_сверки']}, в базе v{row[0]})")
             continue
         # ── ОТКАЗ ①: стороны разошлись. Называем ИСТОЧНИК и строку.
         teaches, marked, missing = scan(root, item)
         for name in missing:
-            stale.append(f"{item['механизм']}: источник {name} не найден в {root}")
+            stale.append(f"{_title(item)}: источник {name} не найден в {root}")
         if teaches:
             red.append((item, teaches, marked))
         else:
             green.append((item, marked))
 
     for item, teaches, marked in red:
-        print(f"🔴 УЧАТ СНЯТОМУ: {item['механизм']} — {item['что это']}")
+        print(f"🔴 УЧАТ СНЯТОМУ: {_title(item)} — {item['что это']}")
         print(f"   снято {item['снято']}, правило «{item['правило']}»")
         for name, n, line in teaches:
             print(f"   · {name}:{n}  {line[:96]}")
@@ -167,7 +236,7 @@ def main() -> int:
               f" — строке прозы или законченном выражении кода"
               f" ({len(marked)} уже помечены и зачтены)")
     for item, marked in green:
-        print(f"✅ {item['механизм']}: предписаний нет · помеченных упоминаний {len(marked)}"
+        print(f"✅ {_title(item)}: предписаний нет · помеченных упоминаний {len(marked)}"
               f" (история разрешена)")
     for s in stale:
         print(f"⛔ ПЕРЕЧЕНЬ УСТАРЕЛ — {s}")

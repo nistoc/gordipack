@@ -14,7 +14,31 @@ import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CHECK = os.path.join(HERE, "check-copy-asymmetry.py")
+
+
+def _find_check():
+    """Испытуемый: --check, затем рядом, затем в тулките. Разбор — в bite-retired-mechanism.py.
+
+    Коротко: у автора механизм и приёмка в одном каталоге, у меня в разных зонах, и приёмка,
+    ищущая соседа рядом с собой, краснеет ВСЕМИ случаями — «испытуемого нет» неотличимо
+    от «механизм плох». Отказ мерить обязан звучать отказом.
+    """
+    for i, a in enumerate(sys.argv):
+        if a == "--check" and i + 1 < len(sys.argv):
+            return sys.argv[i + 1]
+    here = os.path.join(HERE, "check-copy-asymmetry.py")
+    if os.path.exists(here):
+        return here
+    return os.path.abspath(os.path.join(HERE, "..", ".mezosync", "scripts",
+                                        "check-copy-asymmetry.py"))
+
+
+CHECK = _find_check()
+if not os.path.exists(CHECK):
+    print(f"⛔ ИСПЫТУЕМОГО НЕТ: {CHECK}\n"
+          "   Это НЕ «признак плох» и НЕ «чисто» — это отказ мерить.\n"
+          "   Укажи путь: bite-copy-asymmetry.py --check <путь к check-copy-asymmetry.py>")
+    sys.exit(2)
 
 CASES = 0
 DIFFERENTIATING = 0
