@@ -33,16 +33,52 @@ import mezo_paths  # пути машины выводятся, не впечат
 LIVE = mezo_paths.live_scripts()
 TEMPLATE = Path(__file__).resolve().parents[2] / "scripts"
 
-# Механизмы, которых в шаблоне не было ВОВСЕ (замер 08.08): контур, собранный из шаблона,
-# не получал ни одного из них и выглядел при этом исправным.
-NEW = ["machine_layer.py", "urgency.py", "schema_journal.py", "sync_backoff.py",
-       "role-rights.py"]
-# Общие скрипты, разошедшиеся молча.
-SHARED = ["write-message.py", "read-messages.py", "set-rule.py", "save-phoenix.py",
-          "read-phoenix.py", "backlog.py", "guard-all.py"]
+# ⚰️ ЗДЕСЬ СТОЯЛИ ДВА РУКОПИСНЫХ СПИСКА — NEW и SHARED. Сняты 10.08 01:28 UTC (#145+).
+# 🎯 ПОВОД НАЗВАЛ @COORD В ТОТ ЖЕ ДЕНЬ, И ЭТО ЛУЧШАЯ ФОРМУЛИРОВКА КЛАССА: механизм был
+# взят в тулкит, врезан и проверен — и ОСТАЛСЯ НЕВИДИМ ДЛЯ РАСКАТКИ, потому что никто
+# не дописал имя в список. Зависимости код считал сам (with_deps ниже), а КОРНИ переноса
+# знала только рука. Список, писанный рукой, устаревает молча и выглядит полным.
+# ⇒ Корни считаются ЗАМЕРОМ по живому контуру, а не перечисляются:
+#     · SHARED — пересечение имён живого каталога и шаблона (что уже есть у потребителя);
+#     · NEW    — живые файлы, ДОСТИЖИМЫЕ из точек входа контура (их зовут или импортируют),
+#                которых в шаблоне ещё нет. Достижимость и есть «механизм нужен роли».
+# ⚖️ ГРАНИЦА, НАЗВАННАЯ ВСЛУХ: замер видит вызовы ПО ИМЕНИ ФАЙЛА и импорты. Механизм,
+# который зовут вычисленным именем, он не увидит — такой случай обязан быть назван руками,
+# и лучше пусть это будет исключение с подписью, чем список без подписи.
+ENTRY = ["guard-all.py", "read-messages.py", "write-message.py", "read-phoenix.py",
+         "save-phoenix.py", "backlog.py", "set-rule.py"]
+CALLS = re.compile(r"[\"']([a-z0-9_.-]+\.py)[\"']", re.I)
 
-# Путь контейнера в примерах вызова → общий вид. В РАБОЧЕМ выводе путь берётся из
-# Path(__file__) и приведения не требует: правится только текст для человека.
+
+def reachable(live: Path) -> set:
+    """Файлы живого контура, достижимые из точек входа: по вызовам и импортам."""
+    seen, queue = set(), [n for n in ENTRY if (live / n).exists()]
+    while queue:
+        n = queue.pop()
+        if n in seen or not (live / n).exists():
+            continue
+        seen.add(n)
+        body = (live / n).read_text(encoding="utf-8", errors="replace")
+        for cand in set(CALLS.findall(body)):
+            if (live / cand).exists():
+                queue.append(cand)
+        for mod in set(IMPORT.findall(body)):
+            if (live / f"{mod}.py").exists():
+                queue.append(f"{mod}.py")
+    return seen
+
+
+def roots(live: Path, template: Path):
+    """(NEW, SHARED) — замером, а не перечислением."""
+    if not live.exists():
+        return [], []
+    live_names = {p.name for p in live.glob("*.py")}
+    tpl_names = {p.name for p in template.glob("*.py")} if template.exists() else set()
+    shared = sorted(live_names & tpl_names)
+    new = sorted(n for n in reachable(live) if n not in tpl_names)
+    return new, shared
+
+
 CONTAINER = re.compile(r"C:[\\/]guts[\\/]\.atlas[\\/]\.mezosync[\\/]scripts")
 
 
@@ -96,6 +132,9 @@ def main() -> int:
         return 0
 
     missing, differ, same = [], [], []
+    NEW, SHARED = roots(LIVE, TEMPLATE)
+    print(f"📏 корни ЗАМЕРОМ: новых {len(NEW)} · общих {len(SHARED)}"
+          f" (списка от руки больше нет — #145+)")
     plan = with_deps(NEW + SHARED, LIVE)
     # ⚡ ШАГИ СХЕМЫ (migrations/) — тоже механизм, а не архив. Замер 2026-08-09: в шаблоне
     # каталога не было ВОВСЕ при семи шагах в живом. Собранный контур это переживал (конечная
