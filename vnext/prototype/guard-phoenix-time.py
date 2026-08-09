@@ -150,7 +150,10 @@ def run_phoenix(db, role=None):
     return red, yellow, len(rows)
 
 
-CORRECTS = re.compile(r"поправк|исправлен|опечатк|читайте?\s+минус|минус\s+два|correction", re.I)
+# ⚡ ПРИМЕТЫ БЕРУТСЯ ИЗ ОБЩЕГО РАЗЛИЧИТЕЛЯ (mention.py, #57), а не пишутся здесь заново:
+# ровно этот словарь я писал пятый раз за двое суток и каждый раз ошибался в одну из
+# двух сторон. Тема (ABOUT_TIME) остаётся СВОЕЙ — приметы общие, предмет у каждого свой.
+import mention  # noqa: E402
 # 🎯 ПОПРАВКА ОБЯЗАНА БЫТЬ ПРО ЭТО. Замер 09.08 21:12 UTC: без требования темы гасились
 # 186 записок при 10 реально дефектных, и одна поправка «про другое» тушила чужие по одной
 # лишь ссылке — тот же класс #151 (гашение по соседству), только через номера.
@@ -179,7 +182,8 @@ def corrected_ids(con):
             if not refs:
                 continue
             # слово поправки (или тег) И тема ВРЕМЕНИ — обязательно ОБА, в одной строке
-            if (tagged or CORRECTS.search(line)) and ABOUT_TIME.search(line):
+            if ((tagged or mention.is_mention(line, kinds=("correction",)))
+                    and ABOUT_TIME.search(line)):
                 for r in refs:
                     n = int(r)
                     if n < mid:                     # поправка ПОСЛЕ ошибки, не до
