@@ -21,6 +21,8 @@ import argparse
 import os
 import subprocess
 import sys
+import tempfile
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # Приметы того, что приёмка не сломана, а не смогла начаться. Ищем в выводе.
@@ -83,6 +85,26 @@ def main() -> int:
             tail = [l for l in out.strip().splitlines() if l.strip()][-6:]
             for line in tail:
                 print(f"        {line}")
+        # 🪤 ПОЛНЫЙ ВЫВОД УПАВШЕЙ ПРИЁМКИ СОХРАНЯЕТСЯ, А НЕ ОБРЕЗАЕТСЯ ДО ХВОСТА.
+        # Повод — карточка #150, замер 2026-08-09: общий набор даёт редкий отказ (1 из 7
+        # прогонов) на НЕИЗМЕННОМ коде, а в одиночку тот же укус зелёный 8 из 8.
+        # Хвоста в шесть строк хватает, чтобы УВИДЕТЬ отказ, и не хватает, чтобы РАЗОБРАТЬ:
+        # какое из свойств не выполнилось, видно только в теле вывода.
+        # ⇒ Редкое событие нельзя ловить руками: к моменту, когда оно случится, окно
+        #   вывода уже уедет. Механизм обязан его ЗАПОМНИТЬ — иначе разбор стоит ожидания.
+        if mark in ("🔴", "⚠️"):
+            try:
+                fail_dir = os.path.join(tempfile.gettempdir(), "bite-all-failures")
+                os.makedirs(fail_dir, exist_ok=True)
+                stamp = str(int(time.time()))
+                path = os.path.join(fail_dir, f"{name}.{stamp}.txt")
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(out)
+                print(f"        📄 полный вывод сохранён: {path}")
+            except OSError as e:
+                # ⚖️ Отказ сохранения НЕ роняет прогон и НЕ молчит: молчащая страховка
+                #    неотличима от сработавшей.
+                print(f"        ⚠️ вывод сохранить не удалось: {e}")
         green += mark == "✅"
         red += mark == "🔴"
         stuck += mark == "⚠️"
