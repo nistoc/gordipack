@@ -18,9 +18,9 @@ read-phoenix.py — предъявить роли её слепок ИЗ БД. �
 Секция launcher печатается последней, справочно.
 
 ЗАПУСК (это и есть содержимое launcher-строки владельца):
-    python C:/guts/.atlas/.mezosync/scripts/read-phoenix.py --role CORE
-    python C:/guts/.atlas/.mezosync/scripts/read-phoenix.py --role CORE --section state    # одна секция
-    python C:/guts/.atlas/.mezosync/scripts/read-phoenix.py --list                         # кто вообще есть
+    python <КОНТУР>/.mezosync/scripts/read-phoenix.py --role CORE
+    python <КОНТУР>/.mezosync/scripts/read-phoenix.py --role CORE --section state    # одна секция
+    python <КОНТУР>/.mezosync/scripts/read-phoenix.py --list                         # кто вообще есть
 """
 
 import argparse
@@ -28,6 +28,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
+import mezo_paths                     # #145: пути выводятся, не впечатаны
 from mezo_paths import resolve_db   # R15a: путь к БД — от расположения скрипта, не от CWD
 
 # ⚠️ Обёрнут по норме @TAXO (07.08 13:18 UTC): правка общего инструмента не атомарна.
@@ -111,9 +112,14 @@ CANON = r"""
 ⛔ md ЗАМОРОЖЕНЫ. sync.*.md и phoenix.*.md несут надгробие: НЕ читать, НЕ писать, НЕ править.
    Человекочитаемый ВИД — generated/sync.<роль>.md и sync.rules.md (генерируются из БД).
    История ленты — таблица messages_history + VIEW messages_all (сквозной поиск).
-🚨 АВАРИЙНЫЙ ВЫХОД: сломается БД — пиши `write-message.py … --md` и ГРОМКО зови COORD.
-   Ф4 обратима БЕЗ правки кода. Ровно этого не хватило 2026-07-12, когда Ф4 сгорела:
-   STUD был МОЛЧА отрезан от SQLite, DWERR пропущен. Старый --no-md принимается как no-op.
+🚨 СЛОМАЛАСЬ БАЗА — НЕ ИЗОБРЕТАЙ КАНАЛ МОЛЧА: скажи владельцу ЖИВЫМ СЛОВОМ и остановись.
+   ⚰️ Здесь стояло «пиши `--md`». Аварийный выход к файлам СНЯТ владельцем 2026-08-08
+   16:53 UTC вместе с завершением перехода (правило md-to-sqlite-phased-cutover v5).
+   Строка пережила своё решение и учила роль обходному ходу, которого больше нет, —
+   при КАЖДОМ пробуждении, то есть в самом читаемом месте контура.
+   ⚠️ Почему остановиться, а не «что-нибудь придумать»: 2026-07-12 роль STUD была МОЛЧА
+   отрезана от базы, ошибка записи прошла незамеченной, и работа шла «куда-нибудь».
+   Снятие страховки было сознательным решением владельца, а не недосмотром.
 ⏱ ВРЕМЯ — UTC ВЕЗДЕ, суффикс обязателен: «2026-07-16 17:48 UTC». Хуки дают ЛОКАЛЬНОЕ
    с явным offset ⇒ конвертируй сам: UTC = локальное − offset. Offset БРАТЬ ИЗ ХУКА.
 ⚠️ При РАСХОЖДЕНИИ файла и БД — ВЕРЬ БД. sync.rules.md генерируется из неё; 2026-07-16
@@ -223,7 +229,10 @@ def main():
             #    (step04_opssre — зона @opssre), и его падение не имеет права уронить
             #    чтение слепка. Отказ ГОВОРИТ строкой — молчащий сборщик неотличим
             #    от сборщика, которому нечего сказать (та же норма, что у §4¾).
-            _disk = "C:/guts/.atlas/atlas.archs/step04_opssre/tools/disk_layer.py"
+            # 🪤 #145: здесь стоял АБСОЛЮТНЫЙ путь машины разработчика шаблона. Отказ
+            # тут громкий (и это верно), но путь чужой машины УЧИТ несуществующему месту.
+            _disk = str(mezo_paths.container_root(__file__)
+                        / "atlas.archs" / "step04_opssre" / "tools" / "disk_layer.py")
             try:
                 import subprocess as _sp
                 _r = _sp.run([sys.executable, _disk], capture_output=True,

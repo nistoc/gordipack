@@ -96,7 +96,12 @@ def main() -> int:
 
     counts_before = {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
                      for t in ("messages", "rules", "phoenix")}
+    # ⚠️ BEGIN перед правкой схемы — иначе DDL уходит в автокоммит и «та же транзакция»
+    # становится словами (находка @PROTO, записка #3474). ⚖️ executescript сам делает commit
+    # перед выполнением, поэтому BEGIN стоит ПОСЛЕ него и охватывает запись в журнал вместе
+    # с проверкой результата: это лучшее, что даёт executescript, и предел назван вслух.
     conn.executescript(DDL)
+    conn.execute("BEGIN")
     fp = record_step(conn, VERSION, "role_rights: права роли полями (что · кто · когда · "
                                     "разовое/стоячее · где сказано · область)")
     conn.commit()

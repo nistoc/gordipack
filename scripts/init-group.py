@@ -7,6 +7,8 @@ init-group.py — Создаёт новую группу агентов (mezosyn
 """
 
 import argparse
+import hashlib
+import re
 import sqlite3
 import sys
 from pathlib import Path
@@ -77,18 +79,207 @@ def main():
         else:
             print(f"  ⚠️  Доменный пресет '{args.domain}' не найден, пропускаю")
 
-    # 5. Курсоры для ролей
-    for role in args.roles:
+    # 5. Курсоры для ролей — ИМЯ РОЛИ В ВЕРХНЕМ РЕГИСТРЕ.
+    # 🪤 НАЙДЕНО ЗАПУСКОМ СВЕЖЕГО КОНТУРА 10.08 01:09 UTC (#145): сборка заводила курсор
+    # «coord», а читалка регистрозависима и отвечала «роль COORD не в реестре (есть:
+    # coord, proto)». То есть контур из шаблона рождался СЛОМАННЫМ: первая же команда
+    # первой роли падала, и падала с подсказкой «заведи явно --register» — то есть звала
+    # завести ВТОРУЮ роль-двойника поверх существующей.
+    # ⚖️ Класс тот же, что у нас с токенами ролей: одно имя, два регистра, две правды.
+    roles = [r.upper() for r in args.roles]
+    for role in roles:
         conn.execute(
             "INSERT OR IGNORE INTO read_cursors (reader_role, last_read_id) VALUES (?, 0)",
             (role,)
         )
-    print(f"  ✅ Курсоры: {', '.join(args.roles)}")
+    print(f"  ✅ Курсоры: {', '.join(roles)}")
+
+    # 6. ЖУРНАЛ ШАГОВ — контур обязан знать СВОЮ версию (#145, замер 10.08 01:07 UTC).
+    # 🪤 Свежесобранный контур отвечал `schema_version → (None, 0, 0)`: сосуды на месте,
+    # а истории нет. Версия у нас ВЫЧИСЛЯЕТСЯ из журнала (шаг 006, ровно потому, что
+    # хранимый номер врал две версии подряд) — и сборка молча оставляла её пустой.
+    # ⇒ Контур, не знающий своей версии, нечем ни проверить, ни обновить: шаг схемы не
+    # знает, накатывать ли ему себя. Отпечаток берётся от ФАЙЛА схемы, а не пишется рукой.
+    # 🪤 ПЕРВАЯ РЕДАКЦИЯ ПИСАЛА В КОЛОНКУ `step`, КОТОРОЙ НЕТ (колонка зовётся `version`).
+    # INSERT прошёл, надпись «Журнал шагов ✅» напечаталась — а версия осталась пустой,
+    # и контур по-прежнему не знал себя. Имена колонок я УГАДАЛ вместо того, чтобы
+    # спросить схему: ровно тот класс, что мы лечим у чисел, только про имена.
+    # 🪤 ВТОРАЯ ОШИБКА ЗДЕСЬ ЖЕ: я считал отпечаток от ТЕКСТА ФАЙЛА схемы, а сторож
+    # журнала считает его от СТРУКТУРЫ БАЗЫ. Свежесобранный контур немедленно краснел
+    # «схему меняли мимо журнала» — сторож был прав, врал мой отпечаток.
+    # ⇒ Беру ГОТОВУЮ функцию журнала, а не пишу вторую: две меры одного — две правды,
+    # и расходятся они молча (ровно то, чем занята вся эта карточка).
+    sys.path.insert(0, str(SCRIPT_DIR))
+    from schema_journal import fingerprint as _fp
+    fp = _fp(conn)
+    # версия берётся ИЗ ИМЕНИ ФАЙЛА схемы (mezosync_v3.sql → v3), а не пишется рядом;
+    # VIEW schema_version ищет вехи по образцу 'v[0-9]*' — форма обязана совпасть
+    milestone = "v" + "".join(ch for ch in SCHEMA_FILE.stem.split("_v")[-1] if ch.isdigit())
+    conn.execute("INSERT OR IGNORE INTO schema_migrations (version, applied_at, note,"
+                 " fingerprint) VALUES (?, datetime('now'), ?, ?)",
+                 (milestone, f"сборка из шаблона gordipack ({SCHEMA_FILE.name})", fp))
+    got = conn.execute("SELECT version, steps_total FROM schema_version").fetchone()
+    if not got or not got[0]:
+        print("  ⛔ ЖУРНАЛ НЕ ПРИНЯЛ ВЕХУ: контур не знает своей версии — это НЕ «готово»")
+        sys.exit(2)
+    print(f"  ✅ Журнал шагов: веха {got[0]} · отпечаток {fp} (спрошено У БАЗЫ, не по факту вставки)")
 
     conn.commit()
     conn.close()
+
+    # 7. ИНСТРУМЕНТЫ — БЕЗ НИХ КОНТУР НЕ КОНТУР, А ФАЙЛ БАЗЫ (#145).
+    # 🪤 До 10.08 сборка клала ОДИН mezosync.db и печатала «группа готова». Роль в таком
+    # контуре не могла вызвать НИЧЕГО: ни прочесть ленту, ни сохранить память. Приёмки
+    # шаблона этого не видели, потому что гоняли скрипты ИЗ ШАБЛОНА по свежей базе — то
+    # есть проверяли не то, что получает потребитель. Третий оборот класса «испытываем
+    # не то, что чиним» за двое суток, и самый дорогой: он про ПЕРВЫЙ ЧАС чужой команды.
+    tools_dir = mezosync_dir / "scripts"
+    tools_dir.mkdir(exist_ok=True)
+    copied = 0
+    for src in sorted(SCRIPT_DIR.glob("*.py")):
+        if src.name == "init-group.py":       # сборщик живёт в шаблоне, а не в контуре
+            continue
+        (tools_dir / src.name).write_bytes(src.read_bytes())
+        copied += 1
+    migr_src = SCRIPT_DIR / "migrations"
+    if migr_src.is_dir():
+        (tools_dir / "migrations").mkdir(exist_ok=True)
+        for m in sorted(migr_src.glob("*.py")):
+            (tools_dir / "migrations" / m.name).write_bytes(m.read_bytes())
+
+    # 7б. ЗВЕНЬЯ ИЗ vnext/prototype, КОТОРЫЕ СКРИПТЫ ЗОВУТ ПО ИМЕНИ — СПИСОК БЕРЁТСЯ
+    # ЗАМЕРОМ ПО КОДУ, А НЕ ПИШЕТСЯ РУКОЙ. Рукописный список устаревает молча: механизм
+    # добавят, имя дописать забудут — и он останется невидим для сборки, выглядя готовым
+    # (этим контур уже платил, находка @COORD 10.08).
+    # 🪤 Найдено запуском свежего контура: write-message честно печатал «проверка ссылок
+    # НЕ ВЫПОЛНЕНА» — механизм деградировал ГРОМКО и тем спас; кладём звено, чтобы
+    # деградации не было вовсе.
+    # ⚡ ЕДИНИЦА ПЕРЕНОСА — ЗАМЫКАНИЕ, А НЕ ФАЙЛ. Звено тянет то, что зовёт и импортирует;
+    # иначе потребитель получает половину связки. 🪤 Найдено запуском: звено проверки меток
+    # приехало и упало `ModuleNotFoundError: mention` — его модуль-различитель не назван
+    # ни в одном скрипте, поэтому в список замером не попал. Список, замкнутый наполовину,
+    # хуже пустого: он выглядит собранным.
+    proto_dir = REPO_ROOT / "vnext" / "prototype"
+    linked = 0
+    if proto_dir.is_dir():
+        want = set()
+        for s in SCRIPT_DIR.glob("*.py"):
+            want |= set(re.findall(r'"([a-z0-9_.-]+\.py)"',
+                                   s.read_text(encoding="utf-8", errors="replace")))
+        seen = set()
+        while want:
+            name = want.pop()
+            if name in seen:
+                continue
+            seen.add(name)
+            src = proto_dir / name
+            if not src.exists():
+                continue
+            if not (tools_dir / name).exists():
+                (tools_dir / name).write_bytes(src.read_bytes())
+                linked += 1
+            body = src.read_text(encoding="utf-8", errors="replace")
+            want |= set(re.findall(r'"([a-z0-9_.-]+\.py)"', body))
+            want |= {m + ".py" for m in re.findall(r"^\s*import\s+([a-z_][a-z0-9_]*)",
+                                                   body, re.M)}
+    print(f"  ✅ Инструменты: {copied} скриптов + {linked} звеньев (замером) → {tools_dir}")
+
+    # 7в. ЗЕРКАЛО ПРАВИЛ — собирается СРАЗУ, а не при первой правке (#145).
+    # 🪤 Свежий контур краснел «правил в базе 35, а файла НЕТ»: механизм пересборки есть
+    # (#108/#110), но у нового контура ему нечего было пересобирать — первый читатель
+    # видел красное там, где ничего не сломано. Красное на пустом месте учит пролистывать.
+    import subprocess as _sp
+    exporter = tools_dir / "export-rules.py"
+    if exporter.exists():
+        gen = mezosync_dir / "generated"
+        gen.mkdir(exist_ok=True)
+        r = _sp.run([sys.executable, str(exporter), "--db", str(db_path),
+                     "--out", str(gen / "sync.rules.md"), "--apply"],
+                    capture_output=True, text=True, timeout=60)
+        made = (gen / "sync.rules.md").exists()
+        print(f"  {'✅' if made else '⛔'} Зеркало правил: "
+              + (str(gen / 'sync.rules.md') if made
+                 else f"НЕ СОБРАНО — {(r.stderr or r.stdout).strip().splitlines()[-1][:80]}"))
+
+    # 7г. ЗАГОТОВКА ПАМЯТИ РОЛИ — контур рождается С ПАМЯТЬЮ, а не пустым (#145).
+    # 🪤 Свежий контур краснел трижды об одном: «в phoenix нет ничего», «курсор без
+    # слепка — воскресший мертвец/фантом». Сторожа правы: курсор без памяти в ЖИВОМ
+    # контуре и правда призрак. Но у НОВОРОЖДЁННОГО контура это норма — и первый экран
+    # первой роли встречал её тремя красными, ни одно из которых она не создавала.
+    # ⇒ Кладём заготовку из templates/: роль получает launcher и §identity, сторожа молчат
+    # по делу, а не по слепоте. Текст заготовки — из ФАЙЛА шаблона, не сочиняется здесь.
+    tpl_dir = REPO_ROOT / "templates"
+    seeded = 0
+    if tpl_dir.is_dir():
+        conn2 = sqlite3.connect(str(db_path))
+        cols = [c[1] for c in conn2.execute("PRAGMA table_info(phoenix)")]
+        for role in roles:
+            tpl = tpl_dir / ("coordinator.md" if role == "COORD" else "repo-dev.md")
+            if not tpl.exists():
+                continue
+            head = [
+                f"# {role} — ЗАГОТОВКА, положена сборкой из шаблона",
+                "",
+                "⚠️ Это НЕ память роли, а её ПУСТАЯ ФОРМА: роль обязана заменить её",
+                "собственным словом при первом же сохранении. Пока текст ниже — общий",
+                "шаблон роли, а не то, что знает именно эта роль в этом контуре.",
+                "",
+            ]
+            body = "\n".join(head) + tpl.read_text(encoding="utf-8")[:4000]
+            row = {"role": role, "section": "identity", "body": body}
+            use = [c for c in cols if c in row]
+            conn2.execute(f"INSERT OR IGNORE INTO phoenix ({', '.join(use)})"
+                          f" VALUES ({', '.join('?' * len(use))})", [row[c] for c in use])
+            seeded += 1
+        conn2.commit()
+        conn2.close()
+    print(f"  ✅ Заготовка памяти: {seeded} ролям (§identity из templates/)")
+
+    # 8. ПРОБА СОБРАННОГО — «ГОТОВА» ГОВОРИТ ЗАПУСК, А НЕ СБОРЩИК (#145).
+    # 🪤 Три дефекта подряд нашлись ТОЛЬКО потому, что я вызвал инструменты свежего
+    # контура руками: курсор в нижнем регистре (первая же команда падала), пустая версия
+    # схемы, звено, зовущее mezo_paths.live_db — метода, которого в ШАБЛОННОМ mezo_paths
+    # нет (два файла с одним именем и разной начинкой: 145 строк против 81).
+    # ⇒ Сборка, которая не пробует собранное, печатает «готово» про непроверенное.
+    import subprocess
+    probes = [("read-messages.py", ["--role", roles[0]]),
+              ("read-phoenix.py", ["--role", roles[0]]),
+              ("backlog.py", ["list", "--role", roles[0]])]
+    broken = []
+    for name, argv in probes:
+        p = tools_dir / name
+        if not p.exists():
+            broken.append(f"{name} — НЕ ПОЛОЖЕН вовсе")
+            continue
+        r = subprocess.run([sys.executable, str(p), *argv],
+                           capture_output=True, text=True, timeout=60)
+        err = (r.stderr or "")
+        if r.returncode not in (0, 1) or "Traceback" in err or "Error" in err:
+            first = next((ln for ln in err.splitlines()[::-1] if ln.strip()), "")
+            broken.append(f"{name} — {first[:90]}")
+    # звенья: падение при импорте видно только запуском, и оно тихое
+    for name in sorted(p.name for p in tools_dir.glob("check-*.py")):
+        r = subprocess.run([sys.executable, str(tools_dir / name), "--help"],
+                           capture_output=True, text=True, timeout=60)
+        if "AttributeError" in (r.stderr or "") or "ImportError" in (r.stderr or ""):
+            first = next((ln for ln in r.stderr.splitlines()[::-1] if ln.strip()), "")
+            broken.append(f"{name} — {first[:90]}")
+    if broken:
+        # ⚖️ ОДИН ГОЛОС, А НЕ ДВА. Первая редакция печатала «⛔ НЕ ЦЕЛ», а следом всё
+        # равно «🎉 Группа готова» — ровно тот дефект, что контур лечил 09.08 у аварийного
+        # выхода: три источника говорили разное, и читатель верил последнему.
+        print(f"\n⛔ СБОРКА НЕ ПРИНЯТА: собранный контур НЕ ЦЕЛ — не работают {len(broken)}:")
+        for b in broken:
+            print(f"     · {b}")
+        print(f"   База и инструменты лежат в {mezosync_dir} — но потребитель получил бы")
+        print("   падение на первой команде. Это НЕ «готово»; чини шаблон и собери заново.")
+        sys.exit(1)
+    print(f"  ✅ Проба запуском: {len(probes)} главных инструментов отвечают")
+
     print(f"\n🎉 Группа «{args.name}» готова: {db_path}")
-    print(f"   Следующий шаг: запустить COORD с launcher-промптом из templates/coord.md")
+    print("   ⚖️ ПРОВЕРЬ ЗАПУСКОМ, А НЕ ГЛАЗАМИ:")
+    print(f"     python {tools_dir / 'read-messages.py'} --role {args.roles[0].upper()}")
+    print("   Следующий шаг: запустить COORD с launcher-промптом из templates/coord.md")
 
 
 if __name__ == "__main__":

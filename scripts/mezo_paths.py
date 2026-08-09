@@ -50,6 +50,32 @@ def default_db(script_file) -> Path:
     return mezo_root(script_file) / DB_NAME
 
 
+# ═══ ИМЕНА, КОТОРЫХ ЗДЕСЬ НЕ БЫЛО, — ВРЕЗАНЫ 10.08 01:13 UTC ПО ЗАМЕРУ (#145) ═══
+# 🪤 Найдено сборкой свежего контура и ЗАПУСКОМ его инструментов: звенья, доехавшие из
+# vnext/prototype, падали с `AttributeError: module 'mezo_paths' has no attribute 'live_db'`.
+# Причина — ДВА ФАЙЛА С ОДНИМ ИМЕНЕМ и разной начинкой: здесь 81 строка, в рабочем
+# контуре 145. Каждый по-своему прав, и оба выглядят исправными, пока не окажутся рядом.
+# ⇒ Имена сведены, но НЕ переписана логика: всё выражено через mezo_root, чтобы правды
+# не стало две. Работает в обеих раскладках — и когда БД лежит в .mezosync собранного
+# контура, и когда каталог .mezosync лежит внутри контейнера-репозитория.
+def live_db(script_file=None) -> Path:
+    """Путь к живой БД контура (синоним default_db — имя из рабочего контура)."""
+    return default_db(script_file or __file__)
+
+
+def live_scripts(script_file=None) -> Path:
+    """Каталог инструментов контура: рядом с БД."""
+    root = mezo_root(script_file or __file__)
+    cand = root / "scripts"
+    return cand if cand.is_dir() else root
+
+
+def container_root(script_file=None) -> Path:
+    """Каталог, ВНУТРИ которого лежит .mezosync (или сам корень, если он и есть контур)."""
+    root = mezo_root(script_file or __file__)
+    return root.parent if root.name == ".mezosync" else root
+
+
 def resolve_db(arg, script_file, must_exist: bool = True) -> Path:
     """Единственная точка, где путь к БД превращается в абсолютный.
 

@@ -38,10 +38,10 @@ read-messages.py — CLI для агента: прочитать непрочи�
 
 Использование агентом (из Bash tool):
     (АБСОЛЮТНЫЙ путь к скрипту; `--db` НЕ нужен — R15a, норма 26.07: резолвится от расположения скрипта)
-    python C:/guts/.atlas/.mezosync/scripts/read-messages.py --role COORD
-    python C:/guts/.atlas/.mezosync/scripts/read-messages.py --role COORD --ack a1b2c3-d4e5f6
-    python C:/guts/.atlas/.mezosync/scripts/read-messages.py --role CORE --limit 20
-    python C:/guts/.atlas/.mezosync/scripts/read-messages.py --role STUD --tag TRACK-NEWUX
+    python <КОНТУР>/.mezosync/scripts/read-messages.py --role COORD
+    python <КОНТУР>/.mezosync/scripts/read-messages.py --role COORD --ack a1b2c3-d4e5f6
+    python <КОНТУР>/.mezosync/scripts/read-messages.py --role CORE --limit 20
+    python <КОНТУР>/.mezosync/scripts/read-messages.py --role STUD --tag TRACK-NEWUX
 """
 
 import argparse
@@ -389,7 +389,15 @@ def main():
             if unread:
                 print(f"   ⚠️ В ЛЕНТЕ непрочитанных: {unread} — обязанность читать ВСЁ "
                       f"НЕ СНЯТА, витрина задаёт лишь ПОРЯДОК (full-scan-every-tick v5).")
-                print(f"   👉 читать: python <s>/read-messages.py --role {role}")
+                # ⚰️ Здесь стояло сокращение «<s>/» из канона. Оно понятно человеку, но
+                # СКОПИРОВАННАЯ ДОСЛОВНО команда мертва, а роль копирует форму из того,
+                # чему доверяет больше всего, — из рабочего вывода инструмента.
+                # Прежде это гасилось соседним надгробием ПО СЛУЧАЙНОСТИ; после ужесточения
+                # сторожа @PROTO стало видно (записка #3473 ②). Решение моё: разворачивать
+                # в путь, а не учить сторож сокращению — печатаемая команда обязана
+                # запускаться, а не требовать перевода.
+                print(f"   👉 читать: python "
+                      f"{Path(__file__).resolve().as_posix()} --role {role}")
             else:
                 # Второе плечо: курсор у головы — «непрочитанного нет» ЗАКОННО, и эта правда
                 # не должна исчезнуть вместе с починкой первого плеча.
@@ -599,7 +607,7 @@ def main():
                   f"{why}, это НЕ конец ленты. "
                   f"ACK честен (батч прочитан целиком), но хвост НЕ прочитан.")
         # ⚠️ КОМАНДА ПЕЧАТАЕТСЯ АБСОЛЮТНЫМ ПУТЁМ И БЕЗ `--db`. Находка канарейки @STUD #2861:
-        # прежняя строка печатала `python C:/guts/.atlas/.mezosync/scripts/read-messages.py — то есть РАБОЧИЙ вывод,
+        # прежняя строка печатала `python <КОНТУР>/.mezosync/scripts/read-messages.py — то есть РАБОЧИЙ вывод,
         # который роль читает КАЖДЫЙ цикл ленты (чаще, чем шапку read-phoenix!), учил СРАЗУ ДВУМ
         # отозванным формам: относительному вызову скрипта (F20: при уехавшем CWD молча пишет в
         # другую живую БД) и снятому `--db` (R15a, норма владельца 26.07). И выглядел авторитетно —

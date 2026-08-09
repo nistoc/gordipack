@@ -90,6 +90,9 @@ def main() -> int:
     ok = (batches_before == batches_after and unacked_before == unacked_after
           and integrity == "ok" and "ux_batch_race" in idx_after)
     if ok:
+        # ⚠️ executescript выше сделал commit ⇒ транзакции нет, и record_step без BEGIN
+        # записал бы «в той же транзакции», которой не существует (находка @PROTO #3474).
+        conn.execute("BEGIN")
         record_step(conn, "20260809-batch-race-lock",
                     "замок против гонки выдачи батча: UNIQUE(role,last_id) WHERE acked_at IS NULL")
         conn.commit()

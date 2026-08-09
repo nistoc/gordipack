@@ -49,6 +49,9 @@ if len(sys.argv) <= 1:                       # живая база — точк�
     shutil.copy(DB, backup)
     print(f"точка отката: {backup} ({backup.stat().st_size} б)")
 
+# ⚠️ BEGIN до любой правки схемы: DDL первым действием уходит в автокоммит, и обещание
+# «шаг и запись о нём в одной транзакции» становится словами (находка @PROTO, записка #3474).
+conn.execute("BEGIN")
 before_rows = conn.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0]
 before_ver = conn.execute("SELECT * FROM schema_version").fetchone()
 added_col = ensure_column(conn)

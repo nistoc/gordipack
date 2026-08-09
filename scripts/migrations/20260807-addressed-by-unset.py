@@ -8,22 +8,48 @@
 SQLite не умеет ALTER для DEFAULT и CHECK — таблица пересоздаётся. Порядок важен:
 VIEW messages_all дропается ДО таблицы и восстанавливается ПОСЛЕ, иначе он повиснет
 на несуществующей таблице. Индексы снимаются заранее и накатываются обратно.
-"""
-import sqlite3
 
-DB = 'C:/guts/.atlas/.mezosync/mezosync.db'
+ИДЕМПОТЕНТНОСТЬ (починено 2026-08-09, находка @PROTO #3463 пересборкой песочницы).
+v1 падала на повторном прогоне «table messages already exists», нарушая моё же правило
+migration-safety. Причина НЕ в отсутствии гарда как такового, а тоньше: после
+`ALTER TABLE ... RENAME TO messages` SQLite хранит схему как CREATE TABLE "messages"
+— В КАВЫЧКАХ. Замена имени искала форму без кавычек, молча не срабатывала, и шаг пытался
+создать уже существующую таблицу. То есть первый же прогон делал схему непохожей на ту,
+которую ожидал второй: шаг ломал сам себя своим успехом.
+"""
+import re
+import sqlite3
+import sys
+
+# Путь к базе — первым аргументом; без него живая. Нужен НЕ для удобства: без него
+# рабочую ветку шага невозможно прогнать иначе как по живой базе, то есть проверка
+# идемпотентности требовала бы того самого риска, от которого защищает.
+DB = sys.argv[1] if len(sys.argv) > 1 else 'C:/guts/.atlas/.mezosync/mezosync.db'
 c = sqlite3.connect(DB, timeout=15)
 c.execute("PRAGMA foreign_keys=OFF")
 
 old_sql = c.execute("SELECT sql FROM sqlite_master WHERE name='messages'").fetchone()[0]
+
+# ГАРД ИДЕМПОТЕНТНОСТИ: спрашиваем СХЕМУ, а не журнал — журнал говорит «шаг записан»,
+# схема говорит «работа сделана». Второе и есть предмет проверки.
+if "'unset'" in old_sql:
+    print("✅ уже применено: умолчание addressed_by = 'unset' стоит в схеме. Ничего не делаю.")
+    sys.exit(0)
 view_sql = c.execute("SELECT sql FROM sqlite_master WHERE name='messages_all'").fetchone()[0]
 idx = [r[0] for r in c.execute(
     "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='messages' AND sql IS NOT NULL")]
 
-new_sql = (old_sql
-           .replace("CREATE TABLE messages", "CREATE TABLE messages_new", 1)
-           .replace("DEFAULT 'backfill' CHECK (addressed_by IN ('field','backfill'))",
-                    "DEFAULT 'unset' CHECK (addressed_by IN ('field','backfill','unset'))"))
+# Имя заменяем регуляркой: SQLite пишет его и голым, и в двойных кавычках, и в квадратных
+# скобках — в зависимости от того, как таблица родилась. Форма зависит от истории объекта,
+# а не от нашего намерения, поэтому перечисляем все три.
+# ⚠️ Граница слова \b стои́т ТОЛЬКО у голой формы: после закрывающей кавычки её нет вовсе
+# (кавычка и пробел оба не-словесные), и общий \b в конце молча отбрасывал вариант
+# в кавычках — ровно тот, ради которого правка и делалась. Поймано приёмкой, не глазами.
+new_sql, n_renamed = re.subn(r'CREATE\s+TABLE\s+(?:"messages"|\[messages\]|messages\b)',
+                             "CREATE TABLE messages_new", old_sql, count=1)
+assert n_renamed == 1, f"имя таблицы не найдено в схеме — шаг остановлен: {old_sql[:80]}"
+new_sql = new_sql.replace("DEFAULT 'backfill' CHECK (addressed_by IN ('field','backfill'))",
+                          "DEFAULT 'unset' CHECK (addressed_by IN ('field','backfill','unset'))")
 # Страховка: если строка умолчания в схеме окажется другой, замена молча не сработает —
 # и мы пересоздадим таблицу БЕЗ правки, потратив риск впустую. Падаем громко.
 assert "'unset'" in new_sql, "замена умолчания не сработала — схема отличается от ожидаемой"
