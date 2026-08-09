@@ -1,0 +1,135 @@
+# -*- coding: utf-8 -*-
+r"""check-retold-numbers.py — признак «ПЕРЕСКАЗ ИЗМЕРИМОГО» в телах слепков (идея 2.1, #154).
+
+═══ КЛАСС И ЕГО ЦЕНА ═══
+Факт в памяти роли выглядит одинаково, измерен он или пересказан. Ломается пересказ:
+он рождается уже устаревшим. Все оплаченные случаи — ЧИСЛА:
+    «Ролей 8» в живом слепке — их девять · «12 проверок» — их девятнадцать ·
+    «guard-all — 11 проверок» при 13 · «⇒ 8 ролей» у соседей — 7 недель лжи.
+Число выглядит точным, поэтому ему верят сильнее прозы — и протухает оно молча.
+
+═══ ФОРМА ВЫБРАНА ЗАМЕРОМ, НЕ ВКУСОМ (measure-fact-origin.py, 20:22 UTC) ═══
+Количественных строк в слепках 195; «требуй пометку у всякого числа» дало бы ~60 находок
+с половиной шума из историй — такой признак умирает непрочитанным. Поэтому:
+  · предметы — ТОЛЬКО те, что база отвечает запросом (карточки · правила · шаги схемы),
+    и признак НЕ требует пометки, а ПЕРЕМЕРЯЕТ САМ и печатает ОБЕ СТРЕЛКИ:
+        в слепке: «открытых карточек 7» (сохранено 05.08) · база СЕЙЧАС: 14
+    Совпадение — МОЛЧИТ: красить верное значит шуметь;
+  · «ролей N» — отдельный вид: канон ЗАПРЕЩАЕТ держать это число текстом (оно протухает
+    молча и учит отвергать правду), поэтому красное И ПРИ СОВПАДЕНИИ. Источник запрета —
+    правило role-roster-and-zones; надгробие/история в ТОЙ ЖЕ строке гасит (единица —
+    строка, урок #151/#152).
+
+⚖️ ГРАНИЦА (вслух, иначе зелёное шире себя): НЕ сверяются «N проверок» (guard-all свой счёт
+печатает сам, дешёвого источника в базе нет) · подвиды(«без критерия», «живых/надгробий»)
+при полусовпадении · любые числа в строках-историях. Молчание про них — не чистота.
+
+ЗАПУСК:
+    python <абсолютный путь>/check-retold-numbers.py                  # живые слепки
+    python <абсолютный путь>/check-retold-numbers.py --db <копия>     # только для
+                                                     # не-дефолтной БД (стенд приёмки)
+"""
+import argparse
+import re
+import sqlite3
+import sys
+from pathlib import Path
+
+DB = Path(r"C:\guts\.atlas\.mezosync\mezosync.db")
+
+# 🪤 ПЕРВАЯ РЕДАКЦИЯ: 8 находок из 8 ЛОЖНЫЕ (замер 20:25 UTC) — регекспы из головы хватали
+# номера секций (§4½), идентификаторы (S2), цитаты уроков («11 правил» в «ёлочках»), замеры
+# долей («32 из 38» о ДРУГОЙ базе) и эмодзи-счётчики (🔴0). А настоящую жертву («Ролей 8»)
+# ГАСИЛА дата истории в той же строке. Сужено по живому материалу, не по воображению:
+#   · число СМЕЖНО со словом (пробел/тире/двоеточие) — никаких «в пределах 8 символов»;
+#   · «X из Y» · 📏 · §-номера · идентификаторы S1/v3 · число в «ёлочках» — не предмет;
+#   · для КАНОНА РОЛЕЙ дата историю НЕ гасит: у правила «число ролей не держим» нет
+#     исключения «если рядом дата» — гасит только надгробие САМОМУ числу.
+NOT_CLAIM = re.compile(
+    r"⚰️|ОТОЗВАН|истори|был[оаи]?\b|прежн|летопис|не держ|НЕ БЕРИ|запрещ|цитат|"
+    r"20\d\d-\d\d-\d\d|\d\d\.\d\d\b|#\d", re.I)
+NOT_CLAIM_ROLES = re.compile(r"⚰️|не держ|НЕ ДЕРЖ|запрещ|цитат|наприм|образц", re.I)
+QUOTED_NUM = re.compile(r"«[^»]*\d[^»]*»")                 # число в цитате — не утверждение
+IS_MEASURE = re.compile(r"\bиз\s+\d|📏|§\s?\d|\b[SFRЭШQ]-?\d|v\d|🔴\s?\d|✅\s?\d|\d\s?=\s?\d")
+
+ADJ = r"\s*[—:\-]?\s*"
+ROLES_N = re.compile(rf"\bрол(?:ей|и)\b{ADJ}(\d{{1,2}})\b|\b(\d{{1,2}})\s+рол(?:ей|и)\b", re.I)
+CARDS_N = re.compile(rf"открыт\w+\s+карточ\w+{ADJ}(\d{{1,4}})\b|"
+                     rf"карточ\w+{ADJ}(\d{{1,4}})\s+открыт|(\d{{1,4}})\s+открыт\w+\s+карточ", re.I)
+RULES_N = re.compile(rf"\bправил\b{ADJ}(\d{{1,4}})\b|\b(\d{{1,4}})\s+правил\b", re.I)
+STEPS_N = re.compile(rf"шагов\s+схемы{ADJ}(\d{{1,3}})\b|(\d{{1,3}})\s+шагов\s+схемы", re.I)
+
+
+def num(m):
+    return int(next(g for g in m.groups() if g))
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--db", default=None, help="только для не-дефолтной БД (стенд)")
+    a = ap.parse_args()
+    db = Path(a.db) if a.db else DB
+    if not db.exists():
+        print(f"⛔ базы нет: {db} — сверять нечем (это НЕ «чисто»)")
+        return 2
+    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+
+    rows = conn.execute(
+        "SELECT role, section, saved_at, body FROM phoenix ORDER BY role, section").fetchall()
+    if not rows:
+        print("⛔ слепков нет — сверять нечего (это НЕ «чисто»)")
+        return 2
+
+    # живые ответы базы — ОДИН раз, честными запросами
+    cards_open = dict(conn.execute(
+        "SELECT role, COUNT(*) FROM backlog WHERE status IN ('open','in_review') GROUP BY role"))
+    rules_all = conn.execute("SELECT COUNT(*) FROM rules").fetchone()[0]
+    rules_live = conn.execute(
+        "SELECT COUNT(*) FROM rules WHERE body NOT LIKE '%ОТОЗВАН%'").fetchone()[0]
+    steps = conn.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0]
+
+    red = []
+    for role, section, saved_at, body in rows:
+        for i, line in enumerate((body or "").splitlines(), 1):
+            if QUOTED_NUM.search(line) or IS_MEASURE.search(line):
+                continue
+            m = ROLES_N.search(line)
+            if m and not NOT_CLAIM_ROLES.search(line):
+                red.append((role, section, i, line.strip(),
+                            f"ЧИСЛО РОЛЕЙ ТЕКСТОМ ({num(m)}) — канон запрещает держать его "
+                            f"вовсе (протухает молча); спрашивай реестр запросом"))
+                continue
+            if NOT_CLAIM.search(line):
+                continue
+            m = CARDS_N.search(line)
+            if m and "открыт" in line.lower():
+                want, have = num(m), cards_open.get(role, 0)
+                if want != have:
+                    red.append((role, section, i, line.strip(),
+                                f"в слепке открытых карточек {want} · база СЕЙЧАС: {have}"))
+                continue
+            m = RULES_N.search(line)
+            if m and num(m) not in (rules_all, rules_live):
+                red.append((role, section, i, line.strip(),
+                            f"в слепке правил {num(m)} · база СЕЙЧАС: живых {rules_live}, "
+                            f"всего {rules_all}"))
+                continue
+            m = STEPS_N.search(line)
+            if m and "схем" in line.lower() and num(m) != steps:
+                red.append((role, section, i, line.strip(),
+                            f"в слепке шагов схемы {num(m)} · журнал СЕЙЧАС: {steps}"))
+
+    for role, section, i, line, why in red:
+        print(f"🔴 ПЕРЕСКАЗ ИЗМЕРИМОГО [{role}·{section}:{i}] (сохранено {section and ''}"
+              f"{next((s for r2, s2, s, b in rows if r2 == role and s2 == section), '?')[:16]})")
+        print(f"   {line[:110]}")
+        print(f"   ⇒ {why}")
+    print(f"{'🔴' if red else '✅'} пересказ измеримого: {len(red)} — предметы: роли (канон) · "
+          f"открытые карточки · правила · шаги схемы")
+    print("⚖️ ГРАНИЦА: «N проверок», подвиды и строки-истории НЕ сверяются — молчание про них"
+          " не чистота. Совпавшее число тоже молчит (кроме ролей): красить верное — шуметь.")
+    return 1 if red else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
