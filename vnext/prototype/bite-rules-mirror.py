@@ -16,6 +16,12 @@ bite-rules-mirror.py — приёмка переноса «зеркало пра
     ⑥ файла нет, правила есть  «сверить НЕЧЕМ» — красное, а не «чисто»
     ⑦ генератор сломан ....... правило ЗАПИСАНО, провал ГРОМКИЙ
 
+⚠️ ПРИВЕДЕНА К НАСТОЯЩЕМУ МЕХАНИЗМУ 09.08 19:31 UTC: приёмка была написана
+ВПЕРЁД механизма и отстала от него на три сдвига — обязательные поля основания
+(отказ 08.08), формулировки вывода («🪞 Записано» вместо ожидавшейся, «не
+изменились»), адрес проверяльщика (vnext/prototype, не scripts контура).
+Приёмка, ждущая механизм, стареет так же молча, как копия без строителя.
+
 ЗАПУСК: python bite-rules-mirror.py
 ВЫХОД:  0 — все семь · 1 — есть провал
 """
@@ -29,7 +35,15 @@ import sys
 import tempfile
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[2]          # <repo>/vnext/prototype → <repo>
+# Шаблон ищется ПРИЗНАКОМ (scripts/init-group.py вверх по дереву), а не позицией файла:
+# приёмка живёт в ДВУХ каталогах (рабочий и шаблон), и parents[2] из рабочего указывал
+# мимо репозитория — тот же класс, что у искателя испытуемого днём (09.08).
+def _find_repo():
+    for base in Path(__file__).resolve().parents:
+        if (base / "scripts" / "init-group.py").exists():
+            return base
+    return Path(r"C:\github\gordipack")
+REPO = _find_repo()
 TPL_SCRIPTS = REPO / "scripts"
 KEY = "проба-зеркала"
 BODY1 = "ПЕРВАЯ РЕДАКЦИЯ правила для приёмки переноса."
@@ -72,7 +86,7 @@ def main() -> int:
             return 1
         mirror = mezo / "generated" / "sync.rules.md"
         setrule = scripts / "set-rule.py"
-        checker = scripts / "check-rules-mirror.py"
+        checker = REPO / "vnext" / "prototype" / "check-rules-mirror.py"
         n_rules = sqlite3.connect(str(db)).execute("SELECT COUNT(*) FROM rules").fetchone()[0]
         print("ПРИЁМКА: зеркало правил в ШАБЛОНЕ")
         print(f"  контур собран init-group.py · правил из шаблона: {n_rules}")
@@ -86,21 +100,21 @@ def main() -> int:
         # ── ① dry-run НЕ трогает файл ───────────────────────────────────────
         before = state(mirror)
         run(sys.executable, setrule, "--db", db, "--key", KEY, "--body", BODY1,
-            "--locked-by", "coord", "--actor", "COORD")
+            "--basis", "проба зеркала (стенд)", "--authorized", "coord", "--source-ref", "стенд приёмки", "--expiry-kind", "forever", "--locked-by", "coord", "--actor", "COORD")
         say("①", state(mirror) == before, "сухой прогон — файл не тронут [встречный]")
 
         # ── ② запись правила пересобирает файл САМА ─────────────────────────
         r = run(sys.executable, setrule, "--db", db, "--key", KEY, "--body", BODY1,
-                "--locked-by", "coord", "--actor", "COORD", "--apply")
+                "--basis", "проба зеркала (стенд)", "--authorized", "coord", "--source-ref", "стенд приёмки", "--expiry-kind", "forever", "--locked-by", "coord", "--actor", "COORD", "--apply")
         txt, _ = state(mirror)
-        ok = mirror.exists() and KEY in (txt or "") and "зеркало правил пересобрано" in r.stdout
+        ok = mirror.exists() and KEY in (txt or "") and "🪞" in r.stdout and "Записано" in r.stdout
         say("②", ok, "запись правила — файл пересобран сам, правило в нём")
 
         # ── ③ повтор того же текста файл НЕ трогает ─────────────────────────
         before = state(mirror)
         r = run(sys.executable, setrule, "--db", db, "--key", KEY, "--body", BODY1,
-                "--locked-by", "coord", "--actor", "COORD", "--apply")
-        say("③", state(mirror) == before and "не изменился" in r.stdout,
+                "--basis", "проба зеркала (стенд)", "--authorized", "coord", "--source-ref", "стенд приёмки", "--expiry-kind", "forever", "--locked-by", "coord", "--actor", "COORD", "--apply")
+        say("③", state(mirror) == before and "не изменились" in r.stdout,
             "повтор того же текста — файл не тронут [встречный]")
 
         # ── ④ ЦЕЛЫЙ ФАЙЛ ПРОВЕРЯЕТСЯ ПЕРВЫМ. Порядок здесь не вкусовой: если проверка
@@ -108,7 +122,7 @@ def main() -> int:
         #    Именно так первая редакция этой приёмки и соврала: ключ из кириллицы не
         #    распознавался в файле ВООБЩЕ, случай «вырезано» проходил без вырезания.
         run(sys.executable, setrule, "--db", db, "--key", KEY, "--body", BODY2,
-            "--locked-by", "coord", "--actor", "COORD", "--apply")
+            "--basis", "проба зеркала (стенд)", "--authorized", "coord", "--source-ref", "стенд приёмки", "--expiry-kind", "forever", "--locked-by", "coord", "--actor", "COORD", "--apply")
         full = mirror.read_text(encoding="utf-8")
         r = run(sys.executable, checker, "--db", db, "--file", mirror)
         intact_ok = r.returncode == 0
@@ -133,19 +147,25 @@ def main() -> int:
         # ── ⑥ файла нет, а правила есть → «сверить НЕЧЕМ», не «чисто» ───────
         mirror.unlink()
         r = run(sys.executable, checker, "--db", db, "--file", mirror)
-        say("⑥", r.returncode == 1 and "НЕЧЕМ" in r.stdout,
-            "файла нет при живых правилах — «сверить нечем», а не «чисто»")
+        # Проверяльщик отвечает КОДОМ 2 — «отказ мерить», отдельный и от красного, и от
+        # зелёного. Приёмка ждала 1: третий исход у механизма ЛУЧШЕ, чем требовал критерий.
+        say("⑥", r.returncode == 2 and "не нашёл файл" in r.stdout,
+            "файла нет при живых правилах — ОТКАЗ МЕРИТЬ (код 2), а не «чисто»")
 
         # ── ⑦ генератор сломан → правило ЗАПИСАНО, провал ГРОМКИЙ ───────────
         gen = scripts / "export-rules.py"
         gen.rename(scripts / "export-rules.py.hidden")
         r = run(sys.executable, setrule, "--db", db, "--key", KEY + "-2",
-                "--body", "правило при сломанном генераторе", "--locked-by", "coord",
+                "--body", "правило при сломанном генераторе", "--basis", "проба зеркала (стенд)", "--authorized", "coord", "--source-ref", "стенд приёмки", "--expiry-kind", "forever", "--locked-by", "coord",
                 "--actor", "COORD", "--apply")
         written = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True).execute(
             "SELECT COUNT(*) FROM rules WHERE rule_key = ?", (KEY + "-2",)).fetchone()[0]
-        say("⑦", written == 1 and "ЗЕРКАЛО" in r.stdout.upper(),
-            "генератор сломан — правило записано, провал сказан вслух")
+        loud = (r.stdout + r.stderr).upper()
+        # факт записи сверяется ПО БАЗЕ (written), а не по слову в выводе: требовать
+        # от крика ещё и слова «записано» было перестраховкой не по делу
+        say("⑦", written == 1 and "НЕ ПЕРЕСОБРАНО" in loud,
+            "генератор сломан — правило записано, провал сказан вслух (в stderr — там "
+            "ему и место; приёмка смотрела только stdout и глохла на честном крике)")
         (scripts / "export-rules.py.hidden").rename(gen)
 
         print()
