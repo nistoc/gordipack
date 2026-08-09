@@ -45,9 +45,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mezo_target  # noqa: E402 — какую копию испытываем, решается ОДНИМ местом
+
 LIVE = Path(r"C:\guts\.atlas\.mezosync\mezosync.db")
 SANDBOX = Path.home() / ".mezosync-sandbox" / "bite-r16.db"
-READER = Path(r"C:\guts\.atlas\.mezosync\scripts\read-messages.py")
+READER = mezo_target.script("read-messages.py")
 ROLE = "PROTO"
 START_CURSOR = 3069
 

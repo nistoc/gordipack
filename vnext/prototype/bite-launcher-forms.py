@@ -28,8 +28,11 @@ import sys
 import tempfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mezo_target  # noqa: E402 — какую копию испытываем, решается ОДНИМ местом
+
 TOOL = Path(__file__).resolve().parent / "guard-launcher-forms.py"
-LIVE_SCRIPTS = Path(r"C:\guts\.atlas\.mezosync\scripts")
+LIVE_SCRIPTS = mezo_target.scripts_root()
 LIVE_DB = Path(r"C:\guts\.atlas\.mezosync\mezosync.db")
 CASES = DIFFER = 0
 

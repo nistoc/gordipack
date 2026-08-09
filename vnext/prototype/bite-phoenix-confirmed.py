@@ -26,10 +26,14 @@ import os
 import sqlite3
 import subprocess
 import sys
+from pathlib import Path
 import tempfile
 import time
 
-SAVE = r"C:\guts\.atlas\.mezosync\scripts\save-phoenix.py"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mezo_target  # noqa: E402 — какую копию испытываем, решается ОДНИМ местом
+
+SAVE = str(mezo_target.script("save-phoenix.py"))
 CASES = DIFFER = 0
 
 
@@ -130,7 +134,7 @@ def main() -> int:
 
     print()
     print(f"{'✅ МЕРА ③ ПРИНЯТА' if ok else '🔴 НЕ ПРИНЯТА'} — случаев {CASES}, "
-          f"различающих {DIFFER}, испытан ЖИВОЙ скрипт")
+          f"различающих {DIFFER}, испытан {mezo_target.label()}")
     return 0 if ok else 1
 
 

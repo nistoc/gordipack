@@ -35,9 +35,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mezo_target  # noqa: E402 — какую копию испытываем, решается ОДНИМ местом
+
 LIVE = Path(r"C:\guts\.atlas\.mezosync\mezosync.db")
 SANDBOX = Path.home() / ".mezosync-sandbox" / "bite-stamp.db"
-WRITER = Path(r"C:\guts\.atlas\.mezosync\scripts\write-message.py")
+WRITER = mezo_target.script("write-message.py")
 ROLE = "PROTO"
 
 

@@ -22,9 +22,13 @@ import importlib.util
 import os
 import sqlite3
 import sys
+from pathlib import Path
 import tempfile
 
-SCRIPTS = r"C:\guts\.atlas\.mezosync\scripts"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mezo_target  # noqa: E402 — какую копию испытываем, решается ОДНИМ местом
+
+SCRIPTS = str(mezo_target.scripts_root())
 
 
 def load_live():
@@ -161,7 +165,7 @@ def main() -> int:
 
     print()
     print(f"{'✅ МАШИННЫЙ СЛОЙ ПРИНЯТ' if ok else '🔴 МАШИННЫЙ СЛОЙ НЕ ПРИНЯТ'} — "
-          f"случаев {CASES}, различающих {DIFFER}, испытан ЖИВОЙ модуль")
+          f"случаев {CASES}, различающих {DIFFER}, испытан {mezo_target.label()}")
     return 0 if ok else 1
 
 

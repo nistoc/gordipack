@@ -26,10 +26,14 @@ import importlib.util
 import os
 import sqlite3
 import sys
+from pathlib import Path
 import tempfile
 from datetime import datetime, timedelta
 
-SCRIPTS = r"C:\guts\.atlas\.mezosync\scripts"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mezo_target  # noqa: E402 — какую копию испытываем, решается ОДНИМ местом
+
+SCRIPTS = str(mezo_target.scripts_root())
 NOW = datetime(2026, 8, 8, 12, 0, 0)          # фиксированное «сейчас»: приёмка не зависит от часов
 
 
@@ -134,7 +138,7 @@ def main() -> int:
 
     print()
     print(f"{'✅ ХОД Г ПРИНЯТ' if ok else '🔴 ХОД Г НЕ ПРИНЯТ'} — случаев {CASES}, "
-          "испытан ЖИВОЙ модуль, не копия")
+          f"испытан {mezo_target.label()}")
     return 0 if ok else 1
 
 

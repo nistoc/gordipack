@@ -23,9 +23,13 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+from pathlib import Path
 import tempfile
 
-SCRIPTS = r"C:\guts\.atlas\.mezosync\scripts"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mezo_target  # noqa: E402 — какую копию испытываем, решается ОДНИМ местом
+
+SCRIPTS = str(mezo_target.scripts_root())
 LIVE = r"C:\guts\.atlas\.mezosync\mezosync.db"
 WRITE = os.path.join(SCRIPTS, "write-message.py")
 MIGRATION = os.path.join(SCRIPTS, "migrations", "20260808-message-addressee.py")
@@ -157,7 +161,7 @@ def main() -> int:
 
     print()
     print(f"{'✅ АДРЕСАТ ПОЛЕМ ПРИНЯТ' if ok else '🔴 НЕ ПРИНЯТ'} — случаев {CASES}, "
-          f"различающих {DIFFER}, испытан ЖИВОЙ скрипт на копии живой базы")
+          f"различающих {DIFFER}, испытан {mezo_target.label()} на копии живой базы")
     return 0 if ok else 1
 
 

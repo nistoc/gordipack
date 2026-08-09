@@ -31,9 +31,13 @@ import re
 import sqlite3
 import subprocess
 import sys
+from pathlib import Path
 import tempfile
 
-SCRIPTS = r"C:\guts\.atlas\.mezosync\scripts"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mezo_target  # noqa: E402 — какую копию испытываем, решается ОДНИМ местом
+
+SCRIPTS = str(mezo_target.scripts_root())
 WRITE = os.path.join(SCRIPTS, "write-message.py")
 CASES = DIFFER = 0
 
@@ -141,7 +145,7 @@ def main() -> int:
 
     print()
     print(f"{'✅ МЕХАНИЗМ ВРЕМЕНИ ПРИНЯТ' if ok else '🔴 НЕ ПРИНЯТ'} — случаев {CASES}, "
-          f"различающих {DIFFER}, испытан ЖИВОЙ скрипт")
+          f"различающих {DIFFER}, испытан {mezo_target.label()}")
     return 0 if ok else 1
 
 

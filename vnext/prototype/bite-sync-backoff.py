@@ -28,9 +28,13 @@
 import os
 import sqlite3
 import sys
+from pathlib import Path
 import tempfile
 
-sys.path.insert(0, r"C:\guts\.atlas\.mezosync\scripts")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mezo_target  # noqa: E402 — какую копию испытываем, решается ОДНИМ местом
+
+sys.path.insert(0, str(mezo_target.scripts_root()))
 import sync_backoff as sb  # noqa: E402
 
 CASES = DIFFER = 0
@@ -128,7 +132,7 @@ def main() -> int:
 
     print()
     print(f"{'✅ РАЗГОН СНА ПРИНЯТ' if ok else '🔴 НЕ ПРИНЯТ'} — случаев {CASES}, "
-          f"различающих {DIFFER}, испытан ЖИВОЙ модуль")
+          f"различающих {DIFFER}, испытан {mezo_target.label()}")
     return 0 if ok else 1
 
 
