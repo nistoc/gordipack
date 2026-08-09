@@ -44,7 +44,12 @@ def _find_check():
     if os.path.exists(here):
         return here
     toolkit = os.path.join(HERE, "..", ".mezosync", "scripts", "check-retired-mechanism.py")
-    return os.path.abspath(toolkit)
+    toolkit = os.path.abspath(toolkit)
+    if os.path.exists(toolkit):
+        return toolkit
+    # третий адрес: шаблонные scripts (пара COORD живое→шаблон). Из prototype «рядом»
+    # и тулкит недостижимы, а синк COORD кладёт признак ровно сюда.
+    return os.path.abspath(os.path.join(HERE, "..", "..", "scripts", os.path.basename(toolkit)))
 
 
 CHECK = _find_check()

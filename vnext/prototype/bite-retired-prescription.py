@@ -27,6 +27,9 @@ CHECK = os.path.join(HERE, "check-retired-mechanism.py")
 if not os.path.exists(CHECK):
     CHECK = os.path.abspath(os.path.join(HERE, "..", ".mezosync", "scripts",
                                          "check-retired-mechanism.py"))
+    if not os.path.exists(CHECK):
+        CHECK = os.path.abspath(os.path.join(HERE, "..", "..", "scripts",
+                                             "check-retired-mechanism.py"))
 for i, a in enumerate(sys.argv):
     if a == "--check" and i + 1 < len(sys.argv):
         CHECK = sys.argv[i + 1]

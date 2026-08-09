@@ -57,7 +57,13 @@ def fresh():
                 " applied_at TEXT DEFAULT CURRENT_TIMESTAMP, note TEXT, fingerprint TEXT)")
     con.execute("CREATE TABLE t0 (id INTEGER PRIMARY KEY, x TEXT)")
     con.execute("INSERT INTO t0 (x) VALUES ('данные')")
-    # опорный шаг: журнал знает исходную структуру
+    # опорный шаг: журнал знает исходную структуру.
+    # ⚠️ BEGIN здесь появился 2026-08-09 вместе с починкой @COORD по находке ⑧ этой же
+    # приёмки: record_step теперь ОТКАЗЫВАЕТСЯ вне транзакции. Стенд обязан следовать
+    # тому же правилу, что и живые шаги, — иначе приёмка проверяла бы поведение,
+    # которого в бою больше нет.
+    if not con.in_transaction:
+        con.execute("BEGIN")
     SJ.record_step(con, "000-base", "опорный шаг стенда")
     con.commit()
     return con
@@ -69,6 +75,7 @@ def main() -> int:
     # ① ЗДОРОВЫЙ ПУТЬ [контроль]: правка схемы + запись в той же транзакции → сходится.
     #    Без него краснота остальных случаев ничего не доказывает.
     con = fresh()
+    con.execute("BEGIN")          # явная транзакция — теперь это требование record_step
     con.execute("CREATE TABLE t1 (id INTEGER PRIMARY KEY)")
     SJ.record_step(con, "001-t1", "новая таблица")
     con.commit()

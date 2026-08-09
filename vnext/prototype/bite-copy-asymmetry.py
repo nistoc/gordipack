@@ -29,8 +29,11 @@ def _find_check():
     here = os.path.join(HERE, "check-copy-asymmetry.py")
     if os.path.exists(here):
         return here
-    return os.path.abspath(os.path.join(HERE, "..", ".mezosync", "scripts",
-                                        "check-copy-asymmetry.py"))
+    toolkit = os.path.abspath(os.path.join(HERE, "..", ".mezosync", "scripts",
+                                          "check-copy-asymmetry.py"))
+    if os.path.exists(toolkit):
+        return toolkit
+    return os.path.abspath(os.path.join(HERE, "..", "..", "scripts", "check-copy-asymmetry.py"))
 
 
 CHECK = _find_check()
