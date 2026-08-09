@@ -118,18 +118,33 @@ def cmd_list(a):
           f"revoked_at FROM {src}"
     par = ()
     if a.role:
-        sql += " WHERE role=?"
+        # ⚠️ ОБЩИЕ права (role='ALL') КАСАЮТСЯ спросившего. Фильтр «только своё имя» отвечал бы
+        # «тебе ничего не разрешено» при живом стоячем разрешении на ВСЕХ — и роль отказалась бы
+        # от разрешённого, будучи уверенной, что соблюдает правило. Замер 2026-08-09: у PROTO
+        # своих живых прав 0, а касается его 1.
+        sql += " WHERE role IN (?, 'ALL')"
         par = (a.role.upper(),)
-    rows = conn.execute(sql + " ORDER BY role, right_key").fetchall()
+    # ⛔ параметры ОБЯЗАНЫ уехать в execute вместе с текстом запроса: до 2026-08-09 они
+    # собирались и терялись, и ЛЮБОЙ вызов с --role падал. Приёмка не ловила: она звала
+    # только форму без роли.
+    rows = conn.execute(sql + " ORDER BY role, right_key", par).fetchall()
     total = conn.execute("SELECT COUNT(*) FROM role_rights").fetchone()[0]
     conn.close()
+    # граница НАБОРА называется всегда: «прав нет» без указания, чьих, читается как «свод пуст»
+    whose = f" РОЛИ {a.role.upper()} + ОБЩИЕ (ALL)" if a.role else " — ВСЕ РОЛИ"
     print("=" * 78)
-    print("ПРАВА РОЛЕЙ" + (" — ВСЕ, включая потраченные и отозванные" if a.all else " — ЖИВЫЕ"))
+    print("ПРАВА" + whose + (" · ВСЕ, включая потраченные и отозванные" if a.all else " · ЖИВЫЕ"))
     print("=" * 78)
     if not rows:
-        print("⚠️ ПУСТО. Это НЕ «прав нет» — это «поля ещё никто не заполнял»:")
-        print(f"   всего записей в таблице {total}. Права по-прежнему живут прозой в памяти")
-        print("   ролей, и запрос «что мне разрешено» отвечает молчанием, а не «ничего».")
+        if a.role and total:
+            print(f"⚠️ У РОЛИ {a.role.upper()} НЕТ НИ ОДНОГО {'' if a.all else 'ЖИВОГО '}ПРАВА "
+                  "— и общих (ALL) тоже нет.")
+            print(f"   Это ответ про ЕЁ набор, а НЕ про свод: всего записей в таблице {total},")
+            print("   у других ролей права есть. Весь свод — тем же вызовом без --role.")
+        else:
+            print("⚠️ ПУСТО. Это НЕ «прав нет» — это «поля ещё никто не заполнял»:")
+            print(f"   всего записей в таблице {total}. Права по-прежнему живут прозой в памяти")
+            print("   ролей, и запрос «что мне разрешено» отвечает молчанием, а не «ничего».")
         return 0
     for i, role, key, scope, kind, who, when, spent, revoked in rows:
         mark = "🔒СТОЯЧЕЕ" if kind == "standing" else "1️⃣РАЗОВОЕ"
@@ -138,10 +153,21 @@ def cmd_list(a):
             state = f"  ⛔ отозвано {revoked[:16]}"
         elif spent:
             state = f"  ✔ потрачено {spent[:16]}"
-        print(f"#{i:<3} {role:8} {key:24} {mark}  {who:6} {when[:16]}"
+        common = "🌐" if role == "ALL" else " "
+        print(f"{common}#{i:<3} {role:8} {key:24} {mark}  {who:6} {when[:16]}"
               f"{'  · ' + scope if scope else '  · ОБЛАСТЬ НЕ НАЗВАНА'}{state}")
+    live_n = len([r for r in rows if not r[7] and not r[8]])
     print()
-    print(f"живых {len([r for r in rows if not r[7] and not r[8]])} из {total} записей всего")
+    if a.role:
+        # ⚠️ «живых N · своих M» врало бы, когда M считается по ВСЕМ показанным строкам,
+        # а N — только по живым. Каждое число называет свой набор явно.
+        own = len([r for r in rows if r[1] != "ALL"])
+        print(f"показано {len(rows)} записей (живых {live_n}) · своих {own}, общих {len(rows) - own}"
+              f" · в таблице всего {total} записей ПО ВСЕМ РОЛЯМ")
+        print(f"🌐 — право выдано на ВСЕХ (role=ALL): касается {a.role.upper()}, "
+              "хотя её имени в записи нет")
+    else:
+        print(f"живых {live_n} из {total} записей всего")
     return 0
 
 
