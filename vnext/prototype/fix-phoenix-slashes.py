@@ -14,9 +14,9 @@ fix-phoenix-slashes.py — в КОМАНДАХ слепка `python C:\...` об
    роль читает «готово» там, где не сделано ничего. Теперь роль — обязательный параметр,
    неизвестная роль — выход с кодом 2, а не тишина.
 
-    python C:/guts/.atlas/vnext-tools/fix-phoenix-slashes.py --role TAXO          # что изменится
-    python C:/guts/.atlas/vnext-tools/fix-phoenix-slashes.py --role TAXO --out D:/tmp
-    python C:/guts/.atlas/vnext-tools/fix-phoenix-slashes.py --selftest
+    python <абсолютный путь>/fix-phoenix-slashes.py --role TAXO          # что изменится
+    python <абсолютный путь>/fix-phoenix-slashes.py --role TAXO --out D:/tmp
+    python <абсолютный путь>/fix-phoenix-slashes.py --selftest
 
 Файлы кладутся рядом, применяет их РОЛЬ своим `save-phoenix.py --section <имя> --file <файл>`:
 инструмент живую БД НЕ пишет — правка чужого слепка не его дело.
@@ -27,8 +27,9 @@ import sqlite3
 import sys
 import tempfile
 from pathlib import Path
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
-LIVE_DB = Path(r"C:/guts/.atlas/.mezosync/mezosync.db")
+LIVE_DB = Path(str(mezo_paths.live_db()))
 # Путь ВНУТРИ КОМАНДЫ, а не любой путь в тексте: прозу про каталоги не трогаем.
 PATH_IN_CMD = re.compile(r"(?<=python )([A-Za-z]:\\[^\s`'\"]+)")
 
@@ -90,7 +91,7 @@ def main():
                 print(f"     было:  {a_.strip()[:88]}\n     стало: {b_.strip()[:88]}")
         # ⚠️ `.as_posix()` и здесь: первый прогон печатал `--file C:\Users\…` с обратными
         # слэшами — инструмент, чинящий этот класс, САМ учил ему в своей же подсказке.
-        print(f"     ⇒ python C:/guts/.atlas/.mezosync/scripts/save-phoenix.py "
+        print(f"     ⇒ python {mezo_paths.live_scripts().as_posix()}/save-phoenix.py "
               f"--role {a.role} --section {section} --file {p.as_posix()}")
     print(f"\n{'✅ нечего чинить' if not total else f'🔧 {total} строк в {a.role}'} "
           f"— живая БД НЕ изменена, применяет роль сама")
@@ -122,7 +123,7 @@ def selftest():
 
     src = rows[0][1]
     got = fix_line(src)
-    good = "C:/guts/.atlas/.mezosync/scripts/guard-all.py" in got and "\\" not in got
+    good = str(mezo_paths.live_scripts() / "guard-all.py") in got and "\\" not in got
     ok &= good
     print(f"{'✅' if good else '🔴'} замена слэшей: {got[:70]}")
 

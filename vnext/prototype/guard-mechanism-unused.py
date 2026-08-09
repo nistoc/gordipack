@@ -42,17 +42,18 @@ guard-mechanism-unused.py — признак «механизм НАЛОЖЕН, 
 Читает базу ТОЛЬКО НА ЧТЕНИЕ. Ничего не правит.
 
 Запуск:
-    python C:/guts/.atlas/vnext-tools/guard-mechanism-unused.py
-    python C:/guts/.atlas/vnext-tools/guard-mechanism-unused.py --window 200
-    python C:/guts/.atlas/vnext-tools/guard-mechanism-unused.py --self-test
+    python <абсолютный путь>/guard-mechanism-unused.py
+    python <абсолютный путь>/guard-mechanism-unused.py --window 200
+    python <абсолютный путь>/guard-mechanism-unused.py --self-test
 """
 
 import argparse
 import sqlite3
 import sys
 from pathlib import Path
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
-LIVE_DB = Path(r"C:\guts\.atlas\.mezosync\mezosync.db")
+LIVE_DB = mezo_paths.live_db()
 DEFAULT_WINDOW = 120
 
 VERDICT_NO_VESSEL = "⛔ СОСУДА НЕТ"

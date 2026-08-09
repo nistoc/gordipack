@@ -37,10 +37,11 @@ import sqlite3
 import subprocess
 import sys
 from pathlib import Path
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
-DB = Path(r"C:\guts\.atlas\.mezosync\mezosync.db")
-LIVE_SCRIPTS = Path(r"C:\guts\.atlas\.mezosync\scripts")
-REPO = Path(r"C:\guts\.atlas\atlas.agents-sync.db")     # git-история скриптов
+DB = mezo_paths.live_db()
+LIVE_SCRIPTS = mezo_paths.live_scripts()
+REPO = mezo_paths.container_root() / "atlas.agents-sync.db"   # git-история скриптов
 REPO_SCRIPTS = REPO / "scripts"
 
 EXEC = re.compile(r"^(python|py|git|dotnet|curl|npm|node|pwsh|powershell|bash|sh|cd)\b", re.I)
@@ -262,7 +263,7 @@ def selftest():
     #    при НУЛЕ выполненных тестов: «196 прошли» и «0 прошли» дают один код возврата.
     ok = True
     cases = 0
-    CMD = "python C:/guts/.atlas/.mezosync/scripts/guard-all.py"
+    CMD = f"python {mezo_paths.live_scripts().as_posix()}/guard-all.py"
 
     def db_with(tmp, fname, body, saved="2020-01-01 00:00:00"):
         p = Path(tmp) / fname

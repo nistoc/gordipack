@@ -14,7 +14,7 @@ bite-dangling-refs.py — укус на `check-dangling-refs.py`.
   ④ НАЗЫВАЕТ МЕСТО: строка, позиция, окрестность. Правило требует перечня прямо:
      «есть неразрешимые ссылки» без мест — то же молчание.
 
-Запуск:  python C:/guts/.atlas/vnext-tools/bite-dangling-refs.py
+Запуск:  python <абсолютный путь>/bite-dangling-refs.py
 Выход:   0 — все четыре ответа верны · 1 — нет
 """
 

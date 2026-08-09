@@ -39,10 +39,11 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
 SELF = Path(__file__).resolve()
-LIVE_SCRIPTS = Path(r"C:\guts\.atlas\.mezosync\scripts")
-LIVE_ARTIFACTS = Path(r"C:\guts\.atlas\atlas.archs\.mezosync\coordination\generated")
+LIVE_SCRIPTS = mezo_paths.live_scripts()
+LIVE_ARTIFACTS = mezo_paths.container_root() / "atlas.archs" / ".mezosync" / "coordination" / "generated"
 
 # Вызов скрипта: «python <что-то до имени><имя>.py». Голое имя без `python` — это ссылка
 # в прозе («см. read-messages.py:310»), а не форма вызова: такие НЕ трогаем.
@@ -535,7 +536,7 @@ def main():
     ap.add_argument("--selftest", action="store_true", help="доказать, что гард умеет краснеть")
     ap.add_argument("--scripts", default=str(LIVE_SCRIPTS))
     ap.add_argument("--artifacts", default=str(LIVE_ARTIFACTS))
-    ap.add_argument("--canon", default=r"C:\guts\.atlas\CLAUDE.md",
+    ap.add_argument("--canon", default=str(mezo_paths.container_root() / "CLAUDE.md"),
                     help="канон контейнера — самая читаемая учащая поверхность (#56). "
                          "Глобальный CLAUDE.md пользователя НЕ сканируется — граница вслух")
     ap.add_argument("--no-run", action="store_true",

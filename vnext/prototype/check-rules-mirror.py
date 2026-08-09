@@ -34,9 +34,10 @@ import re
 import sqlite3
 import sys
 from pathlib import Path
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
-LIVE = Path(r"C:\guts\.atlas\.mezosync\mezosync.db")
-MIRROR = Path(r"C:\guts\.atlas\atlas.archs\.mezosync\coordination\sync.rules.md")
+LIVE = mezo_paths.live_db()
+MIRROR = mezo_paths.container_root() / "atlas.archs" / ".mezosync" / "coordination" / "sync.rules.md"
 
 # Строка заголовка правила в файле: ### `ключ` 🔒замок vN   (с возможной пометкой отзыва)
 # 🪤 КЛЮЧ — ЛЮБОЙ ТЕКСТ В ОБРАТНЫХ КАВЫЧКАХ. Требование [a-z0-9-]+ означало, что правило

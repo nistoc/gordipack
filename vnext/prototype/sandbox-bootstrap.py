@@ -26,8 +26,9 @@ import sqlite3
 import sys
 import os
 from pathlib import Path
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
-LIVE_MEZO = Path(r"C:\guts\.atlas\.mezosync")
+LIVE_MEZO = mezo_paths.container_root() / ".mezosync"
 LIVE_DB = LIVE_MEZO / "mezosync.db"
 # Песочница живёт ВНЕ контейнера C:\guts\.atlas НАРОЧНО: гард ⑤ («фантомные .db»)
 # рекурсивно сканирует весь контейнер. Полная копия его не краснит (он судит по признаку

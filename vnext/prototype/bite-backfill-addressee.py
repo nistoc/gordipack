@@ -26,8 +26,9 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
-SCRIPT = os.path.join(r"C:\guts\.atlas\.mezosync\scripts", "migrations",
+SCRIPT = os.path.join(str(mezo_paths.live_scripts()), "migrations",
                       "20260808-backfill-addressee.py")
 CASES = DIFFER = 0
 

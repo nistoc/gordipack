@@ -38,7 +38,7 @@ bite-shown-count.py — укус на правку ② : журнал выдач
 Как назвать поле — решает координатор. Укус ищет по смыслу и печатает, что нашёл: укус,
 требующий конкретного имени, красил бы верную правку. (Найденное сегодня имя — `shown_max`.)
 
-Запуск:  python C:/guts/.atlas/vnext-tools/bite-shown-count.py
+Запуск:  python <абсолютный путь>/bite-shown-count.py
 Выход:   0 — все свойства держатся · 1 — поля ещё нет · 2 — поле есть, но свойство нарушено
 """
 
@@ -51,8 +51,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_target  # noqa: E402 — какую копию испытываем, решается ОДНИМ местом
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
-LIVE = Path(r"C:\guts\.atlas\.mezosync\mezosync.db")
+LIVE = mezo_paths.live_db()
 SANDBOX = Path.home() / ".mezosync-sandbox" / "bite-shown.db"
 READER = mezo_target.script("read-messages.py")
 ROLE = "PROTO"

@@ -24,8 +24,9 @@ import re
 import sqlite3
 import sys
 from pathlib import Path
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
-LIVE = Path(r"C:\guts\.atlas\.mezosync\mezosync.db")
+LIVE = mezo_paths.live_db()
 # Таблицы, которых не было в v1: их наличие означает, что схема ушла вперёд объявленной.
 POST_V1 = ("read_batches", "role_status", "stats_log", "messages_history")
 REVOKE_STRICT = re.compile(r"⛔\s*ОТОЗВАН", re.IGNORECASE)

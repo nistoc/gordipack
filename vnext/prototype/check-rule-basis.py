@@ -28,8 +28,9 @@ import argparse
 import re
 import sqlite3
 import sys
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
-DEFAULT_DB = r"C:\guts\.atlas\.mezosync\mezosync.db"
+DEFAULT_DB = str(mezo_paths.live_db())
 WORD = re.compile(r"слов[оаму]\w*\s+владельц\w*|по\s+слову|владелец\s+\w+\s*:", re.I)
 # 🪤 РЕШЕНИЕ ПРИНИМАЕТ НЕ ТОЛЬКО ВЛАДЕЛЕЦ. Первая редакция признавала основанием ИСКЛЮЧИТЕЛЬНО
 # «слово владельца» — и объявила слепым правило `dowry-facts-carry-source`, у которого основание

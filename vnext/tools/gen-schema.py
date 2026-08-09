@@ -13,8 +13,12 @@
 """
 import io
 import sqlite3
+import sys as _sys
+from pathlib import Path as _P
+_sys.path.insert(0, str(_P(__file__).resolve().parent.parent / "prototype"))
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
-LIVE = r"C:\guts\.atlas\.mezosync\mezosync.db"
+LIVE = str(mezo_paths.live_db())
 OUT = r"C:\github\gordipack\schema\mezosync_v3.sql"
 
 HEAD = """-- mezosync v3 — СХЕМА КОНТУРА. СОБРАНА ИЗ ЖИВОЙ БАЗЫ, НЕ НАПИСАНА РУКОЙ.

@@ -30,10 +30,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_target  # noqa: E402 — какую копию испытываем, решается ОДНИМ местом
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
 TOOL = Path(__file__).resolve().parent / "guard-launcher-forms.py"
 LIVE_SCRIPTS = mezo_target.scripts_root()
-LIVE_DB = Path(r"C:\guts\.atlas\.mezosync\mezosync.db")
+LIVE_DB = mezo_paths.live_db()
 CASES = DIFFER = 0
 
 

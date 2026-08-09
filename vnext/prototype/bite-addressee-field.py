@@ -28,9 +28,10 @@ import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_target  # noqa: E402 — какую копию испытываем, решается ОДНИМ местом
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
 SCRIPTS = str(mezo_target.scripts_root())
-LIVE = r"C:\guts\.atlas\.mezosync\mezosync.db"
+LIVE = str(mezo_paths.live_db())
 WRITE = os.path.join(SCRIPTS, "write-message.py")
 MIGRATION = os.path.join(SCRIPTS, "migrations", "20260808-message-addressee.py")
 

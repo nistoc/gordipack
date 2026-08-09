@@ -30,7 +30,7 @@ guard-printed-names.py — признак: НАДПИСЬ, КОТОРУЮ ПЕЧ
   Г. ЗНАЧЕНИЕ ПРОСЯТ И ВЫБРАСЫВАЮТ — флаг принимает значение, а код смотрит только,
      задан ли он. Читающий справку уверен, что его значение куда-то легло. Оно никуда не легло.
 
-Запуск:  python C:/guts/.atlas/vnext-tools/guard-printed-names.py
+Запуск:  python <абсолютный путь>/guard-printed-names.py
          [--dir <папка со скриптами>] [--quiet]
 Выход:   0 — находок нет · 1 — есть находки · 2 — не смог прочитать предмет
 """
@@ -41,9 +41,10 @@ import re
 import sqlite3
 import sys
 from pathlib import Path
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
-SCRIPTS = Path(r"C:\guts\.atlas\.mezosync\scripts")
-LIVE_DB = Path(r"C:\guts\.atlas\.mezosync\mezosync.db")
+SCRIPTS = mezo_paths.live_scripts()
+LIVE_DB = mezo_paths.live_db()
 
 FLAG_RE = re.compile(r"--[a-z][a-z0-9-]*")
 SCRIPT_RE = re.compile(r"\b([a-z][a-z0-9_-]*\.py)\b")

@@ -30,8 +30,9 @@ import secrets
 import sqlite3
 import sys
 from pathlib import Path
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
-LIVE_DB = Path(r"C:\guts\.atlas\.mezosync\mezosync.db")
+LIVE_DB = mezo_paths.live_db()
 
 # Бюджет окна вывода среды. Замер 2026-07-25: среда отдаёт ~30 КБ, дальше — persisted-файл
 # и превью 2 КБ. Берём 24 КБ, оставляя запас на шапку, предупреждения и хвост с токеном.

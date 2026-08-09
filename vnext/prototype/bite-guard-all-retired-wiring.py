@@ -18,9 +18,10 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
-GUARD = r"C:\guts\.atlas\.mezosync\scripts\guard-all.py"
-LIVE = pathlib.Path(r"C:\guts\.atlas\.mezosync\mezosync.db")
+GUARD = str(mezo_paths.live_scripts() / "guard-all.py")
+LIVE = mezo_paths.live_db()
 cases, bad = [], 0
 
 

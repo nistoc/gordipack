@@ -20,8 +20,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
-GUARD = r"C:\guts\.atlas\.mezosync\scripts\guard-scripts-drift.py"
+GUARD = str(mezo_paths.live_scripts() / "guard-scripts-drift.py")
 cases, bad = [], 0
 
 

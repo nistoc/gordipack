@@ -79,3 +79,67 @@ def resolve_db(arg, script_file, must_exist: bool = True) -> Path:
             f"     Если БД лежит в другом месте, укажи АБСОЛЮТНЫЙ --db."
         )
     return db
+
+# ═══ КОНТЕЙНЕР ГРУППЫ И КОРЕНЬ ШАБЛОНА — БЕЗ ЛИТЕРАЛОВ МАШИНЫ (карточка #153 ③) ═══
+# 🪤 До 09.08 путь контейнера был ВПЕЧАТАН в ~75 местах сорока файлов, и все копии уезжали
+# в ПУБЛИЧНЫЙ шаблон. Замер шире моей же карточки («18 в 12») — числа в карточках стареют
+# так же, как в слепках. Теперь путь живёт НИГДЕ: он ВЫВОДИТСЯ, в порядке:
+#   ① переменная среды (явное сильнее выведенного);
+#   ② подъём от расположения файла по МАРКЕРУ (.mezosync/mezosync.db — признак, не глубина);
+#   ③ local.paths РЯДОМ С ЭТИМ ФАЙЛОМ — локальный непубликуемый файл (в .gitignore):
+#      нужен копии, живущей ВНЕ контейнера (шаблон на этой машине);
+#   ④ ГРОМКИЙ отказ с рецептом. Тихий дефолт был бы путём машины под другим именем.
+_LOCAL = Path(__file__).resolve().parent / "local.paths"
+
+
+def _local_get(key: str):
+    if not _LOCAL.exists():
+        return None
+    for line in _LOCAL.read_text(encoding="utf-8").splitlines():
+        if line.startswith(key + "="):
+            return Path(line.split("=", 1)[1].strip())
+    return None
+
+
+def container_root(script_file=None) -> Path:
+    import os
+    env = os.environ.get("MEZO_CONTAINER")
+    if env:
+        return Path(env)
+    start = Path(script_file or __file__).resolve().parent
+    for cand in (start, *start.parents):
+        if (cand / ".mezosync" / DB_NAME).exists():
+            return cand
+    loc = _local_get("container")
+    if loc and (loc / ".mezosync" / DB_NAME).exists():
+        return loc
+    sys.exit("ERR: контейнер группы НЕ НАЙДЕН (маркер .mezosync/mezosync.db не встретился "
+             "вверх по дереву).\n     Задай MEZO_CONTAINER=<путь> либо создай рядом с "
+             f"mezo_paths.py файл local.paths со строкой container=<путь>.\n"
+             f"     Искал от: {start}")
+
+
+def live_db(script_file=None) -> Path:
+    return container_root(script_file) / ".mezosync" / DB_NAME
+
+
+def live_scripts(script_file=None) -> Path:
+    return container_root(script_file) / ".mezosync" / "scripts"
+
+
+def template_root(script_file=None) -> Path:
+    """Корень репозитория-шаблона: маркер scripts/init-group.py; иначе local.paths/среда."""
+    import os
+    env = os.environ.get("MEZO_TEMPLATE")
+    if env:
+        return Path(env)
+    start = Path(script_file or __file__).resolve().parent
+    for cand in (start, *start.parents):
+        if (cand / "scripts" / "init-group.py").exists():
+            return cand
+    loc = _local_get("template")
+    if loc and (loc / "scripts" / "init-group.py").exists():
+        return loc
+    sys.exit("ERR: корень шаблона НЕ НАЙДЕН (маркер scripts/init-group.py).\n"
+             "     Задай MEZO_TEMPLATE=<путь> либо строку template=<путь> в local.paths.")
+

@@ -28,8 +28,9 @@ import re
 import sqlite3
 import sys
 from pathlib import Path
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
-DB_DEFAULT = r"C:\guts\.atlas\.mezosync\mezosync.db"
+DB_DEFAULT = str(mezo_paths.live_db())
 
 
 def table_exists(con, name):

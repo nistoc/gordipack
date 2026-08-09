@@ -18,8 +18,9 @@
 import os
 import sys
 from pathlib import Path
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
-LIVE_SCRIPTS = Path(r"C:\guts\.atlas\.mezosync\scripts")
+LIVE_SCRIPTS = mezo_paths.live_scripts()
 
 
 def scripts_root() -> Path:

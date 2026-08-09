@@ -31,9 +31,10 @@ import sqlite3
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
-LIVE = Path(r"C:\guts\.atlas\.mezosync\mezosync.db")
-SCRIPTS = Path(r"C:\guts\.atlas\.mezosync\scripts")
+LIVE = mezo_paths.live_db()
+SCRIPTS = mezo_paths.live_scripts()
 
 # ① относительный ВЫЗОВ скрипта — ловится по литералу
 REL_CALL = re.compile(r"python\s+[.\\/]*\.?mezosync[\\/]scripts[\\/]", re.IGNORECASE)

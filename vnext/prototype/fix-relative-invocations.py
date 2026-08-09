@@ -19,9 +19,10 @@ import re
 import sqlite3
 import sys
 from pathlib import Path
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
-LIVE_DB = Path(r"C:\guts\.atlas\.mezosync\mezosync.db")
-DEFAULT_PREFIX = r"C:\guts\.atlas"
+LIVE_DB = mezo_paths.live_db()
+DEFAULT_PREFIX = str(mezo_paths.container_root())
 REL = re.compile(r'(?<![\w:\\/.])\.mezosync([\\/])scripts([\\/])([\w-]+\.py)')
 
 

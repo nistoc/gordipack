@@ -25,7 +25,7 @@ bite-default-stamp.py — укус на правку ① : умолчание ш
                                                  работающую ветку
 Укус зовёт НАСТОЯЩИЙ write-message.py на КОПИИ живой базы. Живая база не касается вовсе.
 
-Запуск:  python C:/guts/.atlas/vnext-tools/bite-default-stamp.py
+Запуск:  python <абсолютный путь>/bite-default-stamp.py
 Выход:   0 — правка на месте и различает · 1 — правки ещё нет · 2 — правка есть, но ломает
 """
 
@@ -37,8 +37,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_target  # noqa: E402 — какую копию испытываем, решается ОДНИМ местом
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
-LIVE = Path(r"C:\guts\.atlas\.mezosync\mezosync.db")
+LIVE = mezo_paths.live_db()
 SANDBOX = Path.home() / ".mezosync-sandbox" / "bite-stamp.db"
 WRITER = mezo_target.script("write-message.py")
 ROLE = "PROTO"

@@ -25,6 +25,7 @@ import argparse
 import ast
 import sys
 from pathlib import Path
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
 # Пары «функция · обязательный довод · почему он обязателен».
 # Заводить сюда стоит ТОЛЬКО довод, от которого меняется ОТВЕТ, а не оформление:
@@ -111,7 +112,7 @@ def main() -> int:
     ap.add_argument("--strict", action="store_true", help="вернуть 1 при находках")
     args = ap.parse_args()
 
-    dirs = [Path(d) for d in (args.dir or [r"C:\guts\.atlas\.mezosync\scripts"])]
+    dirs = [Path(d) for d in (args.dir or [str(mezo_paths.live_scripts())])]
     paths = sorted({p for d in dirs if d.exists() for p in d.glob("*.py")})
     if not paths:
         print("⛔ файлов не найдено — проверять НЕЧЕГО. Это НЕ «чисто».")

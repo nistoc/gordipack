@@ -20,9 +20,10 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
-GUARD = Path(r"C:\guts\.atlas\.mezosync\scripts\guard-all.py")
-LIVE = Path(r"C:\guts\.atlas\.mezosync\mezosync.db")
+GUARD = mezo_paths.live_scripts() / "guard-all.py"
+LIVE = mezo_paths.live_db()
 
 ORDER = r"python .mezosync\scripts\read-messages.py --role COORD"
 COUNTER = r"⛔ НЕ зови относительно: python .mezosync\scripts\read-messages.py — падает"

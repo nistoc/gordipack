@@ -34,6 +34,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
 # Шаблон ищется ПРИЗНАКОМ (scripts/init-group.py вверх по дереву), а не позицией файла:
 # приёмка живёт в ДВУХ каталогах (рабочий и шаблон), и parents[2] из рабочего указывал
@@ -42,7 +43,7 @@ def _find_repo():
     for base in Path(__file__).resolve().parents:
         if (base / "scripts" / "init-group.py").exists():
             return base
-    return Path(r"C:\github\gordipack")
+    return mezo_paths.template_root()
 REPO = _find_repo()
 TPL_SCRIPTS = REPO / "scripts"
 KEY = "проба-зеркала"

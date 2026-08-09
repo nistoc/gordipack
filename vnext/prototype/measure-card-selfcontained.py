@@ -21,7 +21,7 @@ measure-card-selfcontained.py — понятна ли карточка БЕЗ ч
 ответа «вводить ли чек-лист и какие поля делать обязательными».
 ⛔ Он НЕ выносит приговор отдельной карточке. Кто прочтёт его так — прочтёт неверно.
 
-Запуск:  python C:/guts/.atlas/vnext-tools/measure-card-selfcontained.py [--last 50]
+Запуск:  python <абсолютный путь>/measure-card-selfcontained.py [--last 50]
 """
 
 import argparse
@@ -30,13 +30,14 @@ import sqlite3
 import sys
 from pathlib import Path
 
-LIVE = Path(r"C:\guts\.atlas\.mezosync\mezosync.db")
+LIVE = mezo_paths.live_db()
 
 # 🪤 Поиск неразрешимых ссылок ЖИВЁТ В ОДНОМ МЕСТЕ и берётся оттуда, а не повторяется здесь.
 #    Здешняя копия однажды соврала: в список поясняющих слов попала сама решётка, и каждый
 #    голый «#3120» считался пояснённым сам собою — счёт печатал «0» ПРИ ЛЮБЫХ данных.
 #    Две копии одного правила расходятся молча, и разошедшись, обе выглядят исправными.
 import importlib.util  # noqa: E402
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 _spec = importlib.util.spec_from_file_location(
     "chk", Path(__file__).with_name("check-dangling-refs.py"))
 chk = importlib.util.module_from_spec(_spec)

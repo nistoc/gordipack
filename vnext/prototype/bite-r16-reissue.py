@@ -35,7 +35,7 @@ bite-r16-reissue.py — укус на дефект: ПЕРЕВЫДАННЫЙ Б�
 руками: реконструкция проверяла бы моё понимание кода, а не код.
 
 Запуск:
-    python C:/guts/.atlas/vnext-tools/bite-r16-reissue.py
+    python <абсолютный путь>/bite-r16-reissue.py
 """
 
 import re
@@ -47,8 +47,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_target  # noqa: E402 — какую копию испытываем, решается ОДНИМ местом
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
-LIVE = Path(r"C:\guts\.atlas\.mezosync\mezosync.db")
+LIVE = mezo_paths.live_db()
 SANDBOX = Path.home() / ".mezosync-sandbox" / "bite-r16.db"
 READER = mezo_target.script("read-messages.py")
 ROLE = "PROTO"

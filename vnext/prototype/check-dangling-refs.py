@@ -38,8 +38,9 @@ import re
 import sqlite3
 import sys
 from pathlib import Path
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
-LIVE = Path(r"C:\guts\.atlas\.mezosync\mezosync.db")
+LIVE = mezo_paths.live_db()
 
 # Ссылка вида «#123». Отсекаем «##» и хвост слова, чтобы не ловить якоря и цвета.
 REF = re.compile(r"(?<![\w#])#(\d{1,5})\b")

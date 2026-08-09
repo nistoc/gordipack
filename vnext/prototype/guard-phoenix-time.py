@@ -43,10 +43,10 @@ guard-phoenix-time.py — ЛОКАЛЬНОЕ ВРЕМЯ ПОД СУФФИКСО�
   · `messages_history`, `rules`, `read_batches` и прочие таблицы — эти две (phoenix+messages)
     покрыты, остальное — следующий кусок, если он вообще нужен (называть, не гнаться заранее).
 
-    python C:/guts/.atlas/vnext-tools/guard-phoenix-time.py                # все роли, обе поверхности
-    python C:/guts/.atlas/vnext-tools/guard-phoenix-time.py --role TAXO
-    python C:/guts/.atlas/vnext-tools/guard-phoenix-time.py --skip-messages   # только слепки (быстрый прогон)
-    python C:/guts/.atlas/vnext-tools/guard-phoenix-time.py --selftest
+    python <абсолютный путь>/guard-phoenix-time.py                # все роли, обе поверхности
+    python <абсолютный путь>/guard-phoenix-time.py --role TAXO
+    python <абсолютный путь>/guard-phoenix-time.py --skip-messages   # только слепки (быстрый прогон)
+    python <абсолютный путь>/guard-phoenix-time.py --selftest
 """
 import argparse
 import re
@@ -55,8 +55,9 @@ import sys
 import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
-LIVE_DB = Path(r"C:/guts/.atlas/.mezosync/mezosync.db")
+LIVE_DB = Path(str(mezo_paths.live_db()))
 STAMP = re.compile(r"(\d{4}-\d{2}-\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?\s*UTC")
 # ДАТА БЕЗ ЧАСОВ — форма, которую STAMP пропускает по построению (\d{2}:\d{2} обязателен).
 # Не пересекается со STAMP: между датой и «UTC» здесь ничего, кроме пробела/скобки/тире.

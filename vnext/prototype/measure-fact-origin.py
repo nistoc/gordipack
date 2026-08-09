@@ -18,8 +18,9 @@ import re
 import sqlite3
 import sys
 from pathlib import Path
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
-DB = Path(r"C:\guts\.atlas\.mezosync\mezosync.db")
+DB = mezo_paths.live_db()
 
 # Количественное утверждение О КОНТУРЕ: слово-предмет + число (или число + слово).
 # Слова взяты из живого словаря контура, а не из головы: роли, проверки, приёмки, шаги,

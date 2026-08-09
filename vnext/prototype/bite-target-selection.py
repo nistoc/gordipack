@@ -18,10 +18,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 BITE_ALL = os.path.join(HERE, "bite-all.py")
-LIVE = r"C:\guts\.atlas\.mezosync\scripts"
+LIVE = str(mezo_paths.live_scripts())
 # приёмки, которые ТОЧНО зовут механизм через резолвер (замер: script("read-messages.py"))
 ONLY = "to-me-empty"
 

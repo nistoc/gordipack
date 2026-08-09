@@ -22,8 +22,9 @@ import sqlite3
 import subprocess
 import sys
 from datetime import datetime, timezone
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
-DEFAULT_DB = r"C:\guts\.atlas\.mezosync\mezosync.db"
+DEFAULT_DB = str(mezo_paths.live_db())
 CC = re.compile(r"\bcc\s+@.*", re.S)
 
 

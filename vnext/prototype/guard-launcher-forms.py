@@ -35,12 +35,13 @@ import sys
 import tempfile
 from collections import defaultdict
 from pathlib import Path
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
-LIVE_SCRIPTS = Path(r"C:\guts\.atlas\.mezosync\scripts")
-VNEXT_TOOLS = Path(r"C:\guts\.atlas\vnext-tools")
-TEMPLATE_ROOT = Path(r"C:\github\gordipack")     # относительные пути вида «vnext/tools/» — сюда
+LIVE_SCRIPTS = mezo_paths.live_scripts()
+VNEXT_TOOLS = Path(__file__).resolve().parent
+TEMPLATE_ROOT = mezo_paths.template_root()     # относительные пути вида «vnext/tools/» — сюда
 LIVE_DB = LIVE_SCRIPTS.parent / "mezosync.db"
-CANON = [Path(r"C:\guts\.atlas\CLAUDE.md")]
+CANON = [Path(str(mezo_paths.container_root() / "CLAUDE.md"))]
 
 CALL = re.compile(
     r"(?:python\s+)?(?P<path>(?:[A-Za-z]:)?[^\s`'\"|]*[\\/])?(?P<script>[a-z0-9_-]+\.py)"

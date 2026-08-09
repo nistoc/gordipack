@@ -32,8 +32,9 @@ import argparse
 import sqlite3
 import sys
 from pathlib import Path
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
-DB = Path(r"C:\guts\.atlas\.mezosync\mezosync.db")
+DB = mezo_paths.live_db()
 
 # Порог взят у существующего гарда свежести (3 ч, обоснование его автора: роль пишет ноты чаще,
 # чем сохраняется, и это нормально). Не изобретаю свой — два разных порога на один предмет

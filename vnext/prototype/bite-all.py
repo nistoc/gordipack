@@ -23,6 +23,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -31,7 +32,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # Рычаг у приёмок был (mezo_target + переменные среды), но набор про него НЕ ЗНАЛ: прогон
 # «по шаблону» набирался рукой, то есть существовал как намерение, а не как механизм.
 # ⚖️ Умолчание — ЖИВОЙ контур: тот, кто просто позвал набор, получает привычное поведение.
-LIVE_SCRIPTS = r"C:\guts\.atlas\.mezosync\scripts"
+LIVE_SCRIPTS = str(mezo_paths.live_scripts())
 TEMPLATE_SCRIPTS = os.path.normpath(os.path.join(HERE, "..", "..", "scripts"))
 
 

@@ -33,8 +33,9 @@ import argparse
 import sqlite3
 import sys
 from pathlib import Path
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
-LIVE_DB = Path(r"C:\guts\.atlas\.mezosync\mezosync.db")
+LIVE_DB = mezo_paths.live_db()
 
 
 def connect(db: str) -> sqlite3.Connection:

@@ -25,8 +25,9 @@ import re
 import sqlite3
 import sys
 from datetime import datetime
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
-DEFAULT_DB = r"C:\guts\.atlas\.mezosync\mezosync.db"
+DEFAULT_DB = str(mezo_paths.live_db())
 REF = re.compile(r"#(\d{3,5})")
 URGENT = ("high", "critical")
 

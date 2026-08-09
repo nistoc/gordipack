@@ -46,8 +46,9 @@ import pathlib
 import re
 import sqlite3
 import sys
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
-LIVE_DB = pathlib.Path(r"C:\guts\.atlas\.mezosync\mezosync.db")
+LIVE_DB = mezo_paths.live_db()
 GUARD_FLAG = "--i-am-coord-and-owner-said"
 
 

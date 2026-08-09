@@ -25,8 +25,12 @@ import hashlib
 import re
 import sys
 from pathlib import Path
+import sys as _sys
+from pathlib import Path as _P
+_sys.path.insert(0, str(_P(__file__).resolve().parent.parent / "prototype"))
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
-LIVE = Path(r"C:\guts\.atlas\.mezosync\scripts")
+LIVE = mezo_paths.live_scripts()
 TEMPLATE = Path(__file__).resolve().parents[2] / "scripts"
 
 # Механизмы, которых в шаблоне не было ВОВСЕ (замер 08.08): контур, собранный из шаблона,

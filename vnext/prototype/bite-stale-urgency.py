@@ -24,9 +24,10 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
 TOOL = Path(__file__).with_name("check-stale-urgency.py")
-LIVE = Path(r"C:\guts\.atlas\.mezosync\mezosync.db")
+LIVE = mezo_paths.live_db()
 
 
 def run(db: Path) -> tuple:

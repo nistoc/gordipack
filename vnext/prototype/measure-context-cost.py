@@ -21,10 +21,11 @@ import argparse
 import re
 import sqlite3
 from pathlib import Path
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
-LIVE = Path(r"C:\guts\.atlas\.mezosync\mezosync.db")
-CLAUDE_MD = Path(r"C:\guts\.atlas\CLAUDE.md")
-READ_PHOENIX = Path(r"C:\guts\.atlas\.mezosync\scripts\read-phoenix.py")
+LIVE = mezo_paths.live_db()
+CLAUDE_MD = Path(str(mezo_paths.container_root() / "CLAUDE.md"))
+READ_PHOENIX = mezo_paths.live_scripts() / "read-phoenix.py"
 LO, HI = 3.5, 2.5          # симв/токен: LO — оптимистично, HI — пессимистично
 SPLIT = re.compile(r"\bcc\b|\bFYI\b|\bcc:", re.IGNORECASE)
 

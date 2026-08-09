@@ -18,8 +18,9 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
-STEP = pathlib.Path(r"C:\guts\.atlas\.mezosync\scripts\migrations\20260807-addressed-by-unset.py")
+STEP = mezo_paths.live_scripts() / "migrations" / "20260807-addressed-by-unset.py"
 
 OLD_SCHEMA = """
 CREATE TABLE messages (

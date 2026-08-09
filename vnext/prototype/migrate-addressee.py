@@ -38,10 +38,11 @@ import re
 import sqlite3
 import sys
 from pathlib import Path
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
 HERE = Path(__file__).resolve().parent
 SCHEMA_FILE = HERE / "schema_vnext.sql"
-LIVE_DB = Path(r"C:\guts\.atlas\.mezosync\mezosync.db")
+LIVE_DB = mezo_paths.live_db()
 
 # ФОРМА A: «[ПИШЕТ→КОМУ · FYI …]» — шапка со стрелкой.
 HEADER_RE = re.compile(r"^\W*\[?\s*(\w+)\s*→\s*([^\]·\n]+)", re.MULTILINE)
