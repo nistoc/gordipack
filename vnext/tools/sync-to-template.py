@@ -93,6 +93,11 @@ def main() -> int:
 
     missing, differ, same = [], [], []
     plan = with_deps(NEW + SHARED, LIVE)
+    # ⚡ ШАГИ СХЕМЫ (migrations/) — тоже механизм, а не архив. Замер 2026-08-09: в шаблоне
+    # каталога не было ВОВСЕ при семи шагах в живом. Собранный контур это переживал (конечная
+    # схема лежит в schema/), а вот приёмка прав — нет: она читает описание таблицы из файла
+    # шага рядом со скриптом и, идя по шаблону, МОЛЧА брала его из живого контура.
+    plan += sorted(f"migrations/{p.name}" for p in (LIVE / "migrations").glob("*.py"))
     extra = [n for n in plan if n not in NEW + SHARED]
     if extra:
         print(f"📎 добавлено по зависимостям (список их не знал): {' · '.join(extra)}")
@@ -133,6 +138,7 @@ def main() -> int:
     TEMPLATE.mkdir(parents=True, exist_ok=True)
     for n, want, dst, *_ in [(m[0], m[1], m[2]) for m in missing] + \
                             [(d[0], d[1], d[2]) for d in differ]:
+        dst.parent.mkdir(parents=True, exist_ok=True)   # у шагов схемы свой подкаталог
         dst.write_text(want, encoding="utf-8", newline="\n")
         print(f"  ✅ {n}")
     print(f"\n✅ Перенесено: {len(missing) + len(differ)}. Дальше: собрать СВЕЖИЙ контур "

@@ -38,10 +38,16 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
-CLI = r"C:\guts\.atlas\.mezosync\scripts\role-rights.py"
-DDL = open(os.path.join(os.path.dirname(CLI), "migrations",
-                        "20260808-role-rights.py"), encoding="utf-8").read()
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mezo_target  # noqa: E402  — какую копию испытываем, решается ОДНИМ местом
+
+# ⚡ 2026-08-09 (карточка #148): путь больше не вписан в приёмку. Прежде он вёл в живой контур
+# всегда, и прогон «по шаблону» на деле испытывал оригинал — а описание таблицы приёмка
+# и вовсе брала из живого молча, потому что в шаблоне каталога шагов схемы не было.
+CLI = str(mezo_target.script("role-rights.py"))
+DDL = mezo_target.migration("20260808-role-rights.py").read_text(encoding="utf-8")
 CASES = DIFFER = 0
 
 
@@ -183,8 +189,12 @@ def main() -> int:
                "в пустой базе тот же вопрос обязан дать ДРУГОЙ текст", differ=True)
 
     print()
+    # ⚠️ Подпись НАЗЫВАЕТ испытанную копию, а не повторяет вчерашнюю правду: до 09.08 здесь
+    # стояло «испытан ЖИВОЙ скрипт» всегда — и прогон по шаблону уверенно врал о себе.
+    which = "ЖИВОЙ контур" if str(mezo_target.scripts_root()) == str(mezo_target.LIVE_SCRIPTS) \
+        else f"копия: {mezo_target.scripts_root()}"
     print(f"{'✅ ПРАВА ПОЛЯМИ ПРИНЯТЫ' if ok else '🔴 НЕ ПРИНЯТЫ'} — случаев {CASES}, "
-          f"различающих {DIFFER}, испытан ЖИВОЙ скрипт")
+          f"различающих {DIFFER}, испытан {which}")
     return 0 if ok else 1
 
 
