@@ -18,9 +18,9 @@ read-phoenix.py — предъявить роли её слепок ИЗ БД. �
 Секция launcher печатается последней, справочно.
 
 ЗАПУСК (это и есть содержимое launcher-строки владельца):
-    python <КОНТУР>/.mezosync/scripts/read-phoenix.py --role CORE
-    python <КОНТУР>/.mezosync/scripts/read-phoenix.py --role CORE --section state    # одна секция
-    python <КОНТУР>/.mezosync/scripts/read-phoenix.py --list                         # кто вообще есть
+    python C:/guts/.atlas/.mezosync/scripts/read-phoenix.py --role CORE
+    python C:/guts/.atlas/.mezosync/scripts/read-phoenix.py --role CORE --section state    # одна секция
+    python C:/guts/.atlas/.mezosync/scripts/read-phoenix.py --list                         # кто вообще есть
 """
 
 import argparse
@@ -211,6 +211,36 @@ def main():
             print(f"\n{'─' * 79}\n## §4¾ МАШИННЫЙ СЛОЙ   "
                   f"[собран этим вызовом, нигде не хранится]\n")
             print("\n".join(machine_block(args.db, role)))
+
+            # ── §4⅞ СЛОЙ ДИСКА — ЗАКРЫВАЕТ ГРАНИЦУ «ЗНАЮ БАЗУ, НЕ ЗНАЮ ДИСК» ──
+            # Написан ЧУЖОЙ рукой (@opssre #3445, `6f96fde`), врезан по слову владельца
+            # 2026-08-09 13:24 UTC. Повод замером, не опасением: факты о диске роли хранили
+            # руками, и они врали как базовые — @STUD записал «docker не отвечает» и через
+            # 13 минут сам намерил обратное; guard-role-standard находил хранимые «ahead
+            # числом» в слепках. Сборщик ничего не хранит, печатает СВОЁ время замера
+            # и свою границу («слой знает ДИСК, но не БАЗУ»).
+            # ⚖️ Зовём подпроцессом, а не импортом: у сборщика свой репозиторий-хозяин
+            #    (step04_opssre — зона @opssre), и его падение не имеет права уронить
+            #    чтение слепка. Отказ ГОВОРИТ строкой — молчащий сборщик неотличим
+            #    от сборщика, которому нечего сказать (та же норма, что у §4¾).
+            _disk = "C:/guts/.atlas/atlas.archs/step04_opssre/tools/disk_layer.py"
+            try:
+                import subprocess as _sp
+                _r = _sp.run([sys.executable, _disk], capture_output=True,
+                             text=True, encoding="utf-8", timeout=30)
+                if _r.returncode == 0 and (_r.stdout or "").strip():
+                    print(f"\n{'─' * 79}")
+                    print(_r.stdout.rstrip())
+                else:
+                    _tail = ((_r.stdout or "") + (_r.stderr or "")).strip().splitlines()[-2:]
+                    print(f"\n⚠️ слой диска НЕ СОБРАН (код {_r.returncode}): "
+                          + " · ".join(_tail))
+                    print("   Это НЕ «всё в порядке» — репозитории и сервисы НЕ проверены. "
+                          f"Зови сам: python {_disk}")
+            except Exception as _e:                       # noqa: BLE001
+                print(f"\n⚠️ слой диска НЕ СОБРАН: {_e}")
+                print("   Это НЕ «всё в порядке» — репозитории и сервисы НЕ проверены. "
+                      f"Зови сам: python {_disk}")
 
     if not args.section:
         miss = [s for s in ORDER if s not in rows]
