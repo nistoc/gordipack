@@ -150,6 +150,43 @@ def run_phoenix(db, role=None):
     return red, yellow, len(rows)
 
 
+CORRECTS = re.compile(r"поправк|исправлен|опечатк|читайте?\s+минус|минус\s+два|correction", re.I)
+# 🎯 ПОПРАВКА ОБЯЗАНА БЫТЬ ПРО ЭТО. Замер 09.08 21:12 UTC: без требования темы гасились
+# 186 записок при 10 реально дефектных, и одна поправка «про другое» тушила чужие по одной
+# лишь ссылке — тот же класс #151 (гашение по соседству), только через номера.
+ABOUT_TIME = re.compile(r"UTC|метк[аиу]|время|времен|час(?:а|ов|ы)?\b|пояс|\d\d:\d\d", re.I)
+REFS = re.compile(r"#(\d{2,6})")
+
+
+def corrected_ids(con):
+    """Номера записок, к которым ПОЗЖЕ вышла явная поправка. Гасит НАВСЕГДА — временем
+    дефект не лечится, лечится поправкой.
+
+    Два вида поправки, оба взяты с ЖИВОГО материала (замер 09.08 21:10 UTC):
+      · тег `correction` + ссылка «#N» в теле  — так помечена #3423 (PROTO);
+      · слово поправки И «#N» В ОДНОЙ СТРОКЕ   — так написана #3431 (TAXO), БЕЗ тега.
+    ⛔ Ссылка сама по себе НЕ гасит: записки ссылаются друг на друга постоянно, и «гасить
+    по любому упоминанию» — ровно тот дефект, что стоил нам находки #151 (гашение по
+    соседству). Для непомеченной поправки единица — СТРОКА: слово и номер вместе.
+    ⚠️ Поправка обязана быть ПОЗЖЕ (id больше): текст, написанный ДО ошибки, её не отменяет.
+    """
+    fixed = {}
+    for mid, tags, body in con.execute(
+            "SELECT id, COALESCE(tags,''), COALESCE(body_md,'') FROM messages ORDER BY id"):
+        tagged = "correction" in tags
+        for line in body.splitlines():
+            refs = REFS.findall(line)
+            if not refs:
+                continue
+            # слово поправки (или тег) И тема ВРЕМЕНИ — обязательно ОБА, в одной строке
+            if (tagged or CORRECTS.search(line)) and ABOUT_TIME.search(line):
+                for r in refs:
+                    n = int(r)
+                    if n < mid:                     # поправка ПОСЛЕ ошибки, не до
+                        fixed.setdefault(n, mid)
+    return fixed
+
+
 def run_messages(db, role=None, since_hours=None):
     """Та же проверка на публичной учащей поверхности — нотах (#2887, @COORD).
 
@@ -170,6 +207,22 @@ def run_messages(db, role=None, since_hours=None):
     Историю смотреть отдельным запросом — без --since-hours, как раньше.
     """
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    # ⚡ ПОПРАВКИ СЧИТАЮТСЯ ПО ВСЕЙ ЛЕНТЕ, а не по окну: поправка к вчерашней записке могла
+    # выйти сегодня, и окно её бы не увидело — гашение зависело бы от момента прогона.
+    fixed = corrected_ids(con)
+    # 🪤 ЧТО ЗА ОКНОМ — ПЕЧАТАЕТСЯ ОТДЕЛЬНО, А НЕ МОЛЧИТ. Класс, найденный на себе 09.08:
+    # три исторических красных «погасли» просто потому, что уехали за 24 ч — и прогон стал
+    # зелёным БЕЗ единой починки. Сигнал, пропавший оттого, что дефект уехал из окна,
+    # неотличим от вылеченного. ⇒ непогашенное старьё считается вслух отдельной строкой.
+    outside = []
+    if since_hours:
+        for mid, wrole, body, ts in con.execute(
+                "SELECT id, writer_role, body_md, timestamp FROM messages "
+                f"WHERE timestamp < datetime('now','-{int(since_hours)} hours') ORDER BY id"):
+            if mid in fixed:
+                continue
+            if check_section(body, ts, ref_label="timestamp ноты"):
+                outside.append((mid, wrole))
     q = "SELECT id, writer_role, body_md, timestamp FROM messages"
     conds, args = [], []
     if role:
@@ -189,17 +242,34 @@ def run_messages(db, role=None, since_hours=None):
         print(f"⚠️ messages не прочитаны ({e}) — эта поверхность НЕ проверена")
         return None
     con.close()
-    red = yellow = 0
+    red = yellow = healed = 0
     for mid, wrole, body, ts in rows:
         hits = check_section(body, ts, ref_label="timestamp ноты")
         if not hits:
+            continue
+        if mid in fixed:
+            # ⚖️ Гасит ПОПРАВКА, а не время: лента дописывается, тело исправить нельзя,
+            # и единственный честный способ закрыть дефект — сказать о нём вслух.
+            healed += 1
             continue
         print(f"── #{mid} [{wrole}]   (timestamp {str(ts)[:16]} UTC)")
         for kind, where, line in hits:
             print(f"   {kind}\n      {where}  {line}")
         red += sum(1 for k, _, _ in hits if k.startswith("🔴"))
         yellow += sum(1 for k, _, _ in hits if k.startswith("🟡"))
-    print(f"{'🔴' if red else '✅'} messages (ноты): 🔴 {red} · 🟡 {yellow} · нот проверено {len(rows)}")
+    print(f"{'🔴' if red else '✅'} messages (ноты): 🔴 {red} · 🟡 {yellow} · "
+          f"нот проверено {len(rows)}" + (f" · погашено ПОПРАВКОЙ {healed}" if healed else ""))
+    if since_hours:
+        if outside:
+            roles = sorted({r for _, r in outside})
+            print(f"⚠️ ВНЕ ОКНА ({since_hours} ч) — {len(outside)} непогашенных: "
+                  f"{', '.join('#' + str(m) for m, _ in outside[:6])}"
+                  f"{' …' if len(outside) > 6 else ''} (роли: {', '.join(roles)})")
+            print("   ⇒ они НЕ исправлены и НЕ признаны — просто уехали за окно. Гасит только"
+                  " поправка: записка с тегом correction либо слово поправки и «#N» в одной строке")
+        else:
+            print(f"✅ вне окна ({since_hours} ч) непогашенных нет — старое либо чисто,"
+                  " либо поправлено вслух")
     return red, yellow, len(rows)
 
 
@@ -222,8 +292,12 @@ def run(db, role=None, skip_messages=False, since_hours=None):
     # применённый к собственному выводу.
     print(f"   📏 охват: слепок целиком + {scope}")
     if since_hours:
-        print(f"   ⚠️ ИСТОРИЯ НЕ ПРОВЕРЕНА этим прогоном — она неустранима (ноты не переписываются).")
-        print(f"      Посмотреть: тот же вызов БЕЗ --since-hours.")
+        # ⚰️ Прежняя строка гласила «ИСТОРИЯ НЕ ПРОВЕРЕНА этим прогоном» — с 09.08 21:14 UTC
+        # это НЕПРАВДА: старое считается и печатается строкой «ВНЕ ОКНА» выше. Механизм,
+        # оставленный со старой подписью, учит не смотреть туда, куда он теперь смотрит.
+        print(f"   ⚖️ ИСТОРИЯ ПРОВЕРЕНА и учтена отдельно (строка «ВНЕ ОКНА» выше): в окне —")
+        print(f"      живой дефект, вне окна — непогашенный долг. Гасит ПОПРАВКА, не время;")
+        print(f"      подробности по каждой записке — тот же вызов БЕЗ --since-hours.")
     if red:
         print("   ⇒ фикс: `datetime.now(timezone.utc)`; самопроверка роли — «метка в теле ≈ saved_at/timestamp».")
         print("   ⚠️ Исторические ноты (уже отправленные) не переписываются — правь ПРИВЫЧКУ, не прошлое.")
