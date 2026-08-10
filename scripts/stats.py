@@ -2,10 +2,10 @@
 stats.py — снимок статистики mezosync.db для COORD (периодический сбор).
 
 Использование:
-    python stats.py --db .mezosync/mezosync.db
-    python stats.py --db .mezosync/mezosync.db --since-min 50   # активность за окно
-    python stats.py --db .mezosync/mezosync.db --json           # машинный вывод
-    python stats.py --db .mezosync/mezosync.db --record         # + записать снимок в stats_log
+    python <КОНТУР>/.mezosync/scripts/stats.py
+    python <КОНТУР>/.mezosync/scripts/stats.py --since-min 50   # активность за окно
+    python <КОНТУР>/.mezosync/scripts/stats.py --json           # машинный вывод
+    python <КОНТУР>/.mezosync/scripts/stats.py --record         # + записать снимок в stats_log
 
 Ничего не мутирует в messages/rules/phoenix. С --record добавляет строку в
 служебную таблицу stats_log (создаётся при первом вызове) — чтобы видеть динамику.
@@ -17,6 +17,8 @@ import json
 import sqlite3
 import sys
 from pathlib import Path
+
+from mezo_paths import resolve_db   # R15a: путь к БД — от расположения скрипта, не от CWD
 
 
 def utc_to_local(s):
@@ -41,11 +43,15 @@ def utc_to_local(s):
 
 def main():
     p = argparse.ArgumentParser(description="Снимок статистики mezosync.db")
-    p.add_argument("--db", required=True)
+        # R15a довезён 27.07 (замер PROTO #2867: справка не может обещать то, чего
+    # механизм не умеет). Проверка готовности — ПРОГОН из чужого каталога.
+
+    p.add_argument("--db", default=None, help="Путь к mezosync.db (по умолчанию — рядом со скриптом)")
     p.add_argument("--since-min", type=int, default=50, help="Окно активности, минут")
     p.add_argument("--json", action="store_true", help="Машинный JSON вместо таблицы")
     p.add_argument("--record", action="store_true", help="Записать снимок в stats_log")
     args = p.parse_args()
+    args.db = str(resolve_db(args.db, __file__))   # R15a: от расположения скрипта
 
     db_path = Path(args.db)
     if not db_path.exists():

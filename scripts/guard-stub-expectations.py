@@ -38,25 +38,17 @@ guard-stub-expectations.py — ловит ЗАГЛУШКУ, ОБЕЩАЮЩУЮ �
 третий вид — ЧЕСТНО ОПИСАННЫЙ УЩЕРБ (документация не врёт, поведение соответствует, вред есть).
 Последний ловится только вопросом «зачем мы это принимаем, если выбрасываем».
 
-⚠️ ПОРТАТИВНОСТЬ ШАБЛОНА. Гард смотрит на исходники SPA-фронтенда — это Atlas-специфично
-(atlas.studio). Путь задаётся env-переменной MEZOSYNC_SPA_SRC. Не задан или каталога нет —
-проверка ПРОПУСКАЕТСЯ (не зелёная, а неприменимая): свежая система без такой SPA не краснит.
-
 ЗАПУСК:
-    python guard-stub-expectations.py           # exit 1, если есть обещания без меток
-    python guard-stub-expectations.py --list    # показать всё найденное с вердиктом
-    (SPA: env MEZOSYNC_SPA_SRC=<путь к src фронтенда>)
+    python <КОНТУР>/.mezosync/scripts/guard-stub-expectations.py           # exit 1, если есть обещания без меток
+    python <КОНТУР>/.mezosync/scripts/guard-stub-expectations.py --list    # показать всё найденное с вердиктом
 """
 
 import argparse
-import os
 import re
 import sys
 from pathlib import Path
 
-# SPA_SRC — Atlas-специфичный каталог исходников фронтенда, задаётся env MEZOSYNC_SPA_SRC.
-# Не задан — гард неприменим (scan вернёт None → пропуск с пометкой, exit 0).
-SPA_SRC = Path(os.environ["MEZOSYNC_SPA_SRC"]) if os.environ.get("MEZOSYNC_SPA_SRC") else None
+SPA_SRC = Path(r"C:\guts\.atlas\atlas.studio\Src\Atlas.Studio.Spa\src")
 
 STUB_MARKERS = re.compile(r"Демо|заглушк|подключается|появится позже|в разработке", re.IGNORECASE)
 
@@ -98,7 +90,7 @@ def verdict_for(lines, i):
 
 
 def scan():
-    if SPA_SRC is None or not SPA_SRC.exists():
+    if not SPA_SRC.exists():
         return None, []
     findings = []
     for path in sorted(SPA_SRC.rglob("*.ts*")):
@@ -163,8 +155,7 @@ def main():
 
     exists, findings = scan()
     if exists is None:
-        print("⏭️ SPA недоступна (env MEZOSYNC_SPA_SRC не задан или каталог отсутствует) — "
-              "проверка пропущена, НЕ зелёная")
+        print("⏭️ SPA недоступна (нет atlas.studio) — проверка пропущена, НЕ зелёная")
         sys.exit(0)
 
     unmarked = [f for f in findings if f[4] == "UNMARKED"]

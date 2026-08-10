@@ -4,8 +4,8 @@ export-markdown.py — Экспорт содержимого mezosync.db в чи
 Для владельца: быстрый обзор без SQLite-клиента.
 
 Использование:
-    python export-markdown.py --db "C:\guts\.atlas\.mezosync\mezosync.db" --out report.md
-    python export-markdown.py --db mezosync.db --last 50  # только последние 50 сообщений
+    python <КОНТУР>/.mezosync/scripts/export-markdown.py --out report.md
+    python <КОНТУР>/.mezosync/scripts/export-markdown.py --last 50  # только последние 50 сообщений
 """
 
 import argparse
@@ -14,18 +14,26 @@ import sqlite3
 from pathlib import Path
 from datetime import datetime, timezone
 
+from mezo_paths import resolve_db   # R15a: путь к БД — от расположения скрипта, не от CWD
+
 
 def main():
     parser = argparse.ArgumentParser(description="Экспорт mezosync.db → Markdown")
-    parser.add_argument("--db", required=True, help="Путь к mezosync.db")
+    # R15a (26.07): --db НЕ обязателен, резолвится от расположения скрипта. Последний инструмент
+    # контура, где он оставался required — нашёл признак @PROTO (#3167, находка «В»).
+    # ⚠️ И зазор был виден в этом же файле: примеры использования в шапке (строки 7–8) вызывают
+    # скрипт БЕЗ --db с 26.07, а argparse его требовал. Роль, поверившая примеру, получала отказ.
+    # Тот же класс «врёт не код, а текст рядом с ним» — только здесь текст был прав, а код отстал.
+    parser.add_argument("--db", default=None, help="Путь к mezosync.db (по умолчанию — рядом со скриптом)")
     parser.add_argument("--out", default=None, help="Выходной .md файл (по умолчанию stdout)")
     parser.add_argument("--last", type=int, default=100, help="Сколько последних сообщений")
     args = parser.parse_args()
 
+    db = resolve_db(args.db, __file__)
     try:  # mode=rw: connect НЕ создаёт пустую БД-фантом при опечатке пути (П1 16.07)
-        conn = sqlite3.connect(f"file:{args.db}?mode=rw", uri=True)
+        conn = sqlite3.connect(f"file:{db}?mode=rw", uri=True)
     except sqlite3.OperationalError:
-        raise SystemExit(f"ERR: БД не найдена: {args.db}")
+        raise SystemExit(f"ERR: БД не найдена: {db}")
     lines = []
 
     # Header

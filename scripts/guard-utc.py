@@ -19,7 +19,7 @@ guard-utc.py — гард правила timestamp-utc-in-sqlite v2: в тулк
 пропуска, которого не видно.
 
 ЗАПУСК:
-    python guard-utc.py              # проверить . (или --dir)
+    python <КОНТУР>/.mezosync/scripts/guard-utc.py              # проверить . (или --dir)
     exit 0 — чисто · exit 1 — найдено локальное время в КОДЕ
 """
 

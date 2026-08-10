@@ -13,12 +13,12 @@ backlog_tests, templates.
 превращаются в ложь при первой же правке — поэтому сначала писатель.
 
 ЗАПУСК:
-    python set-registry.py --db <p> track     --id TRACK-X --title "..." [--status active]
-    python set-registry.py --db <p> invariant --code VERIFY-AT-SOURCE --desc "..."
-    python set-registry.py --db <p> test      --backlog-id 5 --title "..." --method "..." \
+    python <КОНТУР>/.mezosync/scripts/set-registry.py track     --id TRACK-X --title "..." [--status active]
+    python <КОНТУР>/.mezosync/scripts/set-registry.py invariant --code VERIFY-AT-SOURCE --desc "..."
+    python <КОНТУР>/.mezosync/scripts/set-registry.py test      --backlog-id 5 --title "..." --method "..." \
                                               [--command "..."] [--expected "..."]
-    python set-registry.py --db <p> template  --role-type coord --name "COORD" --prompt-file f
-    python set-registry.py --db <p> list      [track|invariant|test|template]
+    python <КОНТУР>/.mezosync/scripts/set-registry.py template  --role-type coord --name "COORD" --prompt-file f
+    python <КОНТУР>/.mezosync/scripts/set-registry.py list      [track|invariant|test|template]
 
 Все подкоманды идемпотентны (INSERT OR REPLACE по ключу) и пишут в audit_log.
 Без --apply — dry-run.
@@ -28,6 +28,8 @@ import argparse
 import sqlite3
 import sys
 from pathlib import Path
+
+from mezo_paths import resolve_db   # R15a: путь к БД — от расположения скрипта, не от CWD
 
 
 def audit(conn, actor, action, target, diff):
@@ -135,7 +137,8 @@ def cmd_list(conn, a):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--db", required=True)
+    # R15a довезён 27.07: set-registry стоит в шапке КАНОНА (инварианты), где --db уже убран.
+    ap.add_argument("--db", default=None, help="Путь к mezosync.db (по умолчанию — рядом со скриптом)")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     for name in ("track", "invariant", "test", "template", "list"):
@@ -167,6 +170,7 @@ def main():
             p.add_argument("what", nargs="?", choices=["track", "invariant", "test", "template", "all"])
 
     a = ap.parse_args()
+    a.db = str(resolve_db(a.db, __file__))   # R15a: от расположения скрипта, не от CWD
     try:  # mode=rw: connect НЕ создаёт пустую БД-фантом при опечатке пути (П1 16.07)
         conn = sqlite3.connect(f"file:{a.db}?mode=rw", uri=True)
     except sqlite3.OperationalError:

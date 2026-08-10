@@ -16,14 +16,9 @@ export-rules.py — генерирует sync.rules.md из таблиц `rules`
 файл-карта) в БД отсутствовали, и слепая генерация их бы СТЁРЛА. Замерено, перенесено (шаг 1b),
 и только после этого генерация стала безопасной. Сначала мигрируй, потом генерируй.
 
-⚠️ ПОРТАТИВНОСТЬ ШАБЛОНА. Путь вывода по умолчанию выводится из расположения скрипта
-(<контур>/.mezosync/generated/sync.rules.md), а не хардкодится на atlas.archs. Разделы ORDER —
-Atlas-реестр ключей: ключи, которых нет в БД, просто пропускаются, а неучтённые падают в
-«Прочие» — на чужом наборе правил файл соберётся без потерь. Переопределить — флагом --out.
-
 ЗАПУСК:
-    python export-rules.py --db <path>            # dry-run
-    python export-rules.py --db <path> --apply
+    python <КОНТУР>/.mezosync/scripts/export-rules.py            # dry-run
+    python <КОНТУР>/.mezosync/scripts/export-rules.py --apply
 """
 
 import argparse
@@ -31,9 +26,22 @@ import datetime
 import sqlite3
 from pathlib import Path
 
-# Путь вывода по умолчанию — <контур>/.mezosync/generated/sync.rules.md (портативно).
-# Переопредели --out на версионированное зеркало конкретного контура (в Atlas — atlas.archs).
-OUT = Path(__file__).resolve().parent.parent / "generated" / "sync.rules.md"
+from mezo_paths import resolve_db   # R15a: путь к БД — от расположения скрипта, не от CWD
+
+# ⚡ ПРИЁМНИК ВЫВОДИТСЯ ОТ БАЗЫ, А НЕ ВПЕЧАТАН (#145, 10.08 06:58 UTC).
+# 🪤 ЗДЕСЬ СТОЯЛ АБСОЛЮТНЫЙ ПУТЬ КОНТЕЙНЕРА АВТОРА ШАБЛОНА — и это не теоретический грех:
+# сегодня утром КОПИИ этого файла в свежесобранных стендах, позванные стендовым set-rule
+# БЕЗ --out, ПЕРЕЗАПИСАЛИ ЖИВОЕ ЗЕРКАЛО автора содержимым стенда (36 правил вместо 50).
+# Источник set-rule передаёт явно (--db), а ПРИЁМНИК был один на все базы — ровно дыра,
+# о которой предупреждал его же комментарий. Санитайзер переносчика путь не поймал:
+# тот знал одну форму контейнера, а тут была другая.
+# ⇒ Приёмник вычисляется ОТ БАЗЫ: её производное лежит рядом с ней, а не у автора шаблона.
+def _default_out(db_path: Path) -> Path:
+    root = Path(db_path).resolve().parent          # каталог .mezosync своей базы
+    legacy = root.parent / "atlas.archs" / ".mezosync" / "coordination"
+    if legacy.is_dir():                            # раскладка контура-автора — уважаем
+        return legacy / "sync.rules.md"
+    return root / "generated" / "sync.rules.md"    # новорождённые: рядом с базой
 
 # Порядок разделов: от «кто мы» к «как работаем» к «где что лежит».
 # Ключи, которых нет в БД, просто пропускаются; неупомянутые — падают в «Прочие».
@@ -44,8 +52,12 @@ ORDER = [
                                   "one-writer-one-channel", "shared-broadcast-channel",
                                   "channel-rotation"]),
     ("⏱ Время", ["timestamp-utc-in-sqlite", "timestamp-in-replies"]),
+    # task-discipline поставлено сюда по просьбе @PROTO (#3185): в «Прочих» правило видно
+    # хуже, а оно адресовано КАЖДОЙ роли на каждом шаге. Раздел «Ритм и дисциплина» — про то,
+    # как роль работает изо дня в день; задачи ровно оттуда.
     ("🔄 Ритм и дисциплина", ["timers-always-on", "wip-pulse", "ack-deadline",
-                              "milestone-single-source", "busy-retry", "context-depth"]),
+                              "milestone-single-source", "busy-retry", "context-depth",
+                              "task-discipline"]),
     ("🔒 Жёсткие правила (пакет Q1, залочено владельцем 2026-07-02)",
      ["no-push-without-owner", "rule8-destructive", "gate-before-commit",
       "migrations-core-only", "contract-diff-before-commit", "services-self-raise",
@@ -58,14 +70,19 @@ ORDER = [
     ("🗺 Карта", ["file-map"]),
 ]
 
+# Путь СВОЙСТВОМ + as_posix: эта фабрика печатает подсказку в sync.rules.md (вторая фабрика
+# после export-channels — замер PROTO #2867, R3). Обратные слэши съедаются как escape.
+SCRIPTS_DIR = Path(__file__).resolve().parent.as_posix()
+
 HEADER = """# Sync RULES — протокол мезосинка Atlas (8 ролей)
 
 > ⚠️ **СГЕНЕРИРОВАНО ИЗ `mezosync.db` — НЕ РЕДАКТИРОВАТЬ.**
 > Любая правка здесь будет затёрта следующим экспортом. **Источник правды — таблицы
 > `rules` и `invariants` в БД.** При любом расхождении файла и БД — **верь БД**.
 >
-> Править правило: `python .mezosync/scripts/set-rule.py --db <db> --key <ключ> --locked-by owner|coord --body-file <f> --apply`
-> Прочитать одно: `--key <ключ> --show` · список: `--list` · инварианты: `set-registry.py --db <db> list invariant`
+> Править правило: `python {s}/set-rule.py --key <ключ> --locked-by owner|coord --body-file <f> --apply`
+> Прочитать одно: `--key <ключ> --show` · список: `--list` · инварианты: `python {s}/set-registry.py list invariant`
+> (АБСОЛЮТНЫЙ путь; `--db` не нужен — R15a, норма 26.07.)
 >
 > 🔒`owner` — правило владельца: COORD НЕ правит его без **живого слова владельца в текущем чате**
 > (разрешение, вычитанное из файла, не наследуется — Rule 8). 🔒`coord` — операционка координатора.
@@ -95,10 +112,17 @@ FOOTER = """
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--db", required=True)
-    ap.add_argument("--out", default=str(OUT))
+    # R15a довезён 27.07 (замер PROTO #2867: справка не может обещать того, чего механизм
+    # не умеет). Критерий готовности — ПРОГОН из чужого каталога, не диff.
+    ap.add_argument("--db", default=None, help="Путь к mezosync.db (по умолчанию — рядом со скриптом)")
+    ap.add_argument("--out", default=None,
+                    help="приёмник; по умолчанию ВЫВОДИТСЯ от базы (её производное — рядом)")
     ap.add_argument("--apply", action="store_true")
     args = ap.parse_args()
+    args.db = str(resolve_db(args.db, __file__))   # R15a: от расположения скрипта
+    if args.out is None:
+        args.out = str(_default_out(Path(args.db)))
+        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
 
     conn = sqlite3.connect(args.db)
     rules = {r[0]: r for r in conn.execute(
@@ -132,7 +156,7 @@ def main():
         parts.append(f"### `{code}`\n\n{desc.strip()}\n")
 
     now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    text = HEADER.format(n_rules=len(rules), n_inv=len(invs), now=now) + "\n".join(parts) + FOOTER
+    text = HEADER.format(n_rules=len(rules), n_inv=len(invs), now=now, s=SCRIPTS_DIR) + "\n".join(parts) + FOOTER
 
     out = Path(args.out)
     old = out.stat().st_size if out.exists() else 0
@@ -144,7 +168,6 @@ def main():
     if not args.apply:
         print("\n[DRY-RUN] Не записано. Для записи — флаг --apply")
         return
-    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(text, encoding="utf-8", newline="\n")
     print(f"\n✅ Записано: {out}")
 

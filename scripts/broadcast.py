@@ -6,13 +6,13 @@ Broadcast — это обычное сообщение в общей ленте 
 
 Использование:
     # простое объявление всем (FYI)
-    python broadcast.py --db mezosync.db --role ING --body "aia.llmgateway UP на http://localhost:5297"
+    python <КОНТУР>/.mezosync/scripts/broadcast.py --role ING --body "aia.llmgateway UP на http://localhost:5297"
 
     # призыв к действию (CTA): priority=high + требует ACK от ролей
-    python broadcast.py --db mezosync.db --role COORD --body "всем сохранить phoenix" --cta
+    python <КОНТУР>/.mezosync/scripts/broadcast.py --role COORD --body "всем сохранить phoenix" --cta
 
     # с дополнительными тегами
-    python broadcast.py --db mezosync.db --role STUD --body "..." --tags "release,ui"
+    python <КОНТУР>/.mezosync/scripts/broadcast.py --role STUD --body "..." --tags "release,ui"
 """
 
 import argparse
@@ -21,16 +21,22 @@ import sqlite3
 import sys
 from pathlib import Path
 
+from mezo_paths import resolve_db   # R15a: путь к БД — от расположения скрипта, не от CWD
+
 
 def main():
     p = argparse.ArgumentParser(description="Объявить broadcast всем ролям")
-    p.add_argument("--db", required=True)
+        # R15a довезён 27.07 (замер PROTO #2867: справка не может обещать то, чего
+    # механизм не умеет). Проверка готовности — ПРОГОН из чужого каталога.
+
+    p.add_argument("--db", default=None, help="Путь к mezosync.db (по умолчанию — рядом со скриптом)")
     p.add_argument("--role", required=True, help="Кто объявляет (writer_role)")
     p.add_argument("--body", required=True, help="Текст объявления")
     p.add_argument("--tags", default="", help="Доп. теги через запятую (ALL добавляется всегда)")
     p.add_argument("--cta", action="store_true",
                    help="Call-to-action: priority=high + тег CTA (ждёт ACK ролей)")
     args = p.parse_args()
+    args.db = str(resolve_db(args.db, __file__))   # R15a: от расположения скрипта
 
     db_path = Path(args.db)
     if not db_path.exists():

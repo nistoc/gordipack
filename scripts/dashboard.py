@@ -2,12 +2,9 @@
 # -*- coding: utf-8 -*-
 """Дашборд состояния контура мезосинка — самодостаточная HTML-страница из mezosync.db.
 
-Запуск:
-    python .mezosync/scripts/dashboard.py
-    python .mezosync/scripts/dashboard.py --db <путь>/mezosync.db --out <путь>/dashboard.html
-
-Пути по умолчанию выводятся ИЗ РАСПОЛОЖЕНИЯ СКРИПТА (портативный шаблон):
-БД — <контур>/.mezosync/mezosync.db, вывод — <контур>/.mezosync/generated/dashboard.html.
+Запуск (АБСОЛЮТНЫЙ путь из любого CWD; `--db` не нужен — R15a):
+    python <КОНТУР>/.mezosync/scripts/dashboard.py
+    python <КОНТУР>/.mezosync/scripts/dashboard.py --out <файл.html>
 
 Страница СТАТИЧНА — это снимок на момент генерации (время указано в шапке).
 Обновление = повторный запуск. Никаких внешних ресурсов: открывается офлайн, файлом.
@@ -21,13 +18,6 @@ import os
 import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
-
-# Пути по умолчанию — из расположения скрипта: <контур>/.mezosync/scripts/ →
-# БД в <контур>/.mezosync/, вывод в <контур>/.mezosync/generated/.
-MEZO = Path(__file__).resolve().parent.parent
-DEFAULT_DB = str(MEZO / "mezosync.db")
-DEFAULT_OUT = str(MEZO / "generated" / "dashboard.html")
 
 ROLES_ORDER = ["COORD", "CORE", "ING", "STUD", "TAXO", "RCC"]
 ROLE_TITLES = {
@@ -83,12 +73,7 @@ def collect(db_path):
     data["total_notes"] = con.execute("SELECT COUNT(*) FROM messages_all").fetchone()[0]
 
     cursors = {r["reader_role"]: r for r in con.execute("SELECT * FROM read_cursors")}
-    # role_status может не существовать на старых копиях БД — тогда статусов просто нет
-    # (тот же приём, что в export-channels: отсутствие таблицы — не крах дашборда).
-    try:
-        statuses = {r["role"]: r for r in con.execute("SELECT * FROM role_status")}
-    except sqlite3.OperationalError:
-        statuses = {}
+    statuses = {r["role"]: r for r in con.execute("SELECT * FROM role_status")}
 
     last_note = {}
     for r in con.execute(
@@ -422,21 +407,12 @@ def render(d):
 
 def main():
     ap = argparse.ArgumentParser(description="Дашборд состояния контура мезосинка (HTML-снимок).")
-    ap.add_argument("--db", default=DEFAULT_DB)
-    ap.add_argument("--out", default=DEFAULT_OUT)
+    ap.add_argument("--db", default=".mezosync/mezosync.db")
+    ap.add_argument("--out", default=".mezosync/generated/dashboard.html")
     args = ap.parse_args()
 
     if not os.path.exists(args.db):
         raise SystemExit(f"БД не найдена: {args.db}")
-
-    # messages_all — VIEW модели мезосинка (live+history), из неё строится вся лента дашборда.
-    # В свежей схеме её может не быть: сообщаем и выходим, а не падаем опакой ошибкой.
-    _c = sqlite3.connect(args.db)
-    has_view = _c.execute("SELECT COUNT(*) FROM sqlite_master WHERE name='messages_all'").fetchone()[0]
-    _c.close()
-    if not has_view:
-        raise SystemExit("VIEW messages_all в схеме нет — дашборд строить не из чего "
-                         "(докати схему до messages_all live+history).")
 
     data = collect(args.db)
     out_dir = os.path.dirname(os.path.abspath(args.out))

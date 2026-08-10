@@ -4,15 +4,15 @@ read-broadcasts.py — общий канал: читать/подтвержда�
 Broadcast = сообщение с тегом `ALL` в общей ленте `messages`.
 Каждая роль каждый тик проверяет свой инбокс broadcast'ов одним запросом.
 
-Использование:
+Использование (АБСОЛЮТНЫЙ путь; `--db` не нужен — R15a, норма 26.07):
     # мой инбокс: broadcast'ы, которые я ещё не видел (не мои, без моего ACK)
-    python read-broadcasts.py --db mezosync.db --role CORE
+    python <КОНТУР>/.mezosync/scripts/read-broadcasts.py --role CORE
 
     # подтвердить, что видел (для CTA — обязательно)
-    python read-broadcasts.py --db mezosync.db --role CORE --ack 49 52
+    python <КОНТУР>/.mezosync/scripts/read-broadcasts.py --role CORE --ack 49 52
 
     # статус CTA: кто подтвердил, кто ещё нет (для автора/COORD)
-    python read-broadcasts.py --db mezosync.db --status
+    python <КОНТУР>/.mezosync/scripts/read-broadcasts.py --status
 """
 
 import argparse
@@ -21,6 +21,8 @@ import json
 import sqlite3
 import sys
 from pathlib import Path
+
+from mezo_paths import resolve_db   # R15a: путь к БД — от расположения скрипта, не от CWD
 
 
 def utc_to_local(s):
@@ -59,12 +61,15 @@ def is_cta(tags_json):
 
 def main():
     p = argparse.ArgumentParser(description="Читать/подтверждать broadcast-объявления")
-    p.add_argument("--db", required=True)
+    # R15a довезён 27.07: скрипт стоит в шапке пробуждения, а канон уже учит форме БЕЗ --db ⇒
+    # без этого канон учил бы команде, которая ПАДАЕТ (мой долг, найден запуском — @STUD #2864).
+    p.add_argument("--db", default=None, help="Путь к mezosync.db (по умолчанию — рядом со скриптом)")
     p.add_argument("--role", help="Роль-читатель (для инбокса и ACK)")
     p.add_argument("--ack", nargs="+", type=int, metavar="ID", help="Подтвердить broadcast'ы")
     p.add_argument("--status", action="store_true", help="Статус CTA: кто ACK'нул, кто нет")
     p.add_argument("--all", action="store_true", help="Показать все broadcast'ы, не только непрочитанные")
     args = p.parse_args()
+    args.db = str(resolve_db(args.db, __file__))   # R15a: от расположения скрипта, не от CWD
 
     db_path = Path(args.db)
     if not db_path.exists():
@@ -125,7 +130,9 @@ def _inbox(conn, role, show_all):
         print(f"    {body[:220]}")
         print()
     if cta_ids:
-        print(f"⚠️ Есть CTA — подтверди: python read-broadcasts.py --db <path> --role {role} --ack {' '.join(map(str, cta_ids))}")
+        # Путь СВОЙСТВОМ, без --db (R15a): эта строка печатается роли в первые минуты жизни —
+        # read-broadcasts стоит в канон-шапке пробуждения, и копируют её особенно охотно (@STUD #2864).
+        print(f"⚠️ Есть CTA — подтверди: python {Path(__file__).resolve().as_posix()} --role {role} --ack {' '.join(map(str, cta_ids))}")
 
 
 def _ack(conn, role, ids):

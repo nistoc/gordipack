@@ -1,10 +1,10 @@
 """
 check-errors.py — COORD: быстрый сбор ошибок двойной записи от всех коллег.
 
-Использование:
-    python check-errors.py --db .mezosync/mezosync.db
-    python check-errors.py --db .mezosync/mezosync.db --resolve 5 7
-    python check-errors.py --db .mezosync/mezosync.db --stats
+Использование (АБСОЛЮТНЫЙ путь; `--db` не нужен — R15a, норма 26.07):
+    python <КОНТУР>/.mezosync/scripts/check-errors.py
+    python <КОНТУР>/.mezosync/scripts/check-errors.py --resolve 5 7
+    python <КОНТУР>/.mezosync/scripts/check-errors.py --stats
 """
 
 import argparse
@@ -13,6 +13,8 @@ import json
 import sqlite3
 import sys
 from pathlib import Path
+
+from mezo_paths import resolve_db   # R15a: путь к БД — от расположения скрипта, не от CWD
 
 
 def utc_to_local(s):
@@ -25,12 +27,14 @@ def utc_to_local(s):
 
 def main():
     parser = argparse.ArgumentParser(description="Сбор и разрешение ошибок двойной записи")
-    parser.add_argument("--db", required=True, help="Путь к mezosync.db")
+    # R15a довезён 27.07 (мой docstring уже обещал «--db не нужен» — обещание без механизма = ложь).
+    parser.add_argument("--db", default=None, help="Путь к mezosync.db (по умолчанию — рядом со скриптом)")
     parser.add_argument("--resolve", nargs="+", type=int, metavar="ID",
                         help="Пометить сообщения как resolved (COORD подтвердил фикс)")
     parser.add_argument("--stats", action="store_true",
                         help="Статистика: сколько ошибок по ролям, resolved/open")
     args = parser.parse_args()
+    args.db = str(resolve_db(args.db, __file__))   # R15a: от расположения скрипта, не от CWD
 
     db_path = Path(args.db)
     if not db_path.exists():
@@ -82,7 +86,8 @@ def _show_open(conn):
         print(f"    {body[:200]}")
         print()
 
-    print(f"Разрешить: python check-errors.py --db <path> --resolve {' '.join(str(r[0]) for r in rows)}")
+    # Путь СВОЙСТВОМ, без --db (R15a, @STUD #2864 — рабочий вывод учит сильнее docstring).
+    print(f"Разрешить: python {Path(__file__).resolve().as_posix()} --resolve {' '.join(str(r[0]) for r in rows)}")
 
 
 def _resolve(conn, ids):

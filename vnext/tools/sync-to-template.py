@@ -178,15 +178,52 @@ def main() -> int:
         print("\n🔍 ЗАМЕР, ШАБЛОН НЕ ТРОНУТ. Перенести — тем же вызовом с --apply.")
         return 1
 
+    # ═══ МАНИФЕСТ ПЕРЕНОСА — ЗАТИРАНИЕ ЧУЖОЙ ПРАВКИ БОЛЬШЕ НЕ МОЛЧИТ (10.08 06:47 UTC) ═══
+    # 🪤 ОПЛАЧЕНО ЧАСОМ РАНЬШЕ, МНОЙ ЖЕ: --apply молча перезаписал ПЯТЬ шаблонных файлов
+    # с сегодняшними фиксами (#145: сборка с инструментами, выведенные пути, применимость
+    # реестра) старыми живыми копиями. Я сам предсказал этот класс утром — и сам в него
+    # шагнул: ЗНАНИЕ О КЛАССЕ НЕ ЗАЩИЩАЕТ, ЗАЩИЩАЕТ МЕХАНИЗМ. Спас только git.
+    # ⇒ Манифест помнит отпечаток КАЖДОГО перенесённого файла. Если шаблонная копия
+    # отличается и от манифеста, и от живой — её правили РУКОЙ после переноса, и затереть
+    # её значит откатить чужую работу. Такой файл НЕ переносится: печатается КОНФЛИКТ
+    # с обоими отпечатками, решает человек (обычно — донеся фикс до живой копии).
+    import json
+    manifest_p = TEMPLATE / ".sync-manifest.json"
+    manifest = {}
+    if manifest_p.exists():
+        try:
+            manifest = json.loads(manifest_p.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            print("⚠️ манифест переноса нечитаем — конфликтов НЕ вижу, переношу как впервые")
+
     TEMPLATE.mkdir(parents=True, exist_ok=True)
+    conflicts, moved = [], 0
     for n, want, dst, *_ in [(m[0], m[1], m[2]) for m in missing] + \
                             [(d[0], d[1], d[2]) for d in differ]:
+        if dst.exists() and n in manifest:
+            have = digest(dst.read_text(encoding="utf-8"))
+            if have != manifest[n] and have != digest(want):
+                conflicts.append((n, have, manifest[n]))
+                continue
         dst.parent.mkdir(parents=True, exist_ok=True)   # у шагов схемы свой подкаталог
         dst.write_text(want, encoding="utf-8", newline="\n")
+        manifest[n] = digest(want)
+        moved += 1
         print(f"  ✅ {n}")
-    print(f"\n✅ Перенесено: {len(missing) + len(differ)}. Дальше: собрать СВЕЖИЙ контур "
+    for name in same:
+        manifest.setdefault(name, digest(sanitize((LIVE / name).read_text(encoding="utf-8"))))
+    manifest_p.write_text(json.dumps(manifest, indent=1, sort_keys=True), encoding="utf-8")
+
+    if conflicts:
+        print(f"\n⛔ КОНФЛИКТ — {len(conflicts)} файл(ов) правлены В ШАБЛОНЕ после переноса,"
+              f" НЕ ТРОНУТЫ:")
+        for n, have, saw in conflicts:
+            print(f"     · {n}: шаблон {have} · последний перенос {saw}")
+        print("   ⇒ решает человек: либо донести шаблонный фикс до ЖИВОЙ копии (тогда"
+              " перенос сойдётся сам), либо осознанно перезаписать рукой. Молча — никогда.")
+    print(f"\n✅ Перенесено: {moved}. Дальше: собрать СВЕЖИЙ контур "
           "и прогнать приёмки НА НЁМ — приёмка на своей копии не доказывает ничего про чужую.")
-    return 0
+    return 1 if conflicts else 0
 
 
 if __name__ == "__main__":

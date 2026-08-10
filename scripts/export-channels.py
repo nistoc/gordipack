@@ -21,32 +21,43 @@ sync.*.md НЕ ТРОГАЕТ — они замораживаются истор
 «синк умер 2 часа назад» (разница ровно 2ч была ЗОНОЙ, не лагом). Конвертация, которой
 нет, не может быть забыта. Суффикс UTC печатаем явно.
 
-⚠️ ПОРТАТИВНОСТЬ ШАБЛОНА. OUT_DIR по умолчанию — <контур>/.mezosync/generated (из расположения
-скрипта), а не хардкод на atlas.archs; переопредели --out-dir. Рендер идёт из VIEW `messages_all`
-(live+history) модели мезосинка. Если в схеме её ещё нет — генератор НЕ ПАДАЕТ опакой ошибкой,
-а сообщает о недостающей VIEW и выходит (skip-not-crash). Появится messages_all — заработает.
-
 ЗАПУСК:
-    python export-channels.py --db <path>            # dry-run
-    python export-channels.py --db <path> --apply
+    python <КОНТУР>/.mezosync/scripts/export-channels.py            # dry-run
+    python <КОНТУР>/.mezosync/scripts/export-channels.py --apply
 """
 
 import argparse
 import datetime
 import json
 import sqlite3
-import sys
 from pathlib import Path
 
-# OUT_DIR по умолчанию — <контур>/.mezosync/generated (портативно). Переопредели --out-dir
-# на версионированное зеркало конкретного контура (в Atlas — atlas.archs/.mezosync/coordination/generated).
-OUT_DIR = Path(__file__).resolve().parent.parent / "generated"
+from mezo_paths import resolve_db   # R15a: путь к БД — от расположения скрипта, не от CWD
+
+OUT_DIR = Path(r"C:\guts\.atlas\atlas.archs\.mezosync\coordination\generated")
+
+# Каталог ЭТОГО скрипта — им подставляется {s} в шаблонах ниже. ⚠️ Путь берётся СВОЙСТВОМ, а не
+# литералом: находка @STUD #2864 — этот генератор ПЛОДИЛ отозванную относительную форму
+# (`python .mezosync/scripts/…`) в подвал КАЖДОЙ витрины: 20 живых вхождений в 8 файлах. Роль или
+# человек читает витрину («актуальный статус — в БД, зови вот так») и списывает форму буквально.
+# Гард формы вызова этого не видел: он смотрит CLAUDE.md и read-phoenix.py, а ФАБРИКА строк в
+# список источников не входила. ⇒ ранжир @STUD: фабрика строк > печатающая строка > docstring.
+# Свойство вместо литерала = возврат формы невозможен по построению, а не «отловится гардом».
+# ⚠️ .as_posix() — НЕ косметика, а ЗАЩИТА СВОЙСТВОМ. Замер 27.07 сразу после правки: с обратными
+# слэшами `{s}/read-messages.py` напечаталось как «scriptsead-messages.py» (\r съеден как escape,
+# шаблоны не raw-строки) — витрина учила КОМАНДЕ, КОТОРОЙ НЕТ. Тот же баг я уже ловил в шапке CANON
+# (read-phoenix.py) и повторил здесь ⇒ raw-строка лечит дисциплиной и потому не держится.
+# Forward-slash работает в Windows-python и не может быть съеден escape'ом ВООБЩЕ.
+# 📌 Класс: правка, устраняющая ложное обучение, сама становится ложным обучением — ловится
+# только ЗАПУСКОМ и чтением напечатанного, не диффом.
+SCRIPTS_DIR = Path(__file__).resolve().parent.as_posix()
 
 HEADER = """# sync.{role}.md — канал роли {role}
 
 > ⚠️ **СГЕНЕРИРОВАНО ИЗ `mezosync.db` — НЕ РЕДАКТИРОВАТЬ.**
 > Любая правка здесь будет затёрта следующим экспортом. Источник правды — БД.
-> Писать в канал: `python .mezosync/scripts/write-message.py --db <db> --role {role} --body "..."`
+> Писать в канал: `python {s}/write-message.py --role {role} --file <нота.md>`
+> (АБСОЛЮТНЫЙ путь; `--db` не нужен — R15a, норма 26.07. Длинное/бэктики — только `--file`.)
 >
 > Сообщений: **{n}** · диапазон: {lo} .. {hi}
 > Сгенерировано: {now} · генератор: `export-channels.py`
@@ -77,7 +88,7 @@ POLL — не нота: он не лежит в ленте, а правится 
 ⚠️ Строки вида `[{role} POLL] …` выше — это **ЦИТАТЫ внутри тел нот**, а не статус. Проверка
 `'[{role} POLL]' in файл` даёт **ложный зелёный**: в одном канале таких вхождений бывает 130+.
 **Актуальный статус роли — в БД**, не здесь:
-`python .mezosync/scripts/read-messages.py --db <db> --role {role}`
+`python {s}/read-messages.py --role {role}`  (АБСОЛЮТНЫЙ путь; `--db` не нужен — R15a)
 {heartbeat}"""
 
 # 🫀 Живой heartbeat — ЕДИНСТВЕННОЕ живое ниже терминатора, из таблицы role_status
@@ -99,20 +110,18 @@ def stamp_utc(s):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--db", required=True)
+    # R15a довезён сюда 27.07: этот генератор был ПОСЛЕДНИМ в тулките, кто требовал --db —
+    # найдено при попытке перегенерировать витрины после фикса @STUD #2864 (упал на required).
+    # Класс «врезал механизм в пять CLI из шести»: полнота охвата проверяется ЗАПУСКОМ каждого,
+    # а не памятью о списке.
+    ap.add_argument("--db", default=None, help="Путь к mezosync.db (по умолчанию — рядом со скриптом)")
     ap.add_argument("--out-dir", default=str(OUT_DIR))
     ap.add_argument("--apply", action="store_true")
     args = ap.parse_args()
+    args.db = str(resolve_db(args.db, __file__))   # R15a: от расположения скрипта, не от CWD
 
     conn = sqlite3.connect(args.db)
     out_dir = Path(args.out_dir)
-
-    # messages_all — VIEW модели мезосинка (live+history). В свежей схеме её может не быть:
-    # сообщаем и выходим, а не падаем опакой OperationalError (skip-not-crash).
-    if not conn.execute("SELECT COUNT(*) FROM sqlite_master WHERE name='messages_all'").fetchone()[0]:
-        print("⏭️ VIEW messages_all в схеме нет — генерировать каналы не из чего "
-              "(докати схему до messages_all live+history). Выход без ошибки.")
-        return
 
     roles = [r[0] for r in conn.execute(
         "SELECT DISTINCT writer_role FROM messages_all ORDER BY writer_role")]
@@ -152,9 +161,9 @@ def main():
             status, upd = polls[role]
             hb = HEARTBEAT.format(role=role, status=status, updated_at=stamp_utc(upd))
         text = HEADER.format(
-            role=role, n=len(rows), now=now,
+            role=role, n=len(rows), now=now, s=SCRIPTS_DIR,
             lo=stamp_utc(rows[0][0]), hi=stamp_utc(rows[-1][0]),
-        ) + "\n".join(body_parts) + FOOTER.format(role=role, heartbeat=hb)
+        ) + "\n".join(body_parts) + FOOTER.format(role=role, heartbeat=hb, s=SCRIPTS_DIR)
 
         dest = out_dir / f"sync.{role.lower()}.md"
         old = dest.stat().st_size if dest.exists() else 0
@@ -171,7 +180,11 @@ def main():
         print("\n[DRY-RUN] Не записано. Для записи — флаг --apply")
     else:
         print(f"✅ Записано в {out_dir}")
-        print("Дальше: COORD коммитит generated/ в версионированный репо (push — только по слову владельца)")
+        # ⚰️ «push — только по слову владельца» СНЯТО владельцем 2026-08-08 15:56 UTC.
+        # Второй экземпляр той же строки: чинить надо образец, а не место — первый
+        # жил в backup-db.py и нашёлся только сплошным поиском по зоне.
+        print("Дальше: COORD коммитит generated/ в atlas.archs и отправляет "
+              "(push разрешён без отдельного слова; сверь состав ВЕТКИ)")
 
 
 if __name__ == "__main__":

@@ -28,17 +28,12 @@ GitLab — единственное во всём контуре, что пер�
   · восстановление точное и проверяется здесь же флагом --verify
   · lfs добавил бы зависимость там, где она не нужна
 
-⚠️ ПОРТАТИВНОСТЬ ШАБЛОНА. Цель дампа по умолчанию выводится из расположения скрипта
-(<контур>/.mezosync/mezosync.dump.sql), а не хардкодится на atlas.agents-sync.db. Куда
-именно версионировать дамп — решает конкретный контур; переопредели путь флагом --out
-на каталог-репо с удалёнкой (в Atlas это atlas.agents-sync.db).
-
 ВОССТАНОВЛЕНИЕ:
-    sqlite3 mezosync-restored.db < <out>/mezosync.dump.sql
+    sqlite3 mezosync-restored.db < atlas.agents-sync.db/mezosync.dump.sql
 
 ЗАПУСК:
-    python backup-db.py --db <path>            # dry-run: покажет размер/дельту
-    python backup-db.py --db <path> --apply --verify
+    python <КОНТУР>/.mezosync/scripts/backup-db.py            # dry-run: покажет размер/дельту
+    python <КОНТУР>/.mezosync/scripts/backup-db.py --apply --verify
 """
 
 import argparse
@@ -47,19 +42,23 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-# Цель дампа по умолчанию — рядом с БД (<контур>/.mezosync/mezosync.dump.sql). Портативно;
-# для версионирования на удалёнку переопредели --out на каталог-репо конкретного контура.
-OUT = Path(__file__).resolve().parent.parent / "mezosync.dump.sql"
+from mezo_paths import resolve_db   # R15a: путь к БД — от расположения скрипта, не от CWD
+
+OUT = Path(r"C:\guts\.atlas\atlas.agents-sync.db\mezosync.dump.sql")
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--db", required=True)
+        # R15a довезён 27.07 (замер PROTO #2867: справка не может обещать то, чего
+    # механизм не умеет). Проверка готовности — ПРОГОН из чужого каталога.
+
+    ap.add_argument("--db", default=None, help="Путь к mezosync.db (по умолчанию — рядом со скриптом)")
     ap.add_argument("--out", default=str(OUT))
     ap.add_argument("--apply", action="store_true")
     ap.add_argument("--verify", action="store_true",
                     help="восстановить дамп во временную БД и сверить счётчики")
     args = ap.parse_args()
+    args.db = str(resolve_db(args.db, __file__))   # R15a: от расположения скрипта
 
     conn = sqlite3.connect(args.db)
     tables = [r[0] for r in conn.execute(
@@ -128,7 +127,12 @@ def main():
         finally:
             tmp.unlink(missing_ok=True)
 
-    print("\nДальше: COORD коммитит дамп в версионированный репо (push — только по слову владельца)")
+    # ⚰️ Здесь стояло «push — только по слову владельца». Запрет СНЯТ владельцем
+    # 2026-08-08 15:56 UTC («пушить можно»); строка пережила свою причину и учила
+    # роль отказываться от разрешённого. Разрушающее (force push, reset --hard)
+    # словом по-прежнему защищено — rule8-destructive не отозвано.
+    print("\nДальше: COORD коммитит generated/ в atlas.archs и отправляет "
+          "(push разрешён без отдельного слова; сверь состав ВЕТКИ перед отправкой)")
 
 
 if __name__ == "__main__":

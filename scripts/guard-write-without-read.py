@@ -23,14 +23,9 @@ guard-write-without-read.py — ловит роль, которая ПИШЕТ, 
 осмыслить — этого не измерить ничем. Он ловит ровно один класс: молчание из-за неработающего
 механизма, а не из-за решения.
 
-⚠️ ПОРТАТИВНОСТЬ ШАБЛОНА. DB выводится из расположения скрипта (<контур>/.mezosync/mezosync.db),
-не хардкодится. Гард опирается на VIEW `messages_all` (live + history) из модели мезосинка. Если
-в схеме её ещё нет (свежая система/недокатанная схема) — гард ПРОПУСКАЕТСЯ С ПОМЕТКОЙ, а не падает
-(skip-not-crash: та же доктрина, что у ⑦ в guard-all). Появится messages_all — гард заработает сам.
-
 ЗАПУСК:
-    python guard-write-without-read.py
-    python guard-write-without-read.py --json     # для встраивания
+    python <КОНТУР>/.mezosync/scripts/guard-write-without-read.py
+    python <КОНТУР>/.mezosync/scripts/guard-write-without-read.py --json     # для встраивания
 """
 
 import argparse
@@ -40,8 +35,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-# DB — из расположения скрипта: <контур>/.mezosync/scripts/ → БД в <контур>/.mezosync/.
-DB = Path(__file__).resolve().parent.parent / "mezosync.db"
+DB = Path(r"C:\guts\.atlas\.mezosync\mezosync.db")
 
 ACTIVE_MIN = 90     # роль активна, если писала за последние N минут
 LAG_NOTES = 8       # допустимое отставание курсора от конца ленты
@@ -63,15 +57,6 @@ def main():
     args = ap.parse_args()
 
     conn = sqlite3.connect(DB)
-    # messages_all — VIEW модели мезосинка (live+history). В свежей схеме её может не быть:
-    # пропускаем с пометкой, а не падаем (skip-not-crash). Появится — гард заработает сам.
-    has_view = conn.execute(
-        "SELECT COUNT(*) FROM sqlite_master WHERE name='messages_all'").fetchone()[0]
-    if not has_view:
-        conn.close()
-        print("⏭️ VIEW messages_all в схеме нет — гард чтения ленты пропущен (не зелёный, а неприменимый)")
-        sys.exit(0)
-
     now = datetime.now(timezone.utc)
     max_id = conn.execute("SELECT COALESCE(MAX(id),0) FROM messages").fetchone()[0]
 
@@ -84,7 +69,19 @@ def main():
             continue                                    # спящая роль — отставание законно
         active.append(role)
 
-        lag_notes = max_id - (cursor or 0)
+        # Отставание считаем по ЧУЖИМ нотам. Своя нота роль не зовёт — а гард предупреждает
+        # именно о том, что «зовущие её ноты не дойдут» (см. текст ниже).
+        # 🪤 Оплачено 2026-08-06 замером @PROTO (#2952) на случае @CHROME: непрочитанных 10,
+        #    из них СВОИХ 2 — и ровно они перевели через порог 8. Прежняя формула
+        #    `max_id - cursor` считала своё и чужое одинаково ⇒ чем активнее роль пишет, тем ниже
+        #    для неё фактический порог: гард был строже всего к тому, кто больше работает.
+        #    Плюс цикл «прочитал → ack → написал» ПО ПОСТРОЕНИЮ оставляет свою свежую ноту
+        #    непрочитанной — у всех и всегда. Наказывать за форму работы значит учить обходить гард.
+        # ⚠️ Строгость от этого НЕ падает: у @CHROME чужих было ровно 8, то есть дочитывать было
+        #    надо и так. Изменился ПРЕДМЕТ счёта, а не порог.
+        lag_notes = conn.execute(
+            "SELECT COUNT(*) FROM messages WHERE id > ? AND writer_role <> ?",
+            (cursor or 0, role)).fetchone()[0]
         read_dt = parse(read_at)
         gap_min = ((last_note - read_dt).total_seconds() / 60) if read_dt else 9999
 
