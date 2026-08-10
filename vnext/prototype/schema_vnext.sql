@@ -25,19 +25,30 @@ PRAGMA foreign_keys = ON;
 -- инструменте; любой другой писатель заводит расщепление курсор↔слепок заново.
 -- ⇒ Нормализация переезжает в ЯДРО: одно имя колонки (role), CHECK на регистр, FK.
 -- ────────────────────────────────────────────────────────────────────────────
+-- ⚡ СВЕДЕНО С ЖИВОЙ БАЗОЙ 2026-08-10 (карточка #89, шаг 2). Три правки, все с ценой:
+--   · ДОБАВЛЕНО состояние 'unknown' — из живой базы. Честное «не знаем» при переносе
+--     терять нельзя: без него перенос начнёт ВЫДУМЫВАТЬ состояние там, где слова не было.
+--     Дефолт стал 'unknown', а не 'alive', по той же причине;
+--   · `lifecycle_at` СТАЛ НЕОБЯЗАТЕЛЬНЫМ. У ролей, заведённых до журнала, часа перехода
+--     нет ни в одном источнике. NOT NULL DEFAULT now записал бы им СЕГОДНЯШНЮЮ дату —
+--     правдоподобно и полностью ложно. Пустое поле видно; уверенный неверный ответ — нет;
+--   · ДОБАВЛЕНЫ `seen_in` / `in_roster` — из живой базы. Это не статус, а следы ЗАМЕРА,
+--     и они отличают «роли не было» от «роль не объявлена». Образец не знал их зря.
 CREATE TABLE roles (
     role        TEXT PRIMARY KEY
                 CHECK (role = UPPER(role) AND LENGTH(role) BETWEEN 2 AND 16),
-    -- ① статус роли ПОЛЕМ. 'alive' работает · 'dormant' усыплена по слову (RCC) ·
-    -- 'closed' апоптоз (EYE). Сегодня это различие живёт прозой в role_status и в
-    -- памяти COORD; роль EYE пришлось охранять отдельной строкой в чужих слепках.
-    lifecycle   TEXT NOT NULL DEFAULT 'alive'
-                CHECK (lifecycle IN ('alive', 'dormant', 'closed')),
+    -- ① состояние роли ПОЛЕМ. 'alive' работает · 'dormant' усыплена по слову (RCC) ·
+    -- 'closed' апоптоз (EYE, GRF) · 'unknown' слова не было. Прежде различие жило прозой
+    -- в role_status и в памяти COORD; EYE пришлось охранять строкой в чужих слепках.
+    lifecycle   TEXT NOT NULL DEFAULT 'unknown'
+                CHECK (lifecycle IN ('unknown', 'alive', 'dormant', 'closed')),
     -- Почему роль в этом состоянии — рядом с состоянием, а не в чужой ноте.
-    lifecycle_at        TEXT NOT NULL DEFAULT (datetime('now')),
+    lifecycle_at        TEXT,                      -- пусто = час перехода неизвестен
     lifecycle_by        TEXT,                      -- кто перевёл (роль или 'owner')
     lifecycle_reason    TEXT,
     zone        TEXT,                              -- за что отвечает (справочно)
+    seen_in     TEXT,                              -- в каких таблицах роль встречена (замер)
+    in_roster   INTEGER,                           -- 1 есть в реестре · 0 нет · NULL не читан
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -125,7 +136,13 @@ SELECT
     CAST((julianday('now') - julianday(COALESCE(p.last_seen_at, p.rhythm_at)))
          * 1440 AS INTEGER)                              AS silent_minutes,
     CASE
-        WHEN r.lifecycle <> 'alive'          THEN 'роль ' || r.lifecycle
+        -- ⚠️ ПЕРЕХВАТЫВАЮТСЯ ТОЛЬКО closed И dormant, а не «всё, что не alive»
+        --    (правка 2026-08-10, тот же случай, что в phoenix_gaps). С появлением
+        --    'unknown' прежнее условие глушило ИЗВЕСТНОЕ неизвестным: состояние роли
+        --    словом не названо, но её ритм известен точно — и ритм здесь предмет.
+        --    Ответ «роль unknown» съедал различение «снят по слову» ⊥ «умер с сессией»,
+        --    ради которого витрина и заведена.
+        WHEN r.lifecycle IN ('closed', 'dormant') THEN 'роль ' || r.lifecycle
         WHEN p.rhythm = 'paused_by_owner'    THEN 'ритм снят СЛОВОМ ВЛАДЕЛЬЦА — не возобновлять молча'
         WHEN p.rhythm = 'stopped_by_role'    THEN 'ритм снят самой ролью (передача смены)'
         WHEN p.rhythm = 'running'
@@ -170,11 +187,18 @@ CREATE TABLE phoenix (
 );
 
 -- Неполный слепок — не «наверное всё сохранено», а видимая строка.
+-- ⚠️ ОТБОР ИДЁТ «КРОМЕ ЗАКРЫТЫХ И СПЯЩИХ», А НЕ «ТОЛЬКО ЖИВЫЕ» — правка 2026-08-10,
+--    найдена нарочной поломкой в тот же час, что и внесена причина. Пока состояний было
+--    три, «= alive» и «не closed/dormant» совпадали. С появлением 'unknown' (из живой
+--    базы) условие «= alive» МОЛЧА выключило проверку для всякой роли, чьё состояние
+--    ещё не названо словом, — то есть ровно для новых, у которых слепок неполон чаще
+--    всего. Неизвестность состояния не повод ослепнуть; закрытую проверять незачем,
+--    а отставание спящей законно (правило rhythm-survives-rebirth).
 CREATE VIEW phoenix_gaps AS
 SELECT r.role, s.section, s.purpose
 FROM roles r CROSS JOIN phoenix_sections s
 LEFT JOIN phoenix p ON p.role = r.role AND p.section = s.section
-WHERE r.lifecycle = 'alive' AND s.required = 1 AND p.role IS NULL;
+WHERE r.lifecycle NOT IN ('closed', 'dormant') AND s.required = 1 AND p.role IS NULL;
 
 -- ────────────────────────────────────────────────────────────────────────────
 -- ③ ЧЕСТНАЯ ВЕРСИЯ СХЕМЫ + РЕЕСТР МИГРАЦИЙ  (F10)
@@ -187,11 +211,21 @@ WHERE r.lifecycle = 'alive' AND s.required = 1 AND p.role IS NULL;
 --   кто-то должен не забыть обновить. Забыть обновление больше нельзя: версия
 --   вычисляется из журнала, а гард сверяет её с ФАКТИЧЕСКИМ составом объектов.
 -- ────────────────────────────────────────────────────────────────────────────
+-- ⚡ СВЕДЕНО С ЖИВОЙ БАЗОЙ 2026-08-10 (карточка #89, шаг 1). Что изменилось и почему:
+--   · `checksum` → `fingerprint`. Одно понятие под двумя именами — ровно тот класс,
+--     который сегодня стоил контуру месяца расхождения словарей. Живое имя точнее:
+--     это отпечаток СТРУКТУРЫ базы (sqlite_master), а не контрольная сумма файла;
+--   · `note` — чем был шаг. Живая база это хранит, образец не знал;
+--   · `applied_by` дожил из образца в живую базу тем же шагом, и там он ЗАПОЛНЯЕТСЯ
+--     МЕХАНИЗМОМ: не назвали автора — записывается вызыватель (`tool:<файл>`).
+--     Иначе колонка повторила бы судьбу `resolved` (1 запись из 1483): поле, которое
+--     нечем заполнить, мертво, и это не лень ролей, а отсутствующий механизм.
 CREATE TABLE schema_migrations (
     version     TEXT PRIMARY KEY,           -- '002_role_entity'
     applied_at  TEXT NOT NULL DEFAULT (datetime('now')),
-    applied_by  TEXT,
-    checksum    TEXT
+    note        TEXT,                       -- чем был шаг
+    fingerprint TEXT,                       -- отпечаток СТРУКТУРЫ на момент шага
+    applied_by  TEXT                        -- роль ('PROTO') либо 'tool:<файл>'
 );
 INSERT INTO schema_migrations (version, applied_by) VALUES
     ('001_base', 'PROTO'),

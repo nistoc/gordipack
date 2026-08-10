@@ -170,6 +170,39 @@ def main() -> int:
                "зелёное здесь — предел признака; непроизнесённый предел читался бы как охват",
                differ=True)
 
+    # ⑨ АВТОР ШАГА ЗАПОЛНЯЕТСЯ ВСЕГДА, И ИСТОЧНИК ВИДЕН В САМОМ ЗНАЧЕНИИ (карточка #89).
+    #    Свойство ради того, чтобы поле не повторило судьбу `resolved` (1 запись из 1483):
+    #    незаполняемое поле — не лень ролей, а отсутствующий механизм. Поэтому автор
+    #    выводится из вызывателя, когда его не назвали, — и остаётся отличим от названного.
+    con9 = fresh()
+    con9.execute("BEGIN")
+    con9.execute("CREATE TABLE t9 (id INTEGER PRIMARY KEY)")
+    SJ.record_step(con9, "009-auto", "автор не назван")
+    con9.execute("CREATE TABLE t9b (id INTEGER PRIMARY KEY)")
+    SJ.record_step(con9, "009-named", "автор назван", by="PROTO")
+    con9.commit()
+    auto = con9.execute("SELECT applied_by FROM schema_migrations WHERE version='009-auto'"
+                        ).fetchone()[0]
+    named = con9.execute("SELECT applied_by FROM schema_migrations WHERE version='009-named'"
+                         ).fetchone()[0]
+    empty = con9.execute("SELECT COUNT(*) FROM schema_migrations WHERE applied_by IS NULL "
+                         "OR TRIM(applied_by)=''").fetchone()[0]
+    # ⚠️ Сравнения нарочно терпимы к пустому значению: при нарочной поломке (автор
+    #    перестал выводиться) первая редакция этой проверки ПАДАЛА трассой на None —
+    #    то есть выдавала третий исход «НЕ ЗАПУСТИЛАСЬ» там, где обязана была сказать
+    #    «свойство нарушено». Проверка, умеющая только падать, не отличает поломку
+    #    механизма от поломки себя самой.
+    ok &= case("⑨ автор шага НИКОГДА не пуст, и выведенный отличим от названного",
+               bool(auto) and str(auto).startswith("tool:") and named == "PROTO" and empty == 0,
+               f"не назван → «{auto}» · назван → «{named}» · пустых {empty}", differ=True)
+
+    # ⑩ ВСТРЕЧНЫЙ К ⑨: выведенное значение обязано указывать на ВЫЗЫВАТЕЛЯ, а не на сам
+    #    модуль журнала. Иначе «tool:…» стоял бы всегда одинаковый и не значил ничего —
+    #    заполненное поле, не несущее сведений, хуже пустого: оно выглядит ответом.
+    ok &= case("⑩ выведенный автор указывает на ВЫЗЫВАТЕЛЯ, а не на сам журнал",
+               bool(auto) and "schema_journal" not in str(auto),
+               f"вызыватель — приёмка, значение «{auto}»", differ=True)
+
     print()
     print((f"✅ ЖУРНАЛ ПРИНЯТ — случаев {CASES}, различающих {DIFFER}, "
            f"испытан {mezo_target.label()}") if ok
