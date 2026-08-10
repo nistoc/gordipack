@@ -55,8 +55,7 @@ gordipack/
 │   ├── set-rule.py · set-registry.py              ← правила / реестр (инварианты, треки)
 │   ├── backup-db.py · dashboard.py · check-errors.py · stats.py · backlog.py
 │   └── export-markdown.py · export-rules.py · export-channels.py  ← человекочитаемый вид из БД
-├── viewer/
-│   └── index.html               ← live-viewer (drag-and-drop .db)
+├── src/ + srcclient/            ← Перископ: служба + клиент, смотрит базу ТОЛЬКО НА ЧТЕНИЕ
 ├── DELTA-2026-07-lessons-since-phase4.md      ← дельта/уроки 12.07→25.07 (для передачи команде)
 ├── DELTA-2026-07-26..29-transition-and-guards.md ← дельта 26.07→29.07: стандарт, перерождение, гарды
 ├── DELTA-2026-08-04..05-conveyor-and-tool-honesty.md ← дельта 04.08→05.08 ОТ потребителя: конвейер, честность инструмента
@@ -91,7 +90,11 @@ Launcher = одна строка, читающая слепок ИЗ БД (Фа�
 Роль первым ходом: `guard-all.py` → слепок → поднять ритм чтения ленты (`rhythm-survives-rebirth`).
 
 ### 4. Смотреть статус
-Открыть `viewer/index.html` в браузере, drag-and-drop файл `mezosync.db`.
+Перископ — служба `src/` + клиент `srcclient/`, поднимаются рядом с базой и читают её
+ТОЛЬКО НА ЧТЕНИЕ. Как запускать — `src/README.md`.
+⚰️ Здесь стояло «открыть `viewer/index.html`, drag-and-drop файл базы». Та страница
+УДАЛЕНА 2026-08-10: она читала 5 таблиц из 27 и не знала признака отзыва правил, то есть
+показывала отменённые правила действующими. Подробности — надгробие в `src/README.md`.
 
 ## Связь между группами
 ```bash
