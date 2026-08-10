@@ -25,17 +25,6 @@ export function fmtUtc(value: string | null | undefined, withSeconds = false): s
 }
 
 /**
- * То же время БЕЗ суффикса — только для колонок таблицы, чья ШАПКА уже несёт
- * «, UTC». Правило пояса не ослаблено: суффикс сказан один раз на колонку,
- * а не сорок один раз в столбик. Вне такой колонки эту функцию звать нельзя —
- * получится ровно та метка без пояса, от которой предостерегает шапка файла.
- */
-export function fmtUtcBare(value: string | null | undefined): string {
-  const full = fmtUtc(value);
-  return full.endsWith(' UTC') ? full.slice(0, -4) : full;
-}
-
-/**
  * Метка времени → миллисекунды, ЯВНО считая её UTC, когда пояс не указан.
  *
  * 🔴 ЗАЧЕМ ОТДЕЛЬНАЯ ФУНКЦИЯ, А НЕ `new Date(value)`. База отдаёт время в виде

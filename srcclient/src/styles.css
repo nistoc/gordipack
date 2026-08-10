@@ -167,34 +167,23 @@ code { background: var(--surface2); padding: 1px 5px; border-radius: 4px; }
 }
 .filters .checkbox { flex-direction: row; align-items: center; gap: 6px; color: var(--text); font-size: 0.85rem; }
 
-/* ── таблица ─────────────────────────────────────────────────────────────── */
+/* ── таблица ──────────────────────────────────────────────────────────────
+   Осталась одна — на странице ролей. Табличный вид задач убран 2026-08-10, вместе
+   с ним ушли правила строк (.row*) и фишки статусов/важности: их некому носить. */
 .table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
 .table th {
   text-align: left; color: var(--muted); font-weight: 500; font-size: 0.75rem;
   padding: 6px 8px; border-bottom: 1px solid var(--border);
 }
 .table td { padding: 7px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
-.row { cursor: pointer; }
-.row:hover { background: var(--surface); }
-.row--open { background: var(--surface); }
-/* Строка с незаданным критерием подсвечена слева — это то, ради чего страница. */
-.row--gap td:first-child { border-left: 3px solid var(--gap); }
 
 .chip {
   display: inline-block; font-size: 0.72rem; padding: 1px 8px;
   border-radius: 10px; background: var(--surface2); color: var(--text);
 }
-.chip--open { background: var(--tint-warn); color: var(--warn); }
-.chip--done { background: var(--tint-good); color: var(--good); }
-.chip--blocked, .chip--p-critical { background: var(--tint-accent); color: var(--accent); }
-.chip--p-high { background: var(--tint-warn); color: var(--warn); }
-.chip--in_review { background: var(--tint-info); color: var(--info); }
-.chip--dropped { color: var(--muted); text-decoration: line-through; }
 
 .badge { display: inline-block; font-size: 0.75rem; padding: 2px 8px; border-radius: 6px; }
 .badge--gap { background: var(--tint-warn); color: var(--warn); border: 1px solid var(--warn); }
-
-.criterion { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .tags { margin-left: 6px; display: inline-flex; gap: 4px; flex-wrap: wrap; }
 /* Заливка тёмная в обеих темах ⇒ текст задан явно белым, а не унаследован (см. .btn). */
@@ -402,10 +391,9 @@ code { background: var(--surface2); padding: 1px 5px; border-radius: 4px; }
    🎯 КАРТОЧКА ЗАДАЧИ — ИСКЛЮЧЕНИЕ ИЗ ПРАВИЛА ВЫШЕ: у неё нет ни потолка высоты, ни
       собственной прокрутки. Слово владельца 2026-08-07 14:24 UTC.
 
-   Действует в ОБОИХ представлениях, а не только на доске: правило сказано про карточку
-   задачи, а в таблице человек открывает ту же карточку тем же щелчком. Оставь потолок
-   здесь — и полоска прокрутки внутри карточки всё-таки останется, ровно та, на которую
-   он жаловался, просто в другом месте.
+   Правило сказано про КАРТОЧКУ ЗАДАЧИ и держится на ней самой, а не на том, из какого
+   вида её открыли. Оставь потолок здесь — и полоска прокрутки внутри карточки всё-таки
+   останется, ровно та, на которую он жаловался, просто в другом месте.
 
    Высота идёт ЗА СОДЕРЖИМЫМ в обе стороны: короткая карточка занимает мало и не
    растягивается на пустое место (полоса выравнивает рейлы по верху), длинная растёт
@@ -501,20 +489,6 @@ code { background: var(--surface2); padding: 1px 5px; border-radius: 4px; }
 /* Рейл живёт в полосе — прежние отступы страницы ему не нужны. */
 .page--rails .filters { margin-bottom: 10px; }
 
-/* 🔴 ФИКСИРОВАННАЯ РАСКЛАДКА КОЛОНОК — НЕ КОСМЕТИКА, А ГЛАВНОЕ МЕСТО ЭТОЙ ПРАВКИ.
-   Замер на живых данных 2026-08-06 17:14 UTC, ДО этой строки:
-       ширина рейла ......... 1180 px
-       ширина таблицы ....... 11 783 px   ← распёрлась содержимым
-       горизонтальный скролл  ПОЯВИЛСЯ
-   Причина: у критерия приёмки бывает 950 знаков в одну строку, и при обычной
-   раскладке браузер расширяет колонку под содержимое, пока таблица не станет
-   в десять раз шире рейла. Типы при этом зелёные, тесты тоже — колонки просто
-   уезжают за край, и человек их не видит. Ровно тот отказ, ради которого писан
-   канон рейлов. Фиксированная раскладка заставляет колонки держать заданную ширину,
-   а длинному тексту — переноситься или обрезаться многоточием. */
-.page--rails .table { font-size: 0.83rem; table-layout: fixed; width: 100%; }
-.page--rails .table td { word-break: break-word; overflow-wrap: anywhere; }
-
 /* Узкий экран: горизонтального места нет вовсе — рейлы становятся одним столбцом.
    Держать жёсткие две колонки на узком окне значит вернуть ту самую давку,
    только вызванную размером окна, а не кодом. */
@@ -580,9 +554,9 @@ code { background: var(--surface2); padding: 1px 5px; border-radius: 4px; }
 }
 .fchip--dir:hover { color: var(--text); }
 
-/* ── переключатель представления ─────────────────────────────────────────────
-   Доска и таблица стоят РЯДОМ и обе видны всегда: выпадающий список спрятал бы
-   сам факт, что второй вид существует. */
+/* ── строка сводного счёта над доской ────────────────────────────────────────
+   Здесь стоял переключатель представлений (доска/таблица); табличный вид убран
+   2026-08-10, и от строки осталось «показано N из M» по всему набору. */
 .viewbar {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   margin: 12px 0 8px;
@@ -691,12 +665,3 @@ code { background: var(--surface2); padding: 1px 5px; border-radius: 4px; }
 .smark--done { color: var(--good); }
 .smark--dropped { color: var(--muted); }
 .smark--unknown { color: var(--muted); }
-
-/* ── сортировка по колонкам ──────────────────────────────────────────────────
-   Значок стоит у КАЖДОЙ сортируемой колонки, а не только у активной: иначе
-   человек не знает, что сортировка вообще есть, пока случайно не щёлкнет. */
-.th-sort { cursor: pointer; user-select: none; white-space: nowrap; }
-.th-sort:hover { color: var(--text); }
-.th-sort__mark { margin-left: 4px; opacity: 0.35; font-size: 0.7rem; }
-.th-sort--on { color: var(--text); }
-.th-sort--on .th-sort__mark { opacity: 1; color: var(--accent); }
