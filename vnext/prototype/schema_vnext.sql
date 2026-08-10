@@ -65,31 +65,47 @@ CREATE TABLE roles (
 -- как приказ. Это лечили правилом «при расхождении верь БД» — компенсатор, который
 -- не работает, когда сама БД хранит статус текстом.
 -- ────────────────────────────────────────────────────────────────────────────
+-- ⚡ СВЕДЕНО С ЖИВОЙ БАЗОЙ 2026-08-10 (карточка #89, шаг 4 — ломающий, слово владельца
+--    08:56 UTC). Что взято от кого:
+--   · ОТ ЖИВОЙ: опознание НОМЕРОМ (id + rule_key UNIQUE) — образец опознавал именем и
+--     на имя же ссылался; переименование правила рвало бы ссылки молча. Плюс пять полей
+--     основания (basis/authorized/source_ref/expiry_kind/expiry_cond — работа 08.08);
+--   · ОТ ОБРАЗЦА: статус полем + обстоятельства отзыва + CHECK-контракт;
+--   · ⚠️ status И expiry_* — НЕ ДУБЛЬ: expiry говорит, ПРИ КАКОМ УСЛОВИИ правило
+--     отменится в будущем; status — отменено ли УЖЕ. Условие и свершившийся факт.
+--   Заполнение живой базы: 10 отзывов внесены КАРТОЙ, СОБРАННОЙ ГЛАЗАМИ из надгробий
+--   (регексп-разбор прозы даёт 28 % ложных — класс «употребление против упоминания»).
 CREATE TABLE rules (
-    rule_key    TEXT PRIMARY KEY,
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    rule_key    TEXT NOT NULL UNIQUE,
     body        TEXT NOT NULL,
+    locked_by   TEXT NOT NULL DEFAULT 'coord',
     version     INTEGER NOT NULL DEFAULT 1,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    basis       TEXT, authorized TEXT, source_ref TEXT,
+    expiry_kind TEXT, expiry_cond TEXT,
     status      TEXT NOT NULL DEFAULT 'active'
                 CHECK (status IN ('active', 'revoked', 'superseded')),
-    -- Отзыв — СОБЫТИЕ: кто, когда, почему. Всё три обязательны при отзыве (CHECK ниже),
+    -- Отзыв — СОБЫТИЕ: кто, когда, почему. Все три обязательны при отзыве (CHECK ниже),
     -- потому что отзыв без причины через месяц неотличим от потери.
     revoked_at      TEXT,
     revoked_by      TEXT,
     revoked_reason  TEXT,
-    -- Чем заменено. FK на само правило: «superseded_by» с опечаткой не должен
-    -- молча указывать в пустоту — это тот же класс, что нота-призрак.
-    superseded_by   TEXT REFERENCES rules(rule_key) ON DELETE SET NULL,
-    locked_by   TEXT REFERENCES roles(role),
-    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    -- Чем заменено. НА НОМЕР, не на имя (правка при сведении 10.08): FK держит ссылку
+    -- от опечатки, а номер — от переименования. Прежняя ссылка на rule_key рвалась бы
+    -- молча при первом же переименовании правила.
+    superseded_by   INTEGER REFERENCES rules(id) ON DELETE SET NULL,
     -- КОНТРАКТ В СХЕМЕ: отозванное обязано нести обстоятельства отзыва,
     -- заменённое — указывать замену. Иначе статус так и останется прозой,
-    -- просто переехавшей в другое поле.
+    -- просто переехавшей в другое поле. Все четыре нарушения проверены НАРОЧНО
+    -- (отзыв без обстоятельств · замена без преемника · сам себе преемник · чужое
+    -- значение) — контракт отбивает каждое.
     CHECK (status <> 'revoked'
            OR (revoked_at IS NOT NULL AND revoked_by IS NOT NULL
                AND revoked_reason IS NOT NULL)),
     CHECK (status <> 'superseded' OR superseded_by IS NOT NULL),
-    CHECK (superseded_by IS NULL OR superseded_by <> rule_key)   -- само себя не заменяет
+    CHECK (superseded_by IS NULL OR superseded_by <> id)   -- само себя не заменяет
 );
 
 -- Живые правила одним обращением — чтобы роль не решала текстом, что ещё действует.

@@ -78,12 +78,15 @@ def main():
                   expect="allow"))
     v.append(case("superseded без указания замены", con,
                   "INSERT INTO rules (rule_key, body, status) VALUES ('r-sup','тело','superseded')"))
+    # ⚠️ Преемник — НОМЕРОМ, не именем (сведение 10.08, карточка #89): переименование
+    #    правила не должно рвать ссылку молча. Стенд ссылается так же, как схема велит.
     v.append(case("superseded на несуществующее правило", con,
                   "INSERT INTO rules (rule_key, body, status, superseded_by) "
-                  "VALUES ('r-sup','тело','superseded','r-нет-такого')"))
+                  "VALUES ('r-sup','тело','superseded',99999)"))
     v.append(case("superseded на живое правило", con,
                   "INSERT INTO rules (rule_key, body, status, superseded_by) "
-                  "VALUES ('r-sup','тело','superseded','r-live')", expect="allow"))
+                  "VALUES ('r-sup','тело','superseded',"
+                  "(SELECT id FROM rules WHERE rule_key='r-live'))", expect="allow"))
     n, = con.execute("SELECT COUNT(*) FROM rules_active").fetchone()
     ok = n == 1
     v.append(ok)

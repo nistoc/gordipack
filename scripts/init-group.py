@@ -21,7 +21,25 @@ REPO_ROOT = SCRIPT_DIR.parent
 # это было нечем. Контур, собранный из v2 в тот день, не получал НИЧЕГО из сделанного
 # за смену и выглядел исправным: приёмки шаблона проверяют то, что в шаблоне ЕСТЬ.
 # ⚖️ Рукописная схема — вторая копия правды, а вторая копия расходится молча.
-SCHEMA_FILE = REPO_ROOT / "schema" / "mezosync_v3.sql"
+# ⚡ 2026-08-10: ФАЙЛ СХЕМЫ ВЫБИРАЕТСЯ ЗАМЕРОМ ПО ДИСКУ — свежайший mezosync_v<N>.sql, —
+#    а не впечатан. История класса в этом самом репо, третий заход подряд:
+#    init-group-vnext ссылался на v1 при живой v2 (записано в его же шапке) · этот файл
+#    держал «v3» в день объявления рубежа v4. Впечатанный номер версии протухает В ДЕНЬ
+#    следующего рубежа — по построению, и молча: сборщик продолжает собирать вчерашний
+#    контур, а приёмки шаблона проверяют то, что в шаблоне ЕСТЬ.
+
+
+def _latest_schema() -> Path:
+    cands = sorted((REPO_ROOT / "schema").glob("mezosync_v*.sql"),
+                   key=lambda p: int("".join(ch for ch in p.stem.split("_v")[-1]
+                                             if ch.isdigit()) or 0))
+    if not cands:
+        raise SystemExit("⛔ НЕ ЗАПУСТИЛАСЬ: в schema/ нет ни одного mezosync_v*.sql — "
+                         "собери его из живой базы: python vnext/tools/gen-schema.py")
+    return cands[-1]
+
+
+SCHEMA_FILE = _latest_schema()
 UNIVERSAL_RULES = REPO_ROOT / "rules" / "universal.sql"
 DOMAIN_RULES_DIR = REPO_ROOT / "rules" / "domain-specific"
 
