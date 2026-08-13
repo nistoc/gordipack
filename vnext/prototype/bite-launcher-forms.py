@@ -139,8 +139,14 @@ def main() -> int:
     print()
     print("⑦ СПЛОШНАЯ ПОЛОМКА — по одному механизму за раз:")
     d7, scripts7, db7 = sandbox()
+    # ⚠️ Цель — скрипты, ОБЪЯВЛЯЮЩИЕ --role своим флагом, а не любое упоминание строки:
+    # 13.08 guard-all получил "--role" как аргумент ПОДПРОЦЕССА (градусник памяти зовёт
+    # решето по ролям), и отбор по упоминанию записал его в цели. Поломка упоминания
+    # контракта guard-all не рушит (его зовут без аргументов) — приёмка объявила прибор
+    # «слепым» на поломке, которую роль не может встретить. Это случай ⑤ («упоминание ≠
+    # команда») в самой приёмке — тем же классом, которым она судит других.
     targets = sorted({p.name for p in scripts7.glob("*.py")
-                      if '"--role"' in p.read_text(encoding="utf-8", errors="ignore")})
+                      if 'add_argument("--role"' in p.read_text(encoding="utf-8", errors="ignore")})
     blind, seen = [], 0
     for name in targets:
         d_i, scripts_i, db_i = sandbox()
