@@ -8,7 +8,7 @@
 Нужны **два** процесса. Сначала бэкенд:
 
 ```bash
-dotnet run --project src/Gordi.Viewer.Api -- --db C:/путь/к/mezosync.db
+dotnet run --project src/Gordi.Periscope.Api -- --db C:/путь/к/mezosync.db
 ```
 
 Потом интерфейс:
