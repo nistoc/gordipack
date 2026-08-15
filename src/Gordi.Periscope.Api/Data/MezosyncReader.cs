@@ -144,6 +144,7 @@ public static class MezosyncReader
         if (!s.Has("backlog")) return [];
 
         var criterionSupported = s.HasColumn("backlog", "done_when");
+        var droppedReasons = ReadDroppedReasons(c, s);
 
         using var cmd = c.CreateCommand();
         cmd.CommandText = "SELECT * FROM backlog ORDER BY id";
@@ -154,11 +155,13 @@ public static class MezosyncReader
         while (r.Read())
         {
             var doneWhen = criterionSupported ? Row.Str(r, m, "done_when") : null;
+            var id = Row.Num(r, m, "id") ?? 0;
+            var status = Row.Str(r, m, "status");
             list.Add(new TaskDto(
-                Id: Row.Num(r, m, "id") ?? 0,
+                Id: id,
                 Role: Row.Str(r, m, "role"),
                 Title: Row.Str(r, m, "title"),
-                Status: Row.Str(r, m, "status"),
+                Status: status,
                 Priority: Row.Str(r, m, "priority"),
                 DoneWhen: doneWhen,
                 CriterionSupported: criterionSupported,
@@ -167,6 +170,7 @@ public static class MezosyncReader
                 ParentId: Row.Num(r, m, "parent_id"),
                 ParentTrack: Row.Str(r, m, "parent_track"),
                 BlockedReason: Row.Str(r, m, "blocked_reason"),
+                DroppedReason: status == "dropped" ? droppedReasons.GetValueOrDefault(id) : null,
                 CreatedBy: Row.Str(r, m, "created_by"),
                 CreatedAt: Row.Str(r, m, "created_at"),
                 UpdatedAt: Row.Str(r, m, "updated_at"),
@@ -174,6 +178,25 @@ public static class MezosyncReader
         }
 
         return list;
+    }
+
+    // Причины устаревания одним запросом на весь список: последний status_change → dropped
+    // с непустой запиской побеждает (ORDER BY id — поздние перезаписывают ранние в словаре).
+    // Тот же отбор, что у CLI-списка: NULL/пустое тело причиной не считается.
+    private static Dictionary<long, string> ReadDroppedReasons(SqliteConnection c, SchemaCapabilities s)
+    {
+        var reasons = new Dictionary<long, string>();
+        if (!s.Has("backlog_events")) return reasons;
+
+        using var cmd = c.CreateCommand();
+        cmd.CommandText =
+            "SELECT backlog_id, body_md FROM backlog_events " +
+            "WHERE event_type = 'status_change' AND to_status = 'dropped' " +
+            "AND body_md IS NOT NULL AND TRIM(body_md) != '' ORDER BY id";
+        using var r = cmd.ExecuteReader();
+        while (r.Read())
+            reasons[r.GetInt64(0)] = r.GetString(1);
+        return reasons;
     }
 
     public static TaskDetailDto? ReadTask(SqliteConnection c, SchemaCapabilities s, long id)
@@ -194,12 +217,15 @@ public static class MezosyncReader
             {
                 var doneWhen = criterionSupported ? Row.Str(r, m, "done_when") : null;
                 bodyMd = Row.Str(r, m, "body_md");
+                var status = Row.Str(r, m, "status");
                 task = new TaskDto(
                     Row.Num(r, m, "id") ?? id, Row.Str(r, m, "role"), Row.Str(r, m, "title"),
-                    Row.Str(r, m, "status"), Row.Str(r, m, "priority"), doneWhen,
+                    status, Row.Str(r, m, "priority"), doneWhen,
                     criterionSupported, !string.IsNullOrWhiteSpace(doneWhen),
                     Row.Tags(r, m, "tags"), Row.Num(r, m, "parent_id"), Row.Str(r, m, "parent_track"),
-                    Row.Str(r, m, "blocked_reason"), Row.Str(r, m, "created_by"),
+                    Row.Str(r, m, "blocked_reason"),
+                    status == "dropped" ? ReadDroppedReasons(c, s).GetValueOrDefault(id) : null,
+                    Row.Str(r, m, "created_by"),
                     Row.Str(r, m, "created_at"), Row.Str(r, m, "updated_at"),
                     (bodyMd ?? "").Length);
             }

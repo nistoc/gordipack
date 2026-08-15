@@ -67,6 +67,8 @@ export interface Task {
   parentId: number | null;
   parentTrack: string | null;
   blockedReason: string | null;
+  /** Причина устаревания (последний переход в dropped с запиской); null у dropped = «НЕ ЗАПИСАНА». */
+  droppedReason: string | null;
   createdBy: string | null;
   createdAt: string | null;
   updatedAt: string | null;

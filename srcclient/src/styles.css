@@ -633,6 +633,15 @@ code { background: var(--surface2); padding: 1px 5px; border-radius: 4px; }
   font-size: 0.74rem; color: var(--accent); background: var(--tint-accent);
 }
 
+/* Причина устаревания dropped-карточки: приглушённая, не конкурирует с оранжевым
+   «нет критерия» — dropped-колонка не место для тревоги, но причина обязана читаться. */
+.tile__dropped-reason {
+  margin-top: 6px; padding: 3px 7px; border-radius: 6px;
+  font-size: 0.74rem; color: var(--muted); background: var(--tint-muted, rgba(128,128,128,.12));
+  overflow: hidden; text-overflow: ellipsis; display: -webkit-box;
+  -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+
 /* Связь с родительской карточкой. Кнопка, а не подпись: связь без перехода —
    это сообщение «где-то есть родитель», после которого его всё равно ищут руками. */
 .reltag {

@@ -172,6 +172,19 @@ export function TaskTile({
         </div>
       )}
 
+      {/* Причина устаревания — у dropped ВСЕГДА, даже когда её нет: старые карточки без
+          причины говорят это словами (тот же текст, что CLI-список), а не молчат как
+          «нечего показать». Класс дыры — «поле пишется и не читается» (карточка #197). */}
+      {task.status === 'dropped' && (
+        <div
+          className="tile__dropped-reason"
+          data-group={`tile-dropped-reason-${task.id}`}
+          title={task.droppedReason ?? 'НЕ ЗАПИСАНА (устарела до ворот 14.08)'}
+        >
+          ✗ причина: {task.droppedReason ?? 'НЕ ЗАПИСАНА (устарела до ворот 14.08)'}
+        </div>
+      )}
+
       {task.tags.length > 0 && (
         <div className="tile__tags" data-group={`tile-tags-${task.id}`}>
           {task.tags.map((tag) => <span key={tag} className="tag">{tag}</span>)}

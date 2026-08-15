@@ -71,6 +71,10 @@ public sealed record TaskDto(
     long? ParentId,
     string? ParentTrack,
     string? BlockedReason,
+    // Причина устаревания: последний status_change → dropped с непустой запиской.
+    // null у dropped-карточки значит «причина НЕ ЗАПИСАНА» (устарела до ворот на
+    // обязательную причину) — витрина обязана сказать это словами, а не молчать.
+    string? DroppedReason,
     string? CreatedBy,
     string? CreatedAt,
     string? UpdatedAt,
