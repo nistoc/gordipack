@@ -27,15 +27,13 @@ import sqlite3
 from pathlib import Path
 
 from mezo_paths import resolve_db   # R15a: путь к БД — от расположения скрипта, не от CWD
+import rule_status as RS            # отзыв правила — ОДИН признак на контур (карточка #89)
 
-# ⚡ ПРИЁМНИК ВЫВОДИТСЯ ОТ БАЗЫ, А НЕ ВПЕЧАТАН (#145, 10.08 06:58 UTC).
-# 🪤 ЗДЕСЬ СТОЯЛ АБСОЛЮТНЫЙ ПУТЬ КОНТЕЙНЕРА АВТОРА ШАБЛОНА — и это не теоретический грех:
-# сегодня утром КОПИИ этого файла в свежесобранных стендах, позванные стендовым set-rule
-# БЕЗ --out, ПЕРЕЗАПИСАЛИ ЖИВОЕ ЗЕРКАЛО автора содержимым стенда (36 правил вместо 50).
-# Источник set-rule передаёт явно (--db), а ПРИЁМНИК был один на все базы — ровно дыра,
-# о которой предупреждал его же комментарий. Санитайзер переносчика путь не поймал:
-# тот знал одну форму контейнера, а тут была другая.
-# ⇒ Приёмник вычисляется ОТ БАЗЫ: её производное лежит рядом с ней, а не у автора шаблона.
+# 🪤 ПРИЁМНИК ВЫВОДИТСЯ ОТ БАЗЫ, А НЕ ВПЕЧАТАН (#145, донесено #157 10.08).
+# Здесь стоял абсолютный путь этой машины — «заряженное ружьё в каждой копии»: стенд,
+# запущенный из чужого места, ДВАЖДЫ перезаписал живое зеркало правил (36 строк вместо 50).
+# ⇒ Производное живёт РЯДОМ СО СВОИМ ИСТОЧНИКОМ; раскладка контура-автора уважается,
+#    но определяется ЗАМЕРОМ, а не памятью.
 def _default_out(db_path: Path) -> Path:
     root = Path(db_path).resolve().parent          # каталог .mezosync своей базы
     legacy = root.parent / "atlas.archs" / ".mezosync" / "coordination"
@@ -120,13 +118,17 @@ def main():
     ap.add_argument("--apply", action="store_true")
     args = ap.parse_args()
     args.db = str(resolve_db(args.db, __file__))   # R15a: от расположения скрипта
-    if args.out is None:
+    if args.out is None:                           # #157: приёмник — от базы, не впечатан
         args.out = str(_default_out(Path(args.db)))
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)
 
     conn = sqlite3.connect(args.db)
+    # Поле статуса подставляется, только если оно есть в базе (см. rule_status.py):
+    # спрашивать несуществующее поле и получать пустоту = объявить всё действующим.
+    has_status = RS.has_status_field(conn)
     rules = {r[0]: r for r in conn.execute(
-        "SELECT rule_key, body, locked_by, version FROM rules")}
+        "SELECT rule_key, body, locked_by, version"
+        + (", status" if has_status else ", NULL") + " FROM rules")}
     invs = list(conn.execute("SELECT code, description FROM invariants ORDER BY code"))
 
     used, parts = set(), []
@@ -136,9 +138,13 @@ def main():
             continue
         parts.append(f"## {title}\n")
         for k in block:
-            _, body, locked, ver = rules[k]
+            _, body, locked, ver, status = rules[k]
             used.add(k)
-            revoked = body.lstrip().startswith("⛔ ОТОЗВАНО")
+            # ⚡ ОДИН признак на контур (rule_status.py, карточка #89, шаг 3). Здесь стоял
+            #    самый узкий из трёх: требовал и значок, и слово ровно «ОТОЗВАНО». Надгробие
+            #    «ОТОЗВАНО» без значка или «⛔ ОТМЕНЁНО» он пропускал — а свод и Перископ
+            #    их видели. Модуль умеет и ПОЛЕ статуса: появится — станет сильнее текста.
+            revoked, _ = RS.revoked_of(body, status, has_status)
             mark = "⛔ **ОТОЗВАНО** " if revoked else ""
             parts.append(f"### {mark}`{k}` 🔒{locked} v{ver}\n\n{body.strip()}\n")
 
@@ -147,8 +153,13 @@ def main():
     if rest:
         parts.append("## 📎 Прочие правила (не разложены по разделам — добавь в ORDER)\n")
         for k in rest:
-            _, body, locked, ver = rules[k]
-            parts.append(f"### `{k}` 🔒{locked} v{ver}\n\n{body.strip()}\n")
+            _, body, locked, ver, status = rules[k]
+            # Отзыв помечается и здесь: «прочее» — не «неважное». Правило, не разложенное
+            # по разделам, читается тем же взглядом, и отозванное среди них выглядело бы
+            # действующим ровно так же.
+            revoked, _ = RS.revoked_of(body, status, has_status)
+            mark = "⛔ **ОТОЗВАНО** " if revoked else ""
+            parts.append(f"### {mark}`{k}` 🔒{locked} v{ver}\n\n{body.strip()}\n")
 
     parts.append("## 🛡️ Инварианты качества\n")
     parts.append("> Живут в таблице `invariants`. Выведены ролями в работе; авторство — в записях.\n")

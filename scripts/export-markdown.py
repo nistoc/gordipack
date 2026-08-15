@@ -15,6 +15,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 from mezo_paths import resolve_db   # R15a: путь к БД — от расположения скрипта, не от CWD
+import rule_status as RS            # отзыв правила — ОДИН признак на контур (карточка #89)
 
 
 def main():
@@ -45,9 +46,15 @@ def main():
     lines.append(f"> Экспорт: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')} UTC\n")
 
     # Rules
+    # ⚡ ОТОЗВАННЫЕ ПОМЕЧАЮТСЯ (карточка #89, шаг 3). До 2026-08-10 эта выгрузка не
+    #    различала отзыв ВООБЩЕ и печатала все десять отозванных правил вровень с
+    #    действующими — то есть свод, выгруженный отсюда, приказывал отменённое.
+    #    Признак берётся из общего модуля: три места контура держали три разных признака,
+    #    и на различающих написаниях они расходились все четыре раза (замер 08:28 UTC).
     lines.append("## 📋 Правила\n")
-    for row in conn.execute("SELECT rule_key, body, locked_by FROM rules ORDER BY rule_key"):
-        lines.append(f"- **{row[0]}** (🔒{row[2]}): {row[1]}")
+    for r in RS.read_rules(conn):
+        mark = "⛔ **ОТОЗВАНО** " if r["revoked"] else ""
+        lines.append(f"- {mark}**{r['rule_key']}** (🔒{r['locked_by']}): {r['body']}")
     lines.append("")
 
     # Tracks

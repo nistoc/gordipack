@@ -8,6 +8,7 @@ save-phoenix.py — CLI для агента: сохранить phoenix-слеп
 
 import argparse
 import sqlite3
+import dryrun          # холостой прогон (13.08)
 import sys
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from mezo_paths import resolve_db   # R15a: путь к БД — от распо
 def main():
     parser = argparse.ArgumentParser(description="Сохранить phoenix-слепок")
     # R15a: --db не обязателен, резолвится от расположения СКРИПТА (не от CWD).
+    dryrun.add_argument(parser)
     parser.add_argument("--db", default=None, help="Путь к mezosync.db (по умолчанию — рядом со скриптом)")
     parser.add_argument("--role", required=True, help="Роль (COORD, CORE, ...)")
     # launcher/rebirth/sources добавлены 2026-07-16: замер показал, что МЕХАНИЗМУ
@@ -42,6 +44,16 @@ def main():
     parser.add_argument("--allow-shrink", action="store_true",
                         help="разрешить сокращение секции в разы: сознательная чистка, "
                              "а не потеря. Пустое тело не разрешает и он")
+    # ── КТО ПРАВИТ ≠ ЧЬЯ СЕКЦИЯ (карточка #164, 2026-08-13). Прежде в audit_log шло
+    # значение --role — ВЛАДЕЛЕЦ слепка, а не исполнитель. Цена показана 10.08: владелец
+    # спросил «что COORD правил за смену», и единственная запись по COORD оказалась правкой
+    # PROTO (§7 — его зона). Проверка добросовестности роли получила бы ложную улику.
+    # Форма — из backlog.py (--actor отдельным флагом от --role): она в контуре уже принята.
+    # Образец честного авторства — applied_by в журнале схемы: ставится механизмом.
+    parser.add_argument("--actor", default=None,
+                        help="КТО правит, если не владелец секции (напр. --actor PROTO при "
+                             "правке чужого слепка). Без флага журнал пишет владельца — "
+                             "прежнее поведение, для правки СВОЕЙ секции оно верно")
     args = parser.parse_args()
 
     # Регистр роли НОРМАЛИЗУЕТСЯ к верхнему (как в read-messages.py/read-phoenix.py): иначе
@@ -49,6 +61,8 @@ def main():
     # а `read-phoenix --role STUD` вернул бы старый — роль МОЛЧА теряет свёртку, гарды зелёные.
     # Латентная мина: найдена PROTO 2026-07-25 (#2665), подтверждена COORD замером, починка по слову владельца.
     role = args.role.upper()
+    # Регистр исполнителя — та же нормализация, что у роли (иначе расщепление PROTO/proto).
+    actor = args.actor.upper() if args.actor else role
     # Путь к БД — та же нормализация входа, что регистр роли (R15a).
     args.db = str(resolve_db(args.db, __file__))
 
@@ -59,7 +73,8 @@ def main():
     body = args.body if args.body else Path(args.file).read_text(encoding="utf-8")
 
     try:  # mode=rw: connect НЕ создаёт пустую БД-фантом при опечатке пути (П1 16.07)
-        conn = sqlite3.connect(f"file:{args.db}?mode=rw", uri=True, timeout=5)
+        conn = dryrun.connect(f"file:{args.db}?mode=rw", args.dry_run,
+                              uri=True, timeout=5)
     except sqlite3.OperationalError:
         sys.exit(f"ERR: БД не найдена: {args.db}")
     # ── 🩸 ЗАЩИТА ПАМЯТИ РОЛИ. Правка @PROTO в шаблоне gordipack (17:02 UTC), перенесена
@@ -133,10 +148,14 @@ def main():
                 saved_at = excluded.saved_at
         """, (role, args.section, body))
 
+    # В actor_role — ИСПОЛНИТЕЛЬ; чья секция — уже в target. Прежде оба поля несли роль,
+    # и вопрос «кто это сделал» получал уверенный неверный ответ (карточка #164).
+    diff_note = (f"Updated {args.section} ({len(body)} chars)"
+                 + (f" [чужая секция: правил {actor}]" if actor != role else ""))
     conn.execute("""
         INSERT INTO audit_log (actor_role, action, target, diff_md)
         VALUES (?, 'save_phoenix', ?, ?)
-    """, (role, f"phoenix.{role}.{args.section}", f"Updated {args.section} ({len(body)} chars)"))
+    """, (actor, f"phoenix.{role}.{args.section}", diff_note))
 
     conn.commit()
     conn.close()
@@ -146,7 +165,8 @@ def main():
     delta = "первое сохранение" if was == 0 else f"было {was} → стало {now} знаков"
     print(f"OK phoenix/{role}/{args.section} — {delta}"
           + ("   ⚠️ сокращение разрешено словом --allow-shrink"
-             if args.allow_shrink and was > now else ""))
+             if args.allow_shrink and was > now else "")
+          + (f"   ✍️ правил {actor} (чужая секция, журнал знает)" if actor != role else ""))
 
 
 if __name__ == "__main__":

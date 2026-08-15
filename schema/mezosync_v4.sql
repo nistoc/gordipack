@@ -8,7 +8,9 @@
 --    об этом здесь: схема тогда НОВЕЕ объявленной версии.
 -- Что входит в версию — спрашивай журнал: SELECT * FROM schema_migrations.
 --
--- собрано: index 14 · table 27 · view 4
+-- 🔴 ВНИМАНИЕ: сверх рубежа 1 шагов — схема НОВЕЕ объявленной версии.
+--
+-- собрано: index 14 · table 27 · view 6
 
 CREATE TABLE IF NOT EXISTS audit_log (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -278,6 +280,19 @@ CREATE VIEW IF NOT EXISTS backlog_without_criterion AS
             WHERE status = 'open'
               AND (done_when IS NULL
                    OR TRIM(done_when, ' ' || char(9) || char(10) || char(13)) = '');
+
+CREATE VIEW IF NOT EXISTS cursor_gaps AS
+SELECT role, from_id, to_id, to_id - from_id + 1 AS notes, basis, authorized, at
+FROM cursor_segments WHERE kind = 'declared';
+
+CREATE VIEW IF NOT EXISTS cursor_truth AS
+SELECT role,
+       SUM(CASE WHEN kind = 'read'     THEN to_id - from_id + 1 ELSE 0 END) AS notes_read,
+       SUM(CASE WHEN kind = 'declared' THEN to_id - from_id + 1 ELSE 0 END) AS notes_declared,
+       SUM(CASE WHEN kind = 'born'     THEN to_id - from_id + 1 ELSE 0 END) AS notes_before_birth,
+       MAX(to_id) AS covered_to
+FROM cursor_segments
+GROUP BY role;
 
 CREATE VIEW IF NOT EXISTS messages_all AS
     SELECT id, writer_role, timestamp, body_md, tags, priority, resolved, 'live'    AS source FROM messages

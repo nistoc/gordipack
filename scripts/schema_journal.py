@@ -52,14 +52,43 @@ def fingerprint(conn):
 
 
 def ensure_column(conn):
-    """Колонка отпечатка. Идемпотентно (правило migration-safety)."""
+    """Колонки отпечатка и автора. Идемпотентно (правило migration-safety)."""
     have = {r[1] for r in conn.execute("PRAGMA table_info(schema_migrations)")}
+    added = False
     if "fingerprint" not in have:
         conn.execute("ALTER TABLE schema_migrations ADD COLUMN fingerprint TEXT")
-    return "fingerprint" not in have
+        added = True
+    if "applied_by" not in have:
+        conn.execute("ALTER TABLE schema_migrations ADD COLUMN applied_by TEXT")
+        added = True
+    return added
 
 
-def record_step(conn, version, note, backdated=False):
+def _who(by):
+    """КЕМ применён шаг — значение, которое механизм добывает САМ.
+
+    🪤 Почему не просто необязательный параметр. Урок поля `resolved` (1 запись из 1483):
+    незаполняемое поле — не лень ролей, а отсутствующий механизм. Необязательный `by`
+    остался бы пустым у всех, кроме тех, кто ВСПОМНИТ, — а механизм, о котором надо
+    вспомнить, умирает. Поэтому автор выводится из вызывателя, когда его не назвали.
+
+    ⚖️ И ЧЕСТНОСТЬ ИСТОЧНИКА ВИДНА В САМОМ ЗНАЧЕНИИ — приём `addressed_by` ('field' /
+    'backfill'), уже принятый в контуре: роль названа явно ⇒ пишем её; не названа ⇒
+    пишем `tool:<файл>`. Выдавать инструмент за роль нельзя: «кто решил» и «чем
+    применено» — разные факты, и слипшись они начнут врать молча.
+    """
+    if by:
+        return str(by)
+    import inspect
+    import os
+    for frame in inspect.stack()[1:]:
+        name = os.path.basename(frame.filename)
+        if name != os.path.basename(__file__):
+            return f"tool:{name}"
+    return "tool:неизвестен"
+
+
+def record_step(conn, version, note, backdated=False, by=None):
     """Записать шаг В ТОЙ ЖЕ транзакции, что и правка схемы.
 
     ⛔ Зовётся ПОСЛЕ применения шага, до commit: иначе журнал скажет о шаге, которого
@@ -94,8 +123,9 @@ def record_step(conn, version, note, backdated=False):
     fp = fingerprint(conn)
     mark = " [ЗАПИСАНО ЗАДНИМ ЧИСЛОМ: отпечаток снят позже шага]" if backdated else ""
     conn.execute(
-        "INSERT OR REPLACE INTO schema_migrations (version, note, fingerprint) VALUES (?,?,?)",
-        (version, (note or "") + mark, fp))
+        "INSERT OR REPLACE INTO schema_migrations (version, note, fingerprint, applied_by) "
+        "VALUES (?,?,?,?)",
+        (version, (note or "") + mark, fp, _who(by)))
     return fp
 
 

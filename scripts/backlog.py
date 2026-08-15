@@ -25,6 +25,7 @@ import time
 from pathlib import Path
 
 from mezo_paths import resolve_db   # R15a: путь к БД — от расположения скрипта, не от CWD
+import dryrun          # холостой прогон (13.08)
 # ⚠️ Импорт ОБЁРНУТ намеренно — правка @TAXO (её замер живой эксплуатации 13:18:06 UTC):
 # она поймала этот файл в 15-секундном окне между записью вызова и записью модуля и получила
 # NameError. Её довод, и он мой же собственный: правило владельца велит ПРЕДУПРЕЖДАТЬ,
@@ -57,12 +58,12 @@ def _text(inline, file_arg):
     return inline or ""
 
 
-def _conn(db):
+def _conn(db, dry=False):
     p = Path(db)
     if not p.exists():
         print(f"ERR: БД не найдена: {p}", file=sys.stderr)
         sys.exit(1)
-    c = sqlite3.connect(str(p), timeout=5)
+    c = dryrun.connect(str(p), dry, timeout=5)
     c.execute("PRAGMA busy_timeout=5000")
     return c
 
@@ -214,15 +215,31 @@ def cmd_list(conn, a):
     where_role = f"role IN ({','.join('?' * len(roles))})"
     params = roles + params
 
+    # Отбор «старше N суток» (карточка #86 ⑧): напоминание о залежавшемся не должно тонуть
+    # в свежем — свежие тут НЕ показываются, и подпись ниже говорит об этом сама.
+    where_age, age_note = "1=1", ""
+    if getattr(a, "older_than_days", None) is not None:
+        where_age = f"created_at <= datetime('now', '-{int(a.older_than_days)} days')"
+        age_note = f" · старше {a.older_than_days} сут (свежие скрыты)"
+
     rows = conn.execute(
         f"SELECT id, role, title, status, priority, tags, done_when FROM backlog "
-        f"WHERE {where_role} AND {where_status}", params).fetchall()
+        f"WHERE {where_role} AND {where_status} AND {where_age}", params).fetchall()
     rows.sort(key=lambda r: (PRIORITY_ORDER.get(r[4], 9), r[0]))
 
     if not rows:
-        print(f"📭 [{a.role.upper()}] backlog пуст (status={a.status}).")
+        print(f"📭 [{a.role.upper()}] backlog пуст (status={a.status}{age_note}).")
         return
-    print(f"📋 backlog [{a.role.upper()}{'' if a.only_mine else ' + SHARED'}] — {len(rows)} задач (status={a.status})\n")
+    # Подпись называет ФАКТИЧЕСКИЙ состав (карточка #188): отбор «open» — это ГРУППА статусов,
+    # и число из подписи уходит в записки и промпты. «status=open» при blocked внутри — ложь
+    # на одну карточку, уже уехавшая в промпт как «открытых 11» при фактических 10.
+    from collections import Counter
+    состав = Counter(r[3] for r in rows)
+    if len(состав) > 1:
+        подпись = " · ".join(f"{s} {n}" for s, n in состав.most_common())
+    else:
+        подпись = f"status={next(iter(состав))}"
+    print(f"📋 backlog [{a.role.upper()}{'' if a.only_mine else ' + SHARED'}] — {len(rows)} задач ({подпись}{age_note})\n")
     icon = {"open": "○", "in_progress": "◐", "blocked": "⛔", "in_review": "👀", "done": "✅", "dropped": "✗"}
     no_criterion = 0
     for bid, role, title, status, prio, tags, done_when in rows:
@@ -239,6 +256,15 @@ def cmd_list(conn, a):
         digest = _criterion_digest(done_when)
         if digest:
             print(f"        🎯 {digest}")
+        # Причина устаревания — В СПИСКЕ, не только в истории (карточка #86 ⑥). Старые
+        # dropped без причины говорят это ЧЕСТНО, а не молчат как «нечего показать».
+        if status == "dropped":
+            why = conn.execute(
+                "SELECT body_md FROM backlog_events WHERE backlog_id=? "
+                "AND event_type='status_change' AND to_status='dropped' "
+                "AND body_md IS NOT NULL AND TRIM(body_md) != '' "
+                "ORDER BY id DESC LIMIT 1", (bid,)).fetchone()
+            print(f"        ✗ причина: {why[0][:140] if why else 'НЕ ЗАПИСАНА (устарела до ворот 14.08)'}")
     if no_criterion:
         print(f"\n✎ без критерия готовности: {no_criterion} из {len(rows)} "
               f"— чем докажешь, что сделано?")
@@ -260,7 +286,19 @@ def cmd_show(conn, a):
     (bid, role, title, body, status, prio, tags, parent, track, blocked, cby, cat, uat, done_when) = row
     print(f"# backlog #{bid} — {title}")
     print(f"роль: {role} · статус: {status} · приоритет: {prio} · теги: {', '.join(json.loads(tags or '[]')) or '—'}")
-    if parent: print(f"родитель: #{parent}")
+    # Цепочка ПРЕДКОВ целиком, не только ближайший родитель (карточка #86 ⑤: «связи читаются
+    # одним запросом»). Гард на цикл в данных: повтор номера обрывает подъём, а не вешает show.
+    if parent:
+        chain, p = [], parent
+        while p and p not in chain:
+            chain.append(p)
+            nxt = conn.execute("SELECT parent_id FROM backlog WHERE id = ?", (p,)).fetchone()
+            p = nxt[0] if nxt else None
+        print("родитель: " + " → ".join(f"#{c}" for c in chain))
+    children = [r[0] for r in conn.execute(
+        "SELECT id FROM backlog WHERE parent_id = ? ORDER BY id", (a.id,))]
+    if children:
+        print("потомки: " + " ".join(f"#{c}" for c in children))
     if track: print(f"трек: {track}")
     if blocked: print(f"⛔ причина блокировки: {blocked}")
     # Критерий печатается ВСЕГДА — и когда он есть, и когда его нет. Молчание о пустом поле
@@ -355,11 +393,25 @@ def cmd_status(conn, a):
               file=sys.stderr)
         print("   он описывает уже полученный результат, а не проверяет его.", file=sys.stderr)
         print(f'   backlog.py criterion {a.id} --actor {a.actor} --text "..."', file=sys.stderr)
-        print("   ⚠️ Отменяешь, а не сделал? Это `dropped` — там критерий не нужен.",
-              file=sys.stderr)
+        print("   ⚠️ Отменяешь, а не сделал? Это `dropped` — критерий там не нужен, "
+              "но ПРИЧИНА обязательна (--note).", file=sys.stderr)
         sys.exit(1)
 
     note = _text(a.note, a.note_file)
+
+    # ⛔ ВОРОТА: `dropped` без причины. Слово владельца 07.08 10:20 UTC (карточка #86 ⑥):
+    # объявлять устаревшими — С ОБЪЯСНЕНИЕМ. Замер 14.08: dropped проходил МОЛЧА, а подсказка
+    # отказа `done` выше сама направляла в эту дверь. Причина — не критерий (доказывать
+    # нечего), но без «почему» отменённая карточка молчит, жив ли предмет и чем заменён.
+    if a.new_status == "dropped" and not note.strip():
+        print(f"⛔ backlog #{a.id} «{title}» — ПРИЧИНЫ НЕТ, объявить устаревшей нельзя.",
+              file=sys.stderr)
+        print("   Почему предмет больше не нужен? Если заменён — назови заменившую карточку.",
+              file=sys.stderr)
+        print(f'   backlog.py status {a.id} dropped --actor {a.actor} '
+              f'--note "причина; заменено: карточка #N"', file=sys.stderr)
+        sys.exit(1)
+
     blocked_reason = note if a.new_status == "blocked" else None
     conn.execute(
         "UPDATE backlog SET status = ?, blocked_reason = ?, updated_at = datetime('now') WHERE id = ?",
@@ -396,6 +448,7 @@ def main():
     sub = p.add_subparsers(dest="cmd", required=True)
 
     pa = sub.add_parser("add")
+    dryrun.add_argument(pa)
     pa.add_argument("--role", required=True)
     pa.add_argument("--title", required=True)
     pa.add_argument("--body", default="")
@@ -420,6 +473,7 @@ def main():
     pa.add_argument("--done-when-file", dest="done_when_file")
 
     pk = sub.add_parser("criterion", help="записать/изменить критерий приёмки существующей карточки")
+    dryrun.add_argument(pk)
     pk.add_argument("id", type=int)
     pk.add_argument("--actor", required=True)
     pk.add_argument("--text", default="")
@@ -429,11 +483,15 @@ def main():
     pl.add_argument("--role", required=True)
     pl.add_argument("--status", default="open", help="open|all|<конкретный статус>")
     pl.add_argument("--only-mine", action="store_true", dest="only_mine", help="без SHARED")
+    pl.add_argument("--older-than-days", type=int, default=None, dest="older_than_days",
+                    help="только карточки СТАРШЕ N суток — напоминание о залежавшемся "
+                         "(карточка #86 ⑧): свежие не показываются")
 
     ps = sub.add_parser("show")
     ps.add_argument("id", type=int)
 
     pt = sub.add_parser("status")
+    dryrun.add_argument(pt)
     pt.add_argument("id", type=int)
     pt.add_argument("new_status")
     pt.add_argument("--actor", required=True)
@@ -444,6 +502,7 @@ def main():
     pt.add_argument("--note-file", dest="note_file")
 
     pc = sub.add_parser("comment")
+    dryrun.add_argument(pc)
     pc.add_argument("id", type=int)
     pc.add_argument("--actor", required=True)
     pc.add_argument("--body", default="")
@@ -451,7 +510,9 @@ def main():
 
     a = p.parse_args()
     a.db = str(resolve_db(a.db, __file__))   # R15a: от расположения скрипта, не от CWD
-    conn = _conn(a.db)
+    # ⚠️ getattr, а не a.dry_run: у читающих подкоманд флага НЕТ по замыслу —
+    # ставить его туда, где нечего сохранять, значит учить, что он бывает бесполезен.
+    conn = _conn(a.db, getattr(a, "dry_run", False))
     {"add": cmd_add, "list": cmd_list, "show": cmd_show,
      "status": cmd_status, "comment": cmd_comment, "criterion": cmd_criterion}[a.cmd](conn, a)
     conn.close()
