@@ -44,6 +44,47 @@ public static class ReadOnlyDb
     }
 
     /// <summary>
+    /// ЗАМЕР read-only по живому соединению — а не пересказ конфигурации.
+    /// До этого замера /api/health печатал ReadOnly: true КОНСТАНТОЙ: подмени Mode —
+    /// и витрина продолжила бы говорить «только чтение». Сторож, который не краснеет
+    /// ни на чём, сторожем не считается (критерий приёмки просмотрщика, пункт ②).
+    ///
+    /// Три независимых показания — по одному на замок:
+    ///   modeReadOnly — строка ФАКТИЧЕСКОГО соединения несёт Mode=ReadOnly (замок 1);
+    ///   queryOnly    — PRAGMA query_only отвечает 1 (замок 2);
+    ///   writeRefused — канарейка BEGIN IMMEDIATE (захват пишущей блокировки, данных
+    ///                  не трогает) ПОЛУЧИЛА ОТКАЗ; если прошла — откатывается и
+    ///                  честно возвращает false (оба первых замка сняты).
+    /// Итог true только когда все три true: подмена любого замка красит health.
+    /// </summary>
+    public static bool ProveReadOnly(SqliteConnection c)
+    {
+        var modeReadOnly = c.ConnectionString.Contains("Mode=ReadOnly", StringComparison.OrdinalIgnoreCase);
+
+        bool queryOnly;
+        using (var q = c.CreateCommand())
+        {
+            q.CommandText = "PRAGMA query_only;";
+            queryOnly = Convert.ToInt64(q.ExecuteScalar() ?? 0L) == 1;
+        }
+
+        bool writeRefused;
+        try
+        {
+            using var canary = c.CreateCommand();
+            canary.CommandText = "BEGIN IMMEDIATE; ROLLBACK;";
+            canary.ExecuteNonQuery();
+            writeRefused = false;   // пишущая блокировка ВЗЯЛАСЬ — соединение умеет писать
+        }
+        catch (SqliteException)
+        {
+            writeRefused = true;    // отказ и есть искомое поведение
+        }
+
+        return modeReadOnly && queryOnly && writeRefused;
+    }
+
+    /// <summary>
     /// Отпечаток файла базы: длина и время правки самого файла И его журнала WAL.
     /// Нужен, чтобы (а) не перечитывать неизменившуюся базу, (б) честно показывать
     /// в интерфейсе «источник менялся в такое-то время».

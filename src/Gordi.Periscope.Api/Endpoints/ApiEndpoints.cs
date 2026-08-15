@@ -17,11 +17,25 @@ public static class ApiEndpoints
         {
             var path = sources.ActivePath;
             var status = path is null ? "no-source" : store.LastError is not null ? "error" : "ok";
+
+            // ReadOnly — ЗАМЕРОМ по живому соединению, не константой: подмена любого из
+            // трёх замков (Mode / query_only / канарейка записи) делает поле false.
+            var readOnly = true;
+            if (path is not null)
+            {
+                try
+                {
+                    using var probe = ReadOnlyDb.Open(path);
+                    readOnly = ReadOnlyDb.ProveReadOnly(probe);
+                }
+                catch { /* база недоступна — статус скажет своё, замок не о чем мерить */ }
+            }
+
             return Results.Ok(new HealthDto(
                 Status: status,
                 ActiveDbPath: path,
                 ScanRoot: sources.ScanRoot,
-                ReadOnly: true,
+                ReadOnly: readOnly,
                 RefreshSeconds: opt.Value.RefreshSeconds,
                 LastRefreshUtc: store.LastRefreshUtc,
                 LastChangeDetectedUtc: store.LastChangeDetectedUtc,
