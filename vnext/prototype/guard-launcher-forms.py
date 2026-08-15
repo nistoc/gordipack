@@ -44,10 +44,21 @@ LIVE_DB = LIVE_SCRIPTS.parent / "mezosync.db"
 CANON = [Path(str(mezo_paths.container_root() / "CLAUDE.md"))]
 
 CALL = re.compile(
-    r"(?:python\s+)?(?P<path>(?:[A-Za-z]:)?[^\s`'\"|]*[\\/])?(?P<script>[a-z0-9_-]+\.py)"
-    r"(?P<tail>[^\n`|]*)", re.I)
+    r"(?:python\s+)?(?P<path>(?:[A-Za-z]:)?[^\s`'\"|]*[\\/])?(?P<script>[a-z0-9_-]+\.py)", re.I)
+# Хвост команды заканчивается там, где начинается ЧУЖОЕ: разделитель перечня « · »,
+# бэктик/труба (как раньше) — а начало СЛЕДУЮЩЕЙ команды в той же строке режется
+# позицией её головы (см. collect). Пока хвост тянулся до конца строки, флаги второй
+# команды прилипали к первой и рождали форму, которой нет ни в одной памяти:
+# «list --role X (закрыть: status <id> done --actor X)» читалось как «list --actor --role»
+# и красило ВЕРНУЮ строку (карточка #203, замер 15.08 — три ложных красных).
+SEG_END = re.compile(r"\s+·\s+|[`|]")
 FLAG = re.compile(r"--[a-z][a-z0-9-]*")
 SUB = re.compile(r"^\s+(?!-)([a-z][a-z0-9-]*)\b")
+
+# Долгие ПО СВОЕЙ ПРИРОДЕ команды: честный прогон занимает минуты, и порог на «висит»
+# для них лжёт («работает дольше порога» ≠ «висит» — вторая половина карточки #203).
+# Форма сверяется по --help (разборщик аргументов тот же), о чём говорится вслух.
+LONG_BY_NATURE = {"bite-all.py": "полный прогон всех приёмок — минуты по своей природе"}
 
 # ⚠️ ЗНАЧЕНИЯ ПОДСТАВЛЯЕМ СВОИ. В памяти на их месте заглушки (<РОЛЬ>, <нота.md>):
 # запуск с ними доказывал бы только то, что заглушка не является ролью.
@@ -107,8 +118,13 @@ def collect(db):
                 in_code = not in_code
                 continue
             quoted = line.lstrip().startswith(">")
-            for m in CALL.finditer(line):
-                script, tail = m.group("script"), m.group("tail")
+            heads = list(CALL.finditer(line))
+            for i, m in enumerate(heads):
+                script = m.group("script")
+                # хвост — ТОЛЬКО этой команды: до головы следующей в той же строке,
+                # и не дальше разделителя « · »/бэктика/трубы (#203: склейка флагов)
+                tail = line[m.end():heads[i + 1].start() if i + 1 < len(heads) else len(line)]
+                tail = SEG_END.split(tail, 1)[0]
                 before = line[:m.start()]
                 # 🪤 ОПИСЬ ФАЙЛОВ ВНУТРИ БЛОКА КОДА выглядит как команды:
                 #    «sync_backoff.py .......... разгон сна между синками»
@@ -252,12 +268,32 @@ def main() -> int:
                               where))
             continue
 
+        if exe.name in LONG_BY_NATURE:
+            # «работает минуты» ≠ «висит»: полный прогон здесь лгал бы порогом (#203).
+            # Форма сверяется разборщиком аргументов самой команды — --help с теми же флагами
+            try:
+                h = subprocess.run([sys.executable, str(exe), "--help"], capture_output=True,
+                                   text=True, encoding="utf-8", timeout=30)
+            except subprocess.TimeoutExpired:
+                red += 1
+                reds.append((shown, "🔴 даже --help не отвечает за 30 с", where))
+                continue
+            if h.returncode == 0:
+                skip += 1
+                skips.append((shown, f"долгая по природе ({LONG_BY_NATURE[exe.name]}) — "
+                                     "полный прогон не гонялся, форма сверена по --help", where))
+            else:
+                red += 1
+                reds.append((shown, "🔴 --help отвечает отказом — файл есть, но не команда", where))
+            continue
+
         argv = build_argv(exe, sub, flags, ctx, db_copy)
         try:
             r = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", timeout=90)
         except subprocess.TimeoutExpired:
             red += 1
-            reds.append((shown, "🔴 ВИСНЕТ дольше 90 с", where))
+            reds.append((shown, "🔴 ВИСНЕТ дольше 90 с (долгие ПО ПРИРОДЕ — в списке "
+                                "LONG_BY_NATURE, эта в него не входит)", where))
             continue
         out = (r.stdout or "") + (r.stderr or "")
         if ("unrecognized arguments: --db" in out or "no such option: --db" in out):
