@@ -54,6 +54,19 @@ def main():
                         help="КТО правит, если не владелец секции (напр. --actor PROTO при "
                              "правке чужого слепка). Без флага журнал пишет владельца — "
                              "прежнее поведение, для правки СВОЕЙ секции оно верно")
+    # ── ОТМЕТКА «СМОТРЕЛ, ПРАВОК НЕТ» (карточка #160) ────────────────────────────
+    # 🪤 Класс: снаружи ВЗГЛЯД БЕЗ ПРАВКИ НЕОТЛИЧИМ ОТ ПРОПУСКА. Роль честно говорит
+    # «прошёл все семь секций», а у одной дата сохранения недельной давности — и оба
+    # утверждения верны одновременно. Протез словом в теле («🔎 ВЗГЛЯД БЫЛ, ПРАВОК НЕТ
+    # — <дата>») заводит вторую ложь того же рода: строка переживёт следующую правку
+    # и начнёт утверждать взгляд, которого не было.
+    # ⚖️ Почему НЕ отдельная команда «сбросить отметку»: отметка обязана гаснуть САМИМ
+    # изменением текста — иначе её сброс становится дисциплиной, а дисциплина и есть то,
+    # что мы чиним механизмом.
+    parser.add_argument("--confirm", action="store_true",
+                        help="отметить «секцию перечитал, правок не нашлось»: ставит время "
+                             "ВЗГЛЯДА, не трогая ни тело, ни время текста. Тело при этом "
+                             "не нужно. Запись нового тела отметку ГАСИТ")
     args = parser.parse_args()
 
     # Регистр роли НОРМАЛИЗУЕТСЯ к верхнему (как в read-messages.py/read-phoenix.py): иначе
@@ -66,11 +79,18 @@ def main():
     # Путь к БД — та же нормализация входа, что регистр роли (R15a).
     args.db = str(resolve_db(args.db, __file__))
 
-    if not args.body and not args.file:
-        print("ERR: укажите --body или --file", file=sys.stderr)
+    if args.confirm and (args.body or args.file):
+        print("ERR: --confirm отмечает ВЗГЛЯД и потому НЕ принимает тело. Если правки есть — "
+              "сохраняй тело обычным вызовом (он сам погасит прежнюю отметку).", file=sys.stderr)
         sys.exit(1)
 
-    body = args.body if args.body else Path(args.file).read_text(encoding="utf-8")
+    if not args.confirm and not args.body and not args.file:
+        print("ERR: укажите --body или --file (или --confirm — «смотрел, правок нет»)",
+              file=sys.stderr)
+        sys.exit(1)
+
+    body = None if args.confirm else (args.body if args.body
+                                      else Path(args.file).read_text(encoding="utf-8"))
 
     try:  # mode=rw: connect НЕ создаёт пустую БД-фантом при опечатке пути (П1 16.07)
         conn = dryrun.connect(f"file:{args.db}?mode=rw", args.dry_run,
@@ -93,6 +113,34 @@ def main():
                         (role, args.section)).fetchone()
     prev_body = prev[0] if prev else None
     was = len(prev_body) if prev_body is not None else 0
+
+    has_confirmed_col = "confirmed_at" in {r[1] for r in conn.execute("PRAGMA table_info(phoenix)")}
+
+    if args.confirm:
+        # Подтверждать НЕЧЕГО, если секции нет: «смотрел» без предмета — пустое утверждение.
+        if prev_body is None:
+            conn.close()
+            sys.exit(f"⛔ ОТКАЗ: секции {role}/{args.section} в базе НЕТ — подтверждать нечего.\n"
+                     f"   «Смотрел, правок нет» о несуществующем тексте было бы утверждением "
+                     f"ни о чём.\n   👉 Сперва сохрани тело: --file <файл>")
+        if not has_confirmed_col:
+            conn.close()
+            sys.exit("⛔ ОТКАЗ: в этой базе нет колонки confirmed_at — отметке негде лечь.\n"
+                     "   Прогони migrations/20260808-phoenix-confirmed-at.py и повтори.")
+        conn.execute("UPDATE phoenix SET confirmed_at = datetime('now') "
+                     "WHERE role=? AND section=?", (role, args.section))
+        conn.execute("INSERT INTO audit_log (actor_role, action, target, diff_md) "
+                     "VALUES (?, 'confirm_phoenix', ?, ?)",
+                     (actor, f"phoenix.{role}.{args.section}",
+                      f"взгляд без правки ({was} знаков, тело не тронуто)"
+                      + (f" [чужая секция: смотрел {actor}]" if actor != role else "")))
+        conn.commit()
+        conn.close()
+        print(f"👁 phoenix/{role}/{args.section} — ВЗГЛЯД ОТМЕЧЕН ({was} знаков, тело не тронуто).")
+        print("  Возраст ТЕКСТА не сдвинут — сдвинут возраст ВЗГЛЯДА: это разные факты.")
+        print("  Отметка ПОГАСНЕТ сама при следующей записи тела — сбрасывать её командой не нужно.")
+        return
+
     now = len(body)
 
     if not body.strip():
@@ -116,7 +164,7 @@ def main():
     #    и подменять второе первым значит дать механизму способ врать без единой ошибки.
     # ⚖️ Обратную половину (нетронутое, но по-прежнему верное, выглядит протухшим) чинит
     #    сторож: он объявляет отставание только если роль РАБОТАЛА после сохранения.
-    has_confirmed = "confirmed_at" in {r[1] for r in conn.execute("PRAGMA table_info(phoenix)")}
+    has_confirmed = has_confirmed_col
 
     if prev_body is not None and body == prev_body:
         # Текст не изменился ⇒ возраст ТЕКСТА остаётся прежним. Но роль на него СМОТРЕЛА
@@ -134,11 +182,18 @@ def main():
         return
 
     if has_confirmed:
+        # 🎯 ЗАПИСЬ ТЕЛА ГАСИТ ОТМЕТКУ ВЗГЛЯДА (карточка #160). Прежде здесь стояло
+        # confirmed_at = datetime('now') — и «правил» становилось неотличимо от
+        # «перечитал и признал верной»: два разных состояния давали один отпечаток,
+        # то есть отметка не значила ничего. Новый текст никем ещё не перечитан —
+        # это ПУСТО, а не «подтверждён самим фактом написания».
+        # ⚖️ Гашение делает запись тела, а не отдельная команда: иначе честность
+        # отметки держалась бы на памяти автора её сбросить.
         conn.execute("""
             INSERT INTO phoenix (role, section, body, saved_at, confirmed_at)
-            VALUES (?, ?, ?, datetime('now'), datetime('now'))
+            VALUES (?, ?, ?, datetime('now'), NULL)
             ON CONFLICT(role, section) DO UPDATE SET body = excluded.body,
-                saved_at = excluded.saved_at, confirmed_at = excluded.confirmed_at
+                saved_at = excluded.saved_at, confirmed_at = NULL
         """, (role, args.section, body))
     else:
         conn.execute("""

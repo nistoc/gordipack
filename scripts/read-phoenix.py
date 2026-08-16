@@ -167,8 +167,13 @@ def main():
         sys.exit(1)
 
     role = args.role.upper()
-    rows = {s: (b, t) for s, b, t in conn.execute(
-        "SELECT section, body, saved_at FROM phoenix WHERE role=?", (role,))}
+    # confirmed_at — ВОЗРАСТ ВЗГЛЯДА (карточка #160), отдельный факт от возраста текста.
+    # Читается мягко: в базе без этой колонки роль всё равно должна получить слепок.
+    _has_conf = "confirmed_at" in {r[1] for r in conn.execute("PRAGMA table_info(phoenix)")}
+    _sql = ("SELECT section, body, saved_at, confirmed_at FROM phoenix WHERE role=?"
+            if _has_conf else
+            "SELECT section, body, saved_at, NULL FROM phoenix WHERE role=?")
+    rows = {s: (b, t, c) for s, b, t, c in conn.execute(_sql, (role,))}
     if not rows:
         print(f"ERR: слепка роли {role} в БД нет. Есть: "
               f"{', '.join(r[0] for r in conn.execute('SELECT DISTINCT role FROM phoenix ORDER BY role'))}",
@@ -205,8 +210,18 @@ def main():
                 print("\n⚠️ слой диска здесь не собирается: его сборщик — компонент "
                       "контура-донора; у нового контура свой появится, когда его напишут.")
             continue
-        body, saved = rows[s]
-        print(f"\n{'─' * 79}\n## {TITLES[s]}   [сохранено {saved} UTC]\n")
+        body, saved, confirmed = rows[s]
+        # ТРИ СОСТОЯНИЯ СЕКЦИИ, различимые снаружи (карточка #160): «правили» ·
+        # «перечитали и признали верной» · «подтверждение СТАРШЕ текста» — последнее
+        # означает, что текст менялся мимо инструмента, и молчать о нём нельзя.
+        if not confirmed:
+            look = "взгляд после правки НЕ отмечен"
+        elif confirmed >= saved:
+            look = f"перечитано и признано верным {confirmed} UTC"
+        else:
+            look = (f"🔴 подтверждение {confirmed} СТАРШЕ текста — текст менялся мимо "
+                    f"инструмента, отметке верить нельзя")
+        print(f"\n{'─' * 79}\n## {TITLES[s]}   [сохранено {saved} UTC · {look}]\n")
         print(body.strip())
 
         # ── §4½ ОТКРЫТЫЕ КАРТОЧКИ — ЖИВОЙ ЗАПРОС К БАЗЕ, А НЕ ТЕКСТ СЛЕПКА (#112 ②) ──
