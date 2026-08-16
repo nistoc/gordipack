@@ -8,9 +8,9 @@
 --    об этом здесь: схема тогда НОВЕЕ объявленной версии.
 -- Что входит в версию — спрашивай журнал: SELECT * FROM schema_migrations.
 --
--- 🔴 ВНИМАНИЕ: сверх рубежа 1 шагов — схема НОВЕЕ объявленной версии.
+-- 🔴 ВНИМАНИЕ: сверх рубежа 2 шагов — схема НОВЕЕ объявленной версии.
 --
--- собрано: index 14 · table 27 · view 6
+-- собрано: index 15 · table 28 · view 6
 
 CREATE TABLE IF NOT EXISTS audit_log (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -235,6 +235,17 @@ CREATE TABLE IF NOT EXISTS templates (
     updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS tool_leases (
+    id          INTEGER PRIMARY KEY,
+    role        TEXT NOT NULL,            -- кто взял: аренда без имени неоспорима
+    tools       TEXT NOT NULL,            -- имена файлов через пробел (пайплайн — одной арендой)
+    reason      TEXT NOT NULL,            -- зачем: без причины ждать нечего
+    taken_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    until_utc   TEXT NOT NULL,            -- ИСТЕКАЕТ САМА: забытая аренда не держит контур
+    released_at TEXT,                     -- снята досрочно (норма, а не исключение)
+    note        TEXT                      -- что изменилось: читает тот, кто ждал
+);
+
 CREATE TABLE IF NOT EXISTS tracks (
     track_id        TEXT PRIMARY KEY,
     title           TEXT NOT NULL,
@@ -270,6 +281,8 @@ CREATE INDEX IF NOT EXISTS idx_thread_reply ON message_thread (reply_to);
 CREATE INDEX IF NOT EXISTS idx_thread_root  ON message_thread (thread_id);
 
 CREATE INDEX IF NOT EXISTS ix_role_rights_role ON role_rights (role);
+
+CREATE INDEX IF NOT EXISTS ix_tool_leases_live ON tool_leases (released_at, until_utc);
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_batch_race
     ON read_batches(role, last_id) WHERE acked_at IS NULL;
