@@ -143,10 +143,10 @@ def sieve(db: str, role: str, show_excused: bool) -> int:
         (role.upper(),)).fetchall()
     con.close()
     if not rows:
-        print(f"⛔ НЕ ЗАПУСТИЛОСЬ: слепка роли {role} в базе нет — это третий исход, не «чисто»")
+        print(f"⛔ НЕ ЗАПУСТИЛОСЬ: сохранённой памяти роли {role} в базе нет — это третий исход, не «чисто»")
         return 2
 
-    print(f"🔎 РЕШЕТО ФОРМ по памяти {role.upper()} · секций {len(rows)}")
+    print(f"🔎 ПРОВЕРКА ПАМЯТИ на устаревшие утверждения · роль {role.upper()} · разделов {len(rows)}")
     print("   Возраст секций (старое протухает молча — смотри в первую очередь):")
     for sec, body, saved in rows:
         print(f"      §{sec:9} {saved}  {len(body):6} симв")
@@ -188,14 +188,14 @@ def sieve(db: str, role: str, show_excused: bool) -> int:
 
     print(f"ИТОГО кандидатов: {hits} · прощено как надгробия и уроки: {excused}")
     print("⚖️ Кандидат — НЕ находка: каждого разбирай ГЛАЗАМИ. Прощённые тоже смотри —")
-    print("   если среди них живой приказ, решето промолчало ЗРЯ, и чинить надо решето.")
+    print("   если среди них живой приказ, проверка промолчала ЗРЯ, и чинить надо проверку.")
     print("⚠️ Ищутся ЗНАКОМЫЕ формы. Отменённое непривычными словами не найдётся ВООБЩЕ:")
     print("   пустой вывод значит «знакомых форм нет», а не «память чиста».")
     return 0
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Решето форм по памяти роли (подготовка к пересозданию)")
+    ap = argparse.ArgumentParser(description="Проверка памяти роли на устаревшие утверждения (подготовка к пересозданию)")
     ap.add_argument("--role", required=True)
     ap.add_argument("--db", default=None)
     ap.add_argument("--show-excused", action="store_true",

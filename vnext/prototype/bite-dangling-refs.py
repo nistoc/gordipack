@@ -55,7 +55,7 @@ CASES = [
 
 
 def main() -> int:
-    print("УКУС: проверяет ли себя охотник за неразрешимыми ссылками\n")
+    print("ПРИЁМКА: проверяет ли себя охотник за неразрешимыми ссылками\n")
     bad = []
     for text, want, why in CASES:
         got = len(chk.find(text))

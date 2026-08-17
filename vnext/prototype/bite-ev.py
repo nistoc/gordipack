@@ -53,7 +53,7 @@ def case(title, con, sql, params=(), expect="deny"):
 
 def main():
     if not SCHEMA.exists():
-        print(f"⛔ УКУС НЕ ПОСТАВЛЕН: нет схемы {SCHEMA}")
+        print(f"⛔ ПРИЁМКА НЕ ПОСТАВЛЕНА: нет схемы {SCHEMA}")
         return 2
     v = []
 
@@ -102,7 +102,7 @@ def main():
     gaps = con.execute("SELECT COUNT(*) FROM phoenix_gaps WHERE role='PROTO'").fetchone()[0]
     ok = gaps == 5
     v.append(ok)
-    print(f"  {'✅' if ok else '🔴'} неполный слепок ВИДЕН строкой: у PROTO не хватает "
+    print(f"  {'✅' if ok else '🔴'} неполная память ВИДНА строкой: у PROTO не хватает "
            f"{gaps} обязательных секций (ожидали 5)")
 
     print("\n── ② ПРИСУТСТВИЕ: три состояния РАЗЛИЧИМЫ (сегодня — нет вовсе)")
@@ -144,9 +144,9 @@ def main():
           and ver2 == ver                    # номер версии НЕ съехал на номер шага
           and after2 == after + 1)           # шаг сверх рубежа виден сам, без сверки
     v.append(ok)
-    print(f"  {'✅' if ok else '🔴'} версия '{ver}' из {applied} шагов, сверх рубежа {after}; "
+    print(f"  {'✅' if ok else '🔴'} версия '{ver}' из {applied} шагов, сверх отметки {after}; "
           f"хранимых копий в meta: {stored} (нужен 0); после чужого шага: "
-          f"шагов {applied}→{applied2}, сверх рубежа {after}→{after2}, версия '{ver2}' (не съехала)")
+          f"шагов {applied}→{applied2}, сверх отметки {after}→{after2}, версия '{ver2}' (не съехала)")
     con.close()
 
     print("\n── 🔴 КОНТРОЛЬНЫЙ: FK БЕЗ `PRAGMA foreign_keys=ON` — УКРАШЕНИЕ")

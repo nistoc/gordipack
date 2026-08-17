@@ -267,7 +267,7 @@ def _self_test() -> int:
     failed = [c for c in cases if not c[3]]
 
     # ── МУТАНТЫ ──
-    print("\nМУТАНТЫ (каждый обязан упасть хотя бы на одном случае)")
+    print("\nНАРОЧНЫЕ ПОЛОМКИ (каждая обязана упасть хотя бы на одном случае)")
     mutants = []
 
     def mutant(name, fn, what):
@@ -318,9 +318,9 @@ def _self_test() -> int:
     survivors = [m for m in mutants if not m[2]]
 
     print(f"\nИТОГ САМОПРОВЕРКИ: случаев {len(cases)} · провалов {len(failed)} · "
-          f"мутантов {len(mutants)} · выживших {len(survivors)}")
+          f"поломок {len(mutants)} · выживших {len(survivors)}")
     if survivors:
-        print("⛔ ВЫЖИВШИЙ МУТАНТ = проверка на этом месте ничего не различает")
+        print("⛔ ВЫЖИВШАЯ ПОЛОМКА = проверка на этом месте ничего не различает")
     return 1 if (failed or survivors) else 0
 
 

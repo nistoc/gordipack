@@ -44,14 +44,14 @@ def main():
     print(f'20260810-milestone-v4{"  ⟨ВХОЛОСТУЮ — база не меняется⟩" if a.dry_run else ""}')
     print(f'база: {a.db}')
     print('=' * 78)
-    print(f'СЕЙЧАС витрина отвечает: версия {ver[0]} · шагов {ver[1]} · сверх рубежа {ver[2]}')
+    print(f'СЕЙЧАС выборка отвечает: версия {ver[0]} · шагов {ver[1]} · сверх отметки {ver[2]}')
     if conn.execute("SELECT 1 FROM schema_migrations WHERE version='v4'").fetchone():
-        print('✅ рубеж v4 уже объявлен — делать нечего')
+        print('✅ отметка версии v4 уже объявлена — делать нечего')
         return
     if ver[2] == 0:
-        sys.exit('⛔ НЕ ЗАПУСТИЛАСЬ: сверх рубежа ноль шагов — объявлять нечего. '
+        sys.exit('⛔ НЕ ЗАПУСТИЛАСЬ: сверх отметки ноль шагов — объявлять нечего. '
                  'Рубеж без шагов — украшение.')
-    print(f'СТАНЕТ: версия v4 · сверх рубежа 0 (рубеж накрывает {ver[2]} шагов)')
+    print(f'СТАНЕТ: версия v4 · сверх отметки 0 (отметка накрывает {ver[2]} шагов)')
     if a.dry_run:
         print('\n⟨ВХОЛОСТУЮ⟩ база не тронута.')
         return
@@ -64,9 +64,9 @@ def main():
     conn.commit()
     print(f'\n✅ ОБЪЯВЛЕНО. отпечаток: {fp}')
     ver2 = conn.execute("SELECT * FROM schema_version").fetchone()
-    print(f'витрина теперь: версия {ver2[0]} · шагов {ver2[1]} · сверх рубежа {ver2[2]}')
+    print(f'выборка теперь: версия {ver2[0]} · шагов {ver2[1]} · сверх отметки {ver2[2]}')
     ok, why = verify(conn)
-    print(f'{"✅" if ok else "🔴"} сторож журнала: {why}')
+    print(f'{"✅" if ok else "🔴"} проверка журнала: {why}')
 
 
 if __name__ == '__main__':

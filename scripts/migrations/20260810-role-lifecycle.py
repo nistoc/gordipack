@@ -132,7 +132,7 @@ def main():
           f'закрытых {sum(1 for p in plan if p[1] == "closed")} · '
           f'не в реестре {len(unlisted)}')
     if a.dry_run:
-        print('\n⟨ВХОЛОСТУЮ⟩ база не тронута. Для врезки прогони без --dry-run.')
+        print('\n⟨ВХОЛОСТУЮ⟩ база не тронута. Чтобы применить, прогони без --dry-run.')
         return
 
     conn.execute("BEGIN")
@@ -149,7 +149,7 @@ def main():
     conn.commit()
     print(f'\n✅ ВРЕЗАНО. отпечаток схемы: {fp}')
     ok, why = verify(conn)
-    print(f'{"✅" if ok else "🔴"} сторож журнала: {why}')
+    print(f'{"✅" if ok else "🔴"} проверка журнала: {why}')
     print('целостность:', conn.execute("PRAGMA integrity_check").fetchone()[0])
 
 

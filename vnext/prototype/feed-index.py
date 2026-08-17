@@ -109,14 +109,14 @@ def run(role, db_path, limit=None, body_ids=None):
         print(f"ВЫДАНО ТЕЛ: {len(got)} из {len(body_ids)} запрошенных")
         if missing:
             print(f"🔴 НЕ НАЙДЕНЫ: {sorted(missing)} — это отказ, а не пустота")
-        print("⚠️ Курсор НЕ сдвинут: выдача тела — не подтверждение прочтения ленты.")
+        print("⚠️ Отметка прочитанного НЕ сдвинута: выдача тела — не подтверждение прочтения ленты.")
         con.close()
         return 0 if not missing else 1
 
     # ── УКАЗАТЕЛЬ ────────────────────────────────────────────────────────────
     cur, rows = build_index(con, role, limit)
     if not rows:
-        print(f"📏 охват: роль {role.upper()} · курсор {cur} · непрочитанного НЕТ")
+        print(f"📏 охват: роль {role.upper()} · отметка {cur} · непрочитанного НЕТ")
         con.close()
         return 0
 
@@ -126,7 +126,7 @@ def run(role, db_path, limit=None, body_ids=None):
     body_bytes = sum(len(r[3] or "") for r in rows)
     usable = 0
 
-    print(f"📏 охват: роль {role.upper()} · курсор {cur} · непрочитано {len(rows)} "
+    print(f"📏 охват: роль {role.upper()} · отметка {cur} · непрочитано {len(rows)} "
           f"(#{ids[0]}…#{ids[-1]})")
     if addr is None:
         print("   ⚠️ адресат НЕ показан: поля адресата в этой базе ещё нет "
@@ -153,7 +153,7 @@ def run(role, db_path, limit=None, body_ids=None):
           f"·  плотнее в {body_bytes/max(idx_bytes,1):.1f} раза")
     print(f"заголовок пригоден (≥25 знаков): {usable}/{len(rows)} = {usable/len(rows):.0%}")
     print()
-    print("🔴 КУРСОР НЕ СДВИНУТ И НЕ СДВИНЕТСЯ ЭТОЙ КОМАНДОЙ.")
+    print("🔴 ОТМЕТКА ПРОЧИТАННОГО НЕ СДВИНУТА И НЕ СДВИНЕТСЯ ЭТОЙ КОМАНДОЙ.")
     print("   Прочитал тела  → ack, отрезок 'read'")
     print("   Прошёл указателем → отрезок 'declared', основание «читан указатель, тела нет»")
     print(f"   Тела: feed-index.py --role {role} --bodies <id,id,…>")
@@ -185,7 +185,7 @@ def selftest():
     con = sqlite3.connect(f"file:{tmp}?mode=ro", uri=True)
     cur, rows = build_index(con, "X")
     if cur != 2 or [r[0] for r in rows] != [3]:
-        print(f"🔴 ① указатель взял не то: курсор={cur}, ноты={[r[0] for r in rows]}"); ok = False
+        print(f"🔴 ① указатель взял не то: отметка={cur}, ноты={[r[0] for r in rows]}"); ok = False
 
     # ② РАЗЛИЧАЮЩИЙ: курсор ПОСЛЕ показа указателя не изменился
     cases += 1
@@ -193,7 +193,7 @@ def selftest():
     run("X", tmp)
     con = sqlite3.connect(f"file:{tmp}?mode=ro", uri=True)
     if cursor_of(con, "X") != 2:
-        print("🔴 ② УКАЗАТЕЛЬ СДВИНУЛ КУРСОР — он стал способом молча пропустить ленту")
+        print("🔴 ② УКАЗАТЕЛЬ СДВИНУЛ ОТМЕТКУ — он стал способом молча пропустить ленту")
         ok = False
 
     # ③ РАЗЛИЧАЮЩИЙ: выдача тела тоже не двигает курсор
@@ -202,7 +202,7 @@ def selftest():
     run("X", tmp, body_ids=[3])
     con = sqlite3.connect(f"file:{tmp}?mode=ro", uri=True)
     if cursor_of(con, "X") != 2:
-        print("🔴 ③ выдача тела сдвинула курсор"); ok = False
+        print("🔴 ③ выдача тела сдвинула отметку прочитанного"); ok = False
 
     # ④ заголовок берётся из первой непустой строки и чистится от разметки
     cases += 1
@@ -222,7 +222,7 @@ def selftest():
         return 2
     print(f"\n{'✅ САМОПРОВЕРКА ПРОЙДЕНА' if ok else '🔴 САМОПРОВЕРКА ПРОВАЛЕНА'} — "
           f"ВЫПОЛНЕНО {cases} случаев")
-    print("   указатель берёт только непрочитанное · НЕ двигает курсор (дважды) · "
+    print("   указатель берёт только непрочитанное · НЕ двигает отметку (дважды) · "
           "чистит заголовок · отказывает на несуществующем теле")
     return 0 if ok else 1
 

@@ -869,7 +869,7 @@ def selftest():
                 print("      🔴 ④+ НЕ СРАБОТАЛ на DIRTY — гашение цитат гасит и утверждения")
         ok &= good
         cases += 1
-        print(f"{'✅' if good else '🔴'} слепок {role}: 🔴 {len(red)} · 🟡 {len(yellow)} "
+        print(f"{'✅' if good else '🔴'} память {role}: 🔴 {len(red)} · 🟡 {len(yellow)} "
               f"· признаки {sorted(kinds) or '—'} "
               f"(ожидали {'красное' if want_red else 'тишину'})")
         for where, what, line in red + yellow:
@@ -915,7 +915,7 @@ def main():
     for role in roles:
         res = check_role(con, role, mtimes, a.verbose, counts)
         if res is None:
-            print(f"⚠️ {role}: слепка нет")
+            print(f"⚠️ {role}: сохранённой памяти нет")
             continue
         red, yellow, nsec = res
         total_red += len(red); total_yellow += len(yellow)
@@ -950,7 +950,7 @@ def main():
     # «по 1 роли», а не «по 1 ролям» (@STUD #2801: вывод инструмента — тоже учащая поверхность)
     word = "роли" if len(roles) == 1 else "ролям"
     print(f"\nитог: 🔴 {total_red} · 🟡 {total_yellow} по {len(roles)} {word}")
-    print("⚠️ Зелёный НЕ означает «слепок честен» — см. шапку: ⑤ не берётся вовсе, "
+    print("⚠️ Зелёный НЕ означает «память честна» — см. шапку: ⑤ не берётся вовсе, "
           "у ⑦⑧⑨ берётся только форма.")
     if total_red or (a.strict and total_yellow):
         return 1

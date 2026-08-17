@@ -128,7 +128,7 @@ def run(db_path, prompts_dir, verbose=False, only_role=None):
         if verbose:
             print(f"        строка: {line[:120]}")
     for label, target, line in yellow:
-        print(f"   🟡 цели нет [{label}] {target} — правит роль-владелец слепка")
+        print(f"   🟡 цели нет [{label}] {target} — правит роль-владелец памяти")
         if verbose:
             print(f"        строка: {line[:120]}")
 
@@ -149,7 +149,7 @@ def main():
                     help="каталог с промптами пересоздания (по умолчанию — штатный)")
     ap.add_argument("-v", "--verbose", action="store_true")
     ap.add_argument("--role", default=None,
-                    help="спросить сторож ПРО СЕБЯ: только слепок этой роли. "
+                    help="спросить проверку ПРО СЕБЯ: только память этой роли. "
                          "Пропущенное при этом называется в выводе")
     a = ap.parse_args()
     db = str(mezo_paths.resolve_db(a.db, __file__))

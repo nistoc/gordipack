@@ -124,9 +124,9 @@ def main():
     bad = [n for n, ok, _ in CASES if not ok]
     print("-" * 78)
     if bad:
-        print(f"🔴 ПРИБОР НЕ ПРИНЯТ — не держатся: {', '.join(bad)}")
+        print(f"🔴 ПРОВЕРКА НЕ ПРИНЯТА — не держатся: {', '.join(bad)}")
         return 1
-    print(f"✅ ПРИБОР ПРИНЯТ — случаев {len(CASES)}, из них различающих 5")
+    print(f"✅ ПРОВЕРКА ПРИНЯТА — случаев {len(CASES)}, из них различающих 5")
     return 0
 
 

@@ -33,11 +33,11 @@ def main():
     db = (Path(a.sandbox) / "mezosync.db").resolve()
 
     if not db.exists():
-        print(f"⛔ УКУС НЕ ПОСТАВЛЕН: нет песочницы {db}")
+        print(f"⛔ ПРИЁМКА НЕ ПОСТАВЛЕНА: нет песочницы {db}")
         sys.exit(2)
     con = sqlite3.connect(str(db))
     if not con.execute("SELECT 1 FROM phoenix WHERE role=? LIMIT 1", (ROLE,)).fetchone():
-        print(f"⛔ УКУС НЕ ПОСТАВЛЕН: в песочнице нет слепка роли {ROLE}")
+        print(f"⛔ ПРИЁМКА НЕ ПОСТАВЛЕНА: в песочнице нет сохранённой памяти роли {ROLE}")
         sys.exit(2)
 
     print("═" * 78)
@@ -51,10 +51,10 @@ def main():
     n_after = con.execute(
         "SELECT COUNT(*) FROM messages WHERE writer_role=? AND timestamp > ?",
         (ROLE, saved_at)).fetchone()[0]
-    print(f"  РУЧНОЙ слепок {ROLE}/state:  сохранён {saved_at} UTC, {n} симв.")
+    print(f"  РУЧНАЯ запись памяти {ROLE}/state:  сохранена {saved_at} UTC, {n} симв.")
     print(f"  последняя нота роли:        {last_note} UTC")
-    print(f"  ⇒ после сохранения слепка роль дала ещё {n_after} нот — их в слепке НЕТ.")
-    print(f"     Это и есть дрейф: слепок честен о себе и молчит о мире.\n")
+    print(f"  ⇒ после сохранения памяти роль дала ещё {n_after} нот — в памяти их НЕТ.")
+    print(f"     Это и есть дрейф: память честна о себе и молчит о мире.\n")
     rc, out = run(["--db", str(db), "derive", "--role", ROLE])
     body = [l for l in out.splitlines() if l.strip()]
     print(f"  DERIVED (rc={rc}) — собран сейчас, {len(out)} симв., ничего не переписывалось руками:")
@@ -63,7 +63,7 @@ def main():
     print(f"    … всего {len(body)} строк\n")
 
     print("═" * 78)
-    print("② ЗАТЁРТЫЙ СЛЕПОК — восстановимо ли прежнее")
+    print("② ЗАТЁРТАЯ ПАМЯТЬ — восстановимо ли прежнее")
     print("═" * 78)
     tmp = Path(a.sandbox) / "_bite_state.md"
 

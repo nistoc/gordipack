@@ -82,7 +82,7 @@ check("③ на нетронутой копии признак ЗЕЛЁН (вс�
       "источники не учат снятому" in out3 and "УСТАРЕЛ" not in out3,
       out3.strip()[-200:])
 
-print("🔬 ПРИЁМКА ВРЕЗКИ: «источники не учат снятому» в guard-all")
+print("🔬 ПРИЁМКА ПРОВЕРКИ: «источники не учат снятому» в guard-all")
 for name, ok, detail in cases:
     print(f"   {'✅' if ok else '🔴'} {name}" + (f"   ← {detail}" if detail and not ok else ""))
 print(f"   ИТОГ: {len(cases) - bad}/{len(cases)}")

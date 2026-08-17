@@ -35,7 +35,7 @@ def to_abs(prefix: str, m: re.Match) -> str:
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Перевести вызовы в слепках/правилах на абсолютный путь")
+    ap = argparse.ArgumentParser(description="Перевести вызовы в памятях ролей и правилах на абсолютный путь")
     ap.add_argument("--db", required=True)
     ap.add_argument("--prefix", default=DEFAULT_PREFIX, help="корень контейнера")
     ap.add_argument("--apply", action="store_true", help="записать (иначе сухой прогон)")

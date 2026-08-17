@@ -32,7 +32,7 @@ ROLE = "PROTO"
 
 
 def die(reason, *details):
-    print(f"⛔ УКУС НЕ ПОСТАВЛЕН: {reason}")
+    print(f"⛔ ПРИЁМКА НЕ ПОСТАВЛЕНА: {reason}")
     for d in details:
         print("   ·", d)
     sys.exit(2)
@@ -169,7 +169,7 @@ def selftest(target, sandbox):
     tmp = Path(tempfile.mkdtemp(prefix="bite-r15a-mutants-"))
     all_ok = True
     for name, (edits, expect) in MUTANTS.items():
-        print(f"\n{'='*72}\n[мутант {name}] ожидаем 🔴 по {', '.join(expect)}\n{'='*72}")
+        print(f"\n{'='*72}\n[нарочная поломка {name}] ожидаем 🔴 по {', '.join(expect)}\n{'='*72}")
         mutated = src
         for needle, repl in edits:
             if needle not in mutated:
@@ -185,11 +185,11 @@ def selftest(target, sandbox):
         got = getattr(verify, "last", {})
         good = rc != 0 and all(got.get(e) is False for e in expect)
         all_ok &= good
-        print(f"\n⇒ мутант {name}: rc={rc}, "
+        print(f"\n⇒ поломка {name}: rc={rc}, "
               f"{{{', '.join(f'{e}={got.get(e)}' for e in expect)}}} — "
-              f"{'✅ укус ЧУВСТВИТЕЛЕН' if good else '🔴 УКУС СЛЕП: порча не поймана'}")
+              f"{'✅ приёмка ЧУВСТВИТЕЛЬНА' if good else '🔴 ПРИЁМКА СЛЕПА: порча не поймана'}")
     print(f"\n{'='*72}\n{'✅ САМОПРОВЕРКА ПРОЙДЕНА' if all_ok else '🔴 САМОПРОВЕРКА ПРОВАЛЕНА'} "
-          f"— укус {'ловит' if all_ok else 'НЕ ловит'} обе известные порчи")
+          f"— приёмка {'ловит' if all_ok else 'НЕ ловит'} обе известные порчи")
     return 0 if all_ok else 1
 
 

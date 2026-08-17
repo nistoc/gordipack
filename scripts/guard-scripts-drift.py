@@ -130,7 +130,7 @@ def report_pair(left, right, left_name, right_name, whose):
         print(f"   {n:30} {a[n].stat().st_size:6}б ≠ {b[n].stat().st_size:6}б   свежее: {newer}")
     if len(diff) > 8:
         print(f"   … ещё {len(diff) - 8}")
-    print("   👉 роль идёт за инструментом ПО ПУТИ ИЗ СВОЕГО СЛЕПКА: сдано у автора ≠ доступно ей")
+    print("   👉 роль идёт за инструментом ПО ПУТИ ИЗ СВОЕЙ ПАМЯТИ: сдано у автора ≠ доступно ей")
 
 
 def main():

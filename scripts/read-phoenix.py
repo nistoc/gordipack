@@ -148,7 +148,7 @@ def main():
         sys.exit(f"ERR: БД не найдена: {args.db}")
 
     if args.list:
-        print("Слепки в БД:")
+        print("Сохранённые памяти ролей в базе:")
         for role, in conn.execute("SELECT DISTINCT role FROM phoenix ORDER BY role"):
             secs = {s: (n, t) for s, n, t in conn.execute(
                 "SELECT section, LENGTH(body), saved_at FROM phoenix WHERE role=?", (role,))}
@@ -175,14 +175,14 @@ def main():
             "SELECT section, body, saved_at, NULL FROM phoenix WHERE role=?")
     rows = {s: (b, t, c) for s, b, t, c in conn.execute(_sql, (role,))}
     if not rows:
-        print(f"ERR: слепка роли {role} в БД нет. Есть: "
+        print(f"ERR: сохранённой памяти роли {role} в базе нет. Есть: "
               f"{', '.join(r[0] for r in conn.execute('SELECT DISTINCT role FROM phoenix ORDER BY role'))}",
               file=sys.stderr)
         sys.exit(1)
 
     wanted = [args.section] if args.section else ORDER
 
-    print(f"🔥 PHOENIX — слепок роли {role} (источник: mezosync.db, таблица phoenix)")
+    print(f"🔥 PHOENIX — сохранённая память роли {role} (источник: mezosync.db, таблица phoenix)")
     if not args.section:
         print(CANON.replace("{role}", role).replace("{s}", str(SCRIPTS_DIR)))
 
@@ -240,7 +240,7 @@ def main():
         # платит вторые сутки. Дата сохранения слепка стоит выше, у §4, и остаётся честной.
         if s == "state":
             lines = reminder_block(args.db, role)
-            print(f"\n{'─' * 79}\n## §4½ ОТКРЫТЫЕ КАРТОЧКИ   [живой запрос к базе, НЕ из слепка]\n")
+            print(f"\n{'─' * 79}\n## §4½ ОТКРЫТЫЕ КАРТОЧКИ   [живой запрос к базе, НЕ из сохранённого текста]\n")
             if lines:
                 print("\n".join(lines))
                 print(f"\n   полностью: python {SCRIPTS_DIR}/backlog.py list --role {role}")

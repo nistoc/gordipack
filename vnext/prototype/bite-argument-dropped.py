@@ -100,7 +100,7 @@ def main() -> int:
                differ=True)
 
     print()
-    print(f"{'✅ СТОРОЖ ПРИНЯТ' if ok else '🔴 СТОРОЖ НЕ ПРИНЯТ'} — случаев {CASES}, "
+    print(f"{'✅ ПРОВЕРКА ПРИНЯТА' if ok else '🔴 ПРОВЕРКА НЕ ПРИНЯТА'} — случаев {CASES}, "
           f"различающих {DIFFER}")
     return 0 if ok else 1
 

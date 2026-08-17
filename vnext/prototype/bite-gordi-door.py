@@ -52,6 +52,9 @@ def case(title, ok, detail, differ=False):
 def run(argv, role=None):
     env = dict(os.environ)
     env.pop("MEZO_LEASE_BYPASS", None)
+    # Приёмка идёт на КОПИИ базы, а объявления о правке действуют в живом контуре —
+    # без этой договорённости случай ⑥ проверял бы не механизм, а собственную песочницу.
+    env["MEZO_LEASE_TEST"] = "1"
     if role:
         env["MEZO_ROLE"] = role
     else:

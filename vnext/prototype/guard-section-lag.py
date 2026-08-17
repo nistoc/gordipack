@@ -168,7 +168,7 @@ def selftest():
             ok = False
 
         # ④ РАЗЛИЧАЮЩИЙ: дормантная роль молчит — её слепок честен, красить нельзя
-        print("── ④ дормант: слепок старый, но и работы нет ─────────────────")
+        print("── ④ дормант: память старая, но и работы нет ─────────────────")
         cases += 1
         p = db_with(tmp, "d.db",
                     [("X", "state", "2026-07-01 10:00:00"), ("X", "plan", "2026-07-01 10:00:00")],
@@ -194,7 +194,7 @@ def selftest():
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description="секция слепка отстала от работы роли")
+    ap = argparse.ArgumentParser(description="раздел памяти отстал от работы роли")
     ap.add_argument("--role")
     ap.add_argument("--db", default=str(DB))
     ap.add_argument("--selftest", action="store_true")

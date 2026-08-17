@@ -16,7 +16,7 @@ from mezo_paths import resolve_db   # R15a: путь к БД — от распо
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Сохранить phoenix-слепок")
+    parser = argparse.ArgumentParser(description="Сохранить память роли (phoenix)")
     # R15a: --db не обязателен, резолвится от расположения СКРИПТА (не от CWD).
     dryrun.add_argument(parser)
     parser.add_argument("--db", default=None, help="Путь к mezosync.db (по умолчанию — рядом со скриптом)")
@@ -36,9 +36,9 @@ def main():
     parser.add_argument("--section", required=True,
                         choices=["identity", "state", "plan", "history",
                                  "launcher", "rebirth", "sources"],
-                        help="Секция слепка")
-    parser.add_argument("--body", default=None, help="Текст слепка (или --file)")
-    parser.add_argument("--file", default=None, help="Файл с текстом слепка")
+                        help="Раздел памяти")
+    parser.add_argument("--body", default=None, help="Текст раздела (или --file)")
+    parser.add_argument("--file", default=None, help="Файл с текстом раздела")
     # ⚠️ ФЛАГ, КОТОРЫЙ ОБЯЗАН БЫТЬ ЯВНЫМ. Сокращение секции в разы бывает законным
     # (роль выбросила устаревшее), но должно быть НАЗВАНО, а не случиться молча.
     parser.add_argument("--allow-shrink", action="store_true",

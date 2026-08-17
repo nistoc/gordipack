@@ -111,7 +111,7 @@ def show(con, role):
         return
     t = con.execute("SELECT cursor_at, notes_read, notes_declared, notes_before_birth, segments "
                     "FROM cursor_truth WHERE role = ?", (role,)).fetchone()
-    print(f"[{role}] курсор #{t[0]} — но это НЕ «прочитано {t[0]} нот»:")
+    print(f"[{role}] отметка прочитанного #{t[0]} — но это НЕ «прочитано {t[0]} нот»:")
     print(f"   глазами ..... {t[1] or 0}")
     print(f"   заявлением .. {t[2] or 0}   ⇐ эти НЕ читаны, и это записано, а не подразумевается")
     # Печатаем строку рождения ТОЛЬКО когда она есть: у восьми старых ролей её нет,
@@ -145,7 +145,7 @@ def show(con, role):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Курьерский курсор (Э-З)")
+    ap = argparse.ArgumentParser(description="Курьерская отметка прочитанного (Э-З)")
     ap.add_argument("--db", required=True)
     ap.add_argument("--role", required=True)
     ap.add_argument("--to", type=int)

@@ -94,14 +94,14 @@ def selftest():
     red = sum(1 for _, ok in clean if not ok)
     print(f"ЧИСТО: {len(clean)-red}/{len(clean)}")
     if red:
-        print("🔴 УКУС КРАСНЫЙ НА ЧИСТОМ — самопроверка невозможна")
+        print("🔴 ПРИЁМКА КРАСНАЯ НА ЧИСТОМ — самопроверка невозможна")
         return 1
     survived = 0
     for name, (target, mut) in MUTANTS.items():
         orig = target.read_text(encoding="utf-8")
         bad = mut(orig)
         if bad == orig:
-            print(f"⚠️ {name}: паттерн не найден в {target.name} — мутант НЕ ВСТАЛ, "
+            print(f"⚠️ {name}: паттерн не найден в {target.name} — нарочная поломка НЕ ВСТАЛА, "
                   f"считаю ВЫЖИВШИМ")
             survived += 1
             continue
@@ -121,7 +121,7 @@ def selftest():
             sp = importlib.util.spec_from_file_location("wm_r", WM_FILE)
             m = importlib.util.module_from_spec(sp); sp.loader.exec_module(m)
             globals()["wm"] = m
-    print(f"\nИТОГ: {len(MUTANTS)-survived}/{len(MUTANTS)} мутантов пойманы (число из len(MUTANTS))")
+    print(f"\nИТОГ: {len(MUTANTS)-survived}/{len(MUTANTS)} нарочных поломок поймано (число из len(MUTANTS))")
     return 1 if survived else 0
 
 

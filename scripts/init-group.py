@@ -51,7 +51,7 @@ def main():
     parser.add_argument("--domain", default=None,
                         help="Доменный пресет правил (data-platform, frontend-spa)")
     parser.add_argument("--roles", nargs="+", default=["coord"],
-                        help="Роли для инициализации курсоров (по умолчанию: coord)")
+                        help="Роли, которым завести отметку прочитанного (по умолчанию: coord)")
     args = parser.parse_args()
 
     mezosync_dir = Path(args.path)
@@ -110,7 +110,7 @@ def main():
             "INSERT OR IGNORE INTO read_cursors (reader_role, last_read_id) VALUES (?, 0)",
             (role,)
         )
-    print(f"  ✅ Курсоры: {', '.join(roles)}")
+    print(f"  ✅ Отметки прочитанного: {', '.join(roles)}")
 
     # 6. ЖУРНАЛ ШАГОВ — контур обязан знать СВОЮ версию (#145, замер 10.08 01:07 UTC).
     # 🪤 Свежесобранный контур отвечал `schema_version → (None, 0, 0)`: сосуды на месте,

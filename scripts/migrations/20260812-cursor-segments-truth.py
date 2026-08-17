@@ -178,11 +178,11 @@ def main():
     views_now = {r[0] for r in conn.execute(
         "SELECT name FROM sqlite_master WHERE type='view'")}
     have = [v for v in ('cursor_truth', 'cursor_gaps') if v in views_now]
-    print(f'меняем отрезков: {touched} из {len(acts)} · витрины cursor_truth и cursor_gaps — '
+    print(f'меняем отрезков: {touched} из {len(acts)} · выборки cursor_truth и cursor_gaps — '
           f'{"пересоздаются (уже есть: " + ", ".join(have) + ")" if have else "создаются впервые"}')
 
     if a.dry_run:
-        print('\n⟨ВХОЛОСТУЮ⟩ база не тронута. Для врезки прогони без --dry-run.')
+        print('\n⟨ВХОЛОСТУЮ⟩ база не тронута. Чтобы применить, прогони без --dry-run.')
         return
 
     conn.execute("BEGIN")
@@ -212,9 +212,9 @@ def main():
     conn.commit()
     print(f'\n✅ ВРЕЗАНО. отпечаток схемы: {fp}')
     ok, why = verify(conn)
-    print(f'{"✅" if ok else "🔴"} сторож журнала: {why}')
+    print(f'{"✅" if ok else "🔴"} проверка журнала: {why}')
     print('целостность:', conn.execute("PRAGMA integrity_check").fetchone()[0])
-    print('\nЧЕМ ПРОЙДЕНА ЛЕНТА (витрина cursor_truth):')
+    print('\nЧЕМ ПРОЙДЕНА ЛЕНТА (выборка cursor_truth):')
     for r in conn.execute("SELECT role, notes_read, notes_declared, notes_before_birth,"
                           " covered_to FROM cursor_truth ORDER BY role"):
         print(f'  {r[0]:8} глазами {r[1]:>5} · заявлением {r[2]:>4} · до рождения {r[3]:>4}'

@@ -167,7 +167,7 @@ def main():
           f'остальных {len(rows) - len(REVOKED)} остаются active')
 
     if a.dry_run:
-        print('\n⟨ВХОЛОСТУЮ⟩ база не тронута. Для врезки прогони без --dry-run.')
+        print('\n⟨ВХОЛОСТУЮ⟩ база не тронута. Чтобы применить, прогони без --dry-run.')
         return
 
     conn.execute("BEGIN")
@@ -189,12 +189,12 @@ def main():
     conn.commit()
     print(f'\n✅ ВРЕЗАНО. отпечаток схемы: {fp}')
     ok, why = verify(conn)
-    print(f'{"✅" if ok else "🔴"} сторож журнала: {why}')
+    print(f'{"✅" if ok else "🔴"} проверка журнала: {why}')
     print('целостность:', conn.execute("PRAGMA integrity_check").fetchone()[0])
     # контрольное чтение ПОЛЕМ — тем же модулем, что читают роли
     n = sum(1 for r in RS.read_rules(conn) if r['revoked'])
     src = RS.read_rules(conn)[0]['status_source']
-    print(f'единый признак после врезки: отозванных {n}, источник «{src}»')
+    print(f'единый признак после применения: отозванных {n}, источник «{src}»')
 
 
 if __name__ == '__main__':

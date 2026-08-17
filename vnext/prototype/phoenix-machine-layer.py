@@ -89,7 +89,7 @@ def main() -> int:
     for sec, ln, at in con.execute(
             "SELECT section, length(body), saved_at FROM phoenix WHERE role=? ORDER BY section",
             (role,)):
-        print(f"   слепок §{sec:<9} {ln:>6} зн. · сохранён {at[:16]}")
+        print(f"   память §{sec:<9} {ln:>6} зн. · сохранена {at[:16]}")
 
     # ── ПРАВИЛА: что сдвинулось после сохранения слепка ──────────────────────
     saved = con.execute("SELECT MIN(saved_at) FROM phoenix WHERE role=?", (role,)).fetchone()[0]
@@ -97,7 +97,7 @@ def main() -> int:
         fresh = con.execute(
             "SELECT rule_key, version FROM rules WHERE updated_at > ? ORDER BY updated_at DESC",
             (saved,)).fetchall()
-        print(f"\n📜 ПРАВИЛА, ПРАВЛЕНЫЕ ПОСЛЕ СТАРЕЙШЕЙ СЕКЦИИ СЛЕПКА: {len(fresh)}")
+        print(f"\n📜 ПРАВИЛА, ПРАВЛЕНЫЕ ПОСЛЕ САМОГО СТАРОГО РАЗДЕЛА ПАМЯТИ: {len(fresh)}")
         for k, v in fresh[:10]:
             print(f"   {k} v{v}")
         if len(fresh) > 10:

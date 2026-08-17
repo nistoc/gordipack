@@ -146,7 +146,7 @@ def run_phoenix(db, role=None):
             print(f"   {kind}\n      {where}  {line}")
         red += sum(1 for k, _, _ in hits if k.startswith("🔴"))
         yellow += sum(1 for k, _, _ in hits if k.startswith("🟡"))
-    print(f"{'🔴' if red else '✅'} phoenix (слепки): 🔴 {red} · 🟡 {yellow} · секций проверено {len(rows)}")
+    print(f"{'🔴' if red else '✅'} phoenix (память ролей): 🔴 {red} · 🟡 {yellow} · разделов проверено {len(rows)}")
     return red, yellow, len(rows)
 
 
@@ -294,7 +294,7 @@ def run(db, role=None, skip_messages=False, since_hours=None):
     # Охват называется ВСЕГДА, а не только при красном: «🔴 0» без границы читается как
     # «у роли чисто», хотя значит «чисто в окне». Это признак ⑨ нашего же стандарта,
     # применённый к собственному выводу.
-    print(f"   📏 охват: слепок целиком + {scope}")
+    print(f"   📏 охват: память целиком + {scope}")
     if since_hours:
         # ⚰️ Прежняя строка гласила «ИСТОРИЯ НЕ ПРОВЕРЕНА этим прогоном» — с 09.08 21:14 UTC
         # это НЕПРАВДА: старое считается и печатается строкой «ВНЕ ОКНА» выше. Механизм,

@@ -69,7 +69,7 @@ def halves(text):
 def die(reason, *details):
     """rc=2 — предусловие не выполнено. Укус, который не смог поставить опыт,
     обязан сказать это, а не напечатать наблюдение, читаемое как результат."""
-    print(f"⛔ УКУС НЕ ПОСТАВЛЕН: {reason}")
+    print(f"⛔ ПРИЁМКА НЕ ПОСТАВЛЕНА: {reason}")
     for d in details:
         print("   ·", d)
     sys.exit(2)
@@ -166,10 +166,10 @@ def verify(target, sandbox):
         con.commit()
         con.close()
         cur, total, stale, head, unread = state(sandbox / "mezosync.db", ROLE)
-        print(f"⚠️ долга у {ROLE} не было — курсор отмотан в ПЕСОЧНИЦЕ на {back} назад "
+        print(f"⚠️ долга у {ROLE} не было — отметка прочитанного отмотана в ПЕСОЧНИЦЕ на {back} назад "
               f"(→ {cur}); живая база не тронута, песочница пересоздаётся строителем")
     print(f"[регрессия R16] цель: {target}")
-    print(f"   состояние роли {ROLE}: курсор {cur} · голова #{head} · непрочитано {unread} · "
+    print(f"   состояние роли {ROLE}: отметка {cur} · голова #{head} · непрочитано {unread} · "
           f"открытых батчей {total} (из них ПРОТУХШИХ {stale}) — НЕ стираем\n")
 
     verdicts = []
@@ -211,7 +211,7 @@ def verify(target, sandbox):
     con.commit()
     con.close()
     print(f"   [P3 подготовка] в стенд добавлен ПРОТУХШИЙ батч last_id={max(cur-5,1)} "
-          f"при курсоре {cur} — условие опыта, названное вслух")
+          f"при отметке {cur} — условие опыта, названное вслух")
     _, o3 = run(r3, ["--db", str(db3), "--role", ROLE, "--limit", "3"])
     t3 = halves(o3)
     m = re.search(r"#(\d+)…#(\d+)", o3)
@@ -219,7 +219,7 @@ def verify(target, sandbox):
     ok3 = (t3 != ("dead01", "dead02") and (not m or int(m.group(2)) > cur)) \
         if readable(o3, "P3") else None
     print(f"P3 протухший батч не перевыдан: токен {t3[0]}-{t3[1]} · диапазон #{span} "
-          f"→ {'✅ выдан новый, новее курсора' if ok3 else '🔴 ПЕРЕВЫДАН ДРЕВНИЙ (тихая потеря видимости)' if ok3 is False else '⚠️ не поставлено'}")
+          f"→ {'✅ выдан новый, новее отметки' if ok3 else '🔴 ПЕРЕВЫДАН ДРЕВНИЙ (тихая потеря видимости)' if ok3 is False else '⚠️ не поставлено'}")
     verdicts.append(ok3)
 
     # P4 — из двух АКТУАЛЬНЫХ открытых батчей перевыдаётся САМЫЙ ПОЛНЫЙ, а не самый
@@ -247,7 +247,7 @@ def verify(target, sandbox):
          ("shrt01-shrt02", ROLE, ids[9], "2026-07-26 09:05:00")])
     con.commit()
     con.close()
-    print(f"   [P4 подготовка] курсор отмотан на {back} (непрочитано {len(ids)}); открыты ДВА "
+    print(f"   [P4 подготовка] отметка отмотана на {back} (непрочитано {len(ids)}); открыты ДВА "
           f"актуальных батча: ПОЛНЫЙ last_id={ids[-1]} (09:00) и КОРОТКИЙ last_id={ids[9]} (09:05)")
     _, o4 = run(r4, ["--db", str(db4), "--role", ROLE, "--limit", "50"])
     t4 = halves(o4)
@@ -461,7 +461,7 @@ def selftest(target, sandbox):
         shutil.copy2(dep, tmpdir / "mezo_paths.py")
     all_ok = True
     for name, (edits, expect) in MUTANTS.items():
-        print(f"\n{'='*72}\n[мутант {name}] ожидаем 🔴 по {expect}\n{'='*72}")
+        print(f"\n{'='*72}\n[нарочная поломка {name}] ожидаем 🔴 по {expect}\n{'='*72}")
         mutated = src
         for needle, repl in edits:
             if needle not in mutated:
@@ -475,12 +475,12 @@ def selftest(target, sandbox):
         got = getattr(verify, "last", {})
         good = rc != 0 and got.get(expect) is False
         all_ok &= good
-        print(f"\n⇒ мутант {name}: rc={rc}, {expect}={'🔴' if got.get(expect) is False else '✅'} "
-              f"— {'✅ укус ЧУВСТВИТЕЛЕН' if good else '🔴 УКУС СЛЕП: порча не поймана'}")
+        print(f"\n⇒ поломка {name}: rc={rc}, {expect}={'🔴' if got.get(expect) is False else '✅'} "
+              f"— {'✅ приёмка ЧУВСТВИТЕЛЬНА' if good else '🔴 ПРИЁМКА СЛЕПА: порча не поймана'}")
     # ⚠️ число мутантов СЧИТАЕТСЯ, а не пишется словом: до 2026-07-27 здесь стояло «обе
     # известные порчи», и с приходом M3 строка стала врать в момент расширения самопроверки.
     print(f"\n{'='*72}\n{'✅ САМОПРОВЕРКА ПРОЙДЕНА' if all_ok else '🔴 САМОПРОВЕРКА ПРОВАЛЕНА'} "
-          f"— укус {'ловит' if all_ok else 'НЕ ловит'} все {len(MUTANTS)} известные порчи "
+          f"— приёмка {'ловит' if all_ok else 'НЕ ловит'} все {len(MUTANTS)} известные порчи "
           f"({', '.join(MUTANTS)})")
     return 0 if all_ok else 1
 
@@ -496,7 +496,7 @@ def demo(baseline, target, sandbox):
     if unread < 2:
         die(f"в песочнице нечего читать роли {ROLE} (непрочитанных {unread})")
     print(f"[демонстрация R16] baseline: {baseline}")
-    print(f"   состояние {ROLE}: курсор {cur} · непрочитано {unread} · "
+    print(f"   состояние {ROLE}: отметка {cur} · непрочитано {unread} · "
           f"открытых батчей {total} (протухших {stale})\n")
 
     (o1, t1), (o2, t2) = read_twice(base, db)

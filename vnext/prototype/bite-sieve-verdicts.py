@@ -96,7 +96,7 @@ def run_sieve(db: Path) -> tuple[set[str], int, str]:
 
 def main() -> int:
     if not SIEVE.exists():
-        print(f"🔴 НЕ ЗАПУСТИЛАСЬ: решета нет рядом ({SIEVE})")
+        print(f"🔴 НЕ ЗАПУСТИЛАСЬ: проверки памяти нет рядом ({SIEVE})")
         return 2
 
     with tempfile.TemporaryDirectory() as tmp:

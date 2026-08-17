@@ -205,7 +205,7 @@ def run_selftest():
     clean_red = sum(1 for _, ok in clean if not ok)
     print(f"ЧИСТАЯ схема: {len(clean) - clean_red}/{len(clean)} — ожидание: все ✅")
     if clean_red:
-        print("🔴 УКУС УЖЕ КРАСНЫЙ НА ЧИСТОМ — самопроверка невозможна")
+        print("🔴 ПРИЁМКА УЖЕ КРАСНАЯ НА ЧИСТОМ — самопроверка невозможна")
         return 1
 
     survived = 0
@@ -213,7 +213,7 @@ def run_selftest():
         orig = target.read_text(encoding="utf-8")
         mutated = mutate(orig)
         if mutated == orig:
-            print(f"⚠️ {name}: паттерн не найден в {target.name} — мутант НЕ ВСТАЛ "
+            print(f"⚠️ {name}: паттерн не найден в {target.name} — нарочная поломка НЕ ВСТАЛА "
                   f"(это не 'поймал', а слепая клетка: считаю выжившим)")
             survived += 1
             continue
@@ -228,7 +228,7 @@ def run_selftest():
                 survived += 1
         finally:
             target.write_text(orig, encoding="utf-8")
-    print(f"\nИТОГ самопроверки: {len(MUTANTS) - survived}/{len(MUTANTS)} мутантов пойманы "
+    print(f"\nИТОГ самопроверки: {len(MUTANTS) - survived}/{len(MUTANTS)} нарочных поломок поймано "
           f"(из {len(MUTANTS)}, число из len(MUTANTS), не литералом)")
     return 1 if survived else 0
 

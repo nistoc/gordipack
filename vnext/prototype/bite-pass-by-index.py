@@ -82,7 +82,7 @@ def main() -> int:
     views = {r[0] for r in probe.execute("SELECT name FROM sqlite_master WHERE type='view'")}
     probe.close()
     if "cursor_gaps" not in views:
-        print("🔴 НЕ ЗАПУСТИЛАСЬ: в базе нет витрины cursor_gaps — судить о видимости нечем")
+        print("🔴 НЕ ЗАПУСТИЛАСЬ: в базе нет готовой выборки cursor_gaps — судить о видимости нечем")
         return 2
 
     with tempfile.TemporaryDirectory() as tmp:

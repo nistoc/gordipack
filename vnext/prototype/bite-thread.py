@@ -202,7 +202,7 @@ def selftest():
     red = sum(1 for _, ok in clean if not ok)
     print(f"ЧИСТО: {len(clean)-red}/{len(clean)}")
     if red:
-        print("🔴 УКУС КРАСНЫЙ НА ЧИСТОМ — самопроверка невозможна")
+        print("🔴 ПРИЁМКА КРАСНАЯ НА ЧИСТОМ — самопроверка невозможна")
         for n, ok in clean:
             if not ok:
                 print(f"   🔴 {n}")
@@ -212,7 +212,7 @@ def selftest():
         orig = target.read_text(encoding="utf-8")
         bad = mut(orig)
         if bad == orig:
-            print(f"⚠️ {name}: паттерн не найден в {target.name} — мутант НЕ ВСТАЛ, "
+            print(f"⚠️ {name}: паттерн не найден в {target.name} — нарочная поломка НЕ ВСТАЛА, "
                   f"считаю ВЫЖИВШИМ (не вставший мутант ничего не доказывает)")
             survived += 1
             continue
@@ -232,7 +232,7 @@ def selftest():
                 survived += 1
         finally:
             target.write_text(orig, encoding="utf-8")
-    print(f"\nИТОГ: {len(MUTANTS)-survived}/{len(MUTANTS)} мутантов пойманы "
+    print(f"\nИТОГ: {len(MUTANTS)-survived}/{len(MUTANTS)} нарочных поломок поймано "
           f"(число из len(MUTANTS))")
     return 1 if survived else 0
 

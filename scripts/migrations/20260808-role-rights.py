@@ -86,7 +86,7 @@ def main() -> int:
     print("ПРАВА РОЛИ — ПОЛЯМИ")
     print("=" * 74)
     print(f"таблица role_rights ........... {'УЖЕ ЕСТЬ' if 'role_rights' in have else 'нет, будет создана'}")
-    print(f"витрина role_rights_live ...... {'УЖЕ ЕСТЬ' if 'role_rights_live' in have else 'нет, будет создана'}")
+    print(f"готовая выборка role_rights_live ...... {'УЖЕ ЕСТЬ' if 'role_rights_live' in have else 'нет, будет создана'}")
 
     if not args.apply:
         print()

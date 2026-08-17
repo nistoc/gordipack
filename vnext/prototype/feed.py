@@ -66,7 +66,7 @@ def connect(db: str, write: bool = False, live_readonly: bool = False) -> sqlite
     if not p.exists():
         sys.exit(f"ERR: БД не найдена: {p}. Подними песочницу: python vnext/sandbox/bootstrap.py")
     if is_live:
-        print("⚠️  ЖИВАЯ mezosync.db, РЕЖИМ mode=ro — курсор и батч НЕ трогаются этим вызовом.",
+        print("⚠️  ЖИВАЯ mezosync.db, РЕЖИМ mode=ro — отметка прочитанного и батч НЕ трогаются этим вызовом.",
               file=sys.stderr)
     return sqlite3.connect(f"file:{p}?mode={'rw' if write else 'ro'}", uri=True, timeout=5)
 
@@ -117,7 +117,7 @@ def fetch_unread(conn, role: str, all_msgs: bool = False):
     cur = conn.execute("SELECT last_read_id FROM read_cursors WHERE reader_role = ?",
                        (role,)).fetchone()
     if cur is None:
-        sys.exit(f"ERR: роль {role} не в реестре курсоров (есть: {', '.join(known_roles(conn))}).")
+        sys.exit(f"ERR: роли {role} нет среди читателей (есть: {', '.join(known_roles(conn))}).")
     last = 0 if all_msgs else cur[0]
     rows = conn.execute(
         "SELECT id, writer_role, timestamp, body_md, priority FROM messages "
@@ -206,7 +206,7 @@ def cmd_index(conn, role, budget_kb, ack_conn=None):
         # «Упёрлось» ≠ «всё» — но теперь остаток не молчит и не теряется: он ИЗМЕРЕН.
         print(f"⚠️  ЗА ОКНОМ ещё {len(rest)} нот ({rest_bytes/1024:.0f} КБ, "
               f"последняя #{rest[-1][0]}). Это НЕ конец ленты.\n"
-              f"    Подтвердишь этот индекс — курсор встанет на #{batch_max}, остаток не пропадёт: "
+              f"    Подтвердишь этот указатель — отметка прочитанного встанет на #{batch_max}, остаток не пропадёт: "
               f"зови index снова.\n")
     print(f"[end-of-index] Прочитал индекс ЦЕЛИКОМ — подтверди СКЛЕЙКОЙ обеих половин "
           f"(первая — в ПЕРВОЙ строке):\n"
@@ -258,7 +258,7 @@ def cmd_digest(conn, role):
         print(f"\n  ⚠️ Повышенный приоритет: {len(hi)}")
         for mid, writer, prio, h in hi[:10]:
             print(f"     #{mid} [{writer}] {prio}: {h}")
-    print(f"\n  Курсор дайджест НЕ двигает. Дальше: index (окнами) или read --ids <нужное>.")
+    print(f"\n  Сводка отметку прочитанного НЕ двигает. Дальше: index (окнами) или read --ids <нужное>.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -292,7 +292,7 @@ def cmd_read(conn, role, ids, read_all, budget_kb):
         print()
         spent += len(body)
         shown += 1
-    print(f"[read] развёрнуто {shown} нот / {spent/1024:.1f} КБ. Курсор НЕ сдвинут "
+    print(f"[read] развёрнуто {shown} нот / {spent/1024:.1f} КБ. Отметка прочитанного НЕ сдвинута "
           f"(сдвиг — только ack по индексу).")
 
 
@@ -310,7 +310,7 @@ def cmd_ack(conn, role, token):
     conn.execute("DELETE FROM read_batches WHERE token=?", (token,))
     conn.commit()
     print(f"[ack] {role}: {prev} → {new}" if new != prev else
-          f"[ack] {role}: токен погашен, курсор уже был на {prev}")
+          f"[ack] {role}: токен погашен, отметка прочитанного уже была на {prev}")
 
 
 def main():

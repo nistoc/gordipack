@@ -404,8 +404,8 @@ def run(scripts, artifacts, quiet=False, do_run=True, role="PROTO"):
     # производный факт, а зашитый перечень протухает молча (мой же класс ④).
     known = {p.name for p in scripts.glob("*.py")}
     if not quiet:
-        print(f"[гард печатаемых форм] скрипты: {scripts} ({len(known)} шт) · витрины: "
-              f"{artifacts if artifacts.exists() else '— нет каталога, витрины НЕ проверены'}")
+        print(f"[проверка печатаемых форм] скрипты: {scripts} ({len(known)} шт) · файлы из базы: "
+              f"{artifacts if artifacts.exists() else '— нет каталога, файлы из базы НЕ проверены'}")
         print("   вижу: литералы/f-строки .py + строки .md · приметы: не-абсолютный вызов · --db")
         print("   НЕ вижу: форму, собранную в рантайме · комментарии · текст из БД\n")
     obs_hits, obs_n, obs_skip = ([], 0, []) if not do_run else observe(scripts, role)
@@ -448,11 +448,11 @@ def run(scripts, artifacts, quiet=False, do_run=True, role="PROTO"):
           f"ограничение канона, не долг строки) · файлов затронуто {len(per_file)} из {len(targets)}")
     print(f"   по рангу (ранжир @STUD): R1 рабочий вывод {by_rank['R1']} · "
           f"R2 docstring/--help {by_rank['R2']} · R3 прочее {by_rank['R3']}"
-          + (f"\n   цитат формы в ТЕЛАХ НОТ витрин: {scan_md.quoted} — это ИСТОРИЯ, "
+          + (f"\n   цитат формы в ТЕЛАХ НОТ этих файлов: {scan_md.quoted} — это ИСТОРИЯ, "
              f"НЕ долг (переписывать нечего)" if scan_md.quoted else ""))
     if red or obs_hits:
         print("   ⇒ чинить у ИСТОЧНИКА: строку печатает скрипт ⇒ правится скрипт; "
-              "витрину печатает генератор ⇒ правится ГЕНЕРАТОР, а не N файлов на диске.")
+              "файл из базы печатает генератор ⇒ правится ГЕНЕРАТОР, а не N файлов на диске.")
     return 1 if (red or obs_hits) else 0
 
 
@@ -522,12 +522,12 @@ def selftest():
     md_all = scan_md(arts / "sync.coord.md", known)
     good = len(md_all) == 2                        # относительный путь + --db
     ok &= good
-    print(f"{'✅' if good else '🔴'} витрина .md, без шаблонов  находок {len(md_all)}, ожидалось 2")
+    print(f"{'✅' if good else '🔴'} файл .md из базы, без шаблонов  находок {len(md_all)}, ожидалось 2")
     scan_md.quoted = 0
     md_tpl = scan_md(arts / "sync.coord.md", known, [re.compile(r"НИЧЕГО НЕ СОВПАДЁТ")])
     good = len(md_tpl) == 0 and scan_md.quoted == 2
     ok &= good
-    print(f"{'✅' if good else '🔴'} витрина .md, цитата в теле  долг {len(md_tpl)} (ждём 0), "
+    print(f"{'✅' if good else '🔴'} файл .md из базы, цитата в теле  долг {len(md_tpl)} (ждём 0), "
           f"цитат {scan_md.quoted} (ждём 2) — история не долг")
     # ── КАНОН (#56): три образца — чистый · без определения · мёртвое определение.
     scripts_dir = tmp / "scripts"

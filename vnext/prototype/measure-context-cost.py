@@ -114,7 +114,7 @@ def main():
     print(f"   {'ИТОГО постоянная часть (одинакова для всех)':44} {canon_total:>7,} симв  "
           f"≈ {tok(canon_total)} токенов".replace(",", " "))
     print()
-    print(f"   {'роль':8} {'слепок':>8} {'долг ленты':>11} {'симв долга':>11} "
+    print(f"   {'роль':8} {'память':>8} {'долг ленты':>11} {'симв долга':>11} "
           f"{'ВСЕГО симв':>11} {'≈ токенов':>16}")
     rows = []
     for role, cur in con.execute("SELECT reader_role, last_read_id FROM read_cursors ORDER BY 1"):

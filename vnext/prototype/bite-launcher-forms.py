@@ -67,7 +67,7 @@ def run(scripts, db, *extra):
 def main() -> int:
     ok = True
     if not TOOL.exists():
-        sys.exit(f"⛔ НЕ ЗАПУСТИЛАСЬ: прибора нет — {TOOL}")
+        sys.exit(f"⛔ НЕ ЗАПУСТИЛАСЬ: инструмента нет — {TOOL}")
 
     # ── ① контроль ────────────────────────────────────────────────────────────
     d, scripts, db = sandbox()
@@ -83,7 +83,7 @@ def main() -> int:
     broken = src.replace('sql + " ORDER BY role, right_key", par',
                          'sql + " ORDER BY role, right_key"')
     if broken == src:
-        sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: место для поломки не найдено — прибор менялся, правь приёмку")
+        sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: место для поломки не найдено — инструмент менялся, правь приёмку")
     target.write_text(broken, encoding="utf-8")
     out, code = run(scripts2, db2, "--only", "role-rights")
     ok &= case("② сломан разбор параметра — прибор КРАСНЕЕТ",
@@ -171,7 +171,7 @@ def main() -> int:
                f"слепых {len(blind)}{': ' + ', '.join(blind) if blind else ''}", differ=True)
 
     print()
-    print(f"{'✅ ПРИБОР ПРИНЯТ' if ok else '🔴 НЕ ПРИНЯТ'} — случаев {CASES}, различающих {DIFFER}")
+    print(f"{'✅ ПРОВЕРКА ПРИНЯТА' if ok else '🔴 НЕ ПРИНЯТ'} — случаев {CASES}, различающих {DIFFER}")
     return 0 if ok else 1
 
 

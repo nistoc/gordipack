@@ -43,7 +43,7 @@ def scan_text(text):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Гард: относительная форма вызова в каноне и слепках")
+    ap = argparse.ArgumentParser(description="Проверка: относительная форма вызова в каноне и в памятях ролей")
     ap.add_argument("--db", required=True)
     ap.add_argument("--canon", action="append", default=[],
                     help="файл канона (можно несколько раз): CLAUDE.md и т.п.")
@@ -96,7 +96,7 @@ def main():
     for f in findings:
         print(f"   {f['where']:28} {f['relative']:2} отн. / {f['absolute']:2} абс.   "
               f"{', '.join(f['samples'])}")
-    print("   Роль копирует форму из того, что читает. Правь ИСТОЧНИК (канон/слепок) —\n"
+    print("   Роль копирует форму из того, что читает. Правь ИСТОЧНИК (канон или память) —\n"
           "   абсолютный путь; тогда следующая инкарнация скопирует уже его.")
     sys.exit(1)
 

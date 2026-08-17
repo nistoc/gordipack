@@ -101,25 +101,25 @@ MUTANTS = {
 def selftest() -> int:
     print("═══ чистый прогон ═══")
     if main() != 0:
-        print("🔴 УКУС КРАСНЫЙ НА ЧИСТОМ — самопроверка невозможна")
+        print("🔴 ПРИЁМКА КРАСНАЯ НА ЧИСТОМ — самопроверка невозможна")
         return 1
     survived = 0
     orig = DBQ.read_text(encoding="utf-8")
     for name, mut in MUTANTS.items():
         bad = mut(orig)
         if bad == orig:
-            print(f"⚠️ {name}: паттерн не найден — мутант НЕ ВСТАЛ, считаю ВЫЖИВШИМ")
+            print(f"⚠️ {name}: паттерн не найден — нарочная поломка НЕ ВСТАЛА, считаю ВЫЖИВШИМ")
             survived += 1
             continue
         DBQ.write_text(bad, encoding="utf-8")
         try:
-            print(f"═══ мутант {name} ═══")
+            print(f"═══ нарочная поломка {name} ═══")
             caught = main() != 0
         finally:
             DBQ.write_text(orig, encoding="utf-8")
         print(f"{'✅ поймал' if caught else '🔴 НЕ ПОЙМАЛ'}: {name}")
         survived += 0 if caught else 1
-    print(f"\nИТОГ: {len(MUTANTS)-survived}/{len(MUTANTS)} мутантов пойманы")
+    print(f"\nИТОГ: {len(MUTANTS)-survived}/{len(MUTANTS)} нарочных поломок поймано")
     return 1 if survived else 0
 
 

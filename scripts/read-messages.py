@@ -114,7 +114,7 @@ def do_ack(conn, role, token):
     if row[2] is not None:
         # Токен уже подтверждён. Раньше строка стиралась и такой вызов был неотличим от
         # «чужой токен»; теперь различаем и говорим прямо.
-        print(f"⛔ ACK ОТКЛОНЁН: токен «{token}» уже подтверждён {row[2]} UTC. Курсор НЕ сдвинут.",
+        print(f"⛔ ACK ОТКЛОНЁН: токен «{token}» уже подтверждён {row[2]} UTC. Отметка прочитанного НЕ сдвинута.",
               file=sys.stderr)
         sys.exit(1)
     # Курсор двигаем по ПОКАЗАННОМУ, а не по верху выданного батча: это второй рубеж
@@ -153,7 +153,7 @@ def do_ack(conn, role, token):
                   file=sys.stderr)
     conn.commit()
     if new == prev:
-        print(f"[ack] {role}: токен погашен, курсор уже был на {prev} — без изменений")
+        print(f"[ack] {role}: токен погашен, отметка прочитанного уже была на {prev} — без изменений")
     else:
         print(f"[ack] {role}: {prev} → {new}")
 
@@ -162,7 +162,7 @@ def main():
     parser = argparse.ArgumentParser(description="Прочитать непрочитанные сообщения")
     # R15a: --db не обязателен, путь резолвится от расположения СКРИПТА (не от CWD).
     parser.add_argument("--db", default=None, help="Путь к mezosync.db (по умолчанию — рядом со скриптом)")
-    parser.add_argument("--role", required=True, help="Роль читателя (для курсора)")
+    parser.add_argument("--role", required=True, help="Роль читателя (для отметки прочитанного)")
     # default=None — НЕ «нет предела», а «роль предела не называла». Различение нужно,
     # чтобы у --index умолчание было ДРУГИМ (весь долг), и чтобы отказ на «0» бил только
     # по НАБРАННОМУ нулю, а не по умолчанию. См. карточку #194.
@@ -177,7 +177,7 @@ def main():
     parser.add_argument("--to-me", action="store_true",
                         help="только записки, где роль названа ОБРАЩЕНИЕМ (не «в копию»). "
                              "Курсор НЕ двигается: это витрина, а не чтение ленты")
-    parser.add_argument("--all", action="store_true", help="Все сообщения (игнорировать курсор)")
+    parser.add_argument("--all", action="store_true", help="Все сообщения (не смотреть на отметку прочитанного)")
     parser.add_argument("--index", action="store_true",
                         help="УКАЗАТЕЛЬ вместо тел: id · время · автор · срочность · первая "
                              "строка. Курсор НЕ двигает и токена НЕ выдаёт — прочитать "
@@ -192,11 +192,11 @@ def main():
     parser.add_argument("--basis", default=None, metavar="ТЕКСТ",
                         help="чем обоснован проход заголовками (обязателен с --pass-by-index)")
     parser.add_argument("--ack", default=None, metavar="TOKEN",
-                        help="Погасить токен батча и сдвинуть курсор (одноразово)")
+                        help="Погасить токен батча и сдвинуть отметку прочитанного (одноразово)")
     parser.add_argument("--no-advance", action="store_true",
-                        help="(устарел, no-op: чтение курсор больше НЕ двигает)")
+                        help="(устарел, ничего не делает: чтение отметку прочитанного больше НЕ двигает)")
     parser.add_argument("--register", action="store_true",
-                        help="ЯВНО завести курсор новой роли. Без флага незнакомая роль — ошибка.")
+                        help="ЯВНО завести отметку прочитанного новой роли. Без флага незнакомая роль — ошибка.")
     args = parser.parse_args()
 
     # ⛔ `--limit 0` — НЕ «без предела». В SQLite `LIMIT 0` отдаёт ноль строк, и ниже ветка
@@ -273,7 +273,7 @@ def main():
         if not args.register:
             known = ", ".join(r for r, in conn.execute(
                 "SELECT reader_role FROM read_cursors ORDER BY reader_role"))
-            print(f"ERR: роль {role} не в реестре курсоров (есть: {known}).\n"
+            print(f"ERR: роли {role} нет среди читателей (есть: {known}).\n"
                   f"     Новая роль? Заведи явно: --register. Опечатка? Поправь --role.",
                   file=sys.stderr)
             conn.close()
@@ -282,7 +282,7 @@ def main():
             "INSERT INTO read_cursors (reader_role, last_read_id) VALUES (?, 0)", (role,)
         )
         conn.commit()
-        print(f"[register] курсор роли {role} заведён с 0 (явный --register)")
+        print(f"[register] отметка прочитанного роли {role} заведена с 0 (явный --register)")
         last_read = 0
     else:
         last_read = cursor_row[0]
@@ -329,7 +329,7 @@ def main():
         except sqlite3.OperationalError:
             covered = 0
         total = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
-        print(f"⚖️ ВИТРИНА «ТОЛЬКО ОБРАЩЁННОЕ КО МНЕ». Курсор НЕ двигается, ключа "
+        print(f"⚖️ ОТБОР «ТОЛЬКО ОБРАЩЁННОЕ КО МНЕ». Отметка прочитанного НЕ двигается, ключа "
               f"подтверждения НЕ будет: это подмножество ленты, а не её чтение.")
         print(f"   охват поля: адресат объявлен у {covered} записок из {total} "
               f"({100.0 * covered / total:.1f} %). Остальные сюда НЕ ПОПАДУТ — "
@@ -346,7 +346,7 @@ def main():
                 "SELECT COUNT(*) FROM messages m WHERE m.id > ? AND m.writer_role <> ? "
                 "AND NOT EXISTS (SELECT 1 FROM message_addressee a WHERE a.message_id = m.id)",
                 (last_read, role)).fetchone()[0]
-            print(f"   в вашем долге БЕЗ АДРЕСАТА ВОВСЕ: {общих} — витрина их не покажет. "
+            print(f"   в вашем долге БЕЗ АДРЕСАТА ВОВСЕ: {общих} — этот отбор их не покажет. "
                   f"Пустой список ниже значит «лично вам не писали», а НЕ «в ленте пусто».")
         except sqlite3.OperationalError as e:
             print(f"   ⚠️ число общих записок НЕ СОБРАНО ({e}) — это не «их нет»")
@@ -441,7 +441,7 @@ def main():
         # что произошло: заголовки видены, тела нет, основание записано, автор назван.
         if args.pass_by_index:
             if not rows:
-                print("\n⛔ Проходить нечего: в отборе пусто. Курсор не тронут.")
+                print("\n⛔ Проходить нечего: в отборе пусто. Отметка прочитанного не тронута.")
                 return
             if not args.basis or len(args.basis.strip()) < 12:
                 print("\n⛔ --pass-by-index ОТКЛОНЁН: нужен --basis «чем обосновано» "
@@ -455,7 +455,7 @@ def main():
                                (role,)).fetchone()
             prev = cur[0] if cur else 0
             if top <= prev:
-                print("\n⛔ Курсор уже дальше показанного — проходить нечего.")
+                print("\n⛔ Отметка прочитанного уже дальше показанного — проходить нечего.")
                 return
             # ⚠️ ЧЕСТНОЕ ПРЕДУПРЕЖДЕНИЕ ПЕРЕД ФАКТОМ, А НЕ ПОСЛЕ: сколько среди пройденных
             # тех, где к роли ОБРАЩАЛИСЬ полем. Это не запрет — это цена, названная вслух.
@@ -475,12 +475,12 @@ def main():
                          " WHERE reader_role = ?", (top, role))
             conn.commit()
             print(f"\n📄 ПРОЙДЕНО УКАЗАТЕЛЕМ: [{prev + 1}..{top}] — {top - prev} записок. "
-                  f"Курсор {prev} → {top}.")
+                  f"Отметка прочитанного {prev} → {top}.")
             print(f"   основание: {args.basis.strip()}")
             if personal:
                 print(f"   ⚠️ Среди них {personal} записок, где к тебе ОБРАЩАЛИСЬ полем — "
                       f"их тела ты не читала. Механизм скажет об этом писавшим.")
-            print("   ⚖️ Долг убран ИЗ ВИДУ, но НЕ ИЗ МИРА: витрина cursor_gaps покажет "
+            print("   ⚖️ Долг убран ИЗ ВИДУ, но НЕ ИЗ МИРА: готовая выборка cursor_gaps покажет "
                   "писавшим,\n      что их записки до тебя не дошли, и попросит повторить.")
         return
 
@@ -569,7 +569,7 @@ def main():
             else:
                 # Второе плечо: курсор у головы — «непрочитанного нет» ЗАКОННО, и эта правда
                 # не должна исчезнуть вместе с починкой первого плеча.
-                print("   ✅ И в самой ленте непрочитанного нет — курсор у головы.")
+                print("   ✅ И в самой ленте непрочитанного нет — отметка прочитанного у головы.")
         elif unread:
             # Пусто, а долг есть ⇒ виновато СУЖЕНИЕ ОТБОРА, и сказать надо про него,
             # а не про ленту. Строка про долг стоит ПОСЛЕДНЕЙ намеренно: решение «читать
@@ -740,12 +740,12 @@ def main():
                       f"те же {len(rows)} нот и тот же токен. **--limit здесь ни при чём** — любой "
                       f"лимит вернёт этот же батч.\n"
                       f"   За ним ещё {rest_count} нот (последняя #{rest_last}).\n"
-                      f"   ⇒ ПОДТВЕРДИ ack (ниже) — курсор встанет на #{batch_max}, и СЛЕДУЮЩИЙ "
+                      f"   ⇒ ПОДТВЕРДИ ack (ниже) — отметка встанет на #{batch_max}, и СЛЕДУЮЩИЙ "
                       f"вызов отдаст остаток. Менять --limit до ack бессмысленно.")
             else:
                 print(f"⚠️  БАТЧ УПЁРСЯ В ЛИМИТ (--limit {args.limit}): за ним ещё {rest_count} нот "
                       f"(последняя #{rest_last}). Это НЕ «всё» — это «упёрлось».\n"
-                      f"   Подтвердишь этот батч — курсор встанет на #{batch_max}, остаток НЕ пропадёт: "
+                      f"   Подтвердишь этот батч — отметка встанет на #{batch_max}, остаток НЕ пропадёт: "
                       f"зови ридер снова. Нужен весь хвост сразу — --limit {rest_count + len(rows)}.")
         print()
 
@@ -812,7 +812,7 @@ def main():
               f"(первая — в ПЕРВОЙ строке вывода):\n"
               f"  python {me} --role {role} --ack <первая>-{half2}")
     elif args.all:
-        print(f"[--all] разведка без курсора: {len(rows)} нот, токен не выдан")
+        print(f"[--all] разведка без отметки прочитанного: {len(rows)} нот, токен не выдан")
 
     conn.close()
 

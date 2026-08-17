@@ -117,7 +117,7 @@ def main():
 
     print(f'\nвосстановим у {len(plan)} · оставим пустыми {len(unknown)}')
     if a.dry_run:
-        print('\n⟨ВХОЛОСТУЮ⟩ база не тронута. Для врезки прогони без --dry-run.')
+        print('\n⟨ВХОЛОСТУЮ⟩ база не тронута. Чтобы применить, прогони без --dry-run.')
         return
 
     conn.execute("BEGIN")            # явная транзакция — требование record_step
@@ -131,7 +131,7 @@ def main():
     conn.commit()
     print(f'\n✅ ВРЕЗАНО. отпечаток схемы: {fp}')
     ok, why = verify(conn)
-    print(f'{"✅" if ok else "🔴"} сторож журнала: {why}')
+    print(f'{"✅" if ok else "🔴"} проверка журнала: {why}')
 
 
 if __name__ == '__main__':
