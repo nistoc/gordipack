@@ -24,7 +24,7 @@
  "guard-utc.py": "309e37022d30",
  "guard-write-without-read.py": "78a685936176",
  "init-group.py": "704936176209",
- "lease.py": "e7dc84d3ba74",
+ "lease.py": "676a29de14bc",
  "machine_layer.py": "4e40d16d9dfe",
  "mezo_paths.py": "80cb23315f99",
  "migrate-md-to-sqlite.py": "d42481548ce7",
