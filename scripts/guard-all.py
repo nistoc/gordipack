@@ -766,7 +766,32 @@ def main():
         container = Path(dbp).parent.parent          # <контур>/.mezosync/mezosync.db
         boxes = sorted(container.glob("*/.mezosync/bridges/*"))
         if not boxes:
-            unreachable.append(f"{group} (искали в {container})")
+            # 🪤 «У СОСЕДА НЕТ ПАПКИ» НЕ ЗНАЧИТ «ОН НЕ СПРАШИВАЛ». Обмен с одним из соседей
+            # старше этого договора: обе стороны писали в ОДНУ папку, и она лежит в НАШЕМ
+            # репозитории. Первая редакция говорила «смотреть некуда» и на этом успокаивалась —
+            # а в той папке лежал его вопрос от 13.08 с их же сроком 03.09, никем не разобранный
+            # (найдено 18.08 при наведении общего вида). ⇒ смотрим И в свои папки: файл
+            # «ask.<имя соседа>…» в нашей папке — это ЕГО вопрос, где бы он ни лежал.
+            legacy = [f for f in sorted(BRIDGES.glob("*/ask.*.md"))
+                      if f.name.split(".")[1].startswith(group)] if BRIDGES.exists() else []
+            if legacy:
+                unreachable.append(f"{group}: своей папки у него нет, обмен старого вида — "
+                                   f"его вопросы лежат у нас")
+                for f in legacy:
+                    # У старых имён адресат и тема СКЛЕЕНЫ дефисом («ask.aia-тема.md»),
+                    # у новых разделены точкой («answer.aia.тема.md»). Снимаем имя соседа
+                    # с обоих концов и сличаем ТЕМУ — иначе свежий ответ на старый вопрос
+                    # не связывается с ним, и долг числится вечным (замер 18.08 16:45).
+                    topic = f.name[len("ask."):-3]
+                    for pref in (group + "-", group + "."):
+                        if topic.startswith(pref):
+                            topic = topic[len(pref):]
+                    if any(o.startswith("answer.") and topic in o.replace("-", "-") for o in ours):
+                        continue
+                    age_h = (datetime.now(timezone.utc).timestamp() - f.stat().st_mtime) / 3600
+                    waiting.append((age_h, group, f.name))
+            else:
+                unreachable.append(f"{group} (искали в {container})")
             continue
         for box in boxes:
             for ask in sorted(box.glob("ask.*.md")):
