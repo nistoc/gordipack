@@ -39,12 +39,29 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 # Корни поиска. Не список репозиториев — список МЕСТ, где контур их держит.
-DEFAULT_ROOTS = [Path("C:/guts/.atlas"), Path("C:/github")]
+# ⚖️ БЕРУТСЯ ОТ РАСПОЛОЖЕНИЯ ЭТОГО ФАЙЛА, а не вписаны каталогом контура-донора: инструмент
+# в шаблоне достаётся другому проекту, и вписанный путь заставил бы его отчитываться о ЧУЖОЙ
+# работе как о своей (18.08, подготовка второго проекта). Свои дополнительные места контур
+# называет сам — переменной окружения MEZO_EXTRA_ROOTS (несколько — через ;).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mezo_paths  # noqa: E402
+
+
+def _default_roots() -> list[Path]:
+    roots = [mezo_paths.container_root(__file__)]
+    for chunk in os.environ.get("MEZO_EXTRA_ROOTS", "").split(";"):
+        if chunk.strip():
+            roots.append(Path(chunk.strip()))
+    return roots
+
+
+DEFAULT_ROOTS = _default_roots()
 MAX_DEPTH = 2  # глубже держать репозитории у нас не принято; узлы вроде node_modules отсекаем
 
 

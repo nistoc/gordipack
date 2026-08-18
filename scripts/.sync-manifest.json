@@ -1,6 +1,6 @@
 {
  "atomic-install.py": "db3ba1ab3206",
- "backlog.py": "ea14d912b620",
+ "backlog.py": "6bab217e9107",
  "backlog_view.py": "fcf9bf4de2e1",
  "backup-db.py": "7c73c6257b32",
  "bite-backlog-view.py": "572d53dcfbc2",
@@ -37,7 +37,7 @@
  "migrations/20260808-schema-journal-fingerprint.py": "374ad5f81d96",
  "migrations/20260809-batch-race-lock.py": "0cc3203d32e7",
  "migrations/20260810-milestone-v4.py": "74911c42e0e0",
- "migrations/20260810-role-lifecycle.py": "46949a33de34",
+ "migrations/20260810-role-lifecycle.py": "6332c142f1ce",
  "migrations/20260810-rule-status-field.py": "948adeeba557",
  "migrations/20260810-schema-journal-applied-by.py": "6d29bc17828d",
  "migrations/20260812-cursor-segments-truth.py": "7cbddec811c4",
@@ -55,7 +55,7 @@
  "split-history-table.py": "deacde6fa1a8",
  "stats.py": "bf9ae4471f3e",
  "sync_backoff.py": "dfc1065b681c",
- "unsaved.py": "1dd5420f6534",
+ "unsaved.py": "accb6acc6775",
  "urgency.py": "6c36841045ba",
  "write-message.py": "45b634b8a762"
 }

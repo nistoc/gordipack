@@ -51,7 +51,25 @@ WORDS = {
     "дверь (инструмента)": r"двер[ьи]\w*(?=[^\n]{0,40}(?:\.py|инструмент|запуск))|"
                            r"(?:\.py|инструмент|запуск)[^\n]{0,40}двер[ьи]\w*",
 }
+# 🪤 СЛОВО С ДВУМЯ ХОЗЯЕВАМИ. Найдено @RCC 18.08 (#3605), решено словом владельца 13:56 UTC:
+# «витрина» в механизме со-работы запрещена, а в области хранилища данных это обычный термин
+# («витрина данных», слой хранилища). Считать её там прежним словом значит требовать калечить
+# верный предметный текст ради нуля в замере — а подгонять текст под проверку контур не даёт.
+DOMAIN_OK = {
+    "витрина": re.compile(r"данн|DWH|BigQuery|SQL|хранилищ|таблиц|витрин\w*\s+данн", re.I),
+}
 ANY = re.compile("|".join(WORDS.values()), re.I)
+
+
+def count(name: str, pat: str, text: str) -> int:
+    """Сколько раз слово встретилось ПРЕЖНИМ, а не в законном предметном смысле."""
+    near = DOMAIN_OK.get(name)
+    n = 0
+    for m in re.finditer(pat, text or "", re.I):
+        if near and near.search(text[max(0, m.start() - 60):m.end() + 60]):
+            continue          # рядом стоит признак предметной области — слово законно
+        n += 1
+    return n
 
 
 def in_memories(db) -> tuple[int, dict[str, int], dict[str, collections.Counter]]:
@@ -63,7 +81,7 @@ def in_memories(db) -> tuple[int, dict[str, int], dict[str, collections.Counter]
         if role.upper() not in alive:
             continue
         for name, pat in WORDS.items():
-            n = len(re.findall(pat, body or "", re.I))
+            n = count(name, pat, body or "")
             if n:
                 per_role[role] += n
                 detail[role][name] += n

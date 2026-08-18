@@ -80,7 +80,19 @@ def main():
     print(f"  ✅ Схема применена: {SCHEMA_FILE.name}")
 
     # 2. Имя группы
-    conn.execute("UPDATE meta SET value = ? WHERE key = 'group_name'", (args.name,))
+    # 🪤 БЫЛО «UPDATE … WHERE key='group_name'» — а строки в свежей базе НЕТ: схема заводит
+    # пустую таблицу meta. Обновление нуля строк проходит без ошибки, и контур рождался
+    # БЕЗЫМЯННЫМ. Вскрылось 18.08 при связывании со вторым проектом: связь записалась как
+    # «atlas ↔ unknown», хотя сборка отчиталась об успехе — имени просто негде было взяться.
+    # ⚖️ Поэтому не только вставка, но и ЧТЕНИЕ ОБРАТНО: успех сборки судится по базе.
+    conn.execute("INSERT INTO meta (key, value) VALUES ('group_name', ?) "
+                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (args.name,))
+    got = conn.execute("SELECT value FROM meta WHERE key = 'group_name'").fetchone()
+    if not got or got[0] != args.name:
+        sys.exit(f"⛔ СБОРКА ОСТАНОВЛЕНА: имя группы не записалось (в базе {got}). "
+                 f"Безымянный контур выглядит исправным, но всякая связь с ним "
+                 f"и всякий отчёт назовут его «unknown».")
+    print(f"  ✅ Имя группы: {got[0]} (спрошено У БАЗЫ, не по факту вставки)")
 
     # 3. Универсальные правила
     rules_sql = UNIVERSAL_RULES.read_text(encoding="utf-8")

@@ -38,6 +38,7 @@
 import argparse
 import io
 import os
+import json
 import sqlite3
 import sys
 
@@ -51,22 +52,17 @@ from schema_journal import record_step, verify  # noqa: E402
 VERSION = "20260810-role-lifecycle"
 
 # роль: (состояние, кто решил, когда, почему, зона)
-ROSTER = {
-    'COORD':  ('alive', 'owner', None, 'координатор контура; в живом реестре', 'atlas.archs + .mezosync'),
-    'CORE':   ('alive', 'owner', None, 'в живом реестре', 'atlas.core'),
-    'ING':    ('alive', 'owner', None, 'в живом реестре', 'atlas.ingestion'),
-    'STUD':   ('alive', 'owner', None, 'в живом реестре', 'atlas.studio'),
-    'TAXO':   ('alive', 'owner', None, 'в живом реестре', 'step03/fable5guess'),
-    'OPSSRE': ('alive', 'owner', '2026-07-25', 'заведён по живому слову владельца', 'atlas.archs: раскатка и стоимость'),
-    'PROTO':  ('alive', 'owner', '2026-07-25', 'заведён по живому слову владельца', 'gordipack + песочница v-next'),
-    'CHROME': ('alive', 'owner', '2026-08-06', 'заведён по живому слову владельца', 'atlas.chrome.extension + guardrails'),
-    'RCC':    ('alive', 'owner', '2026-08-05 20:44', 'пробуждён живым словом владельца после 7 недель дормана; '
-                                                     'дормант 16.07→05.08 был по слову, НЕ апоптозом', 'C:\\guts\\.rcc (только чтение)'),
-    'EYE':    ('closed', 'owner', '2026-07-16 18:03', 'апоптоз живым словом владельца в чате EYE (нота #2145); '
-                                                      'диагноз владельца: «роль без предмета дрейфует в дублирование и чужие зоны»', 'мост к владельцу (закрыт)'),
-    'GRF':    ('closed', 'owner', '2026-07-16 18:39', 'апоптоз живым словом владельца в чате GRF (нота #2164); '
-                                                      'предмет был реален, закрыт за отсутствием загрузки. Зона graphify — в дежурное владение COORD', 'graphify (закрыт)'),
-}
+# ⚖️ РЕЕСТР РОЛЕЙ ЖИВЁТ РЯДОМ С БАЗОЙ (roster.json), А НЕ В КОДЕ ШАГА.
+# Найдено 18.08 при подготовке второго проекта: имена COORD/CORE/ING общие, и роль ЧУЖОГО
+# контура с таким именем получила бы НАШУ зону и основание «в живом реестре» — выдуманный
+# факт о себе, записанный машиной. Нет файла — состояния не выдумываем: у всех «unknown»,
+# и строка об этом печатается, чтобы пропуск не был неотличим от проверки.
+ROSTER_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "roster.json")
+try:
+    with open(ROSTER_FILE, encoding="utf-8") as fh:
+        ROSTER = {k: tuple(v) for k, v in json.load(fh).items()}
+except FileNotFoundError:
+    ROSTER = {}
 
 NEW_TABLE = """
 CREATE TABLE roles_new (

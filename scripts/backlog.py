@@ -39,8 +39,16 @@ except Exception:                          # noqa: BLE001 — любая пол�
     def warn_dangling(*_a, **_k):
         print("⚠️ проверка ссылок НЕ ВЫПОЛНЕНА: модуль refs_check недоступен", file=__import__("sys").stderr)
 
-STATUSES = ["open", "in_progress", "blocked", "in_review", "done", "dropped"]
-OPEN_STATUSES = ["open", "in_progress", "blocked", "in_review"]
+# ⚖️ ДВА СОСТОЯНИЯ ВЗЯТЫ ИЗ ЧУЖОГО СЛОВАРЯ (протокол A2A, слово владельца 18.08 13:56 UTC:
+# «возьми терминологию, на сам протокол пока не переходим»). Оба закрывают потерю правды,
+# которую мы терпели:
+#   awaiting_word — ждёт СЛОВА ЧЕЛОВЕКА. Раньше это писалось как blocked и было неотличимо
+#     от «жду чужую работу»: в первом случае дело стоит из-за меня и молчит об этом владельцу.
+#   failed — ПРОБОВАЛИ, НЕ ВЫШЛО. Раньше писалось как dropped, то есть «передумали делать»;
+#     неудача, записанная отменой, стирает сам факт попытки и её причину.
+STATUSES = ["open", "in_progress", "blocked", "awaiting_word", "in_review", "done",
+            "failed", "dropped"]
+OPEN_STATUSES = ["open", "in_progress", "blocked", "awaiting_word", "in_review"]
 PRIORITY_ORDER = {"critical": 0, "high": 1, "normal": 2, "low": 3}
 
 
@@ -240,7 +248,8 @@ def cmd_list(conn, a):
     else:
         подпись = f"status={next(iter(состав))}"
     print(f"📋 backlog [{a.role.upper()}{'' if a.only_mine else ' + SHARED'}] — {len(rows)} задач ({подпись}{age_note})\n")
-    icon = {"open": "○", "in_progress": "◐", "blocked": "⛔", "in_review": "👀", "done": "✅", "dropped": "✗"}
+    icon = {"open": "○", "in_progress": "◐", "blocked": "⛔", "awaiting_word": "🙋",
+            "in_review": "👀", "done": "✅", "failed": "💥", "dropped": "✗"}
     no_criterion = 0
     for bid, role, title, status, prio, tags, done_when in rows:
         pr = {"critical": "‼️", "high": "⬆️", "normal": "·", "low": "⬇️"}.get(prio, "·")
@@ -403,6 +412,23 @@ def cmd_status(conn, a):
     # объявлять устаревшими — С ОБЪЯСНЕНИЕМ. Замер 14.08: dropped проходил МОЛЧА, а подсказка
     # отказа `done` выше сама направляла в эту дверь. Причина — не критерий (доказывать
     # нечего), но без «почему» отменённая карточка молчит, жив ли предмет и чем заменён.
+    # ⛔ ВОРОТА: «не вышло» без рассказа, ЧТО пробовали, — это не запись неудачи, а её сокрытие.
+    if a.new_status == "failed" and not note.strip():
+        print(f"⛔ backlog #{a.id} «{title}» — НЕ ВЫШЛО, но не сказано ЧТО ПРОБОВАЛИ.",
+              file=sys.stderr)
+        print("   Следующий возьмётся за то же и потратит то же время. Назови попытку и на чём встала.",
+              file=sys.stderr)
+        print(f'   backlog.py status {a.id} failed --actor {a.actor} '
+              f'--note "пробовал так-то; встало на том-то"', file=sys.stderr)
+        sys.exit(1)
+
+    # ⛔ ВОРОТА: «жду слова» без вопроса — владелец не узнает, чего от него хотят.
+    if a.new_status == "awaiting_word" and not note.strip():
+        print(f"⛔ backlog #{a.id} «{title}» — ЖДЁТ СЛОВА, но вопрос не назван.", file=sys.stderr)
+        print("   Напиши сам вопрос: его увидит владелец, а не тот, кто ставил состояние.",
+              file=sys.stderr)
+        sys.exit(1)
+
     if a.new_status == "dropped" and not note.strip():
         print(f"⛔ backlog #{a.id} «{title}» — ПРИЧИНЫ НЕТ, объявить устаревшей нельзя.",
               file=sys.stderr)
@@ -412,7 +438,8 @@ def cmd_status(conn, a):
               f'--note "причина; заменено: карточка #N"', file=sys.stderr)
         sys.exit(1)
 
-    blocked_reason = note if a.new_status == "blocked" else None
+    # причина стоянки хранится одна и та же и для «жду чужую работу», и для «жду слово»
+    blocked_reason = note if a.new_status in ("blocked", "awaiting_word") else None
     conn.execute(
         "UPDATE backlog SET status = ?, blocked_reason = ?, updated_at = datetime('now') WHERE id = ?",
         (a.new_status, blocked_reason, a.id))
