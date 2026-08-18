@@ -53,7 +53,14 @@ REPO = RUNTIME.parent.parent / "atlas.agents-sync.db" / "scripts"
 #   зона @PROTO, а «синхронизировать чужое своей рукой» уже роняло фикс ридера (@STUD #1982).
 # ⛔ И НЕ ВЛИЯЕТ НА КОД ВОЗВРАТА: чинит её чужая рука, а красное, которое я не могу
 #   погасить, приучило бы пролистывать красное вообще — тот же довод, что у вечно-жёлтого.
-VNEXT_RUNTIME = Path(r"C:\guts\.atlas\vnext-tools")
+# 🪤 ЗДЕСЬ СТОЯЛ ЖЁСТКИЙ ПУТЬ НА НАШ КОНТУР. Найдено пробной сборкой нового контура
+# 18.08: свежесобранный проект получал эту строку как есть и сверял свои инструменты
+# С НАШИМИ — то есть проверка у соседа молча меряла чужой каталог. Теперь путь
+# резолвится от расположения файла, а прежний остаётся лишь запасным вариантом
+# для нашего контура, где каталог действительно лежит рядом.
+_own_container = Path(__file__).resolve().parent.parent.parent
+VNEXT_RUNTIME = (_own_container / "vnext-tools" if (_own_container / "vnext-tools").is_dir()
+                 else Path(r"C:\guts\.atlas\vnext-tools"))
 VNEXT_TEMPLATE = Path(r"C:\github\gordipack\vnext\prototype")
 
 

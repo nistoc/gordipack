@@ -47,7 +47,13 @@ INVENTED = re.compile(
     r"слеп(?:ок|ка|ки|ке|ком)|курсор|прибор|укус[ауео]?|дверь|двери",
     re.I)
 
+# 🪤 НЕ ТОЛЬКО print. Найдено @RCC 18.08 (записка #3605): machine_layer.py ничего не
+# печатает сам — он СОБИРАЕТ строки в список и отдаёт наружу, поэтому пять показываемых
+# человеку строк с прежними словами были для приёмки невидимы, и она была зелёной.
+# ⚖️ Класс: приёмка судила ФОРМУ ВЫЗОВА, а не НАЗНАЧЕНИЕ текста. Добавлено накопление
+# в список с говорящим именем — этого достаточно и не тянет за собой образцы поиска.
 SHOWN_CALLS = {"print", "add_argument", "ArgumentParser", "add_parser", "exit"}
+COLLECTORS = {"out", "lines", "block", "blocks", "parts", "rows", "report", "text"}
 CASES = DIFFER = 0
 
 
@@ -70,7 +76,11 @@ def shown_lines(src: str) -> set[int]:
     for n in ast.walk(tree):
         if isinstance(n, ast.Call):
             nm = getattr(n.func, "id", None) or getattr(n.func, "attr", None)
-            if nm in SHOWN_CALLS:
+            shown = nm in SHOWN_CALLS
+            if nm == "append" and isinstance(n.func, ast.Attribute):
+                recv = getattr(n.func.value, "id", None)
+                shown = shown or (recv in COLLECTORS)
+            if shown:
                 for sub in ast.walk(n):
                     if isinstance(sub, (ast.Constant, ast.JoinedStr)):
                         out.add(sub.lineno)
@@ -142,6 +152,22 @@ def main() -> int:
                not in_pattern,
                "образец ищет старое слово в памятях ролей, которые ещё не переписаны: "
                "переименовать его — ослепить проверку, оставив её зелёной", differ=True)
+
+    # -- (6) ТЕКСТ, КОТОРЫЙ ИНСТРУМЕНТ НЕ ПЕЧАТАЕТ, А ОТДАЁТ НАРУЖУ ---------
+    # 🪤 Найдено @RCC 18.08 (записка #3605): machine_layer.py собирает строки в список и
+    # возвращает их — печатает уже другой инструмент. Приёмка судила ФОРМУ ВЫЗОВА, а не
+    # НАЗНАЧЕНИЕ текста, и весь файл был для неё невидим, оставаясь при этом зелёным.
+    collected = ("# -*- coding: utf-8 -*-@def build():@    out = []@"
+                 '    out.append("всё в порядке: %s 24")@    return out@').replace("@", chr(10))
+    probe.write_text(collected % "проверок", encoding="utf-8")
+    coll_clean, _, _ = scan(sand)
+    probe.write_text(collected % "сторожей", encoding="utf-8")
+    coll_broken, _, _ = scan(sand)
+    ok &= case("⑥ собранный в список и отданный наружу текст приёмка тоже судит",
+               not coll_clean and len(coll_broken) == 1,
+               "на чистом %d находок, с поломкой %d — до 18.08 оба случая были зелёными: "
+               "инструмент, отдающий строки вместо печати, приёмку не касался вовсе"
+               % (len(coll_clean), len(coll_broken)), differ=True)
 
     shutil.rmtree(d, ignore_errors=True)
 

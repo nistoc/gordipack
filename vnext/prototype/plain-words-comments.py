@@ -293,8 +293,15 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="перевод пояснений на общепонятные слова")
     ap.add_argument("--apply", action="store_true",
                     help="править файлы (без флага — холостой прогон, файлы не трогаются)")
-    ap.add_argument("--roots", nargs="*", default=[
-        r"C:\guts\.atlas\.mezosync\scripts", r"C:\guts\.atlas\vnext-tools"])
+    # Каталоги по умолчанию — от СВОЕГО расположения, а не жёстко нашим путём:
+    # в чужом контуре жёсткий путь заставил бы инструмент править ЧУЖИЕ файлы.
+    _own = pathlib.Path(__file__).resolve().parent
+    _default_roots = [str(_own)]
+    for cand in (_own.parent / ".mezosync" / "scripts", _own.parent.parent / ".mezosync" / "scripts"):
+        if cand.is_dir():
+            _default_roots.insert(0, str(cand))
+            break
+    ap.add_argument("--roots", nargs="*", default=_default_roots)
     ap.add_argument("--show-skips", action="store_true", help="перечислить отложенное")
     a = ap.parse_args()
 

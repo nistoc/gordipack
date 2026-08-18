@@ -57,7 +57,7 @@ def machine_block(db_path, role: str) -> list:
                            (role,)).fetchone()
         head = conn.execute("SELECT MAX(id) FROM messages").fetchone()[0]
         if cur is None:
-            out.append("⚠️ отметки чтения у роли НЕТ — курсор не заведён, сообщи координатору")
+            out.append("⚠️ отметки прочитанного у роли НЕТ — она не заведена, сообщи координатору")
         else:
             n, kb = conn.execute(
                 "SELECT COUNT(*), COALESCE(SUM(length(body_md)), 0) / 1024 "
@@ -84,8 +84,8 @@ def machine_block(db_path, role: str) -> list:
         if last:
             line = f"📝 ПОСЛЕДНЯЯ СВОЯ ЗАПИСКА: #{last[0]} от {last[1][:16]} UTC"
             if newest_sec and last[1] > newest_sec:
-                line += "\n   ⚠️ ОНА НОВЕЕ СЛЕПКА — ЧИТАЙ ЕЁ ПЕРВОЙ: слепок сохраняется ДО " \
-                        "последней ноты, и отозванное в нём живёт как факт"
+                line += "\n   ⚠️ ОНА НОВЕЕ СОХРАНЁННОЙ ПАМЯТИ — ЧИТАЙ ЕЁ ПЕРВОЙ: память сохраняется ДО " \
+                        "последней записки, и отозванное в ней живёт как факт"
             out.append(line)
     except sqlite3.Error as e:                                        # noqa: BLE001
         out.append(f"⚠️ свой след НЕ СОБРАН ({e})")
@@ -101,10 +101,10 @@ def machine_block(db_path, role: str) -> list:
             if fresh:
                 names = " · ".join(f"{k} v{v}" for k, v in fresh[:8])
                 more = f" · …ещё {len(fresh) - 8}" if len(fresh) > 8 else ""
-                out.append(f"📜 ПРАВИЛА, ПРАВЛЕННЫЕ ПОСЛЕ СТАРЕЙШЕЙ СЕКЦИИ СЛЕПКА: "
+                out.append(f"📜 ПРАВИЛА, ПРАВЛЕННЫЕ ПОСЛЕ САМОГО СТАРОГО РАЗДЕЛА ПАМЯТИ: "
                            f"{len(fresh)}\n   {names}{more}")
             else:
-                out.append("📜 свод не менялся с момента сохранения слепка")
+                out.append("📜 свод не менялся с момента сохранения памяти")
     except sqlite3.Error as e:                                        # noqa: BLE001
         out.append(f"⚠️ свежесть свода НЕ СОБРАНА ({e})")
 
@@ -121,7 +121,7 @@ def machine_block(db_path, role: str) -> list:
         if rows:
             no_crit = [r[0] for r in rows if not (r[3] or "").strip()]
             out.append(f"📋 ТВОИ ОТКРЫТЫЕ КАРТОЧКИ: {len(rows)} "
-                       f"(собрано СЕЙЧАС — в слепке этот список хранить не надо)")
+                       f"(собрано СЕЙЧАС — в памяти этот список хранить не надо)")
             for i, st, title, _ in rows[:12]:
                 out.append(f"   #{i:<4} [{st:9}] {title[:74]}")
             if len(rows) > 12:

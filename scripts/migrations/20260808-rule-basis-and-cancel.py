@@ -38,9 +38,16 @@ ALTER TABLE ADD COLUMN здесь достаточен: таблицу пере�
 у отказа есть человеческий текст; CHECK в схеме дал бы роли невнятный SQL-срыв.
 """
 import sqlite3
+import pathlib
 import sys
 
-DB = sys.argv[1] if len(sys.argv) > 1 else 'C:/guts/.atlas/.mezosync/mezosync.db'
+# ДЕФОЛТ БЕРЁТСЯ ОТ РАСПОЛОЖЕНИЯ ЭТОГО ФАЙЛА, А НЕ ВПИСАН ПУТЁМ КОНТУРА-ДОНОРА.
+# Найдено 18.08 при подготовке запуска второго проекта: шаг схемы без аргумента правил бы
+# ЧУЖУЮ живую базу, а save-phoenix прямо велит роли «прогони migrations/…». Роль исполнила
+# бы приказ буквально и попала бы не в свою базу — молча и с успешным итогом на экране.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+import mezo_paths  # noqa: E402
+DB = sys.argv[1] if len(sys.argv) > 1 else str(mezo_paths.live_db(__file__))
 
 NEW_COLS = [
     ("basis",         "TEXT"),

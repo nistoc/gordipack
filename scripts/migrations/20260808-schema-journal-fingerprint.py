@@ -20,6 +20,7 @@
 """
 import shutil
 import sqlite3
+import pathlib
 import sys
 import tempfile
 from pathlib import Path
@@ -27,7 +28,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from schema_journal import ensure_column, fingerprint, record_step   # noqa: E402
 
-DB = sys.argv[1] if len(sys.argv) > 1 else r"C:\guts\.atlas\.mezosync\mezosync.db"
+# ДЕФОЛТ БЕРЁТСЯ ОТ РАСПОЛОЖЕНИЯ ЭТОГО ФАЙЛА, А НЕ ВПИСАН ПУТЁМ КОНТУРА-ДОНОРА.
+# Найдено 18.08 при подготовке запуска второго проекта: шаг схемы без аргумента правил бы
+# ЧУЖУЮ живую базу, а save-phoenix прямо велит роли «прогони migrations/…». Роль исполнила
+# бы приказ буквально и попала бы не в свою базу — молча и с успешным итогом на экране.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+import mezo_paths  # noqa: E402
+DB = sys.argv[1] if len(sys.argv) > 1 else str(mezo_paths.live_db(__file__))
 
 # Четыре шага, применённые мимо журнала. Даты — по следам в схеме и по запискам ленты,
 # не по памяти: две миграции мои и @PROTO, обе названы в ленте с номерами.

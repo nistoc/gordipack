@@ -19,12 +19,19 @@ migration-safety. Причина НЕ в отсутствии гарда как 
 """
 import re
 import sqlite3
+import pathlib
 import sys
 
 # Путь к базе — первым аргументом; без него живая. Нужен НЕ для удобства: без него
 # рабочую ветку шага невозможно прогнать иначе как по живой базе, то есть проверка
 # идемпотентности требовала бы того самого риска, от которого защищает.
-DB = sys.argv[1] if len(sys.argv) > 1 else 'C:/guts/.atlas/.mezosync/mezosync.db'
+# ДЕФОЛТ БЕРЁТСЯ ОТ РАСПОЛОЖЕНИЯ ЭТОГО ФАЙЛА, А НЕ ВПИСАН ПУТЁМ КОНТУРА-ДОНОРА.
+# Найдено 18.08 при подготовке запуска второго проекта: шаг схемы без аргумента правил бы
+# ЧУЖУЮ живую базу, а save-phoenix прямо велит роли «прогони migrations/…». Роль исполнила
+# бы приказ буквально и попала бы не в свою базу — молча и с успешным итогом на экране.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+import mezo_paths  # noqa: E402
+DB = sys.argv[1] if len(sys.argv) > 1 else str(mezo_paths.live_db(__file__))
 c = sqlite3.connect(DB, timeout=15)
 c.execute("PRAGMA foreign_keys=OFF")
 

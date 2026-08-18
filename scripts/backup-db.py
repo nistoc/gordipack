@@ -44,7 +44,14 @@ from pathlib import Path
 
 from mezo_paths import resolve_db   # R15a: путь к БД — от расположения скрипта, не от CWD
 
-OUT = Path(r"C:\guts\.atlas\atlas.agents-sync.db\mezosync.dump.sql")
+# 🪤 ЗДЕСЬ СТОЯЛ ПУТЬ В НАШ РЕПОЗИТОРИЙ-ЗЕРКАЛО. Найдено пробной сборкой нового проекта
+# 18.08: свежий контур клал бы свой дамп В ЧУЖОЙ репозиторий — и владелец нового проекта
+# увидел бы это не скоро. Путь выводится от своего контейнера; прежний остаётся запасным
+# для нашего контура, где такой репозиторий действительно есть.
+_own = Path(__file__).resolve().parent.parent.parent
+_mirror = _own / "atlas.agents-sync.db"
+OUT = (_mirror / "mezosync.dump.sql" if _mirror.is_dir()
+       else _own / ".mezosync" / "backups" / "mezosync.dump.sql")
 
 
 def main():

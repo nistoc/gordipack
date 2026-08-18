@@ -34,7 +34,11 @@ from pathlib import Path
 
 from mezo_paths import resolve_db   # R15a: путь к БД — от расположения скрипта, не от CWD
 
-OUT_DIR = Path(r"C:\guts\.atlas\atlas.archs\.mezosync\coordination\generated")
+# 🪤 Тот же класс: путь в каталог НАШЕГО репозитория документации. Новый контур писал бы
+# свои человекочитаемые файлы к нам. Выводим от контейнера, прежний — запасной.
+_own = Path(__file__).resolve().parent.parent.parent
+_archs = _own / "atlas.archs" / ".mezosync" / "coordination" / "generated"
+OUT_DIR = _archs if _archs.parent.parent.is_dir() else _own / ".mezosync" / "generated"
 
 # Каталог ЭТОГО скрипта — им подставляется {s} в шаблонах ниже. ⚠️ Путь берётся СВОЙСТВОМ, а не
 # литералом: находка @STUD #2864 — этот генератор ПЛОДИЛ отозванную относительную форму

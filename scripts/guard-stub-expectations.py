@@ -48,7 +48,10 @@ import re
 import sys
 from pathlib import Path
 
-SPA_SRC = Path(r"C:\guts\.atlas\atlas.studio\Src\Atlas.Studio.Spa\src")
+# 🪤 Путь в исходники НАШЕГО портала. В чужом контуре проверка либо молчала бы (каталога
+# нет — и это читается как «заглушек нет»), либо мерила наш код. Выводим от контейнера.
+_own = Path(__file__).resolve().parent.parent.parent
+SPA_SRC = _own / "atlas.studio" / "Src" / "Atlas.Studio.Spa" / "src"
 
 STUB_MARKERS = re.compile(r"Демо|заглушк|подключается|появится позже|в разработке", re.IGNORECASE)
 
