@@ -40,7 +40,10 @@ def build(tmp: pathlib.Path, with_ask: bool, with_answer: bool, with_box: bool):
     ourbox = ours / "atlas.archs" / ".mezosync" / "bridges" / "atlas-neigh"
     ourbox.mkdir(parents=True)
     if with_answer:
-        (ourbox / "answer.atlas.thing.md").write_text("ответ", encoding="utf-8")
+        # ⚠️ ИМЕНА РАЗНЫЕ НАМЕРЕННО: второе слово — КОМУ файл адресован, у вопроса
+        # это мы, у ответа — сосед. Первая редакция ждала «answer.atlas.…»,
+        # которого не бывает по построению, и не видела готовых ответов.
+        (ourbox / "answer.neigh.thing.md").write_text("ответ", encoding="utf-8")
 
     theirs = tmp / "neigh"
     (theirs / ".mezosync").mkdir(parents=True)
@@ -78,10 +81,22 @@ def main() -> int:
                    "а у нас всё зелено — вопрос мог пролежать сколько угодно", differ=True)
 
         out = run(build(tmp / "b", with_ask=True, with_answer=True, with_box=True))
-        ok &= case("② когда ответ положен, проверка молчит",
-                   "ask.atlas.thing.md" not in out,
-                   "иначе она кричала бы вечно и её научились бы пролистывать вместе "
-                   "с настоящими срабатываниями", differ=True)
+        ok &= case("② ответ с ДРУГИМ адресатом в имени всё равно считается ответом",
+                   "отвечен" in out,
+                   "замер 18.08: четыре ответа лежали готовыми (29 и 39 КБ), а признак "
+                   "показывал вопросы неотвеченными — и через 48 ч покрасил бы контур на "
+                   "СДЕЛАННОЙ работе. Худший вид тревоги: он учит не верить красному", differ=True)
+
+        # ⑤ ОДИН ВОПРОС, ОТВЕЧЕННЫЙ ВДВОЁМ более узкими темами.
+        d5 = tmp / "e"
+        guard5 = build(d5, with_ask=True, with_answer=False, with_box=True)
+        (d5 / "atlas" / "atlas.archs" / ".mezosync" / "bridges" / "atlas-neigh"
+         / "answer.neigh.thing-first-half.md").write_text("половина", encoding="utf-8")
+        out = run(guard5)
+        ok &= case("⑤ вопрос, отвечённый файлом с более УЗКОЙ темой, не держится красным",
+                   "отвечен" in out,
+                   "вопрос про две роли отвечают двое, каждый про свою: требовать дословного",
+                   differ=True)
 
         out = run(build(tmp / "c", with_ask=False, with_answer=False, with_box=True))
         ok &= case("③ на пустой папке проверка не выдумывает вопросов",
