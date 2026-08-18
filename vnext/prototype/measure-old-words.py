@@ -1,0 +1,121 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""measure-old-words — сколько прежних слов осталось: в памятях ролей и в пояснениях.
+
+    python C:/guts/.atlas/vnext-tools/measure-old-words.py              # обе половины
+    python C:/guts/.atlas/vnext-tools/measure-old-words.py --memories   # только памяти
+    python C:/guts/.atlas/vnext-tools/measure-old-words.py --short      # одна строка (для проверок)
+
+ЗАЧЕМ ИНСТРУМЕНТ, А НЕ РАЗОВЫЙ ЗАПРОС: 17–18.08 вывод инструментов переведён на
+общепонятные слова (правило `plain-words`). Проверки, ищущие протухшие утверждения,
+знают ОБА написания — прежнее и новое; прежнее снимется, когда в памятях его не останется.
+Условие снятия названо ЧИСЛОМ, значит число надо уметь получить одной командой, а не
+вспоминать «а сколько там было». Замер, который надо помнить, не проводят.
+
+⚖️ ГРАНИЦА: инструмент СЧИТАЕТ, а не судит. Прежнее слово в памяти — не долг сам по себе:
+в уроке или надгробии оно уместно («раньше это звалось сторожем»). Красным здесь не светит
+ничего; решение о снятии прежних написаний принимает человек, глядя на разбор поимённо.
+"""
+from __future__ import annotations
+
+import argparse
+import collections
+import pathlib
+import re
+import sqlite3
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import mezo_paths  # noqa: E402
+
+WORDS = {
+    "сторож": r"сторож\w*",
+    "решето": r"решет[оаеу]\w*",
+    "градусник": r"градусник\w*",
+    "рубеж": r"рубеж\w*",
+    "витрина": r"витрин\w*",
+    "слепок": r"слеп(?:ок|ка|ки|ке|ком|ков|кам|ках)\w*",
+    "курсор": r"курсор\w*",
+    "мутант": r"мутант\w*",
+    "укус": r"укус\w*",
+    "прибор": r"прибор\w*",
+    "врезка": r"врезк\w*",
+    "аренда": r"аренд\w*",
+    "дверь": r"двер[ьи]\w*",
+}
+ANY = re.compile("|".join(WORDS.values()), re.I)
+
+
+def in_memories(db) -> tuple[int, dict[str, int], dict[str, collections.Counter]]:
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    alive = {r[0].upper() for r in con.execute("SELECT role FROM roles WHERE lifecycle='alive'")}
+    per_role: dict[str, int] = collections.Counter()
+    detail: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
+    for role, body in con.execute("SELECT role, body FROM phoenix"):
+        if role.upper() not in alive:
+            continue
+        for name, pat in WORDS.items():
+            n = len(re.findall(pat, body or "", re.I))
+            if n:
+                per_role[role] += n
+                detail[role][name] += n
+    con.close()
+    return sum(per_role.values()), dict(per_role), detail
+
+
+def in_comments() -> tuple[int, dict[str, int]]:
+    """Прежние слова в пояснениях — по каталогам, чтобы было видно, ЧЬЯ это зона."""
+    spec = pathlib.Path(__file__).resolve().parent / "plain-words-comments.py"
+    import importlib.util
+    sp = importlib.util.spec_from_file_location("pwc", spec)
+    pwc = importlib.util.module_from_spec(sp)
+    argv, sys.argv = sys.argv, ["measure"]
+    sp.loader.exec_module(pwc)
+    sys.argv = argv
+    per_dir: dict[str, int] = collections.Counter()
+    for root, label in ((mezo_paths.live_scripts(), "инструменты контура (.mezosync/scripts)"),
+                        (pathlib.Path(__file__).resolve().parent, "инструменты v-next (vnext-tools)")):
+        for p in pathlib.Path(root).rglob("*.py"):
+            src = p.read_text(encoding="utf-8", errors="replace")
+            spans = pwc.editable_spans(src)
+            for i, line in enumerate(src.splitlines(), 1):
+                if i in spans:
+                    per_dir[label] += len(ANY.findall(line[spans[i]:]))
+    return sum(per_dir.values()), dict(per_dir)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="замер прежних слов: памяти ролей и пояснения")
+    ap.add_argument("--db", default=None)
+    ap.add_argument("--memories", action="store_true", help="только памяти ролей")
+    ap.add_argument("--short", action="store_true", help="одна строка — для встраивания")
+    a = ap.parse_args()
+    # ⚠️ У копии модуля путей в vnext-tools своя точка входа: live_db() знает живую
+    # базу, а resolve_db считает корнем каталог инструмента. Разница поймана прогоном.
+    db = a.db or mezo_paths.live_db()
+
+    total_mem, per_role, detail = in_memories(db)
+    if a.short:
+        print(f"прежних слов в памятях: {total_mem} у {len(per_role)} ролей")
+        return 0
+
+    print(f"📊 ПАМЯТИ РОЛЕЙ: прежних слов {total_mem} у {len(per_role)} ролей")
+    for role, n in sorted(per_role.items(), key=lambda x: -x[1]):
+        top = " · ".join(f"{w} {c}" for w, c in detail[role].most_common(4))
+        print(f"   {role:8} {n:4}   {top}")
+    print("   ⚖️ Прежнее слово в памяти — НЕ долг сам по себе: в уроке или надгробии оно")
+    print("      уместно. Число нужно для решения «снимать ли прежние написания из проверок».")
+    if a.memories:
+        return 0
+
+    total_c, per_dir = in_comments()
+    print(f"\n📊 ПОЯСНЕНИЯ ИНСТРУМЕНТОВ: прежних слов {total_c}")
+    for label, n in sorted(per_dir.items(), key=lambda x: -x[1]):
+        print(f"   {n:4}  {label}")
+    print("   ⚖️ Это места, которые машина отложила как рискованные (согласование) либо")
+    print("      многозначные. Их правит ВЛАДЕЛЕЦ КАТАЛОГА, а не роль-читатель.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
