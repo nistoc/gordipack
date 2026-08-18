@@ -748,6 +748,57 @@ def main():
     old = len(unannounced) - len(fresh)
     counted("мост: записки без разбора")
 
+    # ── ⑬б ВОПРОСЫ СОСЕДНИХ КОНТУРОВ, НА КОТОРЫЕ МЫ НЕ ОТВЕТИЛИ.
+    # 🪤 Проверка выше смотрит ТОЛЬКО В НАШ репозиторий. Сосед пишет в СВОЮ исходящую —
+    # в своём репозитории, — и его вопрос для нас невидим: он мог бы пролежать сколько
+    # угодно, а у нас всё это время было зелено. Найдено 18.08 первым же живым обменом
+    # с контуром tapas: файл лёг в 14:54, наша проверка о нём не знала вовсе.
+    # ⚖️ Куда смотреть — берётся ИЗ ЗАПИСИ О СОСЕДЕ (cross_links), а не вписывается сюда:
+    # вписанный путь протухнет молча при следующем соседе. В чужую БАЗУ не ходим (правило
+    # no-scan-external-contours) — читаем только файлы его исходящей папки.
+    waiting, unreachable = [], []
+    try:
+        links = conn.execute("SELECT target_group, target_db_path FROM cross_links").fetchall()
+    except sqlite3.OperationalError:
+        links = []
+    ours = {f.name for f in BRIDGES.glob("*/*.md")} if BRIDGES.exists() else set()
+    for group, dbp in links:
+        container = Path(dbp).parent.parent          # <контур>/.mezosync/mezosync.db
+        boxes = sorted(container.glob("*/.mezosync/bridges/*"))
+        if not boxes:
+            unreachable.append(f"{group} (искали в {container})")
+            continue
+        for box in boxes:
+            for ask in sorted(box.glob("ask.*.md")):
+                # ответ на вопрос «ask.<кому>.<тема>.md» зовётся «answer.<кому>.<тема>.md»
+                answer = "answer." + ask.name[len("ask."):]
+                if answer in ours:
+                    continue
+                age_h = (datetime.now(timezone.utc).timestamp() - ask.stat().st_mtime) / 3600
+                waiting.append((age_h, group, ask.name))
+    # Красным — только просроченное: свежий вопрос не поломка, он только что пришёл.
+    # Окно то же, что у проверки выше (48 ч): иначе первая же записка соседа красит контур.
+    if waiting:
+        waiting.sort(reverse=True)
+        stale = [w for w in waiting if w[0] > FRESH_H]
+        if stale:
+            check(f"мост соседей: вопрос лежит дольше {FRESH_H} ч без ответа", False,
+                  f"{stale[0][1]}: {stale[0][2]} — {stale[0][0]:.0f} ч")
+        else:
+            print(f"⚠️ мост соседей: вопросов без нашего ответа {len(waiting)} (все свежее {FRESH_H} ч)")
+        for age_h, group, name in waiting[:6]:
+            print(f"   · {group}: {name} — лежит {age_h:.0f} ч")
+        print("   ⚖️ Молчание сосед за отказ не считает, но и ответом оно не станет: "
+              "положи answer.<та же тема>.md в нашу исходящую.")
+    elif unreachable:
+        print("⚠️ мост соседей: исходящей папки не нашлось у " + " · ".join(unreachable))
+        print("   ⚖️ Это НЕ «вопросов нет»: сосед записан, а смотреть некуда — "
+              "проверь путь или заведи папку обмена.")
+    else:
+        print(f"✅ мост соседей: вопросов без ответа нет (соседей {len(links)})")
+    counted("мост соседей: вопросы без ответа")
+
+
     # ── ⑭ ЗЕРКАЛО ПРАВИЛ ПРОТИВ БАЗЫ. Инструмент @PROTO (vnext-tools), зову по пути.
     #
     # 🪤 ЗДЕСЬ СТОЯЛА МОЯ СОБСТВЕННАЯ ПРОВЕРКА, написанная за 20 минут до этой строки.
