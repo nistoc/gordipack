@@ -9,6 +9,7 @@ init-group.py — Создаёт новую группу агентов (mezosyn
 import argparse
 import hashlib
 import re
+import shutil
 import sqlite3
 import sys
 from pathlib import Path
@@ -239,6 +240,14 @@ def main():
     # ⇒ Кладём заготовку из templates/: роль получает launcher и §identity, сторожа молчат
     # по делу, а не по слепоте. Текст заготовки — из ФАЙЛА шаблона, не сочиняется здесь.
     tpl_dir = REPO_ROOT / "templates"
+    # Заготовки едут В КОНТУР целиком: роль и владелец читают их у себя, а не в чужом
+    # каталоге автора шаблона — того может не быть на машине вовсе.
+    if tpl_dir.is_dir():
+        dest = mezosync_dir / "templates"
+        dest.mkdir(parents=True, exist_ok=True)
+        for src in tpl_dir.glob("*.md"):
+            shutil.copy2(src, dest / src.name)
+        print(f"  ✅ Заготовки запуска: {len(list(dest.glob('*.md')))} файлов → {dest}")
     seeded = 0
     if tpl_dir.is_dir():
         conn2 = sqlite3.connect(str(db_path))
@@ -309,7 +318,19 @@ def main():
     print(f"\n🎉 Группа «{args.name}» готова: {db_path}")
     print("   ⚖️ ПРОВЕРЬ ЗАПУСКОМ, А НЕ ГЛАЗАМИ:")
     print(f"     python {tools_dir / 'read-messages.py'} --role {args.roles[0].upper()}")
-    print("   Следующий шаг: запустить COORD с launcher-промптом из templates/coord.md")
+    # 🪤 ПОСЛЕДНЯЯ СТРОКА СБОРКИ НАЗЫВАЛА ФАЙЛ, КОТОРОГО НЕТ: «templates/coord.md» —
+    # при том, что заготовка зовётся coordinator.md и лежала ТОЛЬКО в шаблоне, а не в
+    # собранном контуре. Найдено 18.08 при запуске второго проекта: владелец пошёл бы
+    # по указанному пути и не нашёл ничего. ⇒ заготовки кладутся В КОНТУР, а имя файла
+    # в подсказке БЕРЁТСЯ ЗАМЕРОМ ПО ДИСКУ. Нет файла — так и сказано, без выдумки.
+    first = args.roles[0].upper()
+    wanted = "coordinator.md" if first == "COORD" else "repo-dev.md"
+    landed = mezosync_dir / "templates" / wanted
+    if landed.exists():
+        print(f"   Следующий шаг: запустить {first} текстом заготовки {landed}")
+    else:
+        print(f"   ⚠️ Заготовки запуска в контуре НЕТ (ждали {landed}) — роль придётся"
+              f" заводить своим текстом; это не «готово по умолчанию».")
 
 
 if __name__ == "__main__":

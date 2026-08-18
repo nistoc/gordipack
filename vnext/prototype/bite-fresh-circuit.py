@@ -22,6 +22,7 @@ r"""ПРИЁМКА СБОРКИ КОНТУРА ИЗ ШАБЛОНА (карточ
 import os
 import shutil
 import subprocess
+import pathlib
 import sqlite3
 import sys
 import tempfile
@@ -131,6 +132,18 @@ def main() -> int:
                              "--db", str(mez / "mezosync.db"), "--root", str(mez / "scripts")],
                             capture_output=True, text=True, encoding="utf-8", timeout=120)
         rmout = (rm.stdout or "") + (rm.stderr or "")
+        # ⑩ ПОСЛЕДНЯЯ СТРОКА СБОРКИ НАЗЫВАЕТ СУЩЕСТВУЮЩИЙ ФАЙЛ.
+        #    Она говорила «запусти COORD промптом из templates/coord.md» — файла с таким
+        #    именем нет (заготовка зовётся coordinator.md), и в собранный контур заготовки
+        #    не клались вовсе. Владелец пошёл бы по указанному пути и не нашёл ничего.
+        #    Класс: подсказка пересказывает устройство вместо того, чтобы спросить диск.
+        named = [tok for line in out.splitlines() if "Следующий шаг" in line
+                 for tok in line.split() if tok.endswith(".md")]
+        ok &= case("⑩ подсказка сборки называет ФАЙЛ, который на диске есть",
+                   bool(named) and pathlib.Path(named[-1]).exists(),
+                   f"названо {named[-1] if named else None!r} — подсказка, ведущая в пустоту,"
+                   f" тратит первый шаг новой команды и учит не верить подсказкам", differ=True)
+
         # ⑨ КОНТУР ЗНАЕТ СВОЁ ИМЯ.
         #    Сборка писала имя обновлением строки, которой в свежей базе НЕТ (схема заводит
         #    пустую таблицу meta). Обновление нуля строк проходит без ошибки — контур рождался
