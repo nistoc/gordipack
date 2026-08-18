@@ -18,8 +18,8 @@
 
 ⚠️ ЗОНЫ РАЗНЫЕ, ПОЭТОМУ И ЦВЕТ РАЗНЫЙ:
   🔴 источники и §launcher — их пишет PROTO (реестр зон v12 от 2026-08-10): чинятся здесь же;
-  🟡 прочие секции слепков — их пишет сама роль: показываем, но не красим, иначе вечно-красный
-     сторож обесценится (урок ⑪ контура).
+  🟡 прочие секции памятей — их пишет сама роль: показываем, но не красим, иначе вечно-красный
+     проверка обесценится (урок ⑪ контура).
 """
 import argparse
 import re
@@ -111,7 +111,7 @@ def run(db_path, prompts_dir, verbose=False, only_role=None):
             if path.exists():
                 scan_text(label, path.read_text(encoding="utf-8"), red)
 
-    # ② СЛЕПКИ. §launcher — зона PROTO (строка пробуждения), остальное — зона роли.
+    # ② ПАМЯТИ. §launcher — зона PROTO (строка пробуждения), остальное — зона роли.
     if only_role:
         rows = conn.execute("SELECT role, section, body FROM phoenix WHERE role=?", (only_role,))
     else:

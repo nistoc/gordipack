@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-bite-addressee.py — укус контрактов адресата (Э-Б, R3).
+bite-addressee.py — приёмка контрактов адресата (Э-Б, R3).
 
 Проверяет СВОЙСТВА схемы + парсера на временной БД в scratch-каталоге ОС (не в
 живом контуре, не в песочнице — своя изолированная копия на каждый прогон, урок
@@ -8,7 +8,7 @@ bite-addressee.py — укус контрактов адресата (Э-Б, R3)
 состояния» — здесь предмета накопленного нет вовсе, чистый CREATE на каждый прогон).
 
     python bite-addressee.py            # 8 свойств
-    python bite-addressee.py --selftest # доказать, что укус ЕЩЁ красится на порче
+    python bite-addressee.py --selftest # доказать, что приёмка ЕЩЁ красится на порче
 """
 import argparse
 import sqlite3
@@ -102,7 +102,7 @@ def run_properties():
     check("P5 messages_unaddressed = ровно ноты без адресата и без broadcast", debt == {5})
 
     # P6 — ON DELETE CASCADE: удаление ноты чистит message_addressee (без CASCADE
-    # DELETE вообще падает FK-ошибкой — это ТОЖЕ поимка мутанта, не крах укуса)
+    # DELETE вообще падает FK-ошибкой — это ТОЖЕ поимка нарочной поломки, не крах приёмки)
     con = fresh_db()
     seed(con, 8, "COORD", "x")
     con.execute("INSERT INTO message_addressee (message_id, role, kind) VALUES (8,'PROTO','to')")

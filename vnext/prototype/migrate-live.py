@@ -542,7 +542,7 @@ def step7_criterion_view(con: sqlite3.Connection, dry: bool) -> dict:
     if not dry:
         con.execute("DROP VIEW IF EXISTS backlog_without_criterion")
         # TRIM с явным набором символов: голый TRIM в SQLite снимает только пробел,
-        # и критерий из одной табуляции считался бы настоящим (поймано укусом 14:46 UTC).
+        # и критерий из одной табуляции считался бы настоящим (поймано приёмкой 14:46 UTC).
         con.execute("""
             CREATE VIEW backlog_without_criterion AS
             SELECT id, role, title, priority, created_at

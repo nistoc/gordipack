@@ -39,7 +39,7 @@ from schema_journal import ensure_column, record_step, verify  # noqa: E402
 VERSION = "20260810-schema-journal-applied-by"
 
 # Где ищем файлы, наносившие шаги. Пути ВЫВОДЯТСЯ от расположения скрипта — впечатанный
-# путь машины автора уже стрелял в чужой копии (грабля ② слепка PROTO, 10.08).
+# путь машины автора уже стрелял в чужой копии (грабля ② памяти PROTO, 10.08).
 SEARCH_DIRS = [
     os.path.join(HERE, '*.py'),
     os.path.join(SCRIPTS, '*.py'),

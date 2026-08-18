@@ -19,7 +19,7 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # Приёмник выводится от расположения скрипта, а не впечатан: впечатанный путь —
-# заряженное ружьё в каждой копии (грабля ② слепка PROTO, оплачена 10.08).
+# заряженное ружьё в каждой копии (грабля ② памяти PROTO, оплачена 10.08).
 SAMPLE = os.path.normpath(os.path.join(HERE, '..', 'prototype', 'schema_vnext.sql'))
 LIVE_DEFAULT = r'C:\guts\.atlas\.mezosync\mezosync.db'
 SUBJECT = ('roles', 'rules', 'schema_migrations')
