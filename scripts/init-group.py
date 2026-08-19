@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import re
 import shutil
+from datetime import datetime, timezone
 import sqlite3
 import sys
 from pathlib import Path
@@ -94,6 +95,31 @@ def main():
                  f"Безымянный контур выглядит исправным, но всякая связь с ним "
                  f"и всякий отчёт назовут его «unknown».")
     print(f"  ✅ Имя группы: {got[0]} (спрошено У БАЗЫ, не по факту вставки)")
+
+    # ── ОТКУДА СОБРАН КОНТУР. 🪤 Вопрос владельца 19.08 09:22 UTC: «откуда tapas берёт
+    # инструментарий?» — и ответить на него было НЕЧЕМ. Контур получал копию файлов и не
+    # хранил ни источника, ни версии: спросить его самого было невозможно, ответ жил только
+    # в голове того, кто собирал. Это ровно тот класс, который мы лечим у ролей («не хранить
+    # то, что машина соберёт сама» имеет и обратную сторону: происхождение машина НЕ соберёт).
+    # ⚠️ ОТДЕЛЬНОЕ ИМЯ: ниже в этой же функции есть СВОЙ `import subprocess`, и он делает
+    # имя локальным для ВСЕЙ функции — обращение до него падает «переменная не связана».
+    # Поймано первым прогоном сборки: контур не собрался вовсе.
+    import subprocess as _git
+    src = _git.run(["git", "-C", str(REPO_ROOT), "remote", "get-url", "origin"],
+                         capture_output=True, text=True)
+    rev = _git.run(["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"],
+                         capture_output=True, text=True)
+    origin = (src.stdout or "").strip() or f"локальный каталог {REPO_ROOT} (не репозиторий)"
+    commit = (rev.stdout or "").strip()[:12] or "версия неизвестна"
+    for k, v in (("template_source", origin), ("template_commit", commit),
+                 ("template_copied_at", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"))):
+        conn.execute("INSERT INTO meta (key, value) VALUES (?, ?) "
+                     "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (k, v))
+    conn.commit()
+    print(f"  ✅ Происхождение записано: {origin} · версия {commit}")
+    if not (src.stdout or "").strip():
+        print("     ⚠️ ИСТОЧНИК — КАТАЛОГ НА ЭТОЙ МАШИНЕ, а не общий репозиторий: обновиться",
+              "у контура будет негде, если каталог исчезнет.")
 
     # 3. Универсальные правила
     rules_sql = UNIVERSAL_RULES.read_text(encoding="utf-8")
