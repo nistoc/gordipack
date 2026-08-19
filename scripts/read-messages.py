@@ -466,19 +466,38 @@ def main():
                     (role, prev, top)).fetchone()[0]
             except sqlite3.OperationalError:
                 personal = None
-            conn.execute(
-                "INSERT INTO cursor_segments (role, from_id, to_id, kind, basis, authorized, at)"
-                " VALUES (?, ?, ?, 'declared', ?, ?, datetime('now'))",
-                (role, prev + 1, top, args.basis.strip(),
-                 "owner:2026-08-12 11:07 UTC («да, со записью способа»)"))
+            # 🪤 ОБЪЯВЛЕННЫЙ ОТРЕЗОК РАЗРЕЗАЕТСЯ ВОКРУГ УЖЕ ПРОЧИТАННЫХ ТЕЛ, а не кладётся
+            # сплошняком. Прежде он покрывал ВЕСЬ хвост — и записки, тела которых роль читала
+            # десятью минутами раньше отбором --to-me, попадали в выборку «до неё не дошло».
+            # Найдено 19.08 12:52 UTC на себе, 11 записок. Дороже всего здесь адресат неправды:
+            # это ТРЕТЬЕ лицо, писавший, — он проверить её не может и переспросит по разобранному.
+            read_ids = sorted(r[0] for r in conn.execute(
+                "SELECT DISTINCT from_id FROM cursor_segments WHERE role = ? AND kind = 'read' "
+                "AND from_id = to_id AND from_id > ? AND from_id <= ?", (role, prev, top)))
+            pieces, start_id = [], prev + 1
+            for mid in read_ids + [top + 1]:
+                if mid > start_id:
+                    pieces.append((start_id, mid - 1))
+                start_id = mid + 1
+            for lo, hi in pieces:
+                conn.execute(
+                    "INSERT INTO cursor_segments (role, from_id, to_id, kind, basis, "
+                    "authorized, at) VALUES (?, ?, ?, 'declared', ?, ?, datetime('now'))",
+                    (role, lo, hi, args.basis.strip(),
+                     "owner:2026-08-12 11:07 UTC («да, со записью способа»)"))
             conn.execute("UPDATE read_cursors SET last_read_id = ?, updated_at = datetime('now')"
                          " WHERE reader_role = ?", (top, role))
             conn.commit()
-            print(f"\n📄 ПРОЙДЕНО УКАЗАТЕЛЕМ: [{prev + 1}..{top}] — {top - prev} записок. "
+            print(f"{chr(10)}📄 ПРОЙДЕНО УКАЗАТЕЛЕМ: [{prev + 1}..{top}] — {top - prev} записок. "
                   f"Отметка прочитанного {prev} → {top}.")
             print(f"   основание: {args.basis.strip()}")
-            if personal:
-                print(f"   ⚠️ Среди них {personal} записок, где к тебе ОБРАЩАЛИСЬ полем — "
+            unread_personal = (personal - len(read_ids)) if personal else personal
+            if read_ids:
+                print(f"   ✅ Прочитаны ТЕЛАМИ ранее (отбор --to-me): {len(read_ids)} — "
+                      f"объявленный отрезок разрезан вокруг них ({len(pieces)} шт.),"
+                      f"{chr(10)}      и писавшим об этих записках НЕ будет сказано «не дошло».")
+            if unread_personal:
+                print(f"   ⚠️ Среди них {unread_personal} записок, где к тебе ОБРАЩАЛИСЬ полем — "
                       f"их тела ты не читала. Механизм скажет об этом писавшим.")
             print("   ⚖️ Долг убран ИЗ ВИДУ, но НЕ ИЗ МИРА: готовая выборка cursor_gaps покажет "
                   "писавшим,\n      что их записки до тебя не дошли, и попросит повторить.")
@@ -813,6 +832,38 @@ def main():
               f"  python {me} --role {role} --ack <первая>-{half2}")
     elif args.all:
         print(f"[--all] разведка без отметки прочитанного: {len(rows)} нот, токен не выдан")
+    elif args.to_me:
+        # 🔴 ЗДЕСЬ ЧИНИТСЯ ЛОЖЬ, КОТОРУЮ МЕХАНИЗМ ГОВОРИЛ ПИСАВШИМ. Найдено 19.08 12:52 UTC
+        # на себе: я прочитал ТЕЛАМИ все 11 записок, где ко мне обращались полем, — этим самым
+        # отбором, — а следующей командой прошёл хвост заголовками, и механизм объявил те же
+        # 11 непрочитанными («Механизм скажет об этом писавшим»). Обе строки честны по
+        # отдельности: отбор действительно не двигает отметку прочитанного, проход
+        # действительно не читал тел. Ложным был ПРОБЕЛ МЕЖДУ НИМИ — показ тела нигде
+        # не записывался, и потому не существовал для второй команды.
+        # ⚖️ Отметку прочитанного это НЕ двигает и двигать не может: отбор — подмножество
+        # ленты, и подтверждать им ленту нельзя (тот же запрет, что на токен для витрины).
+        # Записывается ровно и только то, что произошло: ТЕЛО ЭТОЙ ЗАПИСКИ БЫЛО ПОКАЗАНО.
+        # ⚖️ ВИД ОТРЕЗКА — `read`, И ЭТО НЕ УЛОВКА, А ТОЧНОЕ ИМЯ: тело этой записки прочитано.
+        # Свой четвёртый вид я заводить не стал, хотя первая редакция именно это и делала
+        # (упёрлась в ограничение схемы и тем себя выдала): у таблицы уже есть ровно то
+        # понятие, которое здесь нужно, а второе имя для одного и того же разошлось бы
+        # с первым молча. Отрезок — на ОДНУ записку: показанные лежат вразбивку.
+        shown = [r[0] for r in rows]
+        already = {r[0] for r in conn.execute(
+            "SELECT from_id FROM cursor_segments WHERE role = ? AND kind = 'read' "
+            "AND from_id = to_id", (role,))}
+        fresh_marks = [i for i in shown if i not in already]
+        for mid in fresh_marks:
+            conn.execute(
+                "INSERT INTO cursor_segments (role, from_id, to_id, kind, basis, authorized, at)"
+                " VALUES (?, ?, ?, 'read', ?, 'self', datetime('now'))",
+                (role, mid, mid, "тело показано отбором --to-me"))
+        conn.commit()
+        print(f"📝 ЗАПИСАНО: тела показаны — записок {len(shown)}, новых отметок "
+              f"{len(fresh_marks)}. Отметка прочитанного НЕ двинута.")
+        print("   ⚖️ Зачем запись: без неё следующий проход заголовками объявит эти же "
+              "записки непрочитанными,\n      и писавшим будет сказано «не дошло» про то, "
+              "что дошло. Теперь проход их вычитает.")
 
     conn.close()
 

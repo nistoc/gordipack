@@ -227,6 +227,7 @@ def main():
         if not sieve_tool.exists():
             print(f"⚠️ память: проверка памяти не найдена ({sieve_tool}) — замер НЕ сделан, это не ноль")
             counted("память: кандидаты решета")
+
         else:
             per, total_cand = [], 0
             alive = [r[0] for r in conn.execute(
@@ -247,7 +248,6 @@ def main():
                   + (f" ({' · '.join(per)})" if per else " — ни одного")
                   + f" · порог стабилизации <10 · разбор: python {sieve_tool} --role <РОЛЬ>")
             counted("память: кандидаты решета")
-
     # ⑮б ПРЕЖНИЕ СЛОВА В ПАМЯТЯХ — условие снятия старых написаний из признаков.
     # 17–18.08 вывод переведён на общепонятные слова; проверки знают ОБА написания, и
     # прежнее снимется, когда в памятях его не останется. Условие названо ЧИСЛОМ ⇒ число
@@ -762,6 +762,24 @@ def main():
     except sqlite3.OperationalError:
         links = []
     ours = {f.name for f in BRIDGES.glob("*/*.md")} if BRIDGES.exists() else set()
+
+    # 🪤 СЛИЧЕНИЕ ТЕМ ЖИВЁТ ЗДЕСЬ, А НЕ ВНУТРИ ОДНОЙ ИЗ ВЕТОК. Первая редакция держала его
+    # только в ветке «у соседа есть своя папка», и обмен старого вида сличения не получал
+    # вовсе: отвеченный вопрос там не печатался НИКАК — ни зелёным, ни красным, — а роль
+    # видела единственную строку «исходящей папки не нашлось» и не могла узнать из неё,
+    # отвечен вопрос или нет. Заявка @OPSSRE #221 (19.08 09:00 UTC) после его же ответа
+    # соседям: оба вопроса AIA были отвечены, а проверка молчала об этом обоими способами.
+    def _topic(name: str) -> str:
+        """Тема из имени файла. Новый вид: вид.кому.тема.md · старый: вид.кому-тема.md."""
+        parts = name.split(".")
+        topic = ".".join(parts[2:-1]) if len(parts) > 3 else ".".join(parts[1:-1])
+        return topic
+
+    def _answers_to(topic: str) -> list:
+        """Наши ответы, чья тема содержит эту или содержится в ней (ответ вдвоём — уже́)."""
+        return [o for o in sorted(ours) if o.startswith("answer.")
+                and (_topic(o) in topic or topic in _topic(o))]
+
     for group, dbp in links:
         container = Path(dbp).parent.parent          # <контур>/.mezosync/mezosync.db
         boxes = sorted(container.glob("*/.mezosync/bridges/*"))
@@ -775,8 +793,7 @@ def main():
             legacy = [f for f in sorted(BRIDGES.glob("*/ask.*.md"))
                       if f.name.split(".")[1].startswith(group)] if BRIDGES.exists() else []
             if legacy:
-                unreachable.append(f"{group}: своей папки у него нет, обмен старого вида — "
-                                   f"его вопросы лежат у нас")
+                answered = 0
                 for f in legacy:
                     # У старых имён адресат и тема СКЛЕЕНЫ дефисом («ask.aia-тема.md»),
                     # у новых разделены точкой («answer.aia.тема.md»). Снимаем имя соседа
@@ -786,10 +803,26 @@ def main():
                     for pref in (group + "-", group + "."):
                         if topic.startswith(pref):
                             topic = topic[len(pref):]
-                    if any(o.startswith("answer.") and topic in o.replace("-", "-") for o in ours):
+                    hit = _answers_to(topic)
+                    if hit:
+                        answered += 1
+                        # ⚖️ ОТВЕЧЕННЫЙ ВОПРОС ОБЯЗАН ЗВУЧАТЬ ТАК ЖЕ, как у соседа со своей
+                        # папкой. Прежде здесь стояло молчаливое `continue`: работа сделана,
+                        # а прогон о ней не говорил ни слова — и роль читала общую строку
+                        # «папки не нашлось» как «про AIA неизвестно ничего».
+                        print(f"✅ мост соседей: «{f.name}» отвечен — {' · '.join(hit)}")
+                        print("   ⚖️ Сверены ИМЕНА тем. Полон ли ответ по существу, "
+                              "машина не знает.")
                         continue
                     age_h = (datetime.now(timezone.utc).timestamp() - f.stat().st_mtime) / 3600
                     waiting.append((age_h, group, f.name))
+                print(f"ℹ️ мост соседей: с «{group}» обмен СТАРОГО ВИДА — своей исходящей папки "
+                      f"у него нет, его вопросы лежат у нас: {len(legacy)}, "
+                      f"отвечено {answered}, ждут {len(legacy) - answered}")
+                if answered < len(legacy):
+                    print("   👉 неотвеченные названы ниже строкой «вопросы без ответа».")
+                print("   ⚖️ Это НЕ приговор обмену: он просто старше договора. Заведётся "
+                      "у соседа своя папка — проверка увидит её и скажет то же самое.")
             else:
                 unreachable.append(f"{group} (искали в {container})")
             continue
@@ -808,12 +841,7 @@ def main():
                 # совпадения темы значит держать красным вопрос, на который ответили вдвоём.
                 # ⇒ Тема совпала, если одна содержит другую. Совпавшие файлы ПЕЧАТАЮТСЯ:
                 # механизм судит ИМЕНА, а полон ли ответ — видит только человек.
-                def _topic(name):
-                    parts = name.split(".")
-                    return ".".join(parts[2:-1]) if len(parts) > 3 else ".".join(parts[1:-1])
-                _ask_topic = _topic(ask.name)
-                hit = [o for o in sorted(ours) if o.startswith("answer.")
-                       and (_topic(o) in _ask_topic or _ask_topic in _topic(o))]
+                hit = _answers_to(_topic(ask.name))
                 if hit:
                     print(f"✅ мост соседей: «{ask.name}» отвечен — {' · '.join(hit)}")
                     print("   ⚖️ Сверены ИМЕНА тем. Полон ли ответ по существу, машина не знает.")
@@ -841,7 +869,6 @@ def main():
     else:
         print(f"✅ мост соседей: вопросов без ответа нет (соседей {len(links)})")
     counted("мост соседей: вопросы без ответа")
-
 
     # ── ⑭ ЗЕРКАЛО ПРАВИЛ ПРОТИВ БАЗЫ. Инструмент @PROTO (vnext-tools), зову по пути.
     #
