@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """bite-plain-words — приёмка: инструменты говорят общепонятными словами (слово владельца).
 
-    python <КОНТУР>/vnext-tools/bite-plain-words.py
+    python C:/guts/.atlas/vnext-tools/bite-plain-words.py
 
 ПОВОД — СЛОВО ВЛАДЕЛЬЦА, дословно (17.08.2026 08:27 UTC, чат PROTO): «запрещено
 использовать выдуманные названия или аллегории к понятиям, но нужно использовать
@@ -54,7 +54,37 @@ INVENTED = re.compile(
 # в список с говорящим именем — этого достаточно и не тянет за собой образцы поиска.
 SHOWN_CALLS = {"print", "add_argument", "ArgumentParser", "add_parser", "exit"}
 COLLECTORS = {"out", "lines", "block", "blocks", "parts", "rows", "report", "text"}
+
+# 🪤 И ТРЕТИЙ РОД, найденный на себе 19.08: СВОЙ ПЕЧАТАЮЩИЙ ПОМОЩНИК. Почти каждая приёмка
+# контура печатает не сама, а через собственную функцию (`case(title, ok, detail)`), и весь
+# её текст — то есть текст, который человек читает чаще всего, — для этой проверки был
+# невидим. Замер в тот день: 44 запрещённых слова в 10 инструментах при ЗЕЛЁНОЙ проверке.
+# ⚖️ Лечим НЕ списком имён (список — это опять «проверяем перечисленное»), а РАЗБОРОМ:
+# печатающей считается функция, которая печатает СВОЙ ЖЕ параметр. Это выводится из кода
+# и работает для чужих помощников с любыми именами.
 CASES = DIFFER = 0
+
+
+def printing_helpers(tree: ast.AST) -> set[str]:
+    """Имена функций модуля, которые печатают собственный параметр.
+
+    Контроль обратного: функция, которая параметры только копит или возвращает, сюда
+    НЕ попадает — иначе признак начнёт считать показываемым любой текст в любом вызове.
+    """
+    names: set[str] = set()
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        params = {a.arg for a in list(fn.args.args) + list(fn.args.kwonlyargs)}
+        if not params:
+            continue
+        for n in ast.walk(fn):
+            if not (isinstance(n, ast.Call) and getattr(n.func, "id", None) == "print"):
+                continue
+            if any(isinstance(s, ast.Name) and s.id in params for s in ast.walk(n)):
+                names.add(fn.name)
+                break
+    return names
 
 
 def case(title, ok, detail, differ=False):
@@ -73,10 +103,11 @@ def shown_lines(src: str) -> set[int]:
     except SyntaxError:
         return set()
     out: set[int] = set()
+    helpers = printing_helpers(tree)
     for n in ast.walk(tree):
         if isinstance(n, ast.Call):
             nm = getattr(n.func, "id", None) or getattr(n.func, "attr", None)
-            shown = nm in SHOWN_CALLS
+            shown = nm in SHOWN_CALLS or nm in helpers
             if nm == "append" and isinstance(n.func, ast.Attribute):
                 recv = getattr(n.func.value, "id", None)
                 shown = shown or (recv in COLLECTORS)
@@ -168,6 +199,42 @@ def main() -> int:
                "на чистом %d находок, с поломкой %d — до 18.08 оба случая были зелёными: "
                "инструмент, отдающий строки вместо печати, приёмку не касался вовсе"
                % (len(coll_clean), len(coll_broken)), differ=True)
+
+    # ── ⑦ СВОЙ ПЕЧАТАЮЩИЙ ПОМОЩНИК И ЕГО ГРАНИЦА (найдено на себе 19.08) ─────
+    # Почти каждая приёмка контура печатает через собственную функцию, а не через print.
+    # Пока разбор знал только print, весь этот текст был невидим: 44 запрещённых слова
+    # в 10 инструментах при зелёной проверке. Второй случай — ГРАНИЦА: помощник, который
+    # параметры только копит, показываемым текст НЕ делает, иначе признак покрасит всё.
+    helper_shown = sand / "helper_tool.py"
+    helper_shown.write_text(
+        '# -*- coding: utf-8 -*-\n'
+        'def case(title, detail):\n'
+        '    print(title)\n'
+        '    print("   " + detail)\n'
+        'def main():\n'
+        '    case("итог: сторож зелёный", "подробность")\n',
+        encoding="utf-8")
+    helper_hits, _, _ = scan(sand)
+    ok &= case("⑦ текст, уходящий в СВОЙ печатающий помощник, приёмка судит",
+               any("helper_tool.py" in h for h in helper_hits),
+               "почти весь читаемый человеком текст приёмок идёт не в print, а в case(...): "
+               "пока разбор знал только print, он был невидим целиком", differ=True)
+
+    helper_shown.write_text(
+        '# -*- coding: utf-8 -*-\n'
+        'def collect(title, detail):\n'
+        '    return [title, detail]\n'
+        'def main():\n'
+        '    rows = collect("итог: сторож зелёный", "подробность")\n'
+        '    return len(rows)\n',
+        encoding="utf-8")
+    quiet_hits, _, _ = scan(sand)
+    ok &= case("⑦-бис ГРАНИЦА: помощник, который НЕ печатает, показываемым текст не делает",
+               not any("helper_tool.py" in h for h in quiet_hits),
+               "печатающая функция узнаётся по тому, что печатает СВОЙ параметр, а не по "
+               "имени: без этой границы признак объявил бы показываемым любой текст в "
+               "любом вызове и стал бы шумным", differ=True)
+    helper_shown.unlink()
 
     shutil.rmtree(d, ignore_errors=True)
 
