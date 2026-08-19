@@ -68,7 +68,12 @@ def main() -> int:
     ap.add_argument("--to", required=True, help="имя соседней группы из записи о связи")
     ap.add_argument("--keys", help="ключи правил через запятую")
     ap.add_argument("--diff", action="store_true", help="показать, где наш текст свежее")
-    ap.add_argument("--apply", action="store_true", help="записать (без него — только план)")
+    ap.add_argument("--apply", action="store_true",
+                    help="записать В БАЗУ СОСЕДА — только вместе с --invited")
+    ap.add_argument("--invited", metavar="ЧЕМ ПОПРОСИЛИ",
+                    help="имя файла-просьбы соседа или дословное слово его владельца")
+    ap.add_argument("--out", metavar="ФАЙЛ",
+                    help="сложить перенос ФАЙЛОМ, который сосед применит у себя (так по умолчанию)")
     ap.add_argument("--db", default=None)
     a = ap.parse_args()
 
@@ -133,6 +138,36 @@ def main() -> int:
               f"Готово к переносу: {len(plan)}, отказано: {len(refused)}")
         return 0 if not refused else 1
 
+    # ⚖️ ПО УМОЛЧАНИЮ — ФАЙЛ, А НЕ ПРАВКА ЧУЖОЙ БАЗЫ. Внесено 19.08 по замечанию соседа
+    # (`status.answers-received.md`): 18.08 мы досеяли ему правила прямо в базу по слову
+    # СВОЕГО владельца, а договор обоих концов говорит «в чужую базу не ходим». Он принял
+    # перенос по существу и назвал границу верно: слово одного владельца не отменяет подписи
+    # второго. Возражение против инструмента, который это позволял, — сильнее возражения
+    # против случая: случай проходит, инструмент остаётся и повторит.
+    if not a.invited:
+        out = pathlib.Path(a.out or "share-rules-out.sql")
+        lines = ["-- Перенос правил из контура-донора. ПРИМЕНЯЕТ ПОЛУЧАТЕЛЬ У СЕБЯ:",
+                 f"--     sqlite3 <ваша база> < {out.name}",
+                 "-- Ничего не применяется само: это ваша база и ваше решение.", ""]
+        for k, body, locked, _ in plan:
+            esc = body.replace("'", "''")
+            lines.append(
+                f"INSERT INTO rules (rule_key, body, locked_by, version, basis, authorized,"
+                f" source_ref, expiry_kind, status) VALUES ('{k}', '{esc}', '{locked}', 1,"
+                f" 'перенос из контура-донора {donor}', 'owner', '{when}', 'forever', 'active')"
+                f" ON CONFLICT(rule_key) DO UPDATE SET body=excluded.body,"
+                f" version=rules.version+1, updated_at=datetime('now');")
+        out.write_text(NEWLINE.join(lines) + NEWLINE, encoding="utf-8")
+        print(f"{NEWLINE}📄 Перенос сложен ФАЙЛОМ: {out.resolve()}")
+        print(f"   Положи его в исходящую папку и скажи запиской — сосед применит сам.")
+        print(f"   Прямая правка его базы возможна ТОЛЬКО по его просьбе: --invited '<чем попросили>'")
+        ours.close()
+        theirs.close()
+        return 1 if refused else 0
+
+    print(f"⚠️ ПРЯМАЯ ПРАВКА ЧУЖОЙ БАЗЫ по просьбе: {a.invited}")
+    print("   Условия договора: снимок ДО правки · расписка в исходящей тем же заходом ·",
+          "ничего сверх названного.")
     for k, body, locked, _ in plan:
         theirs.execute(
             "INSERT INTO rules (rule_key, body, locked_by, version, basis, authorized,"

@@ -52,7 +52,7 @@
  "schema_journal.py": "03a9a0d2728c",
  "set-registry.py": "51d5869a821e",
  "set-rule.py": "2ae1ff928bfd",
- "share-rules.py": "11a870149f21",
+ "share-rules.py": "96690f734895",
  "split-history-table.py": "deacde6fa1a8",
  "stats.py": "bf9ae4471f3e",
  "sync_backoff.py": "dfc1065b681c",
