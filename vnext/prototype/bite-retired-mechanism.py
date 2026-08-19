@@ -64,13 +64,25 @@ CASES = 0
 DIFFERENTIATING = 0
 
 
-def build_db(path: str, version, key=RULE):
+def build_db(path: str, version, key=RULE, trace: bool = True):
+    """trace — есть ли у правила след в журнале решений этого контура.
+
+    🪤 РАЗЛИЧЕНИЕ, ВВЕДЁННОЕ 18.08 ПРИ ЧИСТКЕ ПОСЕВА. «Правила нет» бывает ДВУХ родов,
+    и до того дня они были склеены: правило могло ИСЧЕЗНУТЬ (было и пропало — перечень
+    устарел, это отказ мерить) либо НИКОГДА ЗДЕСЬ НЕ БЫТЬ (свежая команда не наследует
+    чужую историю перехода — сверять нечего). Различаются следом в журнале.
+    Приёмка обязана держать ОБА рода: без второго первым красным у новой команды снова
+    станет чужое решение чужого владельца.
+    """
     con = sqlite3.connect(path)
     con.execute("CREATE TABLE rules (id INTEGER PRIMARY KEY, rule_key TEXT, body TEXT,"
                 " locked_by TEXT, version INTEGER)")
+    con.execute("CREATE TABLE audit_log (id INTEGER PRIMARY KEY, target TEXT)")
     if version is not None:
         con.execute("INSERT INTO rules (rule_key, body, locked_by, version) VALUES (?,?,?,?)",
                     (key, "Тело правила. Аварийный выход снят.", "owner", version))
+    if trace:
+        con.execute("INSERT INTO audit_log (target) VALUES (?)", (key,))
     con.commit()
     con.close()
 
@@ -110,10 +122,10 @@ def main() -> int:
     tmp = tempfile.mkdtemp(prefix="bite-retired-")
     ok = True
 
-    def stand(name, phx, wrt, version=5, key=RULE):
+    def stand(name, phx, wrt, version=5, key=RULE, trace=True):
         db = os.path.join(tmp, f"{name}.db")
         root = os.path.join(tmp, name)
-        build_db(db, version, key)
+        build_db(db, version, key, trace)
         build_src(root, phx, wrt)
         return run(db, root)
 
@@ -150,11 +162,23 @@ def main() -> int:
                f"код {code} (не 1 и не 0); отказ отделён и от красного, и от зелёного",
                differ=True)
 
-    # ⑥ ВСТРЕЧНЫЙ к ⑤: правила нет вовсе — тот же отказ, но НЕ «чисто»
+    # ⑥ ВСТРЕЧНЫЙ к ⑤: правило ИСЧЕЗЛО — тот же отказ, но НЕ «чисто».
+    #    След в журнале есть ⇒ правило здесь БЫЛО и пропало: перечень отстал от свода.
     out, code = stand("f", ["# шапка", CLEAN], ["# код"], version=None)
-    ok &= case("⑥ правила нет вовсе — тоже «устарел», а не «чисто» (встречный к ⑤)",
+    ok &= case("⑥ правило ИСЧЕЗЛО из свода (след в журнале есть) — «устарел», а не «чисто»",
                code == 2 and "ИСЧЕЗЛО" in out,
                "исчезнувший предмет обязан звучать отказом мерить, а не зелёным", differ=True)
+
+    # ⑥-бис ВСТРЕЧНЫЙ к ⑥ И ОХРАНА РЕШЕНИЯ 18.08: правила здесь НЕ БЫЛО ВОВСЕ.
+    #    Свежая команда не наследует чужую историю перехода. Зелёное — но НЕ молчаливое:
+    #    механизм обязан сказать «сверять нечего», иначе роль прочтёт это как проверенную
+    #    чистоту. Без этого случая приёмка требовала бы красного у любой новой команды —
+    #    ровно того, что мы чинили при чистке посева.
+    out, code = stand("f2", ["# шапка", CLEAN], ["# код"], version=None, trace=False)
+    ok &= case("⑥-бис правила здесь НЕ БЫЛО ВОВСЕ — зелёное, но СКАЗАННОЕ вслух",
+               code == 0 and "не было вовсе" in out and "сверять нечего" in out,
+               f"код {code}; два разных «нет» различаются следом в журнале, а не молчанием",
+               differ=True)
 
     # ⑦ ИСТОЧНИК ПРОПАЛ — молчать нельзя: ненайденный файл ничем не отличим от чистого
     db = os.path.join(tmp, "g.db")

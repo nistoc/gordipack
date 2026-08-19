@@ -19,6 +19,9 @@ import subprocess
 import sys
 import tempfile
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import mezo_paths  # noqa: E402
+
 CASES = DIFFER = 0
 
 
@@ -33,7 +36,10 @@ def case(title, ok, detail, differ=False):
 
 def build(tmp: pathlib.Path, with_ask: bool, with_answer: bool, with_box: bool):
     """Собирает две стороны: наш контур и соседа. Возвращает путь к нашему guard-all."""
-    live = pathlib.Path(__file__).resolve().parent.parent / ".mezosync"
+    # Каталог группы ищется ПОДЪЁМОМ ПО ПРИЗНАКУ, а не угадыванием глубины:
+    # у копии в публичном образце «два уровня вверх» указывают в пустоту,
+    # и приёмка падала ещё до первого случая (замер 2026-08-19 16:34 UTC).
+    live = mezo_paths.container_root(__file__) / ".mezosync"
     ours = tmp / "atlas"
     shutil.copytree(live / "scripts", ours / ".mezosync" / "scripts")
     shutil.copy(live / "mezosync.db", ours / ".mezosync" / "mezosync.db")

@@ -21,10 +21,14 @@ import subprocess
 import sys
 import tempfile
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import mezo_paths  # noqa: E402
+
 CASES = DIFFER = 0
 NL = chr(10)
-INIT = pathlib.Path("<ШАБЛОН>/scripts/init-group.py")
-UPDATER = pathlib.Path("<КОНТУР>/.mezosync/scripts/update-tools.py")
+INIT = mezo_paths.template_root(__file__) / "scripts" / "init-group.py"
+UPDATER = (mezo_paths.container_root(__file__) / ".mezosync" / "scripts"
+           / "update-tools.py")
 
 
 def case(title, ok, detail, differ=False):

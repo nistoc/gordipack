@@ -19,6 +19,9 @@ import subprocess
 import sys
 import tempfile
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import mezo_paths  # noqa: E402
+
 CASES = DIFFER = 0
 NL = chr(10)
 
@@ -43,7 +46,10 @@ def send(scripts: pathlib.Path, db: pathlib.Path, body_file: pathlib.Path, *extr
 
 def main() -> int:
     ok = True
-    live = pathlib.Path(__file__).resolve().parent.parent / ".mezosync"
+    # Каталог группы ищется ПОДЪЁМОМ ПО ПРИЗНАКУ, а не угадыванием глубины:
+    # у копии в публичном образце «два уровня вверх» указывают в пустоту,
+    # и приёмка падала ещё до первого случая (замер 2026-08-19 16:34 UTC).
+    live = mezo_paths.container_root(__file__) / ".mezosync"
     tmp = pathlib.Path(tempfile.mkdtemp(prefix="bite-dup-"))
     try:
         scripts = tmp / "scripts"

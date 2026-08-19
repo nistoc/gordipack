@@ -42,15 +42,26 @@ RULE_PUSH = "no-push-without-owner"
 cases, bad, differ = [], 0, 0
 
 
-def build_db(path, push_version=2):
+def build_db(path, push_version=2, trace=True):
+    """trace — есть ли у правила след в журнале решений этого контура.
+
+    🪤 РАЗЛИЧЕНИЕ, ВВЕДЁННОЕ 18.08 ПРИ ЧИСТКЕ ПОСЕВА. «Правила нет» бывает ДВУХ родов:
+    правило ИСЧЕЗЛО (было и пропало — перечень отстал, это отказ мерить) либо ЕГО ЗДЕСЬ
+    НЕ БЫЛО ВОВСЕ (новая команда не наследует чужую историю перехода — сверять нечего).
+    Различаются следом в журнале. Приёмка обязана держать оба рода, иначе она требует
+    красного у любого свежего контура — ровно то, что мы тогда и чинили.
+    """
     con = sqlite3.connect(path)
     con.execute("CREATE TABLE rules (id INTEGER PRIMARY KEY, rule_key TEXT, body TEXT,"
                 " locked_by TEXT, version INTEGER)")
+    con.execute("CREATE TABLE audit_log (id INTEGER PRIMARY KEY, target TEXT)")
     con.execute("INSERT INTO rules (rule_key, body, locked_by, version) VALUES (?,?,?,?)",
                 (RULE_MD, "тело", "owner", 5))
     if push_version is not None:
         con.execute("INSERT INTO rules (rule_key, body, locked_by, version) VALUES (?,?,?,?)",
                     (RULE_PUSH, "надгробие: запрет снят", "owner", push_version))
+    if trace:
+        con.execute("INSERT INTO audit_log (target) VALUES (?)", (RULE_PUSH,))
     con.commit()
     con.close()
 
@@ -68,11 +79,11 @@ def build_src(root, unsaved_lines):
             f.write("\n".join(body) + "\n")
 
 
-def run(lines, push_version=2):
+def run(lines, push_version=2, trace=True):
     tmp = tempfile.mkdtemp(prefix="bite-presc-")
     db = os.path.join(tmp, "c.db")
     root = os.path.join(tmp, "src")
-    build_db(db, push_version)
+    build_db(db, push_version, trace)
     build_src(root, lines)
     r = subprocess.run([sys.executable, CHECK, "--db", db, "--root", root, "--only", "no-push-without-owner"],
                        capture_output=True, text=True, encoding="utf-8", errors="replace")
@@ -120,10 +131,18 @@ case("⑥ версия правила выросла — ПЕРЕЧЕНЬ УСТ
      code == 2 and "ПЕРЕЧЕНЬ УСТАРЕЛ" in out and "unsaved.py:" not in out,
      f"код {code}", True)
 
-# ⑦ ПРАВИЛА НЕТ ВОВСЕ — тоже отказ мерить, а не «чисто» (встречный к ⑥)
+# ⑦ ПРАВИЛО ИСЧЕЗЛО (след в журнале есть) — отказ мерить, а не «чисто» (встречный к ⑥)
 out, code = run(['# пусто'], push_version=None)
-case("⑦ правила нет вовсе — тоже отказ мерить, а не зелёное (встречный к ⑥)",
+case("⑦ правило ИСЧЕЗЛО из свода — отказ мерить, а не зелёное (встречный к ⑥)",
      code == 2 and "ПЕРЕЧЕНЬ УСТАРЕЛ" in out, f"код {code}", True)
+
+# ⑦-бис ВСТРЕЧНЫЙ к ⑦ И ОХРАНА РЕШЕНИЯ 18.08: правила здесь НЕ БЫЛО ВОВСЕ.
+#      У новой команды нет нашей истории перехода. Зелёное — но НЕ молчаливое: механизм
+#      обязан сказать «сверять нечего», иначе роль прочтёт это как проверенную чистоту.
+out, code = run(['# пусто'], push_version=None, trace=False)
+case("⑦-бис правила здесь НЕ БЫЛО ВОВСЕ — зелёное, но СКАЗАННОЕ вслух",
+     code == 0 and "не было вовсе" in out and "сверять нечего" in out,
+     f"код {code}; два разных «нет» различаются следом в журнале, а не молчанием", True)
 
 # ⑧ ПРОЗА О ПРОШЛОМ не должна краснеть: замер показал 1 ложное из 4 у первой редакции форм
 out, code = run(['# разовое разрешение на push я сам дважды спутал — потрачено или нет'])
