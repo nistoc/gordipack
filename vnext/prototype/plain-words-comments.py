@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 """plain-words-comments — перевод ПОЯСНЕНИЙ (комментарии и шапки) на общепонятные слова.
 
-    python C:/guts/.atlas/vnext-tools/plain-words-comments.py            # холостой прогон
-    python C:/guts/.atlas/vnext-tools/plain-words-comments.py --apply    # правка файлов
+    python <КОНТУР>/vnext-tools/plain-words-comments.py            # холостой прогон
+    python <КОНТУР>/vnext-tools/plain-words-comments.py --apply    # правка файлов
 
 ПОВОД: слово владельца 17.08 08:27 UTC (правило `plain-words`). Показываемый текст переведён
 17.08; здесь — вторая половина работы, пояснения внутри инструментов.

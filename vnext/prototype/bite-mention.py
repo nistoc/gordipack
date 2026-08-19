@@ -109,7 +109,7 @@ def main() -> int:
 
     # ⑫ ЖИВОЙ СЛУЧАЙ 09.08 23:44: слово-примета ВНУТРИ ИМЕНИ ФАЙЛА. Перевод второго
     #    потребителя на общий словарь сделал красное зелёным именно здесь.
-    named = ("python C:/guts/.atlas/.mezosync/scripts/check-retired-mechanism.py"
+    named = ("python <КОНТУР>/.mezosync/scripts/check-retired-mechanism.py"
              " --db <копия> --root <кат>")
     ok &= case("⑫ «retired» ВНУТРИ имени файла — НЕ примета (имена и пути не говорят)",
                not mention.is_mention(named),

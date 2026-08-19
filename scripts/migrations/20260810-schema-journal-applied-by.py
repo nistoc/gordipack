@@ -43,7 +43,11 @@ VERSION = "20260810-schema-journal-applied-by"
 SEARCH_DIRS = [
     os.path.join(HERE, '*.py'),
     os.path.join(SCRIPTS, '*.py'),
-    r'C:\github\gordipack\vnext\prototype\*.py',
+    # 🪤 ЗДЕСЬ БЫЛ ПУТЬ МАШИНЫ АВТОРА, а 19.08 моя же чистка заменила его ЗАГЛУШКОЙ —
+    # и поиск искал бы каталог с буквальным именем-заглушкой, молча ничего не находя.
+    # Обезличивание ИСПОЛНЯЕМОЙ строки — изготовление поломки, а не защита приватности.
+    # ⇒ путь ВЫВОДИТСЯ от расположения самого шага, как и две строки выше.
+    os.path.join(os.path.dirname(SCRIPTS), 'vnext', 'prototype', '*.py'),
 ]
 DECL = re.compile(r'(?:VERSION\s*=\s*|record_step\s*\(\s*\w+\s*,\s*|MILESTONE\s*=\s*'
                   r'|STEP\d+\s*=\s*)["\']([^"\']+)["\']')

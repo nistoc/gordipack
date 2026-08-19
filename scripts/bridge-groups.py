@@ -3,7 +3,7 @@ bridge-groups.py — Устанавливает связь (cross_link) межд
 
 Использование:
     python <КОНТУР>/.mezosync/scripts/bridge-groups.py \
-        --source-db "C:\guts\.atlas\.mezosync\mezosync.db" \
+        --source-db "<КОНТУР>\.mezosync\mezosync.db" \
         --target-db "C:\guts\.rcc\.mezosync\mezosync.db" \
         --description "Atlas ↔ RCC DWH bridge"
 """

@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """check-viewer-readonly — приёмка ② просмотрщика: служба доказанно НЕ ПИШЕТ в базу.
 
-    python C:/guts/.atlas/vnext-tools/check-viewer-readonly.py [--api http://127.0.0.1:5177]
+    python <КОНТУР>/vnext-tools/check-viewer-readonly.py [--api http://127.0.0.1:5177]
 
 Что делает (всё — прогоном, не чтением кода):
   1. PRAGMA integrity_check по базе, которую служба объявила активной, — ДО;
