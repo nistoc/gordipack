@@ -134,6 +134,47 @@ def machine_block(db_path, role: str) -> list:
     except sqlite3.Error as e:                                        # noqa: BLE001
         out.append(f"⚠️ карточки НЕ СОБРАНЫ ({e})")
 
+    # ── ЧУЖАЯ РАБОТА, ИДУЩАЯ ПРЯМО СЕЙЧАС ───────────────────────────────────
+    # 🪤 Найдено владельцем 19.08 08:30 UTC: роль работала час — учебное восстановление
+    # базы, — и контур узнал об этом только из её итоговой записки. Никто не мог ни
+    # подождать, ни не браться за то же: «в работе» ставили ТРИ раза за месяц (замер:
+    # 3 перевода против 142 закрытий), потому что состояние ничего не давало ставящему.
+    # ⇒ Объявленная работа показывается КАЖДОМУ при пробуждении, и это единственное место,
+    # куда роль смотрит раньше, чем начинает свою.
+    try:
+        claims = conn.execute(
+            "SELECT e.backlog_id, e.actor_role, e.body_md, e.at, b.title FROM backlog_events e"
+            " JOIN backlog b ON b.id = e.backlog_id"
+            " WHERE e.event_type = 'claim' AND e.at > datetime('now', '-24 hours')"
+            " ORDER BY e.at DESC").fetchall()
+        живые = []
+        for bid, who, body, at, title in claims:
+            # 🪤 СРАВНИВАТЬ ЧАСОМ НЕЛЬЗЯ: объявление и его снятие ложатся в ОДНУ секунду,
+            # если роль передумала сразу, и «снятие позже объявления» тогда не выполняется.
+            # Поймано приёмкой на первом же прогоне: снятая работа осталась на чужом экране.
+            # ⇒ Берём ПОСЛЕДНЕЕ событие по номеру записи: он растёт всегда.
+            снято = conn.execute(
+                "SELECT event_type FROM backlog_events WHERE backlog_id=?"
+                " AND event_type IN ('claim','claim_release')"
+                " ORDER BY id DESC LIMIT 1", (bid,)).fetchone()
+            снято = bool(снято) and снято[0] == "claim_release"
+            срок = body.split(" UTC")[0].replace("до ", "") if body.startswith("до ") else None
+            истёк = bool(срок) and conn.execute("SELECT ? < datetime('now')", (срок,)).fetchone()[0]
+            if снято or истёк:
+                continue
+            живые.append((bid, who, title, body))
+        if живые:
+            out.append(f"🔧 СЕЙЧАС В РАБОТЕ У КОЛЛЕГ: {len(живые)} — не берись за то же, "
+                       f"не разбудив их владельца")
+            for bid, who, title, body in живые[:6]:
+                чьё = "ТВОЯ" if who.upper() == role.upper() else who
+                out.append(f"   #{bid:<4} [{чьё:8}] {title[:52]}")
+                out.append(f"        {body[:96]}")
+        else:
+            out.append("🔧 объявленной работы у коллег нет — проверено запросом, а не молчанием")
+    except sqlite3.Error as e:                                        # noqa: BLE001
+        out.append(f"⚠️ чужая работа НЕ СОБРАНА ({e})")
+
     conn.close()
     out.append("⚖️ блок знает БАЗУ, но не ДИСК: состояния репозиториев и живости сервисов "
                "здесь НЕТ — не считай их проверенными")

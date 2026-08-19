@@ -82,6 +82,33 @@ def _event(conn, bid, actor, etype, body="", frm=None, to=None):
         "VALUES (?,?,?,?,?,?)", (bid, actor.upper(), etype, frm, to, body))
 
 
+def cmd_claim(conn, a):
+    """Объявить работу над карточкой. Видно коллегам при пробуждении и в общем прогоне."""
+    row = conn.execute("SELECT role, status, title FROM backlog WHERE id=?", (a.id,)).fetchone()
+    if not row:
+        sys.exit(f"⛔ карточки #{a.id} нет")
+    owner, status, title = row
+    if a.release:
+        _event(conn, a.id, a.actor, "claim_release", a.note or "работа окончена или отложена")
+        conn.commit()
+        print(f"🔓 снято объявление о работе над #{a.id} «{title[:50]}»")
+        return
+    if not a.note.strip():
+        sys.exit(f"⛔ скажи, ЧТО делаешь: коллега видит эту строку и по ней решает, ждать "
+                 f"ему или браться самому. «Работаю» ему не говорит ничего.")
+    until = conn.execute("SELECT datetime('now', ?)", (f"+{a.minutes} minutes",)).fetchone()[0]
+    _event(conn, a.id, a.actor, "claim", f"до {until} UTC · {a.note}")
+    if status == "open":
+        conn.execute("UPDATE backlog SET status='in_progress', updated_at=datetime('now')"
+                     " WHERE id=?", (a.id,))
+    conn.commit()
+    чужая = "" if owner.upper() == a.actor.upper() else f" (карточка роли {owner})"
+    print(f"🔧 ВЗЯТО В РАБОТУ #{a.id}{чужая} «{title[:50]}» до {until[:16]} UTC")
+    print(f"   что делаешь: {a.note}")
+    print("   Видно коллегам при пробуждении и в общем прогоне проверок. Гаснет само —")
+    print("   снимать не обязательно; досрочно: backlog.py claim {} --actor {} --release"
+          .format(a.id, a.actor))
+
 def cmd_add(conn, a):
     body = _text(a.body, a.body_file)
     tags = json.dumps([t.strip() for t in a.tags.split(",") if t.strip()], ensure_ascii=False)
@@ -528,6 +555,20 @@ def main():
     pt.add_argument("--note", default="")
     pt.add_argument("--note-file", dest="note_file")
 
+    # 🪤 «В РАБОТЕ» СТАВИЛИ ТРИ РАЗА ЗА МЕСЯЦ (замер 19.08: 3 перевода против 142 закрытий,
+    # последний 07.08). Состояние существовало и было мертво: ставящий не получал НИЧЕГО,
+    # а коллеги всё равно не видели, кто чем занят. Владелец назвал класс 19.08 08:30 UTC:
+    # роль работает час, никто об этом не знает, и её будят второй раз или берут её же задачу.
+    # ⇒ Отдельная команда с ЯВНЫМ СРОКОМ и рассказом, что делаешь. Гаснет сама, как
+    # объявление о правке инструмента: забыть снять не страшно, вечный захват — страшно.
+    pw = sub.add_parser("claim", help="объявить, что берёшь карточку в работу (видно коллегам)")
+    dryrun.add_argument(pw)
+    pw.add_argument("id", type=int)
+    pw.add_argument("--actor", required=True)
+    pw.add_argument("--minutes", type=int, default=120, help="на сколько берёшь (по умолчанию 2 ч)")
+    pw.add_argument("--note", default="", help="что именно делаешь — это увидят коллеги")
+    pw.add_argument("--release", action="store_true", help="снять объявление досрочно")
+
     pc = sub.add_parser("comment")
     dryrun.add_argument(pc)
     pc.add_argument("id", type=int)
@@ -541,7 +582,8 @@ def main():
     # ставить его туда, где нечего сохранять, значит учить, что он бывает бесполезен.
     conn = _conn(a.db, getattr(a, "dry_run", False))
     {"add": cmd_add, "list": cmd_list, "show": cmd_show,
-     "status": cmd_status, "comment": cmd_comment, "criterion": cmd_criterion}[a.cmd](conn, a)
+     "status": cmd_status, "comment": cmd_comment, "criterion": cmd_criterion,
+     "claim": cmd_claim}[a.cmd](conn, a)
     conn.close()
 
 

@@ -2,9 +2,9 @@
 # -*- coding: utf-8 -*-
 """share-rules — отдать соседнему контуру свежие тексты названных правил.
 
-    python C:/guts/.atlas/.mezosync/scripts/share-rules.py --to tapas --keys note-format,ack-deadline
-    python C:/guts/.atlas/.mezosync/scripts/share-rules.py --to tapas --keys ... --apply
-    python C:/guts/.atlas/.mezosync/scripts/share-rules.py --to tapas --diff       # что у нас свежее
+    python <КОНТУР>/.mezosync/scripts/share-rules.py --to tapas --keys note-format,ack-deadline
+    python <КОНТУР>/.mezosync/scripts/share-rules.py --to tapas --keys ... --apply
+    python <КОНТУР>/.mezosync/scripts/share-rules.py --to tapas --diff       # что у нас свежее
 
 ЗАЧЕМ ИНСТРУМЕНТ, А НЕ РУКА. 18.08 перенос десяти правил соседу делался руками: пути к
 инструментам приводились к его контуру, сверху ставилась расписка о происхождении, версия
