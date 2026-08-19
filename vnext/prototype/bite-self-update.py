@@ -8,7 +8,7 @@
 с рабочего каталога соседа, не хранил ни источника, ни версии, и обновиться мог только чужой
 рукой — то есть был не самостоятельной командой, а придатком чужой машины.
 
-    python C:/guts/.atlas/vnext-tools/bite-self-update.py
+    python <КОНТУР>/vnext-tools/bite-self-update.py
 """
 from __future__ import annotations
 
@@ -21,8 +21,8 @@ import tempfile
 
 CASES = DIFFER = 0
 NL = chr(10)
-INIT = pathlib.Path("C:/github/gordipack/scripts/init-group.py")
-UPDATER = pathlib.Path("C:/guts/.atlas/.mezosync/scripts/update-tools.py")
+INIT = pathlib.Path("<ШАБЛОН>/scripts/init-group.py")
+UPDATER = pathlib.Path("<КОНТУР>/.mezosync/scripts/update-tools.py")
 
 
 def case(title, ok, detail, differ=False):
@@ -82,6 +82,50 @@ def main() -> int:
                    вернулся and "Забрано" in (p.stdout or ""),
                    "это и есть самостоятельность: обновление не требует того, кто контур собирал",
                    differ=True)
+
+        # ⑥⑦⑧ НАХОДКИ СОСЕДА (контур tapas, ответ 19.08 10:46 UTC). Он отказался брать
+        # инструменты, пока шапка обещает сохранность правок, а код перезаписывает.
+        своя = tmp / ".mezosync" / "scripts" / "backlog.py"
+        было_своё = "# МОЯ ПРАВКА, её терять нельзя" + NL + своя.read_text(encoding="utf-8")
+        своя.write_text(было_своё, encoding="utf-8")
+        p = subprocess.run([sys.executable, str(upd)], capture_output=True, text=True,
+                           encoding="utf-8", timeout=300)
+        план = (p.stdout or "") + (p.stderr or "")
+        p2 = subprocess.run([sys.executable, str(upd), "--apply"], capture_output=True,
+                            text=True, encoding="utf-8", timeout=300)
+        цела = "МОЯ ПРАВКА" in своя.read_text(encoding="utf-8")
+        ok &= case("⑥ файл, ПРАВЛЕННЫЙ У СЕБЯ, не затирается — обещание шапки исполняется",
+                   цела and "ПРАВЛЕН У ТЕБЯ" in план,
+                   "до 19.08 шапка это обещала, а код перезаписывал безусловно; сосед отказался "
+                   "брать инструменты, пока противоречие не снято — и был прав", differ=True)
+
+        # ⑦ ЗВЕНО ИЗ vnext/prototype: у потребителя лежит рядом со скриптами, в источнике — нет.
+        звено = tmp / ".mezosync" / "scripts" / "mention.py"
+        if звено.exists():
+            звено.write_text("# отставшее звено" + NL, encoding="utf-8")
+            subprocess.run([sys.executable, str(upd), "--apply", "--overwrite-unknown"],
+                           capture_output=True, text=True, encoding="utf-8", timeout=300)
+            ok &= case("⑦ звено из соседнего каталога источника ТОЖЕ обновляется",
+                       "отставшее звено" not in звено.read_text(encoding="utf-8"),
+                       "прежде обновлятор обходил только scripts/, и семь звеньев, которые "
+                       "зовёт общий прогон, не обновлялись НИКОГДА — молча", differ=True)
+        else:
+            ok &= case("⑦ звено из соседнего каталога источника ТОЖЕ обновляется", False,
+                       "звена mention.py нет в собранном контуре — проверять нечего", differ=True)
+
+        # ⑧ КОНТРОЛЬ: без отпечатка установки различить свою правку НЕЧЕМ — и это говорится.
+        con = sqlite3.connect(db)
+        con.execute("DELETE FROM meta WHERE key = 'template_files_sha'")
+        con.commit()
+        con.close()
+        victim.write_text("# снова устарело" + NL, encoding="utf-8")
+        p = subprocess.run([sys.executable, str(upd), "--apply"], capture_output=True,
+                           text=True, encoding="utf-8", timeout=300)
+        не_тронут = "снова устарело" in victim.read_text(encoding="utf-8")
+        ok &= case("⑧ КОНТРОЛЬ: без отпечатка установки файл НЕ обновляется молча",
+                   не_тронут and "отпечатка установки нет" in (p.stdout or ""),
+                   "молчаливое обновление здесь неотличимо от затирания чужой правки; "
+                   "цена названа ДО действия и требует явного согласия", differ=True)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
