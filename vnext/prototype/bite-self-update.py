@@ -12,6 +12,8 @@
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import pathlib
 import shutil
 import sqlite3
@@ -42,8 +44,14 @@ def main() -> int:
                             "--path", str(tmp / ".mezosync"), "--roles", "COORD"],
                            capture_output=True, text=True, encoding="utf-8", timeout=300)
         db = tmp / ".mezosync" / "mezosync.db"
-        ok &= case("① контур вообще собрался", db.exists(),
-                   ((r.stdout or "") + (r.stderr or ""))[-160:].strip() or "сборка молчала")
+        # 🪤 СУДИТСЯ ИСХОД ЗАПУСКА, А НЕ НАЛИЧИЕ ФАЙЛА. Первая редакция смотрела только
+        # на существование базы — и объявила собранным контур, сборка которого УПАЛА
+        # с ошибкой посередине: файл базы рождается на первом шаге и переживает падение
+        # любого следующего. Поймано 19.08 живым падением на шаге отпечатков.
+        ok &= case("① контур собрался — судится ИСХОД запуска, не наличие файла базы",
+                   r.returncode == 0 and db.exists(),
+                   (f"код выхода {r.returncode} · база {'есть' if db.exists() else 'НЕТ'} · "
+                    + ((r.stdout or "") + (r.stderr or ""))[-160:].strip()))
         if not db.exists():
             return 1
 
@@ -60,11 +68,31 @@ def main() -> int:
                    f"{meta.get('template_source')} — стой здесь путь на машине соседа, контур "
                    f"зависел бы от чужого диска и не обновился бы вовсе", differ=True)
 
-        victim = tmp / ".mezosync" / "scripts" / "guard-utc.py"
-        victim.write_text("# устаревшая копия" + NL, encoding="utf-8")
         upd = tmp / ".mezosync" / "scripts" / "update-tools.py"
         if not upd.exists():
             shutil.copy(UPDATER, upd)
+
+        # 🪤 «ОТСТАЛ ОТ ИСТОЧНИКА» И «ПРАВЛЕН У СЕБЯ» — РАЗНЫЕ СЛУЧАИ, И ИЗОБРАЖАТЬ ИХ
+        # ОДИНАКОВО НЕЛЬЗЯ. Первая редакция приёмки просто портила файл и ждала обновления —
+        # но снаружи это неотличимо от своей правки, и починенный инструмент честно
+        # отказывался затирать. Приёмка требовала от него ровно того, что мы запретили.
+        # ⇒ Отставший = содержимое старое И отпечаток установки ЕМУ СООТВЕТСТВУЕТ
+        # («мы это и клали, а источник с тех пор ушёл вперёд»).
+        def состарить(файл: pathlib.Path, текст: str):
+            файл.write_text(текст, encoding="utf-8")
+            c = sqlite3.connect(db)
+            печати = json.loads(dict(c.execute("SELECT key, value FROM meta"))
+                                .get("template_files_sha") or "{}")
+            печати[файл.name] = hashlib.sha256(
+                файл.read_bytes().replace(b"\r\n", b"\n").rstrip()).hexdigest()[:12]
+            c.execute("INSERT INTO meta (key, value) VALUES ('template_files_sha', ?) "
+                      "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                      (json.dumps(печати, ensure_ascii=False),))
+            c.commit()
+            c.close()
+
+        victim = tmp / ".mezosync" / "scripts" / "guard-utc.py"
+        состарить(victim, "# устаревшая копия" + NL)
 
         p = subprocess.run([sys.executable, str(upd)], capture_output=True, text=True,
                            encoding="utf-8", timeout=300)
@@ -102,8 +130,8 @@ def main() -> int:
         # ⑦ ЗВЕНО ИЗ vnext/prototype: у потребителя лежит рядом со скриптами, в источнике — нет.
         звено = tmp / ".mezosync" / "scripts" / "mention.py"
         if звено.exists():
-            звено.write_text("# отставшее звено" + NL, encoding="utf-8")
-            subprocess.run([sys.executable, str(upd), "--apply", "--overwrite-unknown"],
+            состарить(звено, "# отставшее звено" + NL)
+            subprocess.run([sys.executable, str(upd), "--apply"],
                            capture_output=True, text=True, encoding="utf-8", timeout=300)
             ok &= case("⑦ звено из соседнего каталога источника ТОЖЕ обновляется",
                        "отставшее звено" not in звено.read_text(encoding="utf-8"),
@@ -118,12 +146,12 @@ def main() -> int:
         con.execute("DELETE FROM meta WHERE key = 'template_files_sha'")
         con.commit()
         con.close()
-        victim.write_text("# снова устарело" + NL, encoding="utf-8")
+        victim.write_text("# правка без отпечатка" + NL, encoding="utf-8")
         p = subprocess.run([sys.executable, str(upd), "--apply"], capture_output=True,
                            text=True, encoding="utf-8", timeout=300)
-        не_тронут = "снова устарело" in victim.read_text(encoding="utf-8")
+        не_тронут = "правка без отпечатка" in victim.read_text(encoding="utf-8")
         ok &= case("⑧ КОНТРОЛЬ: без отпечатка установки файл НЕ обновляется молча",
-                   не_тронут and "отпечатка установки нет" in (p.stdout or ""),
+                   не_тронут and "Отпечатков установки нет" in (p.stdout or ""),
                    "молчаливое обновление здесь неотличимо от затирания чужой правки; "
                    "цена названа ДО действия и требует явного согласия", differ=True)
     finally:

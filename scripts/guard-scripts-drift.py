@@ -2,14 +2,14 @@ r"""
 guard-scripts-drift.py — рантайм тулкита против его версионированной копии в репо.
 
 ЗАЧЕМ. До 2026-07-16 17:53 UTC тулкит НЕ БЫЛ ВЕРСИОНИРОВАН НИЧЕМ: 20 скриптов в
-<КОНТУР>/.mezosync/scripts\ — вне любого git (контейнер .atlas не репо). Там живут
+<КОНТУР>\.mezosync\scripts\ — вне любого git (контейнер .atlas не репо). Там живут
 бэкап-механизм, оба гарда и read-phoenix.py, которым воскрешаются ВСЕ роли. Потеря каталога
 уносила бы и БД, и средства её восстановления одним движением.
 Владелец (17:52 UTC): «клади в atlas.agents-sync.db».
 
 ПОЧЕМУ КОПИЯ, А НЕ ПЕРЕНОС: рантайм ОБЯЗАН остаться в .mezosync/scripts/ — оттуда его
 достают все 8 ролей. Инвариант TOOLS-INSIDE-CONTAINER родился 2026-07-12 из отката Фазы 4:
-скрипты лежали в C:\github\gordipack, песочница STUD (C:\guts) их не доставала, он был
+скрипты лежали в <ШАБЛОН>, песочница роли портала (другой корень) их не доставала, он был
 МОЛЧА отрезан от SQLite. Перенести = повторить ту же беду.
 
 ПОЧЕМУ ГАРД ОБЯЗАТЕЛЕН. Копия делает ТРЕТИЙ источник: gordipack (шаблон) → рантайм → репо.
@@ -40,7 +40,27 @@ from pathlib import Path
 RUNTIME = Path(__file__).resolve().parent
 # Зеркало-репозиторий у нового контура НЕ СУЩЕСТВУЕТ, и это не дефект, а состояние
 # «бэкап ещё не заведён» — говорится СЛОВАМИ ниже, а не падением и не пустым каталогом.
-REPO = RUNTIME.parent.parent / "atlas.agents-sync.db" / "scripts"
+# 🪤 ИМЯ РЕПОЗИТОРИЯ БЕРЁТСЯ ИЗ ЗАПИСИ КОНТУРА, А НЕ ВПЕЧАТАНО. Здесь стояло имя нашего
+# зеркала («atlas.…»), и у соседа инструмент советовал завести репозиторий С НАШИМ ИМЕНЕМ
+# в ЕГО контейнере. Нашёл сосед (контур tapas, 19.08 10:46 UTC): «имя вашего контура,
+# впечатанное в наш инструмент». Умолчание остаётся нашим — но только как умолчание.
+
+
+def _зеркало() -> Path:
+    имя = None
+    try:
+        import sqlite3
+        import mezo_paths as _mp
+        c = sqlite3.connect(str(_mp.live_db()))
+        row = c.execute("SELECT value FROM meta WHERE key = 'mirror_repo'").fetchone()
+        c.close()
+        имя = (row[0] if row else "") or None
+    except Exception:                                  # noqa: BLE001
+        имя = None
+    return RUNTIME.parent.parent / (имя or "atlas.agents-sync.db") / "scripts"
+
+
+REPO = _зеркало()
 
 # ── ВТОРАЯ ПАРА КОПИЙ, ДОБАВЛЕНА 07.08 17:18 UTC ПО ЗАМЕРУ @RCC (записка #3338) ──
 # Он пошёл за инструментом в vnext-tools — каталог, который его слепок называет зоной
@@ -59,13 +79,67 @@ REPO = RUNTIME.parent.parent / "atlas.agents-sync.db" / "scripts"
 # резолвится от расположения файла, а прежний остаётся лишь запасным вариантом
 # для нашего контура, где каталог действительно лежит рядом.
 _own_container = Path(__file__).resolve().parent.parent.parent
-VNEXT_RUNTIME = (_own_container / "vnext-tools" if (_own_container / "vnext-tools").is_dir()
-                 else Path(r"C:\guts\.atlas\vnext-tools"))
-VNEXT_TEMPLATE = Path(r"C:\github\gordipack\vnext\prototype")
+# ⛔ ЗАПАСНОГО ЖЁСТКОГО ПУТИ БОЛЬШЕ НЕТ. Он назывался «лишь запасным для нашего контура»,
+# но у соседа выполнялся ИМЕННО ОН — каталог с таким именем у него не находится, и
+# инструмент уходил мерить путь на чужой машине (нашей). Нет каталога — это факт,
+# который надо СКАЗАТЬ, а не заместить чужим адресом.
+VNEXT_RUNTIME = _own_container / "vnext-tools"
+# Шаблон-источник: путь берётся из записи контура, не впечатан. Не объявлен — сверка
+# с шаблоном просто не делается, и об этом говорится строкой (ниже по коду).
+VNEXT_TEMPLATE = None
+try:
+    import sqlite3 as _s
+    import mezo_paths as _mp2
+    _c2 = _s.connect(str(_mp2.live_db()))
+    _r2 = _c2.execute("SELECT value FROM meta WHERE key = 'template_checkout'").fetchone()
+    _c2.close()
+    VNEXT_TEMPLATE = Path(_r2[0]) / "vnext" / "prototype" if _r2 and _r2[0] else None
+except Exception:                                      # noqa: BLE001
+    VNEXT_TEMPLATE = None
+
+
+# 🪤 ДВА РАЗНЫХ «ОДИНАКОВО». Байты (правило `bytes-are-not-content`) и СМЫСЛ: у шаблона,
+# который публичен, машинные пути заменены заглушками, а у живой копии стоят настоящие —
+# это НЕ расхождение работы, а обезличивание. 19.08 чистка путей развела 15 файлов из 85,
+# и постоянный жёлтый на них научил бы пролистывать сверку целиком.
+# ⇒ Считаем ДВА отпечатка: точный и «с точностью до обезличивания». Разница между ними
+#   показывается ОТДЕЛЬНОЙ строкой, а не прячется: обезличенных файлов должно быть видно.
+PLACEHOLDERS = [
+    (str(_own_container), "<КОНТУР>"),
+    (str(_own_container).replace(chr(92), "/"), "<КОНТУР>"),
+]
+if VNEXT_TEMPLATE is not None:
+    _корень_шаблона = str(VNEXT_TEMPLATE.parent.parent)
+    PLACEHOLDERS += [(_корень_шаблона, "<ШАБЛОН>"),
+                     (_корень_шаблона.replace(chr(92), "/"), "<ШАБЛОН>")]
+
+
+def сверить_с_шаблоном():
+    """Сверка с общим образцом — только если контур объявил, где его рабочая копия.
+
+    ⛔ Прежде путь к образцу был впечатан абсолютной строкой, и у соседа инструмент шёл
+    сверять его инструменты с каталогом на ЧУЖОЙ машине. Не объявлен — говорим это
+    строкой: «не сверялось» и «не расходится» — разные ответы.
+    """
+    if VNEXT_TEMPLATE is None or not VNEXT_TEMPLATE.is_dir():
+        print("ℹ️ с общим образцом НЕ сверялось: рабочая копия образца в этом контуре "
+              "не объявлена (запись `template_checkout` в meta).")
+        print("   Это НЕ «расхождений нет»: отставание от образца меряет "
+              "update-tools.py — он ходит в сам репозиторий, а не на диск.")
+        return
+    report_pair(VNEXT_RUNTIME, VNEXT_TEMPLATE, "vnext-tools", "образец", "@PROTO")
 
 
 def sha(p):
     return hashlib.sha256(p.read_bytes()).hexdigest()[:12]
+
+
+def sha_sanitized(p):
+    """Отпечаток с точностью до обезличивания: пути приведены к заглушкам, строки — к одному виду."""
+    text = p.read_bytes().replace(b"\r\n", b"\n").decode("utf-8", "replace")
+    for real, mark in PLACEHOLDERS:
+        text = text.replace(real, mark)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
 
 
 def scripts_in(root):
@@ -92,7 +166,12 @@ def report_pair(left, right, left_name, right_name, whose):
               f"({left if not left.exists() else right})")
         return
     a, b = scripts_in(left), scripts_in(right)
-    diff = sorted(n for n in set(a) & set(b) if not filecmp.cmp(a[n], b[n], shallow=False))
+    diff_raw = sorted(n for n in set(a) & set(b) if not filecmp.cmp(a[n], b[n], shallow=False))
+    # Из расходящихся выделяем ОБЕЗЛИЧЕННЫЕ: совпадающие после приведения путей к заглушкам.
+    # Это не разная работа, а публичность шаблона. Молчать о них всё равно нельзя: роль,
+    # скопировавшая команду ИЗ ШАБЛОНА, получит невыполнимую строку.
+    sanitized = [n for n in diff_raw if sha_sanitized(a[n]) == sha_sanitized(b[n])]
+    diff = [n for n in diff_raw if n not in set(sanitized)]
     # 🔴 БЫЛО: сверялось ТОЛЬКО пересечение, и файл, лежащий лишь в одной копии,
     # расхождением не считался ВООБЩЕ (замер COORD 2026-08-09: положил новую приёмку
     # в vnext-tools — сторож напечатал «42 общих совпадают» и был формально прав).
@@ -108,6 +187,12 @@ def report_pair(left, right, left_name, right_name, whose):
     #    right = ШАБЛОН (источник раскатки; полнее по построению — это НОРМА)
     only_a = sorted(set(a) - set(b))   # 🔴 есть у потребителя, в шаблоне нет ⇒ НЕ ДОЕДЕТ
     only_b = sorted(set(b) - set(a))   # ✅ есть только в шаблоне ⇒ норма, молчим
+    if sanitized:
+        print("")
+        print(f"📝 {left_name} ↔ {right_name}: обезличено {len(sanitized)} — совпадают"
+              f" с точностью до путей (в шаблоне заглушки, у потребителя настоящие)")
+        print("   ⚖️ Это НЕ расхождение работы. Но роль, копирующая команду ИЗ ШАБЛОНА,"
+              " получит невыполнимую строку — заглушку подставляет человек.")
     if not (diff or only_a):
         tail = f" · шаблон полнее на {len(only_b)} — это НОРМА" if only_b else ""
         print(f"\n✅ {left_name} ↔ {right_name}: {len(set(a) & set(b))} общих совпадают, "
@@ -180,6 +265,14 @@ def main():
         print(f"⚠️ ЗЕРКАЛО-РЕПОЗИТОРИЙ НЕ ЗАВЕДЁН: {REPO}")
         print("   Скрипты контура пока не версионированы — потеряются вместе с каталогом.")
         print("   Заведи git-репозиторий по этому пути и прогони меня с --sync.")
+        print("   ⚖️ Имя взято из записи контура `mirror_repo`; не объявлено — подставлено "
+              "умолчание контура-донора.")
+        print("      Своё имя объявляется записью в meta — тогда совет будет про ТВОЙ "
+              "репозиторий, а не про чужой.")
+        print("   ⛔ И этот инструмент НЕ отвечает на вопрос «отстали ли мы от общего "
+              "образца»: он сличает")
+        print("      рабочий каталог со своим зеркалом-бэкапом. Отставание от образца "
+              "меряет update-tools.py.")
         print("   (Это состояние нового контура, а не поломка — потому не красное.)")
         sys.exit(0)
     rt, rp = scripts_in(RUNTIME), scripts_in(REPO)
@@ -193,7 +286,7 @@ def main():
 
     if not (only_rt or only_rp or diff):
         print("\n✅ СОВПАДАЕТ: рантайм и версионированная копия идентичны.")
-        report_pair(VNEXT_RUNTIME, VNEXT_TEMPLATE, "vnext-tools", "gordipack", "@PROTO")
+        сверить_с_шаблоном()
         return
 
     if only_rt:
@@ -212,7 +305,7 @@ def main():
     if not args.sync:
         # Путь СВОЙСТВОМ (@STUD #2864): относительная форма в рабочем выводе учит отозванному.
         print(f"\n   Синхронизировать: python {Path(__file__).resolve().as_posix()} --sync   (затем commit+push)")
-        report_pair(VNEXT_RUNTIME, VNEXT_TEMPLATE, "vnext-tools", "gordipack", "@PROTO")
+        сверить_с_шаблоном()
         sys.exit(1)
 
     for n in only_rt + diff:
@@ -228,7 +321,7 @@ def main():
     # ⛔ ПОСЛЕ --sync тоже показываем, но НЕ синхронизируем: --sync означает «рантайм → репо»
     # для МОЕЙ пары. Чужая пара сюда не входит, и молчание о ней после успешного синка
     # прочиталось бы как «все копии сведены».
-    report_pair(VNEXT_RUNTIME, VNEXT_TEMPLATE, "vnext-tools", "gordipack", "@PROTO")
+    сверить_с_шаблоном()
 
 
 if __name__ == "__main__":
