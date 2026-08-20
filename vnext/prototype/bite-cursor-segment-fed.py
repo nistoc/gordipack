@@ -137,8 +137,8 @@ def main() -> int:
         cursor = con.execute("SELECT last_read_id FROM read_cursors WHERE reader_role=?",
                              (ROLE,)).fetchone()[0]
         con.close()
-        case("⑤ курсор доехал до головы — главный путь цел", cursor == base + 6,
-             f"курсор {cursor}, ждали {base + 6}")
+        case("⑤ отметка прочитанного доехала до головы — главный путь цел", cursor == base + 6,
+             f"отметка прочитанного {cursor}, ждали {base + 6}")
 
     # ⑥ ЖИВАЯ БАЗА ЦЕЛА.
     con = sqlite3.connect(f"file:{LIVE_DB}?mode=ro", uri=True)

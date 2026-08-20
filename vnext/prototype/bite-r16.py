@@ -465,8 +465,8 @@ def selftest(target, sandbox):
         mutated = src
         for needle, repl in edits:
             if needle not in mutated:
-                die(f"мутант {name} не накладывается: якорь не найден в {target}",
-                    "ридер изменился — мутанта надо перепривязать, иначе самопроверка лжёт",
+                die(f"нарочная поломка {name} не накладывается: якорь не найден в {target}",
+                    "читающий изменился — нарочную поломку надо перепривязать, иначе самопроверка лжёт",
                     f"якорь: {needle.strip()[:70]}")
             mutated = mutated.replace(needle, repl, 1)
         mpath = tmpdir / f"read-messages-{name}.py"
@@ -504,7 +504,7 @@ def demo(baseline, target, sandbox):
     if t1 == t2:
         die("указанный baseline УЖЕ несёт R16 — это не «до»-версия",
             f"два вызова дали один токен {t1[0]}-{t1[1]}",
-            "возьми версию ДО врезки, напр.: git show <коммит-до>:scripts/read-messages.py",
+            "возьми версию ДО применения, напр.: git show <коммит-до>:scripts/read-messages.py",
             "или гоняй регрессию вместо демонстрации: bite-r16.py verify")
 
     print("── ДО (baseline): два вызова подряд")
@@ -546,7 +546,7 @@ def main():
         return selftest(target, sandbox)
     if not a.baseline:
         die("demo требует --baseline <ДО-версия read-messages.py>",
-            "именно этого не хватало прежней версии укуса: baseline брался молча "
+            "именно этого не хватало прежней версии приёмки: точка отсчёта бралась молча "
             "из песочницы и после врезки оказывался уже почищенным (COORD #2748)")
     bp = Path(a.baseline).resolve()
     if not bp.exists():

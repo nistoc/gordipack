@@ -164,7 +164,7 @@ def selftest(target, sandbox):
     """Доказываем чувствительность: портим mezo_paths и требуем красного по нужным свойствам."""
     dep = target.parent / "mezo_paths.py"
     if not dep.exists():
-        die(f"нет mezo_paths.py рядом с {target}", "мутанты накладываются на него")
+        die(f"нет mezo_paths.py рядом с {target}", "нарочные поломки накладываются на него")
     src = dep.read_text(encoding="utf-8")
     tmp = Path(tempfile.mkdtemp(prefix="bite-r15a-mutants-"))
     all_ok = True
@@ -173,8 +173,8 @@ def selftest(target, sandbox):
         mutated = src
         for needle, repl in edits:
             if needle not in mutated:
-                die(f"мутант {name} не накладывается: якорь не найден в {dep}",
-                    "код изменился — мутанта надо перепривязать, иначе самопроверка лжёт",
+                die(f"нарочная поломка {name} не накладывается: якорь не найден в {dep}",
+                    "код изменился — нарочную поломку надо перепривязать, иначе самопроверка лжёт",
                     f"якорь: {needle.strip()[:70]}")
             mutated = mutated.replace(needle, repl, 1)
         mdir = tmp / name
@@ -201,7 +201,7 @@ def demo(baseline, sandbox):
     if notes(bait) == b_before and notes(db) == d_before + 1:
         die("указанный baseline УЖЕ несёт R15a — это не «до»-версия",
             "относительный --db резолвился от корня, приманка не сработала",
-            "возьми версию ДО врезки: git show <коммит-до>:scripts/write-message.py",
+            "возьми версию ДО применения: git show <коммит-до>:scripts/write-message.py",
             "или гоняй регрессию: bite-r15a.py verify")
     print("── ДО (baseline): относительный --db из чужого каталога")
     print(f"   rc={rc} · своя БД {d_before}→{notes(db)} · ЧУЖАЯ {b_before}→{notes(bait)}")
@@ -228,7 +228,7 @@ def main():
         return selftest(target, sandbox)
     if not a.baseline:
         die("demo требует --baseline <ДО-версия write-message.py>",
-            "именно этого не хватало прежней версии укуса: baseline брался молча "
+            "именно этого не хватало прежней версии приёмки: точка отсчёта бралась молча "
             "из песочницы и после врезки оказывался уже почищенным")
     bp = Path(a.baseline).resolve()
     if not bp.exists():

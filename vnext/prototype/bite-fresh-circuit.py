@@ -88,7 +88,7 @@ def main() -> int:
                             capture_output=True, text=True, encoding="utf-8", timeout=120)
         ok &= case("④ первая команда первой роли отвечает (регистр имени)",
                    "не в реестре" not in (rd.stdout or "") + (rd.stderr or ""),
-                   "сборка заводила курсор «coord», читалка ждёт «COORD» — контур рождался"
+                   "сборка заводила отметку прочитанного «coord», читалка ждёт «COORD» — контур рождался"
                    " сломанным", differ=True)
 
         # ⑤ СТОРОЖА СУДЯТ СВОЮ БАЗУ, А НЕ БАЗУ РАЗРАБОТЧИКА ШАБЛОНА.
@@ -97,7 +97,7 @@ def main() -> int:
                            capture_output=True, text=True, encoding="utf-8", timeout=300)
         gout = (g.stdout or "") + (g.stderr or "")
         foreign = [n for n in ("RCC", "TAXO", "OPSSRE", "STUD", "CHROME") if n in gout]
-        ok &= case("⑤ сторожа судят СВОЮ базу, а не базу автора шаблона",
+        ok &= case("⑤ проверки судят СВОЮ базу, а не базу автора шаблона",
                    not foreign,
                    f"чужие имена в выводе: {foreign or 'нет'}; путь машины был впечатан"
                    " в код — потребитель читал бы чужие данные", differ=True)

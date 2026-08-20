@@ -88,7 +88,7 @@ def main() -> int:
     con2.execute("CREATE TABLE tx (id INTEGER PRIMARY KEY)")   # запись НЕ делаем
     con2.commit()
     good, why = SJ.verify(con2)
-    ok &= case("② шаг МИМО журнала — сторож краснеет и называет причину",
+    ok &= case("② шаг МИМО журнала — проверка краснеет и называет причину",
                (not good) and "МИМО ЖУРНАЛА" in why,
                f"ответ: {why[:100]}", differ=True)
 

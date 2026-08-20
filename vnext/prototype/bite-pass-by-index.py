@@ -95,8 +95,8 @@ def main() -> int:
         #    выдать ключ от чёрного хода вместе с замком.
         code, out = run(db, "--pass-by-index")
         cur, segs = state(db)
-        case("① без --basis проход отклонён, курсор не тронут",
-             code == 2 and cur == base and segs == [], f"код {code} (ждали 2), курсор {cur}")
+        case("① без --basis проход отклонён, отметка прочитанного не тронута",
+             code == 2 and cur == base and segs == [], f"код {code} (ждали 2), отметка прочитанного {cur}")
 
         # ② КОРОТКАЯ ОТПИСКА — ТОЖЕ ОТКАЗ. Основание из трёх букв формально есть и по сути
         #    отсутствует; порог низкий, но он отсекает «.» и «нет».
@@ -114,15 +114,15 @@ def main() -> int:
                and mine[0][0] == base + 1 and mine[0][1] == base + DEBT
                and "заголовками" in (mine[0][3] or "") and "owner" in (mine[0][4] or ""))
         case("③ проход записан видом 'declared' с основанием и автором", ok3,
-             f"курсор {cur} (ждали {base + DEBT}) · отрезки: {segs}")
+             f"отметка прочитанного {cur} (ждали {base + DEBT}) · отрезки: {segs}")
 
         # ④ ВИДНО ПИСАВШИМ: витрина «что не дошло» показывает этот участок. Без этого
         #    случая проход был бы просто тихим способом обнулить долг.
         con = sqlite3.connect(db)
         gap = con.execute("SELECT notes, basis FROM cursor_gaps WHERE role=?", (ROLE,)).fetchall()
         con.close()
-        case("④ витрина cursor_gaps показывает пройденное как НЕ ДОШЕДШЕЕ",
-             len(gap) == 1 and gap[0][0] == DEBT, f"витрина: {gap}")
+        case("④ экран cursor_gaps показывает пройденное как НЕ ДОШЕДШЕЕ",
+             len(gap) == 1 and gap[0][0] == DEBT, f"экран: {gap}")
 
         # ⑤ ЗАГОЛОВКИ ПОКАЗАНЫ ПЕРЕД ПРОХОДОМ — роль проходит то, что ВИДЕЛА, а не вслепую.
         case("⑤ перед проходом напечатан указатель",
@@ -135,9 +135,9 @@ def main() -> int:
         cur_before, segs_before = state(db)
         run(db, "--index")
         cur_after, segs_after = state(db)
-        case("⑥ обычный --index курсор не двигает и отрезков не пишет",
+        case("⑥ обычный --index отметку прочитанного не двигает и отрезков не пишет",
              cur_after == cur_before and segs_after == segs_before,
-             f"курсор {cur_before} → {cur_after}")
+             f"отметка прочитанного {cur_before} → {cur_after}")
 
     # ⑦ ЖИВАЯ БАЗА ЦЕЛА.
     con = sqlite3.connect(f"file:{LIVE_DB}?mode=ro", uri=True)
