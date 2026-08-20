@@ -135,7 +135,12 @@ def render(card: dict, container: Path) -> str:
         for s in card["умения"]:
             L.append(f"- **{s['skill']}**")
             L.append(f"  - чем подтверждено: {s['evidence']}")
-            L.append(f"  - когда убедились: {s['measured_at']} UTC"
+            # Тот же случай, что у прав ниже: у части записей зона уже стои́т в самом поле,
+            # и дописывание своей даёт «UTC UTC». Решение было принято строкой ниже и
+            # НЕ ПРИМЕНЕНО здесь — увидела @CHROME на своих же строках (записка #3712 ⑥).
+            час = (s['measured_at'] if "UTC" in (s['measured_at'] or "")
+                   else f"{s['measured_at']} UTC")
+            L.append(f"  - когда убедились: {час}"
                      + (f" · вписала {s['written_by']}"
                         if s["written_by"] != card["роль"] else ""))
             L.append(f"  - перестаёт быть верным: {s['until_cond']}"
