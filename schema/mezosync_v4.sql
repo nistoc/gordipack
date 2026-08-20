@@ -8,9 +8,9 @@
 --    об этом здесь: схема тогда НОВЕЕ объявленной версии.
 -- Что входит в версию — спрашивай журнал: SELECT * FROM schema_migrations.
 --
--- 🔴 ВНИМАНИЕ: сверх рубежа 2 шагов — схема НОВЕЕ объявленной версии.
+-- 🔴 ВНИМАНИЕ: сверх рубежа 3 шагов — схема НОВЕЕ объявленной версии.
 --
--- собрано: index 15 · table 28 · view 6
+-- собрано: index 17 · table 29 · view 6
 
 CREATE TABLE IF NOT EXISTS audit_log (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -160,6 +160,26 @@ CREATE TABLE IF NOT EXISTS role_rights (
     note          TEXT
 );
 
+CREATE TABLE IF NOT EXISTS role_skill (
+    id          INTEGER PRIMARY KEY,
+    role        TEXT NOT NULL
+                CHECK (role = UPPER(role) AND LENGTH(role) BETWEEN 2 AND 16),
+    -- ЧТО умеет: короткой строкой, словами предмета, а не именем инструмента.
+    -- «читать графы .rcc» — умение; «уметь rcc-graph.py» — имя, которое переживёт предмет.
+    skill       TEXT NOT NULL CHECK (LENGTH(TRIM(skill)) BETWEEN 3 AND 200),
+    -- ЧЕМ подтверждено. NOT NULL намеренно: см. шапку. Форма свободная, но это ССЫЛКА
+    -- на наблюдаемое — «записка #3698», «карточка #204», коммит, слово владельца с часом.
+    evidence    TEXT NOT NULL CHECK (LENGTH(TRIM(evidence)) >= 3),
+    -- КОГДА в последний раз убедились (UTC). Не час записи — час замера.
+    measured_at TEXT NOT NULL,
+    -- ПРИ ЧЁМ перестаёт быть верным. Пусто разрешено и видно.
+    until_cond  TEXT,
+    -- кто вписал: роль сама о себе. Чужой рукой — видно в поле, а не подразумевается.
+    written_by  TEXT NOT NULL,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (role, skill)
+);
+
 CREATE TABLE IF NOT EXISTS role_status (  role       TEXT PRIMARY KEY,  status     TEXT NOT NULL,  updated_at TEXT NOT NULL DEFAULT (datetime('now')));
 
 CREATE TABLE IF NOT EXISTS "roles" (
@@ -275,6 +295,10 @@ CREATE INDEX IF NOT EXISTS idx_message_task_task ON message_task (task_id, messa
 CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages(timestamp);
 
 CREATE INDEX IF NOT EXISTS idx_messages_writer ON messages(writer_role);
+
+CREATE INDEX IF NOT EXISTS idx_role_skill_role  ON role_skill(role);
+
+CREATE INDEX IF NOT EXISTS idx_role_skill_skill ON role_skill(skill);
 
 CREATE INDEX IF NOT EXISTS idx_thread_reply ON message_thread (reply_to);
 
