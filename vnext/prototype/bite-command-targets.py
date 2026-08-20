@@ -9,6 +9,12 @@
 однажды съест чью-то работу. Копия делается из ТОГО ЖЕ файла, что и живая, — иначе
 проверялась бы не та вещь (класс «испытываем не то, что чиним»).
 """
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mezo_paths  # пути машины ВЫВОДЯТСЯ, не впечатаны (карточка #208)
+
 import shutil
 import sqlite3
 import subprocess
@@ -16,8 +22,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-GUARD = Path(r"C:\guts\.atlas\.mezosync\scripts\guard-command-targets.py")
-LIVE_DB = Path(r"C:\guts\.atlas\.mezosync\mezosync.db")
+GUARD = mezo_paths.live_scripts() / "guard-command-targets.py"
+LIVE_DB = mezo_paths.live_db()
 
 CASES = []
 
@@ -71,7 +77,9 @@ def main():
         # ② ИСТОЧНИК зовёт несуществующий файл — прибор КРАСНЕЕТ и НАЗЫВАЕТ путь.
         prompts_bad = tmp / "prompts_bad"
         prompts_bad.mkdir()
-        ghost = r"C:\guts\.atlas\atlas.core\askgate.ps1"   # ровно та поломка из заявки #161
+        # ровно та поломка из заявки #161: путь строится от корня, чтобы у чужого
+        # читателя он указывал в ЕГО контур, а не в мою машину
+        ghost = str(mezo_paths.container_root() / "atlas.core" / "askgate.ps1")
         (prompts_bad / "bad.md").write_text(
             f"Прогони гейт:\n    {ghost} -Full\n", encoding="utf-8")
         code, out = run_guard(db, prompts_bad)
@@ -113,7 +121,8 @@ def main():
         prompts_mask = tmp / "prompts_mask"
         prompts_mask.mkdir()
         (prompts_mask / "mask.md").write_text(
-            "Прогони все: python C:/guts/.atlas/vnext-tools/guard-*.py\n", encoding="utf-8")
+            f"Прогони все: python {mezo_paths.container_root()}/vnext-tools/guard-*.py\n",
+            encoding="utf-8")
         code, out = run_guard(fresh_db(), prompts_mask)
         case("⑥ маска набора файлов не считается мёртвой целью", code == 0, f"код {code}")
 

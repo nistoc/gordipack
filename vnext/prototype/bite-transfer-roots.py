@@ -14,6 +14,12 @@ r"""ПРИЁМКА КОРНЕЙ ПЕРЕНОСА: список механизм�
 ⛔ Живой базы не касается: работает с каталогами и временной копией.
 ⛔ Число случаев печатает прогон.
 """
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mezo_paths  # пути машины ВЫВОДЯТСЯ, не впечатаны (карточка #208)
+
 import importlib.util
 import shutil
 import sys
@@ -21,7 +27,7 @@ import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-CANDIDATES = [Path("C:/github/gordipack"), HERE.parent.parent / "gordipack"]
+CANDIDATES = [mezo_paths.template_root(), HERE.parent.parent / "gordipack"]
 PACK = next((p for p in CANDIDATES if (p / "vnext" / "tools" / "sync-to-template.py").exists()), None)
 if PACK is None:
     print(f"⛔ ПЕРЕНОСЧИКА НЕТ: {[str(c) for c in CANDIDATES]} — отказ мерить, не «чисто»")

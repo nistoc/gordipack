@@ -16,6 +16,12 @@ r"""ПРИЁМКА ПРИЗНАКА «МЕХАНИЗМ ПЕЧАТАЕТ ИМЯ, 
    только чтением.
 ⛔ Число случаев печатает прогон.
 """
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mezo_paths  # пути машины ВЫВОДЯТСЯ, не впечатаны (карточка #208)
+
 import subprocess
 import sys
 import tempfile
@@ -23,7 +29,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 CHECKER = HERE / "check-false-signature.py"
-MIRROR = Path("C:/guts/.atlas/atlas.agents-sync.db")
+MIRROR = mezo_paths.container_root() / "atlas.agents-sync.db"
 if not CHECKER.exists():
     print(f"⛔ ИСПЫТУЕМОГО НЕТ: {CHECKER} — отказ мерить, не «чисто»")
     sys.exit(2)
@@ -107,7 +113,7 @@ def main() -> int:
     # ── РАЗЛИЧАЮЩИЙ: на ПОЧИНЕННЫХ современных версиях ТЕХ ЖЕ файлов — молчит ──
     root2 = tmp / "now_root"
     root2.mkdir()
-    live = Path("C:/guts/.atlas/.mezosync/scripts")
+    live = mezo_paths.live_scripts()
     for name in ("write-message.py", "backlog.py", "read-phoenix.py", "backup-db.py"):
         (root2 / name).write_text((live / name).read_text(encoding="utf-8"),
                                   encoding="utf-8")

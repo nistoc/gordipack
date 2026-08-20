@@ -13,6 +13,12 @@
    Без этого «ноль расхождений» неотличимо от «сверка не смотрит».
    Контрольная пара — нетронутая копия обязана дать РОВНО исходное число.
 """
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mezo_paths  # пути машины ВЫВОДЯТСЯ, не впечатаны (карточка #208)
+
 import argparse, io, os, sqlite3, sys
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
@@ -21,7 +27,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # Приёмник выводится от расположения скрипта, а не впечатан: впечатанный путь —
 # заряженное ружьё в каждой копии (грабля ② памяти PROTO, оплачена 10.08).
 SAMPLE = os.path.normpath(os.path.join(HERE, '..', 'prototype', 'schema_vnext.sql'))
-LIVE_DEFAULT = r'C:\guts\.atlas\.mezosync\mezosync.db'
+LIVE_DEFAULT = str(mezo_paths.live_db())
 SUBJECT = ('roles', 'rules', 'schema_migrations')
 
 

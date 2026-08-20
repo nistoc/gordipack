@@ -35,6 +35,12 @@ v3 (2026-08-09, карточка #150): песочница строится ТЕ
     python bootstrap.py --verify        # только сверить существующую
     python bootstrap.py --no-scripts    # только БД
 """
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mezo_paths  # пути машины ВЫВОДЯТСЯ, не впечатаны (карточка #208)
+
 import argparse
 import shutil
 import sqlite3
@@ -43,7 +49,7 @@ import sys
 import os
 from pathlib import Path
 
-LIVE_MEZO = Path(r"C:\guts\.atlas\.mezosync")
+LIVE_MEZO = mezo_paths.container_root() / ".mezosync"
 LIVE_DB = LIVE_MEZO / "mezosync.db"
 # Песочница живёт ВНЕ контейнера C:\guts\.atlas НАРОЧНО: гард ⑤ («фантомные .db»)
 # рекурсивно сканирует весь контейнер. Полная копия его не краснит (он судит по признаку

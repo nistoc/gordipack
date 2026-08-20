@@ -16,6 +16,12 @@
 
 ⛔ Живую базу только ЧИТАЕТ (mode=ro). Стенды — в памяти.
 """
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mezo_paths  # пути машины ВЫВОДЯТСЯ, не впечатаны (карточка #208)
+
 import importlib.util
 import io
 import os
@@ -28,7 +34,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import mezo_target  # noqa: E402 — какую копию испытываем, решает одно место
 
-LIVE = r'C:\guts\.atlas\.mezosync\mezosync.db'
+LIVE = str(mezo_paths.live_db())
 
 
 def load(name):

@@ -19,6 +19,12 @@ r"""ПРИЁМКА СБОРКИ КОНТУРА ИЗ ШАБЛОНА (карточ
 ⛔ Живой базы не касается: собирает контур во временном каталоге.
 ⛔ Число случаев печатает прогон.
 """
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mezo_paths  # пути машины ВЫВОДЯТСЯ, не впечатаны (карточка #208)
+
 import os
 import shutil
 import subprocess
@@ -30,7 +36,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 # шаблон ищем по известным раскладкам — тот же приём, что у звеньев (#145)
-CANDIDATES = [Path("C:/github/gordipack"), HERE.parent.parent / "gordipack",
+CANDIDATES = [mezo_paths.template_root(), HERE.parent.parent / "gordipack",
               HERE.parent / "gordipack"]
 PACK = next((p for p in CANDIDATES if (p / "scripts" / "init-group.py").exists()), None)
 if PACK is None:
