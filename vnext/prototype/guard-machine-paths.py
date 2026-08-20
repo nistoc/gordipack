@@ -17,8 +17,8 @@ r"""ПРОВЕРКА: публичный образец не несёт путе
    и требовать от них чистоты значит требовать переписать верный текст ради нуля в замере.
 
 Зовут так (пример намеренно без пути одной машины — им же и меряемся):
-    python <ваш контейнер>/vnext-tools/guard-machine-paths.py            # образец
-    python <ваш контейнер>/vnext-tools/guard-machine-paths.py --root .   # любое дерево
+    python <КОНТУР>/vnext-tools/guard-machine-paths.py            # образец
+    python <КОНТУР>/vnext-tools/guard-machine-paths.py --root .   # любое дерево
 """
 from __future__ import annotations
 
