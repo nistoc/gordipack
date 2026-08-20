@@ -51,6 +51,9 @@ def build_db(path: Path, with_spent_right: bool = False) -> None:
                 " lifecycle_by TEXT, lifecycle_reason TEXT, zone TEXT, seen_in TEXT)")
     con.execute("INSERT INTO roles VALUES ('PROBE','alive','2026-08-01','owner','',"
                 "'испытательная зона','чат')")
+    con.execute("CREATE TABLE role_skill (id INTEGER PRIMARY KEY, role TEXT, skill TEXT,"
+                " evidence TEXT, measured_at TEXT, until_cond TEXT, written_by TEXT,"
+                " UNIQUE (role, skill))")
     con.execute("CREATE TABLE role_rights (id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT,"
                 " right_key TEXT, scope TEXT, kind TEXT, authorized_by TEXT, granted_at TEXT,"
                 " source_ref TEXT, spent_at TEXT, revoked_at TEXT, revoked_why TEXT,"
@@ -155,6 +158,44 @@ def main() -> int:
                    and "пропущено папок" in out7,
                    "молчаливый пропуск читался бы как «других папок не было»; отбор идёт по "
                    "имени нашей группы ИЗ БАЗЫ, а не по виду каталога", differ=True)
+
+        # ⑨ УМЕНИЯ ПОКАЗЫВАЮТСЯ ВМЕСТЕ С ТЕМ, ЧЕМ ПОДТВЕРЖДЕНЫ (заявка #3698).
+        #    Умение без доказательства и часа замера — утверждение роли о себе, которое
+        #    стареет молча: умевшая в июле могла потерять доступ в августе, и обе записи
+        #    честны. Соседу нужна не строка «умею», а то, чем она держится.
+        db_sk = tmp / "sk.db"
+        build_db(db_sk)
+        con = sqlite3.connect(str(db_sk))
+        con.execute("INSERT INTO role_skill (role, skill, evidence, measured_at, until_cond,"
+                    " written_by) VALUES ('PROBE','читать графы','записка #1','2026-08-01',"
+                    "'если доступ отзовут','PROBE')")
+        con.commit()
+        con.close()
+        code9, out9 = run(db_sk, bridges)
+        ok &= case("⑨ умение показано ВМЕСТЕ с доказательством, часом и условием устаревания",
+                   code9 == 0 and "читать графы" in out9 and "записка #1" in out9
+                   and "2026-08-01" in out9 and "если доступ отзовут" in out9,
+                   "«умею» без того, чем это держится, сосед проверить не может, а время "
+                   "старит запись молча", differ=True)
+
+        # ⑩ ДВА РАЗНЫХ «УМЕНИЙ НЕТ» — их нельзя склеивать (тот же класс, что «правила нет»)
+        code10, out10 = run(db, bridges)          # место есть, записей нет
+        ok &= case("⑩ место под умения ЕСТЬ, записей нет — сказано именно это",
+                   code10 == 0 and "НЕ ВПИСАНЫ" in out10,
+                   "молчание здесь читалось бы как «роль ничего не умеет»", differ=True)
+
+        db_old = tmp / "old.db"
+        build_db(db_old)
+        con = sqlite3.connect(str(db_old))
+        con.execute("DROP TABLE role_skill")      # сборка старше шага схемы
+        con.commit()
+        con.close()
+        code11, out11 = run(db_old, bridges)
+        ok &= case("⑪ ВСТРЕЧНЫЙ: места под умения НЕТ ВОВСЕ — это другой ответ",
+                   code11 == 0 and "НЕТ МЕСТА" in out11 and "НЕ «умений нет»" in out11,
+                   "контур, собранный до этого шага схемы, иначе выглядел бы ролью без "
+                   "умений — та же склейка двух «нет», что мы чинили в перечне правил",
+                   differ=True)
 
         # ⑧ ВСТРЕЧНЫЙ к ⑦: имя группы не записано — ОТКАЗ, а не «положу везде»
         db3 = tmp / "e.db"

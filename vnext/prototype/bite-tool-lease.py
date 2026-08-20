@@ -67,9 +67,12 @@ def run(argv, role=None, cwd=None, testmode=True):
 
 def main() -> int:
     d = Path(tempfile.mkdtemp(prefix="bite-lease-"))
-    scripts = d / "scripts"
+    # Стенд — НАСТОЯЩАЯ раскладка контура: .mezosync/scripts рядом с .mezosync/mezosync.db.
+    # Иначе механизмы не находят корень и отказывают (громкая редакция помощника, 20.08).
+    контур = d / ".mezosync"
+    scripts = контур / "scripts"
     shutil.copytree(LIVE_SCRIPTS, scripts)
-    db = d / "copy.db"
+    db = контур / "mezosync.db"
     shutil.copyfile(LIVE_DB, db)
     LEASE = str(scripts / "lease.py")
     SAVE = str(scripts / "save-phoenix.py")          # пишущий
@@ -223,9 +226,16 @@ def main() -> int:
     # 🪤 Найдено ЖИВЫМ ПРИМЕНЕНИЕМ 17.08: пока я держал объявление на 13 инструментах,
     # ШЕСТЬ приёмок контура покраснели — каждая копирует живую базу, и объявление ехало
     # в копию. Механизм наказывал за собственное правильное применение.
+    # ⚠️ 20.08: стенд стал воспроизводить РАСКЛАДКУ контура (иначе механизмы не находят
+    # корень и отказывают). Побочное следствие: база стенда стала для помощника «живой»,
+    # и копия перестала отличаться от неё. Поэтому работа ведётся на ВТОРОЙ копии рядом:
+    # объявление берётся в «живой» базе стенда, а работа идёт на другой — ровно тот случай,
+    # ради которого признак и заведён.
+    db2 = контур / "copy2.db"
+    shutil.copyfile(db, db2)
     run([LEASE, "take", "--db", str(db), "--role", "CORE", "--tools", "save-phoenix.py",
          "--reason", "правка в живом контуре, пока идут приёмки", "--minutes", "30"])
-    out_sb, code_sb = run([SAVE, "--db", str(db), "--role", "PROTO", "--section", "state",
+    out_sb, code_sb = run([SAVE, "--db", str(db2), "--role", "PROTO", "--section", "state",
                            "--file", str(body), "--allow-shrink"], role="STUD", testmode=False)
     ok &= case("⑪ объявление живого контура НЕ мешает работе на КОПИИ базы",
                code_sb == 0 and "В РАБОТЕ у роли" not in out_sb,

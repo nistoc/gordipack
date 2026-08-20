@@ -124,6 +124,32 @@ def in_comments() -> tuple[int, dict[str, int]]:
     return sum(per_dir.values()), dict(per_dir)
 
 
+def мерило(db) -> str:
+    """Чем мерено: версия правила-словаря и число слов в самом признаке.
+
+    🪤 ЗАЯВКА @COORD (записка #3702), поддержанная @CHROME (#3704) своим случаем.
+    20.08 его вывод вырос со 131 до 181 за час — и НИ ОДНА роль ничего не ухудшила:
+    в 06:39 UTC в словарь добавились «гейт» и «ворота». Число было арифметически верным
+    и по существу ложным: читалось как «контур деградировал».
+    🎯 Класс: ЧИСЛО БЕЗ СВОЕЙ МЕРКИ ЛЖЁТ, ОСТАВАЯСЬ ПРАВИЛЬНЫМ. Лечится не оговоркой
+    в записке (её пишет тот, кто и так помнит), а тем, что мерка печатается САМИМ замером.
+
+    ⚖️ Печатаются ДВЕ величины, а не одна: правило и признак живут порознь, и разойтись
+    они могут молча. Версия правила без числа слов признака сказала бы «мерено v4»,
+    когда признак ещё не знает новых слов, — то есть соврала бы точнее прежнего.
+    """
+    версия = "?"
+    try:
+        con = sqlite3.connect(str(db))
+        row = con.execute("SELECT version FROM rules WHERE rule_key = 'plain-words'").fetchone()
+        con.close()
+        if row and row[0] is not None:
+            версия = f"v{row[0]}"
+    except sqlite3.Error:
+        версия = "правило не прочиталось"
+    return f"правило plain-words {версия} · слов в признаке {len(WORDS)}"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="замер прежних слов: памяти ролей и пояснения")
     ap.add_argument("--db", default=None)
@@ -135,12 +161,14 @@ def main() -> int:
     db = a.db or mezo_paths.live_db()
 
     total_mem, per_role, detail = in_memories(db)
+    мерка = мерило(db)
     if a.short:
-        print(f"прежних слов в памятях: {total_mem} у {len(per_role)} ролей "
+        print(f"прежних слов в памятях: {total_mem} у {len(per_role)} ролей, {мерка} "
               f"(цитаты и уроки среди них законны — разбор поимённо)")
         return 0
 
     print(f"📊 ПАМЯТИ РОЛЕЙ: прежних слов {total_mem} у {len(per_role)} ролей")
+    print(f"   📏 МЕРЕНО: {мерка} — два замера РАЗНЫМИ мерками несравнимы")
     for role, n in sorted(per_role.items(), key=lambda x: -x[1]):
         top = " · ".join(f"{w} {c}" for w, c in detail[role].most_common(4))
         print(f"   {role:8} {n:4}   {top}")

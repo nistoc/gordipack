@@ -47,9 +47,11 @@ def main() -> int:
     live = mezo_paths.container_root(__file__) / ".mezosync"
     tmp = pathlib.Path(tempfile.mkdtemp(prefix="bite-shown-"))
     try:
-        scripts = tmp / "scripts"
+        # Стенд — НАСТОЯЩАЯ раскладка контура, а не файлы рядом (замер 20.08 07:33 UTC).
+        контур = tmp / ".mezosync"
+        scripts = контур / "scripts"
         shutil.copytree(live / "scripts", scripts)
-        db = tmp / "mezosync.db"
+        db = контур / "mezosync.db"
         shutil.copy(live / "mezosync.db", db)
         reader = scripts / "read-messages.py"
         env = {**os.environ, "MEZO_ROLE": "PROTO"}

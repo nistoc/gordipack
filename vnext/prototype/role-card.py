@@ -75,12 +75,26 @@ def collect(db: Path, role: str) -> dict:
         "   AND (revoked_at IS NULL OR revoked_at = '')"
         "   AND (spent_at IS NULL OR spent_at = '')"
         " ORDER BY id", (role,)).fetchall()
+    # Умения — таблица role_skill (заведена @COORD 2026-08-20 по заявке #3698).
+    # ⚖️ Её может не быть у контура, собранного раньше: отсутствие таблицы — НЕ «умений нет»,
+    # и карточка обязана эти два случая различать, иначе сосед прочитает старую сборку
+    # как роль без умений.
+    try:
+        skills = con.execute(
+            "SELECT skill, evidence, measured_at, until_cond, written_by FROM role_skill"
+            " WHERE role = ? ORDER BY measured_at DESC, id", (role,)).fetchall()
+        место_есть = True
+    except sqlite3.OperationalError:
+        skills, место_есть = [], False
+
     card = {
         "роль": r["role"],
         "состояние": r["lifecycle"],
         "состояние_с": r["lifecycle_at"] or "",
         "зона": r["zone"] or "",
         "права": [dict(x) for x in rights],
+        "умения": [dict(x) for x in skills],
+        "место_под_умения": место_есть,
     }
     con.close()
     return card
@@ -104,9 +118,29 @@ def render(card: dict, container: Path) -> str:
     L.append("")
     L.append("## Что роль умеет")
     L.append("")
-    L.append("⚠️ В БАЗЕ ПОКА НЕТ МЕСТА ПОД ЭТО ПОЛЕ — карточка #234, шаг схемы отдан @COORD.")
-    L.append("   Пока поля нет, карточка честно молчит об умениях, а не пересказывает их")
-    L.append("   по памяти автора: пересказ разошёлся бы с правдой ровно так, как вторая копия.")
+    if not card["место_под_умения"]:
+        L.append("⚠️ В ЭТОЙ БАЗЕ НЕТ МЕСТА ПОД УМЕНИЯ (таблицы `role_skill` не существует).")
+        L.append("   Это НЕ «умений нет»: сборка старше того шага схемы, которым место заведено.")
+    elif not card["умения"]:
+        L.append("⚠️ УМЕНИЯ НЕ ВПИСАНЫ. Место в базе есть, записей нет — карточка молчит вслух,")
+        L.append("   а не пересказывает умения по памяти автора: пересказ разошёлся бы")
+        L.append("   с правдой так же, как вторая копия, только незаметнее.")
+        L.append("   Вписывает роль сама: чужой рукой это было бы чужое представление о её")
+        L.append("   работе, записанное как факт о ней.")
+    else:
+        L.append("⚖️ Умение — утверждение роли о себе, и оно **стареет молча**: та, что умела")
+        L.append("   в июле, могла потерять доступ в августе — обе записи честны, лжёт время.")
+        L.append("   Поэтому у каждой строки видно, чем подтверждено и когда в этом убедились.")
+        L.append("")
+        for s in card["умения"]:
+            L.append(f"- **{s['skill']}**")
+            L.append(f"  - чем подтверждено: {s['evidence']}")
+            L.append(f"  - когда убедились: {s['measured_at']} UTC"
+                     + (f" · вписала {s['written_by']}"
+                        if s["written_by"] != card["роль"] else ""))
+            L.append(f"  - перестаёт быть верным: {s['until_cond']}"
+                     if s.get("until_cond") else
+                     "  - ⚠️ условие устаревания НЕ названо — значит проверять придётся вам")
     L.append("")
     L.append("## Куда ей писать")
     L.append("")

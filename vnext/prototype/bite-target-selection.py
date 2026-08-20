@@ -48,8 +48,15 @@ def run(target=None, only=ONLY):
 
 
 def copy_scripts(tmp, name, break_files=()):
-    dst = os.path.join(tmp, name, "scripts")
+    # Копия строится КАК КОНТУР (.mezosync/scripts + база рядом), а не просто каталогом
+    # скриптов: с 20.08 помощник путей отказывает ГРОМКО, если корень не находится, и
+    # копия «файлы рядом» перестала быть испытуемой — падала целиком, ещё до предмета.
+    # ⚖️ Стенд, не воспроизводящий раскладку, зелен ровно до тех пор, пока испытуемый
+    # неразборчив; чинить надо стенд, а не возвращать инструменту снисходительность.
+    корень = os.path.join(tmp, name, ".mezosync")
+    dst = os.path.join(корень, "scripts")
     shutil.copytree(LIVE, dst)
+    shutil.copyfile(mezo_paths.live_db(), os.path.join(корень, "mezosync.db"))
     for f in break_files:
         with open(os.path.join(dst, f), "w", encoding="utf-8") as fh:
             fh.write("import sys\nsys.exit('НАРОЧНО СЛОМАН В КОПИИ')\n")

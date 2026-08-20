@@ -66,9 +66,12 @@ def run(argv, role=None):
 
 def main() -> int:
     d = Path(tempfile.mkdtemp(prefix="bite-door-"))
-    scripts = d / "scripts"
+    # Стенд — НАСТОЯЩАЯ раскладка контура: .mezosync/scripts рядом с .mezosync/mezosync.db.
+    # Иначе механизмы не находят корень и отказывают (громкая редакция помощника, 20.08).
+    контур = d / ".mezosync"
+    scripts = контур / "scripts"
     shutil.copytree(LIVE_SCRIPTS, scripts)
-    db = d / "copy.db"
+    db = контур / "mezosync.db"
     shutil.copyfile(LIVE_DB, db)
     DOOR = str(scripts / "gordi.py")
     # Изоляция от объявлений, действующих в живом контуре прямо сейчас (см. ту же правку
