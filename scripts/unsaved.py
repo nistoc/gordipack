@@ -149,7 +149,7 @@ def main() -> int:
         description="Обзор незаписанного: что умрёт с чатом, что с машиной",
     )
     ap.add_argument("--root", action="append", type=Path,
-                    help="где искать репозитории (можно несколько; по умолчанию — контейнер этого контура)")
+                    help="где искать репозитории (можно несколько; по умолчанию — контейнер этого контура плюс MEZO_EXTRA_ROOTS)")
     ap.add_argument("--quiet-clean", action="store_true",
                     help="не печатать репозитории, где всё записано")
     args = ap.parse_args()

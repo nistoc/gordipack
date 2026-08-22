@@ -243,6 +243,9 @@ CREATE TABLE IF NOT EXISTS sync_backoff (
                         sleep_sec INTEGER NOT NULL,
                         quiet_streak INTEGER NOT NULL DEFAULT 0,
                         last_seen_id INTEGER NOT NULL DEFAULT 0,
+                        -- без NOT NULL намеренно: пусто = «обмен ещё не читали»,
+                        -- ноль значил бы «читали, там пусто» — это разные факты
+                        last_bridge_mtime REAL,
                         updated_at TEXT);
 
 CREATE TABLE IF NOT EXISTS templates (

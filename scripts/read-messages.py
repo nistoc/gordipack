@@ -647,7 +647,7 @@ def main():
             "ORDER BY last_id DESC, issued_at DESC LIMIT 1", (role, last_read)).fetchone()
         if reissue:
             # Тот же батч — значит тот же НАБОР нот: пришедшее позже в него не входит и
-            # ждёт следующего. Иначе ack сдвинул бы курсор на prev_last, а на экране было
+            # ждёт следующего. Иначе ack сдвинул бы отметку прочитанного на prev_last, а на экране было
             # бы больше — роль подтвердила бы не то, что прочитала.
             kept = [r for r in rows if r[0] <= reissue[1]]
             if kept:

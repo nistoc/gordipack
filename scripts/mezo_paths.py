@@ -26,6 +26,7 @@ mezo_paths.py — ПРОТОТИП механизма R15a: инструмент
     db = resolve_db(args.db, __file__)
 """
 from pathlib import Path
+import os
 import sys
 
 DB_NAME = "mezosync.db"
@@ -42,8 +43,48 @@ def mezo_root(script_file) -> Path:
     for cand in (p, *p.parents):
         if (cand / DB_NAME).exists():
             return cand
-    # Не нашли — отдаём ожидаемое место (scripts/../), чтобы сообщение об ошибке было предметным.
-    return Path(script_file).resolve().parent.parent
+    # ⛔ ГРОМКО, А НЕ ТИХО — сведено 2026-08-20 06:10 UTC по заявке @PROTO (записка #3697 ②).
+    # Прежде здесь стоял возврат «ожидаемого места» (parent.parent). Он выглядел безобидной
+    # предметностью сообщения, а на деле отдавал ПУТЬ, по которому следующий же
+    # `sqlite3.connect` МОЛЧА СОЗДАЁТ ПУСТУЮ БАЗУ. Не рассуждение: 19.08 18:53 UTC при прогоне
+    # @PROTO в корне публичного образца так появился `mezosync.db` нулевой длины.
+    # Цена названа в шапке этого же файла и была верна про соседний класс, но не исполнялась
+    # здесь: «тихий отказ дороже громкого — громкий стоит повторного вызова, тихий — пяти
+    # суток пустышки».
+    # 🪤 ДО ОТКАЗА — ТЕ ЖЕ ИСТОЧНИКИ, ЧТО У container_root. Врезано 2026-08-21 22:26 UTC
+    # по заявке @PROTO (записка #3713 ②), её замер воспроизведён мной перед правкой.
+    # Прежде отказ НАЗЫВАЛ два выхода, и оба были мертвы: переменную среды читал только
+    # container_root, а про «абсолютный --db» см. правку в resolve_db ниже. Роль выполняла
+    # оба совета, получала тот же отказ слово в слово и решала, что сломан механизм,
+    # а не её собственное место запуска. Больнее всего у lease.py — его зовут в первые
+    # минуты жизни роли.
+    # ⚖️ Развилка @PROTO решена в сторону «сделать советы правдой», а не «убрать их
+    # из текста»: оба совета разумны, роль попробует их в любом случае, и текст без них
+    # оставил бы читателя в тупике без выхода.
+    env = os.environ.get("MEZO_CONTAINER")
+    loc = _local_get("container")
+    for src in (Path(env) if env else None, loc):
+        if src is None:
+            continue
+        # Обе раскладки, как и в отсечке template_root: база может лежать в подкаталоге
+        # .mezosync контейнера или прямо в названном каталоге.
+        for cand in (src / ".mezosync", src):
+            if (cand / DB_NAME).exists():
+                return cand
+    sys.exit(
+        f"ERR: корень мезосинка НЕ НАЙДЕН: файла {DB_NAME} нет ни в одном предке.\n"
+        f"     Искал вверх от: {Path(script_file).resolve().parent}\n"
+        + (f"     MEZO_CONTAINER={env} — задана, но {DB_NAME} по ней не найден.\n"
+           if env else "")
+        + (f"     local.paths: container={loc} — задан, но {DB_NAME} по нему не найден.\n"
+           if loc else "")
+        + f"     Прежде здесь молча возвращалось «ожидаемое место», и подключение к базе\n"
+        f"     по этому пути создавало ПУСТУЮ базу вместо отказа.\n"
+        f"     Выходы, и оба ПРОВЕРЕНЫ прогоном:\n"
+        f"       · MEZO_CONTAINER=<путь до контейнера>  (или строка container=<путь>\n"
+        f"         в файле local.paths рядом с mezo_paths.py)\n"
+        f"       · позвать с АБСОЛЮТНЫМ --db <путь до {DB_NAME}> — корень тогда не нужен вовсе."
+    )
 
 
 def default_db(script_file) -> Path:
@@ -53,27 +94,93 @@ def default_db(script_file) -> Path:
 # ═══ ИМЕНА, КОТОРЫХ ЗДЕСЬ НЕ БЫЛО, — ВРЕЗАНЫ 10.08 01:13 UTC ПО ЗАМЕРУ (#145) ═══
 # 🪤 Найдено сборкой свежего контура и ЗАПУСКОМ его инструментов: звенья, доехавшие из
 # vnext/prototype, падали с `AttributeError: module 'mezo_paths' has no attribute 'live_db'`.
-# Причина — ДВА ФАЙЛА С ОДНИМ ИМЕНЕМ и разной начинкой: здесь 81 строка, в рабочем
-# контуре 145. Каждый по-своему прав, и оба выглядят исправными, пока не окажутся рядом.
-# ⇒ Имена сведены, но НЕ переписана логика: всё выражено через mezo_root, чтобы правды
-# не стало две. Работает в обеих раскладках — и когда БД лежит в .mezosync собранного
-# контура, и когда каталог .mezosync лежит внутри контейнера-репозитория.
-def live_db(script_file=None) -> Path:
-    """Путь к живой БД контура (синоним default_db — имя из рабочего контура)."""
-    return default_db(script_file or __file__)
+# Причина — ДВА ФАЙЛА С ОДНИМ ИМЕНЕМ и разной начинкой. Каждый по-своему прав, и оба
+# выглядят исправными, пока не окажутся рядом.
+#
+# ═══ СВЕДЕНО К ГРОМКОЙ РЕДАКЦИИ 2026-08-20 06:10 UTC (заявка @PROTO, записка #3697 ②) ═══
+# Работа 15.08 «пути машины больше не впечатаны — они выводятся» (`2417f72`, карточка #153 ③)
+# доехала только до копии @PROTO; здесь оставалась прежняя, тихая. Порядок поиска контейнера
+# теперь ОДИН в обеих копиях:
+#   ① переменная среды MEZO_CONTAINER — явное сильнее выведенного;
+#   ② подъём от расположения файла по МАРКЕРУ (.mezosync/mezosync.db — признак, не глубина);
+#   ③ local.paths рядом с этим файлом — непубликуемый, для копии ВНЕ контейнера;
+#   ④ ГРОМКИЙ отказ с рецептом. Тихий дефолт был бы путём машины под другим именем.
+# ⚠️ ЧТО СОХРАНЕНО ЗДЕСЬ И ЧЕГО НЕТ У ОБРАЗЦА — @PROTO прямо предупредила, что переносить
+# «как есть» нельзя, у здешних функций свои потребители:
+#   · mezo_root/default_db — зовут 3 инструмента; у образца этих имён нет вовсе;
+#   · проверка объявлений о правке в resolve_db — 21 инструмент, у образца её нет.
+# ⚖️ И РАЗНЫЙ СМЫСЛ ВОЗВРАТА, названный вслух, чтобы не свести по ошибке:
+#   mezo_root      → каталог, ГДЕ ЛЕЖИТ база  (…/.atlas/.mezosync)
+#   container_root → каталог, ВНУТРИ которого лежит .mezosync  (…/.atlas)
+# Проверено прогоном до и после правки: все пять функций отдают то же, что отдавали.
+_LOCAL = Path(__file__).resolve().parent / "local.paths"
 
 
-def live_scripts(script_file=None) -> Path:
-    """Каталог инструментов контура: рядом с БД."""
-    root = mezo_root(script_file or __file__)
-    cand = root / "scripts"
-    return cand if cand.is_dir() else root
+def _local_get(key: str):
+    if not _LOCAL.exists():
+        return None
+    for line in _LOCAL.read_text(encoding="utf-8").splitlines():
+        if line.startswith(key + "="):
+            return Path(line.split("=", 1)[1].strip())
+    return None
 
 
 def container_root(script_file=None) -> Path:
-    """Каталог, ВНУТРИ которого лежит .mezosync (или сам корень, если он и есть контур)."""
-    root = mezo_root(script_file or __file__)
-    return root.parent if root.name == ".mezosync" else root
+    """Каталог, ВНУТРИ которого лежит .mezosync. Не найден — ОТКАЗ, а не догадка."""
+    import os
+    env = os.environ.get("MEZO_CONTAINER")
+    if env:
+        return Path(env)
+    start = Path(script_file or __file__).resolve().parent
+    for cand in (start, *start.parents):
+        if (cand / ".mezosync" / DB_NAME).exists():
+            return cand
+    loc = _local_get("container")
+    if loc and (loc / ".mezosync" / DB_NAME).exists():
+        return loc
+    sys.exit("ERR: контейнер группы НЕ НАЙДЕН (маркер .mezosync/mezosync.db не встретился "
+             "вверх по дереву).\n     Задай MEZO_CONTAINER=<путь> либо создай рядом с "
+             f"mezo_paths.py файл local.paths со строкой container=<путь>.\n"
+             f"     Искал от: {start}")
+
+
+def live_db(script_file=None) -> Path:
+    """Путь к живой базе контура."""
+    return container_root(script_file) / ".mezosync" / DB_NAME
+
+
+def live_scripts(script_file=None) -> Path:
+    """Каталог инструментов контура."""
+    return container_root(script_file) / ".mezosync" / "scripts"
+
+
+def template_root(script_file=None) -> Path:
+    """Корень репозитория-образца: маркер scripts/init-group.py; иначе local.paths/среда."""
+    import os
+    env = os.environ.get("MEZO_TEMPLATE")
+    if env:
+        return Path(env)
+    start = Path(script_file or __file__).resolve().parent
+    for cand in (start, *start.parents):
+        # 🪤 ОТСЕЧКА, ДОБАВЛЕННАЯ ЗДЕСЬ 2026-08-20 06:12 UTC — прогоном, не по образцу.
+        # Маркер `scripts/init-group.py` НЕ РАЗЛИЧАЕТ образец и рабочий контур: контур
+        # собран ИЗ образца и несёт тот же файл. В раскладке @PROTO это не видно (у неё
+        # копия лежит внутри самого образца), а здесь первый же кандидат — наш собственный
+        # контейнер, и функция уверенно возвращала его как «корень образца».
+        # Признак живого контура — база рядом; у образца её нет по построению.
+        # Обе раскладки: база может лежать в САМОМ кандидате (…/.mezosync/mezosync.db,
+        # когда кандидат — сам каталог .mezosync) или в его подкаталоге (…/.atlas).
+        # Первая редакция отсечки проверяла только вторую форму и промахнулась ровно
+        # на здешней раскладке — поймано прогоном сразу после правки, а не рассуждением.
+        if (cand / ".mezosync" / DB_NAME).exists() or (cand / DB_NAME).exists():
+            continue
+        if (cand / "scripts" / "init-group.py").exists():
+            return cand
+    loc = _local_get("template")
+    if loc and (loc / "scripts" / "init-group.py").exists():
+        return loc
+    sys.exit("ERR: корень образца НЕ НАЙДЕН (маркер scripts/init-group.py).\n"
+             "     Задай MEZO_TEMPLATE=<путь> либо строку template=<путь> в local.paths.")
 
 
 def resolve_db(arg, script_file, must_exist: bool = True) -> Path:
@@ -90,12 +197,17 @@ def resolve_db(arg, script_file, must_exist: bool = True) -> Path:
     создание пустой БД. «Ошибка должна указывать на причину, а не на симптом» (CORE #2669:
     `can't open file` указывал на скрипт, хотя виноват был сменившийся каталог).
     """
-    root = mezo_root(script_file)
-    if arg is None:
-        db = root / DB_NAME
+    # 🪤 ПОРЯДОК ЗДЕСЬ — ЧАСТЬ ПОЧИНКИ, А НЕ ОФОРМЛЕНИЕ (21.08, заявка @PROTO #3713 ②).
+    # Прежде первой строкой стоял безусловный `root = mezo_root(script_file)`, и он ВЫХОДИЛ
+    # с отказом ДО того, как кто-либо смотрел на arg. Поэтому совет «позови с абсолютным
+    # --db» не мог сработать в принципе: путь был правильный, а до него не доходило.
+    # ⚖️ Абсолютный путь самодостаточен по построению — корень для него не нужен вовсе.
+    p = Path(arg) if arg is not None else None
+    if p is not None and p.is_absolute():
+        db = p
     else:
-        p = Path(arg)
-        db = p if p.is_absolute() else (root / p)
+        root = mezo_root(script_file)          # корень ищем ТОЛЬКО когда он правда нужен
+        db = (root / DB_NAME) if p is None else (root / p)
     db = db.resolve()
     # ── ЕДИНАЯ ТОЧКА ПРОВЕРКИ АРЕНДЫ (карточка #204) ─────────────────────────
     # Почему здесь, а не в каждом инструменте: 23 инструмента зовут эту функцию, и она
