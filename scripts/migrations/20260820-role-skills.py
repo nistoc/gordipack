@@ -52,7 +52,7 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS = os.path.dirname(HERE)
 sys.path.insert(0, SCRIPTS)
-from schema_journal import record_step, verify  # noqa: E402
+from schema_journal import record_step, split_statements, verify  # noqa: E402
 
 VERSION = "20260820-role-skills"
 
@@ -141,7 +141,9 @@ def main():
     conn.execute("BEGIN")
     # ⛔ НЕ executescript: он делает неявный commit и рвёт явную транзакцию — журнал тогда
     # пишется вне её, и «та же транзакция» становится словами. Поймано прогоном, не чтением.
-    for stmt in [x.strip() for x in DDL.split(";") if x.strip()]:
+    # ⚠️ Разбор общим модулем, НЕ `DDL.split(";")`: точка с запятой в комментарии
+    #    или в строковом значении разрывала оператор пополам (находка @OPSSRE 23.08).
+    for stmt in split_statements(DDL):
         conn.execute(stmt)
     fp = record_step(
         conn, VERSION,
