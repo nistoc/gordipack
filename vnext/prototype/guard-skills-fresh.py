@@ -18,7 +18,7 @@ r"""ПРОВЕРКА: навык не отстал от свода правил,
   ⚠️ у навыка нет отпечатка — судить о свежести НЕЧЕМ (это не «свежо»).
 
 Зовут так:
-    python <КОНТУР>/vnext-tools/guard-skills-fresh.py
+    python C:/guts/.atlas/vnext-tools/guard-skills-fresh.py
 """
 from __future__ import annotations
 

@@ -106,7 +106,7 @@ def selftest():
     con = sqlite3.connect(str(db))
     con.execute("CREATE TABLE phoenix (role TEXT, section TEXT, body TEXT)")
     con.execute("INSERT INTO phoenix VALUES ('SOMEROLE','rebirth',"
-                r"'шаг 1: python <КОНТУР>\.mezosync\scripts\guard-all.py')")
+                r"'шаг 1: python C:\guts\.atlas\.mezosync\scripts\guard-all.py')")
     con.commit()
     con.close()
     ok = True
@@ -127,7 +127,7 @@ def selftest():
     ok &= good
     print(f"{'✅' if good else '🔴'} замена слэшей: {got[:70]}")
 
-    proza = r"каталог <КОНТУР>\.mezosync — тут python не зовут"
+    proza = r"каталог C:\guts\.atlas\.mezosync — тут python не зовут"
     good = fix_line(proza) == proza
     ok &= good
     print(f"{'✅' if good else '🔴'} проза без вызова python НЕ тронута")

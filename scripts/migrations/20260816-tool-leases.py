@@ -70,8 +70,7 @@ def main() -> int:
     schema_journal.record_step(
         con, "20260816-tool-leases",
         "аренда инструмента на время правки: кто · что · зачем · до какого времени; "
-        "истекает сама (карточка #204, вопрос владельца 16.08 09:59 UTC)",
-        by="PROTO")
+        "истекает сама (карточка #204, вопрос владельца 16.08 09:59 UTC)")
     con.commit()
     after = {r[0] for r in con.execute(
         "SELECT name FROM sqlite_master WHERE type='table'")}

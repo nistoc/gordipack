@@ -208,7 +208,7 @@ def main():
     fp = record_step(conn, VERSION,
                      "засеянные отрезки говорят правду (слово владельца 12.08: «считать "
                      "прочитанным, кроме RCC») + витрины cursor_truth и cursor_gaps; "
-                     "gaps показывает ТОЛЬКО declared — 'born' исключён намеренно", by='PROTO')
+                     "gaps показывает ТОЛЬКО declared — 'born' исключён намеренно")
     conn.commit()
     print(f'\n✅ ВРЕЗАНО. отпечаток схемы: {fp}')
     ok, why = verify(conn)

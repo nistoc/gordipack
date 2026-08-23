@@ -46,14 +46,45 @@ import mezo_paths  # noqa: E402
 
 SCRIPTS = Path(__file__).resolve().parent
 DB = mezo_paths.default_db(__file__)
-# ⚠️ coordination живёт ПО-РАЗНОМУ: у нас — в atlas.archs/.mezosync/ (репо координатора),
-# у собранного из шаблона контура — в корне контейнера. Ищем по известным раскладкам;
-# не нашли — отдаём ПЕРВЫЙ кандидат, чтобы отказ называл ожидаемое место, а не пустоту.
-_coord_candidates = [
-    mezo_paths.container_root(__file__) / "atlas.archs" / ".mezosync" / "coordination",
-    mezo_paths.container_root(__file__) / "coordination",
-]
-COORDINATION = next((c for c in _coord_candidates if c.exists()), _coord_candidates[0])
+# ⚡ КАТАЛОГ КООРДИНАЦИИ ИЩЕТСЯ ПРИЗНАКОМ (ГДЕ ОН ЛЕЖИТ), А НЕ ПЕРЕЧНЕМ НАШИХ ИМЁН.
+# 🩸 Оплачено соседним контуром (карточка #248, их замер 23.08): прежняя редакция перебирала
+# два кандидата, и ОБА были наши — `atlas.archs/.mezosync/coordination` и корень контейнера.
+# У них репозиторий зовётся иначе ⇒ путь несуществующий ⇒ проверка «замороженные md» брала
+# оттуда НОЛЬ файлов и печатала ✅. Молчало ПЯТЬ СУТОК, всю жизнь их контура.
+# ⛔ Их формулировка, забираю дословно: **это хуже ложной тревоги. Ложная учит не верить
+# красному; эта учит ВЕРИТЬ ЗЕЛЁНОМУ.** Пустой набор проходит любую проверку.
+# ⛔ Дописать сюда `tapas.archs` рядом с `atlas.archs` — ровно тот класс, за который контур
+# платил трижды: перечень имён неполон на то имя, которым ещё не обожглись.
+# ⚖️ Признак: каталог `coordination` внутри `.mezosync` ЛЮБОГО репозитория контейнера, либо
+# прямо в корне (раскладка контура, собранного из образца). Имена репозиториев берутся
+# С ДИСКА. Возвращаем ВСЕ найденные, а не первый: два каталога координации — это тоже факт,
+# и лучше увидеть оба, чем судить по одному.
+def _каталоги_координации(корень):
+    найденные = []
+    свой = корень / "coordination"
+    if свой.is_dir():
+        найденные.append(свой)
+    try:
+        соседи = sorted(d for d in корень.iterdir() if d.is_dir())
+    except OSError:
+        соседи = []
+    for репо in соседи:
+        кандидат = репо / ".mezosync" / "coordination"
+        if кандидат.is_dir():
+            найденные.append(кандидат)
+    return найденные
+
+
+ГДЕ_ИСКАЛИ = ("<корень контура>/coordination либо "
+              "<корень контура>/<любой репозиторий>/.mezosync/coordination")
+COORDINATIONS = _каталоги_координации(mezo_paths.container_root(__file__))
+# ⚠️ None, а НЕ первый кандидат: «не нашли» обязано отличаться от «нашли». Прежняя редакция
+# отдавала несуществующий путь, и дальше он вёл себя как пустой каталог — то есть как чистый.
+COORDINATION = COORDINATIONS[0] if COORDINATIONS else None
+# Законный контур без каталога координации: гасит ОТКАЗ в жёлтое одним явным словом.
+# ⚖️ Без такого выхода отказ стал бы вечно-красным-без-вины у того, кто каталогом
+# не пользуется, — а вечно-красный учит не верить красному (надгробие FREEZE_UTC ниже).
+БЕЗ_КООРДИНАЦИИ = (os.environ.get("MEZO_NO_COORDINATION") or "").strip().lower() == "yes"
 # ⚰️ FREEZE_UTC (отсечка по mtime) УБРАНА 2026-07-26: проверка ⑦ теперь по СОДЕРЖИМОМУ (git),
 # а не по времени файла — см. блок «замороженные md» ниже. mtime двигало любое копирование
 # (git checkout @opssre #2793, восстановление из бэкапа) без правки содержимого → вечно-красный
@@ -525,11 +556,33 @@ def main():
     # поверят. Это же блокировало гейт CORE. ⇒ критерий — РАСХОЖДЕНИЕ С КОММИТОМ (git status
     # --porcelain): mtime подвинет любое копирование (в т.ч. восстановление из бэкапа), содержимое
     # — только реальная правка. generated/ и archive/ — живые, не смотрим; sync.rules.md — из БД.
-    frozen = [p for p in (list(COORDINATION.glob("sync.*.md"))
-                          + list((COORDINATION / "phoenix").glob("*.md")))
-              if p.name != "sync.rules.md"]
-    repo = COORDINATION.parents[1]  # …/atlas.archs (coordination → .mezosync → atlas.archs)
-    touched, git_ok = [], True
+    # ⛔ ТРЕТИЙ ИСХОД — «НЕ НАШЁЛ, ГДЕ СМОТРЕТЬ». Пустой набор больше не проходит зелёным
+    #    (карточка #248): у соседей несуществующий путь давал НОЛЬ файлов и ✅ пять суток.
+    #    Зелёное здесь означало бы «проверено и чисто», а верно — «проверять было негде».
+    # ⛔ И ПРОДОЛЖАЕМ, А НЕ ВЫХОДИМ: этот блок стои́т внутри main(), после него ещё восемь
+    #    проверок. Первая редакция починки писала здесь `return` — он погасил бы их МОЛЧА,
+    #    и это был бы тот же класс в новом месте: итог назвал бы меньше проверок, чем есть.
+    исход_вынесен = True
+    if not COORDINATIONS and БЕЗ_КООРДИНАЦИИ:
+        counted("замороженные md")
+        print("   ⚠️ замороженные md: каталога координации нет, и это объявлено явно "
+              "(MEZO_NO_COORDINATION=yes) — проверка НЕ ПОСТАВЛЕНА, а не пройдена")
+        frozen, repo, git_ok, touched = [], None, False, []
+    elif not COORDINATIONS:
+        check("замороженные md", False,
+              f"каталог координации НЕ НАЙДЕН. Искал по признаку: {ГДЕ_ИСКАЛИ}. "
+              "Проверка неприкосновенности замороженных md НЕ ВЫПОЛНЯЛАСЬ — это отказ, "
+              "а не чистота. 👉 Если контур каталогом не пользуется, скажи это вслух: "
+              "MEZO_NO_COORDINATION=yes — и отказ станет жёлтым «не поставлена»")
+        frozen, repo, git_ok, touched = [], None, False, []
+    else:
+        исход_вынесен = False
+        frozen = [p for каталог in COORDINATIONS
+                  for p in (list(каталог.glob("sync.*.md"))
+                            + list((каталог / "phoenix").glob("*.md")))
+                  if p.name != "sync.rules.md"]
+        repo = COORDINATION.parents[1]  # …/atlas.archs (coordination → .mezosync → atlas.archs)
+        touched, git_ok = [], True
     if frozen:
         try:
             r = subprocess.run(["git", "-C", str(repo), "status", "--porcelain", "--"]
@@ -542,9 +595,19 @@ def main():
                 touched.append(line[3:].strip().strip('"').replace("\\", "/").split("/")[-1])
         except (OSError, subprocess.SubprocessError):
             git_ok = False
-    if git_ok:
+    if исход_вынесен:
+        # ⚠️ Исход уже назван выше (каталога нет). Без этой ветки сюда пришло бы `git_ok=False`
+        #    и добавило ВТОРУЮ запись — зелёную, поверх только что вынесенного отказа.
+        pass
+    elif not frozen:
+        # Каталог найден, а охранять в нём нечего — это ДРУГОЕ, чем «проверено и цело».
+        counted("замороженные md")
+        print(f"   ⚠️ замороженные md: каталог найден ({len(COORDINATIONS)} шт.), "
+              "но замороженных файлов НОЛЬ — охранять нечего. Не путать с «цело»")
+    elif git_ok:
         check("замороженные md", not touched,
-              "СОДЕРЖИМОЕ изменено (git): " + "; ".join(sorted(set(touched))))
+              f"СОДЕРЖИМОЕ изменено (git), под охраной {len(frozen)}: "
+              + "; ".join(sorted(set(touched))))
     else:
         # git недоступен — содержимое проверить нечем. НЕ блокируем (иначе тот же вечно-красный),
         # но честно говорим, что проверка не поставлена, а не рисуем зелёное как факт.
@@ -687,9 +750,20 @@ def main():
     #   setdefault теперь запоминает САМЫЙ НОВЫЙ, а не самый старый.
     # ⛔ Защита min(git, mtime) остаётся: заменить git-дату на mtime нельзя — это снимет
     #   ровно то, ради чего минимум заводился (@opssre отвёл эту починку сам, до вопроса).
-    BRIDGES = COORDINATION.parent / "bridges"
+    # ⚡ ВТОРАЯ ПРОВЕРКА, ЗАВИСЯЩАЯ ОТ ТОГО ЖЕ КАТАЛОГА (карточка #248). Соседи назвали одну —
+    # «замороженные md». Их ДВЕ: мост соседей отсчитывается от того же места, и при ненайденном
+    # каталоге он тоже молчал бы зелёным — то есть контур не узнал бы, что ему пишут.
+    # 🎯 Тот же порядок, что у нашего COORD с миграцией: заявка называла одно место, мест было два.
+    # Починка по заявке буквально оставила бы половину, и проверка после неё была бы зелёной.
+    BRIDGES = (COORDINATION.parent / "bridges") if COORDINATION else None
+    if BRIDGES is None or not BRIDGES.exists():
+        counted("мост соседей")
+        print("   ⚠️ мост соседей: "
+              + ("каталога координации нет — искал по признаку: " + ГДЕ_ИСКАЛИ
+                 if BRIDGES is None else f"нет папки моста ({BRIDGES})")
+              + ". Записки соседей НЕ ПРОВЕРЯЛИСЬ — это не «их нет», а «смотреть негде»")
     added = {}
-    if BRIDGES.exists():
+    if BRIDGES and BRIDGES.exists():
         r = subprocess.run(["git", "-C", str(BRIDGES.parent.parent), "log",
                             "--format=%at", "--name-only", "--", "*.mezosync/bridges/*"],
                            capture_output=True, text=True)
@@ -700,7 +774,7 @@ def main():
             elif line.strip() and ts:
                 added.setdefault(Path(line).name, ts)   # log новее→старее ⇒ первым лёг САМЫЙ СВЕЖИЙ
     unannounced = []
-    if BRIDGES.exists():
+    if BRIDGES and BRIDGES.exists():
         for f in sorted(BRIDGES.glob("*/*.md")):
             if f.name == "INDEX.md":       # указатель правится при каждой записке, о нём не сообщают
                 continue
@@ -808,7 +882,7 @@ def main():
         будет прихвачен. Это лучше плоского обхода и честнее вписанного списка папок,
         который надо помнить рукой."""
         return [d for d in sorted(BRIDGES.iterdir())
-                if d.is_dir() and group in d.name.split("-")] if BRIDGES.exists() else []
+                if d.is_dir() and group in d.name.split("-")] if BRIDGES and BRIDGES.exists() else []
 
     def _наши(group: str) -> set:
         return {f.name for d in _папки(group) for f in d.glob("*.md")}
@@ -832,7 +906,8 @@ def main():
         НЕ равны «записан один раз» и говорятся вслух."""
         if _записи_кеш:
             return _записи_кеш
-        корень = next((p for p in [BRIDGES, *BRIDGES.parents] if (p / ".git").exists()), None)
+        корень = (next((p for p in [BRIDGES, *BRIDGES.parents] if (p / ".git").exists()), None)
+              if BRIDGES else None)
         if корень is None:
             _записи_кеш["__нет__"] = "папка моста вне репозитория — число записей неизвестно"
             return _записи_кеш

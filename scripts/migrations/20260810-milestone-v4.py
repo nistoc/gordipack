@@ -60,7 +60,7 @@ def main():
     fp = record_step(conn, VERSION,
                      "рубеж: версия v4 = адресат полем + основание правил + журнал с "
                      "отпечатком и автором + права роли + замок гонки + сведение с образцом "
-                     "v-next (#89: lifecycle ролей, статус правил полем)", by='PROTO')
+                     "v-next (#89: lifecycle ролей, статус правил полем)")
     conn.commit()
     print(f'\n✅ ОБЪЯВЛЕНО. отпечаток: {fp}')
     ver2 = conn.execute("SELECT * FROM schema_version").fetchone()

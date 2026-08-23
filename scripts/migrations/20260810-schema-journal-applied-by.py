@@ -131,7 +131,7 @@ def main():
                      (value, ver))
     fp = record_step(conn, VERSION,
                      "журнал схемы: applied_by — чем применён шаг; восстановлено замером "
-                     "по диску, недоказуемое оставлено пустым", by='PROTO')
+                     "по диску, недоказуемое оставлено пустым")
     conn.commit()
     print(f'\n✅ ВРЕЗАНО. отпечаток схемы: {fp}')
     ok, why = verify(conn)

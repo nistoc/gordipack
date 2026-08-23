@@ -2,9 +2,9 @@
 # -*- coding: utf-8 -*-
 """measure-old-words — сколько прежних слов осталось: в памятях ролей и в пояснениях.
 
-    python <КОНТУР>/vnext-tools/measure-old-words.py           # обе половины
-    python <КОНТУР>/vnext-tools/measure-old-words.py --memories  # только памяти
-    python <КОНТУР>/vnext-tools/measure-old-words.py --short     # одна строка (для проверок)
+    python C:/guts/.atlas/vnext-tools/measure-old-words.py           # обе половины
+    python C:/guts/.atlas/vnext-tools/measure-old-words.py --memories  # только памяти
+    python C:/guts/.atlas/vnext-tools/measure-old-words.py --short     # одна строка (для проверок)
 
 ЗАЧЕМ ИНСТРУМЕНТ, А НЕ РАЗОВЫЙ ЗАПРОС: 17–18.08 вывод инструментов переведён на
 общепонятные слова (правило `plain-words`). Проверки, ищущие протухшие утверждения,

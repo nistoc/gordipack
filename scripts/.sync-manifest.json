@@ -16,7 +16,7 @@
  "export-channels.py": "94a58be18512",
  "export-markdown.py": "9efc8ced30ea",
  "export-rules.py": "888cac79e2e6",
- "guard-all.py": "3322d0ad2fbb",
+ "guard-all.py": "5529c3256dec",
  "guard-command-targets.py": "249b0327a91d",
  "guard-cursor-segments.py": "c7d168018f9d",
  "guard-scripts-drift.py": "b5b020d1b2aa",

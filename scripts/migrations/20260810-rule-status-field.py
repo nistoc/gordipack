@@ -185,7 +185,7 @@ def main():
     fp = record_step(conn, VERSION,
                      "rules: статус полем (active/revoked/superseded) + обстоятельства "
                      "отзыва + преемник НОМЕРОМ; 10 отзывов заполнены картой, собранной "
-                     "глазами; слово владельца 08:56 UTC", by='PROTO')
+                     "глазами; слово владельца 08:56 UTC")
     conn.commit()
     print(f'\n✅ ВРЕЗАНО. отпечаток схемы: {fp}')
     ok, why = verify(conn)

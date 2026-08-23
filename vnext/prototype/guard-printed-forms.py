@@ -99,7 +99,7 @@ REVOKED_MARK = _Revoked()
 # ⭐ ПРИЗНАК F (находка @CORE #3448/#3449 и @opssre #3441, 2026-08-08).
 # Прежний образец ловил ТОЛЬКО вызовы наших python-скриптов ⇒ команда ЧУЖОГО инструмента
 # с теми же обратными слэшами была ему невидима:
-#     git -C <КОНТУР>\<репозиторий> log --oneline -6
+#     git -C C:\guts\.atlas\atlas.core log --oneline -6
 # Роль копирует её так же, как нашу, и получает в bash `can't open file`: `\` съедается как
 # escape. @CORE нашёл такую строку ГЛАЗАМИ ПОСЛЕ зелёного прогона гарда — то есть зелёное
 # давало ложное спокойствие при живой неисполнимой строке рядом.
@@ -486,7 +486,7 @@ SAMPLES = {
     "dirty_other_tool.py": ('def f():\n    print(r"смотри: git -C C:\\\\guts\\\\.atlas'
                             '\\\\atlas.core log --oneline -6")\n'),
     # ⚖️ ВСТРЕЧНЫЕ (без них признак F стал бы кричать всегда, и его перестали бы читать):
-    "clean_other_tool.py": ('def f():\n    print("смотри: git -C <КОНТУР>/atlas.core '
+    "clean_other_tool.py": ('def f():\n    print("смотри: git -C C:/guts/.atlas/atlas.core '
                             'log --oneline -6")\n'),          # прямой слэш — исполнимо у всех
     "clean_prose_tool.py": ('def f():\n    print(r"история git лежит в C:\\\\guts\\\\.atlas '
                             'и переживёт чат")\n'),           # ПРОЗА о пути, не команда

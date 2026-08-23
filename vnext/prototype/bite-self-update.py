@@ -8,7 +8,7 @@
 с рабочего каталога соседа, не хранил ни источника, ни версии, и обновиться мог только чужой
 рукой — то есть был не самостоятельной командой, а придатком чужой машины.
 
-    python <КОНТУР>/vnext-tools/bite-self-update.py
+    python C:/guts/.atlas/vnext-tools/bite-self-update.py
 """
 from __future__ import annotations
 

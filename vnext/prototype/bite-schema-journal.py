@@ -19,6 +19,7 @@ r"""ПРИЁМКА журнала изменений схемы (schema_journal.
 """
 import importlib.util
 import os
+import re
 import sqlite3
 import sys
 import tempfile
@@ -174,6 +175,11 @@ def main() -> int:
     #    Свойство ради того, чтобы поле не повторило судьбу `resolved` (1 запись из 1483):
     #    незаполняемое поле — не лень ролей, а отсутствующий механизм. Поэтому автор
     #    выводится из вызывателя, когда его не назвали, — и остаётся отличим от названного.
+    # ⚠️ Убираем MEZO_ROLE из окружения ЯВНО: с карточки #248 он — средняя ступень выбора
+    #    автора, и у роли, которая его выставила, «не назван» дало бы её имя, а не «tool:».
+    #    Приёмка, зависящая от окружения запускающего, отвечает по-разному у разных ролей —
+    #    и первая же расходящаяся пара читается как дефект продукта.
+    было_MEZO_ROLE = os.environ.pop("MEZO_ROLE", None)
     con9 = fresh()
     con9.execute("BEGIN")
     con9.execute("CREATE TABLE t9 (id INTEGER PRIMARY KEY)")
@@ -202,6 +208,42 @@ def main() -> int:
     ok &= case("⑩ выведенный автор указывает на ВЫЗЫВАТЕЛЯ, а не на сам журнал",
                bool(auto) and "schema_journal" not in str(auto),
                f"вызыватель — приёмка, значение «{auto}»", differ=True)
+
+    # ⑪ СРЕДНЯЯ СТУПЕНЬ (карточка #248): роль объявила себя в окружении — пишем ЕЁ.
+    #    Это её собственное слово, а не догадка кода и не имя чужого контура.
+    os.environ["MEZO_ROLE"] = "neigh"
+    con11 = fresh()
+    con11.execute("BEGIN")
+    con11.execute("CREATE TABLE t11 (id INTEGER PRIMARY KEY)")
+    SJ.record_step(con11, "011-env", "автор не назван, но объявлен в окружении")
+    con11.commit()
+    из_среды = con11.execute("SELECT applied_by FROM schema_migrations WHERE version='011-env'"
+                             ).fetchone()[0]
+    os.environ.pop("MEZO_ROLE", None)
+    if было_MEZO_ROLE is not None:
+        os.environ["MEZO_ROLE"] = было_MEZO_ROLE
+    ok &= case("⑪ роль объявлена в окружении — пишем ЕЁ, а не «tool:» (карточка #248)",
+               из_среды == "NEIGH",
+               f"MEZO_ROLE=neigh → «{из_среды}» (регистр приведён: реестр ролей верхний)",
+               differ=True)
+
+    # ⑫ ⛔ ГЛАВНОЕ ПО КАРТОЧКЕ #248: НИ В ОДНОМ ШАГЕ СХЕМЫ ИМЯ РОЛИ НЕ ВПЕЧАТАНО.
+    #    🩸 Оплачено соседями: прогнав наш шаг у себя, они получили в свой журнал автора
+    #    «PROTO» — роль их контура не касавшуюся. Заявка называла ОДИН файл; замер нашёл
+    #    имена в СЕМИ, и в двух из них по два места.
+    #    ⚖️ Признак берётся ПО КАТАЛОГУ, а не списком известных файлов: список сходится
+    #    в день написания и молча расходится с первой же новой миграцией.
+    шаги = sorted((mezo_target.scripts_root() / "migrations").glob("*.py"))
+    впечатано = []
+    for ш in шаги:
+        for i, s in enumerate(ш.read_text(encoding="utf-8").splitlines(), 1):
+            if re.search(r"""by\s*=\s*['"](?:PROTO|COORD|CORE|ING|STUD|TAXO|OPSSRE|RCC|CHROME)""", s):
+                впечатано.append(f"{ш.name}:{i}")
+    ok &= case("⑫ ⛔ ни в одном шаге схемы имя роли НЕ впечатано",
+               not впечатано and len(шаги) > 5,
+               f"шагов просмотрено {len(шаги)}; впечатано: {впечатано or 'нигде'} — "
+               "впечатанное имя отвечает на «кто применил» уверенно и неверно",
+               differ=True)
 
     print()
     print((f"✅ ЖУРНАЛ ПРИНЯТ — случаев {CASES}, различающих {DIFFER}, "

@@ -19,9 +19,9 @@
 ЧТО ЭТО НЕ ДЕЛАЕТ. Не заводит сетевых ручек и не ходит в чужую базу: файл кладётся в НАШУ
 исходящую папку, сосед читает его как обычный файл обмена (договор — bridges/*/README.md).
 
-    python <КОНТУР>/vnext-tools/role-card.py --role PROTO            # показать, не писать
-    python <КОНТУР>/vnext-tools/role-card.py --role PROTO --write    # положить в исходящие
-    python <КОНТУР>/vnext-tools/role-card.py --role PROTO --check    # файл ≠ база → отказ
+    python C:/guts/.atlas/vnext-tools/role-card.py --role PROTO            # показать, не писать
+    python C:/guts/.atlas/vnext-tools/role-card.py --role PROTO --write    # положить в исходящие
+    python C:/guts/.atlas/vnext-tools/role-card.py --role PROTO --check    # файл ≠ база → отказ
 """
 from __future__ import annotations
 

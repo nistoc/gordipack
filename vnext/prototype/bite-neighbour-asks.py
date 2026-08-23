@@ -8,7 +8,7 @@
 чужую исходящую, молчит ли она, когда ответ уже положен, и говорит ли вслух, когда сосед
 записан, а смотреть некуда.
 
-    python <КОНТУР>/vnext-tools/bite-neighbour-asks.py
+    python C:/guts/.atlas/vnext-tools/bite-neighbour-asks.py
 """
 from __future__ import annotations
 

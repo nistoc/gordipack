@@ -141,7 +141,7 @@ def main():
     fp = record_step(conn, VERSION,
                      "roles: состояние полем (lifecycle) + причина/автор/час перехода + зона; "
                      "словарь сведён с образцом v-next, 'unknown' сохранён из живой, "
-                     "CHECK на верхний регистр имени", by='PROTO')
+                     "CHECK на верхний регистр имени")
     conn.commit()
     print(f'\n✅ ВРЕЗАНО. отпечаток схемы: {fp}')
     ok, why = verify(conn)
