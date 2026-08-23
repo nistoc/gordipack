@@ -56,7 +56,28 @@ def _table(conn):
     if "last_bridge_mtime" not in столбцы:
         # Без NOT NULL намеренно: пустое значение означает «моста ещё не читали», и оно
         # должно ОТЛИЧАТЬСЯ от нуля, который значил бы «прочитали, там пусто».
+        # 🪤 ПЕРВАЯ РЕДАКЦИЯ МЕНЯЛА СХЕМУ МОЛЧА — и сторож журнала схемы закричал «схему
+        # меняли мимо журнала» на первой же честной сборке контура. Правка на ходу обязана
+        # записывать себя тем же общим модулем, что и шаги схемы: изменение без следа
+        # делает ответ о версии схемы уверенным и неверным (правило migrations-under-watch).
+        # Канонический шаг — migrations/20260822-sync-backoff-bridge-mtime.py; эта ветка —
+        # страховка контура, обновившего инструменты раньше, чем прогнали шаги.
+        в_журнал = None
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                        "AND name='schema_migrations'").fetchone():
+            try:
+                import schema_journal as в_журнал
+            except ImportError:
+                в_журнал = None                      # стенд без журнала — записывать некуда
+        if в_журнал is not None and not conn.in_transaction:
+            conn.execute("BEGIN")
         conn.execute("ALTER TABLE sync_backoff ADD COLUMN last_bridge_mtime REAL")
+        if в_журнал is not None:
+            в_журнал.record_step(
+                conn, "20260822-sync-backoff-bridge-mtime",
+                "отметка последнего виденного чужого файла обмена (карточка #242); "
+                "применено правкой на ходу при обращении к ритму")
+            conn.commit()
 
 
 def _чужое_в_мосте(conn, db_path) -> tuple:

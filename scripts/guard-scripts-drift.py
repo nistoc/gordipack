@@ -121,6 +121,22 @@ PLACEHOLDERS = [
     (str(_own_container), "<КОНТУР>"),
     (str(_own_container).replace(chr(92), "/"), "<КОНТУР>"),
 ]
+# 🔴 И ВТОРОЙ СЛОЙ ТОГО ЖЕ КЛАССА (карточка #244): внутри контейнера лежат РЕПОЗИТОРИИ,
+# и их имена — такая же примета одного контура, как путь. Шаблон обезличивает
+# «<КОНТУР>\<репозиторий>», сверка знала только заглушку корня — и файл, отличавшийся
+# РОВНО правильным обезличиванием имени репозитория, больше суток висел «расходится».
+# Постоянный жёлтый, который нельзя погасить работой, учит пролистывать сверку целиком.
+# ⚖️ Имена берутся С ДИСКА (подпапки контейнера с .git), не перечислены: впечатанное имя
+# нашего репозитория уже однажды уехало в инструмент соседа и советовало ему завести
+# репозиторий с чужим именем (находка контура tapas 19.08 10:46 UTC).
+try:
+    _репо = sorted(d.name for d in _own_container.iterdir()
+                   if d.is_dir() and (d / ".git").exists())
+except OSError:
+    _репо = []
+for _имя in _репо:
+    for _кос in (chr(92), "/"):
+        PLACEHOLDERS.append((f"<КОНТУР>{_кос}{_имя}", f"<КОНТУР>{_кос}<репозиторий>"))
 if VNEXT_TEMPLATE is not None:
     _корень_шаблона = str(VNEXT_TEMPLATE.parent.parent)
     PLACEHOLDERS += [(_корень_шаблона, "<ШАБЛОН>"),
@@ -160,12 +176,17 @@ def sha(p):
     return hashlib.sha256(p.read_bytes()).hexdigest()[:12]
 
 
-def sha_sanitized(p):
-    """Отпечаток с точностью до обезличивания: пути приведены к заглушкам, строки — к одному виду."""
+def _sanitized_lines(p):
+    """Строки файла после обезличивания — общий разбор для отпечатка и счёта различий."""
     text = p.read_bytes().replace(b"\r\n", b"\n").decode("utf-8", "replace")
     for real, mark in PLACEHOLDERS:
         text = text.replace(real, mark)
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+    return text.splitlines()
+
+
+def sha_sanitized(p):
+    """Отпечаток с точностью до обезличивания: пути приведены к заглушкам, строки — к одному виду."""
+    return hashlib.sha256("\n".join(_sanitized_lines(p)).encode("utf-8")).hexdigest()[:12]
 
 
 def scripts_in(root):
@@ -245,7 +266,16 @@ def report_pair(left, right, left_name, right_name, whose):
           f"— чинит {whose}, не этот гард")
     for n in diff[:8]:
         newer = left_name if a[n].stat().st_mtime > b[n].stat().st_mtime else right_name
-        print(f"   {n:30} {a[n].stat().st_size:6}б ≠ {b[n].stat().st_size:6}б   свежее: {newer}")
+        # ⚖️ ЧЕМ расходятся — строками ПО СУЩЕСТВУ, а не только байтами (карточка #244,
+        # правило bytes-are-not-content): «46753б ≠ 46767б» не говорит читающему, правка
+        # это или окончания строк, и разбор занимал 15 минут руками при одном различии.
+        # Различий больше, чем строк в файле, — признак, что сверка сравнивает не то.
+        сa = _sanitized_lines(a[n])
+        сb = _sanitized_lines(b[n])
+        по_существу = (sum(1 for x, y in zip(сa, сb) if x != y)
+                       + abs(len(сa) - len(сb)))
+        print(f"   {n:30} {a[n].stat().st_size:6}б ≠ {b[n].stat().st_size:6}б   "
+              f"свежее: {newer} · строк по существу: {по_существу}")
     if len(diff) > 8:
         print(f"   … ещё {len(diff) - 8}")
     print("   👉 роль идёт за инструментом ПО ПУТИ ИЗ СВОЕЙ ПАМЯТИ: сдано у автора ≠ доступно ей")
