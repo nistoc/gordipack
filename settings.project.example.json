@@ -7,6 +7,21 @@
           {
             "type": "command",
             "command": "python \"$CLAUDE_PROJECT_DIR/vnext-tools/hook-pipe-tool-output.py\""
+          },
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/vnext-tools/hook-shared-repo-guard.py\" --judge"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|Write|Edit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/vnext-tools/hook-shared-repo-guard.py\" --record"
           }
         ]
       }
