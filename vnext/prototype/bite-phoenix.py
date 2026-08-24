@@ -76,7 +76,7 @@ def main():
                 (ROLE, "plan", "ЗАТЁРТО (имитация неаккуратного сохранения)"))
     con.commit()
     has_hist = con.execute(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='phoenix_history'"
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='phoenix_history_vnext'"
     ).fetchone()[0]
     print(f"  ДО (сегодняшний save-phoenix): секция затёрта. Прежнее тело ({len(before)} симв.) "
           f"восстановимо? {'нет — истории не существует' if not has_hist else 'см. ниже'}")
@@ -92,7 +92,7 @@ def main():
     for line in out.strip().splitlines():
         print("    " + line)
 
-    v1 = con.execute("SELECT MIN(version) FROM phoenix_history WHERE role=? AND section='plan'",
+    v1 = con.execute("SELECT MIN(version) FROM phoenix_history_vnext WHERE role=? AND section='plan'",
                      (ROLE,)).fetchone()[0]
     if v1:
         rc, out = run(["--db", str(db), "restore", "--role", ROLE, "--section", "plan",

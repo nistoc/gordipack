@@ -8,9 +8,9 @@
 --    об этом здесь: схема тогда НОВЕЕ объявленной версии.
 -- Что входит в версию — спрашивай журнал: SELECT * FROM schema_migrations.
 --
--- 🔴 ВНИМАНИЕ: сверх рубежа 3 шагов — схема НОВЕЕ объявленной версии.
+-- 🔴 ВНИМАНИЕ: сверх рубежа 5 шагов — схема НОВЕЕ объявленной версии.
 --
--- собрано: index 17 · table 29 · view 6
+-- собрано: index 18 · table 30 · view 6
 
 CREATE TABLE IF NOT EXISTS audit_log (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -136,6 +136,30 @@ CREATE TABLE IF NOT EXISTS phoenix (
     PRIMARY KEY (role, section)
 );
 
+CREATE TABLE IF NOT EXISTS phoenix_history (
+        id          INTEGER PRIMARY KEY,
+        role        TEXT NOT NULL,
+        section     TEXT NOT NULL,
+        -- ТЕЛО ВЕРСИИ ДОСЛОВНО, а не разница с предыдущей. Возврат обязан быть
+        -- КОПИРОВАНИЕМ: восстановление по частям добавляет шаг, на котором
+        -- «не смог собрать» превращается в «данных нет», и происходит это
+        -- в худший для роли момент.
+        body        TEXT NOT NULL,
+        body_chars  INTEGER NOT NULL,
+        -- КОГДА это тело стало текущим. У посева — час из phoenix.saved_at,
+        -- а не час миграции: иначе история соврала бы о возрасте всех тел разом.
+        saved_at    TEXT NOT NULL,
+        -- КТО записал: исполнитель (--actor), а не владелец секции. Форма из audit_log.
+        actor       TEXT NOT NULL,
+        -- 'seed' | 'save' | 'save --allow-shrink' | 'restore <id>'.
+        -- ⚠️ Сокращение, разрешённое словом, обязано быть видно В САМОЙ ИСТОРИИ:
+        -- в audit_log записей со словом shrink сегодня НОЛЬ, то есть журнал о нём
+        -- не знает вовсе, и злоупотребление флагом нечем измерить.
+        reason      TEXT NOT NULL,
+        -- каким был размер ПРЕЖНЕГО тела. NULL значит «первая версия секции»
+        prev_chars  INTEGER
+    );
+
 CREATE TABLE IF NOT EXISTS read_batches (  token     TEXT PRIMARY KEY,  role      TEXT NOT NULL,  last_id   INTEGER NOT NULL,  issued_at TEXT NOT NULL DEFAULT (datetime('now')), shown_max INTEGER, acked_at TEXT);
 
 CREATE TABLE IF NOT EXISTS read_cursors (
@@ -243,10 +267,7 @@ CREATE TABLE IF NOT EXISTS sync_backoff (
                         sleep_sec INTEGER NOT NULL,
                         quiet_streak INTEGER NOT NULL DEFAULT 0,
                         last_seen_id INTEGER NOT NULL DEFAULT 0,
-                        -- без NOT NULL намеренно: пусто = «обмен ещё не читали»,
-                        -- ноль значил бы «читали, там пусто» — это разные факты
-                        last_bridge_mtime REAL,
-                        updated_at TEXT);
+                        updated_at TEXT, last_bridge_mtime REAL);
 
 CREATE TABLE IF NOT EXISTS templates (
     role_type       TEXT PRIMARY KEY,  -- 'coord' | 'core' | 'stud' | ...
@@ -298,6 +319,9 @@ CREATE INDEX IF NOT EXISTS idx_message_task_task ON message_task (task_id, messa
 CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages(timestamp);
 
 CREATE INDEX IF NOT EXISTS idx_messages_writer ON messages(writer_role);
+
+CREATE INDEX IF NOT EXISTS idx_phoenix_history
+        ON phoenix_history(role, section, id DESC);
 
 CREATE INDEX IF NOT EXISTS idx_role_skill_role  ON role_skill(role);
 

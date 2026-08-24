@@ -309,6 +309,10 @@ def main():
     if tpl_dir.is_dir():
         conn2 = sqlite3.connect(str(db_path))
         cols = [c[1] for c in conn2.execute("PRAGMA table_info(phoenix)")]
+        # Поля истории спрашиваем У БАЗЫ, а не перечисляем: схема ещё будет меняться,
+        # и впечатанный перечень отстанет молча.
+        history_cols = [c[1] for c in conn2.execute("PRAGMA table_info(phoenix_history)")]
+        now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         for role in roles:
             tpl = tpl_dir / ("coordinator.md" if role == "COORD" else "repo-dev.md")
             if not tpl.exists():
@@ -326,6 +330,22 @@ def main():
             use = [c for c in cols if c in row]
             conn2.execute(f"INSERT OR IGNORE INTO phoenix ({', '.join(use)})"
                           f" VALUES ({', '.join('?' * len(use))})", [row[c] for c in use])
+            # ⚡ ВЕРСИЯ КЛАДЁТСЯ ВМЕСТЕ С ТЕЛОМ, А НЕ ПРИ ПЕРВОМ СОХРАНЕНИИ РОЛИ.
+            # 🩸 Замер 24.08 23:19 UTC (рождение свежего контура): 2 секции памяти засеяно,
+            # версий ноль. Защита памяти держится на инварианте «у каждой секции есть
+            # версия, равная её телу» — а рождение нарушало его СРАЗУ и не рукой роли.
+            # ⚖️ Довод тот же, которым засеяна сама история при шаге схемы: без посева
+            # первое же сохранение прошло бы без защиты. Здесь — то же, но у новорождённого.
+            # ⛔ Тихо, если таблицы нет: контур мог родиться по схеме, которая её ещё
+            # не знает. Рождение не вправе упасть из-за отсутствующей защиты.
+            if history_cols:
+                hrow = {"role": role, "section": "identity", "body": body,
+                        "body_chars": len(body), "saved_at": now_utc,
+                        "actor": "init-group", "reason": "seed", "prev_chars": None}
+                huse = [c for c in history_cols if c in hrow]
+                conn2.execute(
+                    f"INSERT INTO phoenix_history ({', '.join(huse)})"
+                    f" VALUES ({', '.join('?' * len(huse))})", [hrow[c] for c in huse])
             seeded += 1
         conn2.commit()
         conn2.close()

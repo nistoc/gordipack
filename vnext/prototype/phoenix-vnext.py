@@ -45,11 +45,22 @@ STABLE = ("identity", "history", "sources", "launcher")
 # ─────────────────────────────────────────────────────────────────────────────
 # R7: версионирование. append-only история + указатель на текущую версию
 # ─────────────────────────────────────────────────────────────────────────────
+# ⚡ ИМЯ ТАБЛИЦЫ РАЗВЕДЕНО С ЖИВЫМ МЕХАНИЗМОМ (PROTO 2026-08-24 23:20 UTC).
+# 🩸 Было `phoenix_history` — то же имя, что у живой защиты памяти (заявка @OPSSRE),
+# но поля РАЗНЫЕ: там body_chars/actor/prev_chars, здесь version/saved_by. Оба
+# объявления зовут CREATE TABLE IF NOT EXISTS ⇒ второй молча не создаёт свою таблицу
+# и падает на первом обращении к чужому полю.
+# 📏 Замер с контролем перед применением заявки:
+#     прототип на базе БЕЗ схемы заявки .... код 0
+#     прототип на базе СО схемой заявки .... код 1, «no such column: version»
+# ⚖️ Прототип живёт на КОПИЯХ живой базы, а копии после применения несут чужую схему ⇒
+# столкновение было не теоретическим, а ежедневным. Разведено переименованием здесь,
+# а не в живом механизме: спорное имя занял тот, кто в жизни работает.
 def ensure_schema(con):
     """Идемпотентно (правило migration-safety). Таблица истории — append-only:
     UPDATE по ней не делается никогда, только INSERT. Текущая версия — максимум version."""
     con.execute("""
-        CREATE TABLE IF NOT EXISTS phoenix_history (
+        CREATE TABLE IF NOT EXISTS phoenix_history_vnext (
             id        INTEGER PRIMARY KEY AUTOINCREMENT,
             role      TEXT NOT NULL,
             section   TEXT NOT NULL,
@@ -58,12 +69,12 @@ def ensure_schema(con):
             saved_at  TEXT NOT NULL DEFAULT (datetime('now')),
             saved_by  TEXT NOT NULL DEFAULT 'role',
             reason    TEXT DEFAULT '')""")
-    con.execute("CREATE INDEX IF NOT EXISTS idx_ph_hist ON phoenix_history(role, section, version)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_ph_hist_vnext ON phoenix_history_vnext(role, section, version)")
     con.commit()
 
 
 def next_version(con, role, section):
-    row = con.execute("SELECT MAX(version) FROM phoenix_history WHERE role=? AND section=?",
+    row = con.execute("SELECT MAX(version) FROM phoenix_history_vnext WHERE role=? AND section=?",
                       (role, section)).fetchone()
     return (row[0] or 0) + 1
 
@@ -79,16 +90,16 @@ def save_versioned(con, role, section, body, reason=""):
     cur = con.execute("SELECT body FROM phoenix WHERE role=? AND section=?",
                       (role, section)).fetchone()
     if cur and not con.execute(
-            "SELECT 1 FROM phoenix_history WHERE role=? AND section=? AND body=? LIMIT 1",
+            "SELECT 1 FROM phoenix_history_vnext WHERE role=? AND section=? AND body=? LIMIT 1",
             (role, section, cur[0])).fetchone():
-        con.execute("INSERT INTO phoenix_history (role, section, version, body, reason) "
+        con.execute("INSERT INTO phoenix_history_vnext (role, section, version, body, reason) "
                     "VALUES (?,?,?,?,?)",
                     (role, section, next_version(con, role, section), cur[0], "снимок перед правкой"))
     con.execute("""INSERT INTO phoenix (role, section, body, saved_at)
                    VALUES (?,?,?,datetime('now'))
                    ON CONFLICT(role, section) DO UPDATE
                    SET body=excluded.body, saved_at=excluded.saved_at""", (role, section, body))
-    con.execute("INSERT INTO phoenix_history (role, section, version, body, reason) VALUES (?,?,?,?,?)",
+    con.execute("INSERT INTO phoenix_history_vnext (role, section, version, body, reason) VALUES (?,?,?,?,?)",
                 (role, section, next_version(con, role, section), body, reason or "сохранение роли"))
     con.commit()
 
@@ -109,7 +120,7 @@ def derive(con, role, notes=6):
     a = out.append
     now = con.execute("SELECT datetime('now')").fetchone()[0]
     a(f"# СОБРАНО МАШИНОЙ {now} UTC — руками НЕ править, пересобирается при каждом чтении")
-    a("# (источники: messages · read_cursors · role_status · backlog · phoenix_history)")
+    a("# (источники: messages · read_cursors · role_status · backlog · phoenix_history_vnext)")
     a("")
 
     # ── присутствие: прямой ответ на F16
@@ -172,7 +183,7 @@ def derive(con, role, notes=6):
 
     try:
         hist = list(con.execute(
-            "SELECT section, MAX(version), MAX(saved_at) FROM phoenix_history WHERE role=? "
+            "SELECT section, MAX(version), MAX(saved_at) FROM phoenix_history_vnext WHERE role=? "
             "GROUP BY section ORDER BY section", (role,)))
     except sqlite3.OperationalError:
         hist = []
@@ -215,12 +226,12 @@ def main():
     elif a.cmd == "save":
         body = Path(a.file).read_text(encoding="utf-8")
         save_versioned(con, role, a.section, body, a.reason)
-        v = con.execute("SELECT MAX(version) FROM phoenix_history WHERE role=? AND section=?",
+        v = con.execute("SELECT MAX(version) FROM phoenix_history_vnext WHERE role=? AND section=?",
                         (role, a.section)).fetchone()[0]
         print(f"OK phoenix/{role}/{a.section} ({len(body)} симв.) → версия v{v}, прежнее сохранено")
     elif a.cmd == "history":
         ensure_schema(con)
-        q = ("SELECT section, version, saved_at, LENGTH(body), reason FROM phoenix_history "
+        q = ("SELECT section, version, saved_at, LENGTH(body), reason FROM phoenix_history_vnext "
              "WHERE role=?" + (" AND section=?" if a.section else "") + " ORDER BY section, version")
         rows = list(con.execute(q, (role, a.section) if a.section else (role,)))
         if not rows:
@@ -228,7 +239,7 @@ def main():
         for s, v, ts, n, r in rows:
             print(f"  {s:9} v{v:<3} {ts} UTC  {n:6} симв.  {r}")
     elif a.cmd == "restore":
-        row = con.execute("SELECT body FROM phoenix_history WHERE role=? AND section=? AND version=?",
+        row = con.execute("SELECT body FROM phoenix_history_vnext WHERE role=? AND section=? AND version=?",
                           (role, a.section, a.version)).fetchone()
         if not row:
             sys.exit(f"⛔ версии v{a.version} для {role}/{a.section} нет")
