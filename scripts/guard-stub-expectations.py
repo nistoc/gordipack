@@ -45,6 +45,7 @@ guard-stub-expectations.py — ловит ЗАГЛУШКУ, ОБЕЩАЮЩУЮ �
 
 import argparse
 import re
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -78,7 +79,58 @@ OTHER_ACTION = re.compile(
 )
 
 MARK_HONESTY = re.compile(r"HONESTY-GUARD")
-MARK_DEBT = re.compile(r"STUB-EXPECTED:\s*#\d+")
+MARK_DEBT = re.compile(r"STUB-EXPECTED:\s*#(\d+)")
+
+
+def _состояние_задачи(номер: str):
+    """→ ('open'|'closed'|'ghost'|'unknown', пояснение). Метка-долг обязана иметь СРОК.
+
+    🩸 ЗАЯВКА @COORD (записка #3768). Шапка этого инструмента сама называет назначение
+    метки — «ДОЛГ СО СРОКОМ ГОДНОСТИ», в отличие от вечного признания честности.
+    Срок был объявлен и ничем не обеспечен: проверялось НАЛИЧИЕ номера, и только.
+    ```
+    стои́т ли номер ....... проверялось
+    жива ли задача ....... НЕТ
+    существует ли она .... НЕТ. `STUB-EXPECTED: #99999` проходило
+    ```
+    ⇒ Закроют задачу — метка продолжит оправдывать заглушку бессрочно, и оправдание
+    переживёт свою причину. Тот же класс, что у долгого носителя объявления, и та же
+    цена: не ложная тревога, а ложная тишина.
+    ⚖️ Экземпляров у нас НОЛЬ, и правка сделана именно поэтому: **в чистом состоянии
+    дыры не видно, а в грязном она уже выглядит законной** (довод соседей, взят целиком).
+    ⛔ Третий исход отдельно от второго: «задача закрыта» и «задачи нет вовсе» — разные
+    беды. Первая говорит о просроченном долге, вторая — об опечатке или выдумке.
+    """
+    try:
+        import mezo_paths
+        db = mezo_paths.live_db()
+    except Exception:
+        return "unknown", "базы задач нет под рукой — проверить срок нечем"
+    try:
+        con = sqlite3.connect(f"file:{Path(db).as_posix()}?mode=ro", uri=True)
+        строка = con.execute("SELECT status FROM backlog WHERE id=?", (int(номер),)).fetchone()
+        con.close()
+    except (sqlite3.Error, ValueError, OSError) as e:
+        return "unknown", f"спросить базу задач не вышло: {str(e)[:60]}"
+    if строка is None:
+        return "ghost", f"задачи #{номер} в бэклоге НЕТ ВОВСЕ"
+    статус = (строка[0] or "").strip().lower()
+    # 📏 СПИСКИ ВЗЯТЫ ЗАМЕРОМ ПО БАЗЕ, А НЕ ПРИДУМАНЫ (PROTO 2026-08-24 17:01 UTC):
+    #    done 162 · open 62 · awaiting_word 6 · blocked 6 · in_progress 4 · in_review 4 · dropped 4
+    #    🩸 Первая редакция этой правки перечисляла closed/cancelled/rejected — статусов,
+    #    которых в базе НЕТ ВОВСЕ, и не знала про dropped. То есть проверка срока годности
+    #    сама была написана по памяти о чужих системах. Поймано первым же запросом к базе.
+    ЗАКРЫТЫЕ = ("done", "dropped")
+    ЖИВЫЕ = ("open", "in_progress", "in_review", "blocked", "awaiting_word")
+    if статус in ЗАКРЫТЫЕ:
+        return "closed", f"задача #{номер} ЗАКРЫТА ({статус})"
+    if статус in ЖИВЫЕ:
+        return "open", f"задача #{номер} открыта ({статус})"
+    # ⚖️ ЧЕТВЁРТЫЙ ИСХОД: статус незнаком. Не «жива» и не «мертва» — НЕ ЗНАЮ.
+    #    Отнести незнакомое к закрытым значило бы краснеть на каждом новом статусе;
+    #    отнести к живым — молча пропускать просроченное. Оба врут увереннее, чем надо.
+    return "unknown", (f"статус задачи #{номер} незнаком ({статус or 'пусто'}) — "
+                       f"жива она или нет, сказать не берусь")
 
 CONTEXT = 3
 
@@ -87,8 +139,11 @@ def verdict_for(lines, i):
     near = "\n".join(lines[max(0, i - CONTEXT): i + CONTEXT + 1])
     if MARK_HONESTY.search(near):
         return "honesty"
-    if MARK_DEBT.search(near):
-        return "debt"
+    м = MARK_DEBT.search(near)
+    if м:
+        состояние, _ = _состояние_задачи(м.group(1))
+        return {"open": "debt", "closed": "debt-dead",
+                "ghost": "debt-ghost", "unknown": "debt"}[состояние]
     return "UNMARKED"
 
 
@@ -164,10 +219,18 @@ def main():
     unmarked = [f for f in findings if f[4] == "UNMARKED"]
     debts = [f for f in findings if f[4] == "debt"]
     guards = [f for f in findings if f[4] == "honesty"]
+    # ⚡ ДОЛГ С ИСТЁКШИМ СРОКОМ — отдельно от живого (записка @COORD #3768). Два разных
+    #    исхода, а не один: «задача закрыта» говорит о просроченном оправдании,
+    #    «задачи нет» — об опечатке или выдумке. Свести их значило бы объявить
+    #    несуществующее просроченным.
+    просроченные = [f for f in findings if f[4] == "debt-dead"]
+    призрачные = [f for f in findings if f[4] == "debt-ghost"]
 
     if args.list:
         for path, ln, kind, text, v in findings:
-            mark = {"honesty": "🛡️ гард", "debt": "⏳ долг", "UNMARKED": "⛔ без метки"}[v]
+            mark = {"honesty": "🛡️ гард", "debt": "⏳ долг",
+                    "debt-dead": "🔴 долг просрочен", "debt-ghost": "🔴 задачи нет",
+                    "UNMARKED": "⛔ без метки"}[v]
             print(f"{mark:14} [{kind}] {rel(path)}:{ln}  {text}")
         print(f"\nвсего: {len(findings)} · без метки: {len(unmarked)} · "
               f"долгов: {len(debts)} · гардов честности: {len(guards)}")
@@ -176,6 +239,21 @@ def main():
     if debts and not args.list:
         print(f"⏳ долгов со сроком годности: {len(debts)} — "
               + ", ".join(f"{rel(p)}:{ln}" for p, ln, _, _, _ in debts[:6]))
+
+    # ⛔ ОПРАВДАНИЕ, ПЕРЕЖИВШЕЕ СВОЮ ПРИЧИНУ, — КРАСНОЕ. Метка объявлена «долгом
+    #    со сроком годности»; срок, ничем не обеспеченный, делает её вечной.
+    if просроченные or призрачные:
+        for path, ln, kind, text, v in просроченные:
+            м = MARK_DEBT.search(text) or MARK_DEBT.search("")
+            _, почему = _состояние_задачи(м.group(1)) if м else ("", "задача закрыта")
+            print(f"⛔ ОПРАВДАНИЕ ПЕРЕЖИЛО СВОЮ ПРИЧИНУ: {rel(path)}:{ln} — {почему}, "
+                  f"а метка держит заглушку")
+        for path, ln, kind, text, v in призрачные:
+            м = MARK_DEBT.search(text)
+            print(f"⛔ МЕТКА ССЫЛАЕТСЯ НА НЕСУЩЕСТВУЮЩУЮ ЗАДАЧУ: {rel(path)}:{ln} — "
+                  f"#{м.group(1) if м else '?'} в бэклоге нет вовсе")
+        print("   👉 Либо снимите заглушку, либо заведите живую задачу и укажите ЕЁ номер.")
+        sys.exit(1)
 
     if unmarked:
         print(f"⛔ обещаний заглушки БЕЗ метки: {len(unmarked)}")
@@ -187,7 +265,7 @@ def main():
         sys.exit(1)
 
     print(f"✅ обещаний заглушки {len(findings)}, все подписаны "
-          f"(долгов {len(debts)}, гардов {len(guards)})")
+          f"(долгов {len(debts)}, гардов {len(guards)}) — у каждого долга задача ЖИВА")
     sys.exit(0)
 
 
