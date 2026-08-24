@@ -28,10 +28,11 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402 — пути машины выводятся, не впечатаны (#153)
+
+import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
 CASES = DIFFER = 0
 
@@ -99,7 +100,7 @@ def run(guard) -> str:
 
 def main() -> int:
     ok = True
-    tmp = pathlib.Path(tempfile.mkdtemp(prefix="bite-answer-over-"))
+    tmp = mezo_stand.new("bite-answer-over-")
     try:
         # ① КОНТРОЛЬ: один ответ — лишней строки нет. Без него краснота ниже ничего
         #    не значит: молчать можно и от того, что проверка не смотрит вовсе.
@@ -175,7 +176,7 @@ def main() -> int:
                    "историю; без этого случая ② зеленел бы у проверки, лезущей к соседу",
                    differ=True)
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        mezo_stand.release(tmp)  # уборка отложена до исхода прогона
 
     print()
     print(f"{'✅ СКОЛЬКО РАЗ ОТВЕЧЕНО — ПРИНЯТО' if ok else '🔴 НЕ ПРИНЯТО'} — "
@@ -184,4 +185,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

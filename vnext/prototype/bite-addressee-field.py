@@ -24,11 +24,11 @@ import sqlite3
 import subprocess
 import sys
 from pathlib import Path
-import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_target  # noqa: E402 — какую копию испытываем, решается ОДНИМ местом
 import mezo_paths  # пути машины выводятся, не впечатаны (#153)
+import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
 
 SCRIPTS = str(mezo_target.scripts_root())
 LIVE = str(mezo_paths.live_db())
@@ -52,7 +52,7 @@ def prepare():
     for p in (WRITE, MIGRATION, LIVE):
         if not os.path.exists(p):
             raise SystemExit(f"⛔ НЕ ЗАПУСТИЛАСЬ: не найден {p} — приёмке нечего испытывать.")
-    tmp = tempfile.mkdtemp(prefix="bite-addressee-")
+    tmp = mezo_stand.new("bite-addressee-")
     db = os.path.join(tmp, "copy.db")
     shutil.copy(LIVE, db)
     r = subprocess.run([sys.executable, MIGRATION, "--db", db],
@@ -167,4 +167,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

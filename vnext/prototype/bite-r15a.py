@@ -25,8 +25,10 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
 
 ROLE = "PROTO"
 
@@ -62,7 +64,7 @@ def stage(sandbox, target, bait=False):
     src = sandbox / "mezosync.db"
     if not src.exists():
         die(f"нет песочницы: {src}", "подними её: python vnext/sandbox/bootstrap.py")
-    root = Path(tempfile.mkdtemp(prefix="bite-r15a-"))
+    root = mezo_stand.new("bite-r15a-")
     mezo = root / ".mezosync"
     (mezo / "scripts").mkdir(parents=True)
     shutil.copy2(src, mezo / "mezosync.db")
@@ -166,7 +168,7 @@ def selftest(target, sandbox):
     if not dep.exists():
         die(f"нет mezo_paths.py рядом с {target}", "нарочные поломки накладываются на него")
     src = dep.read_text(encoding="utf-8")
-    tmp = Path(tempfile.mkdtemp(prefix="bite-r15a-mutants-"))
+    tmp = mezo_stand.new("bite-r15a-mutants-")
     all_ok = True
     for name, (edits, expect) in MUTANTS.items():
         print(f"\n{'='*72}\n[нарочная поломка {name}] ожидаем 🔴 по {', '.join(expect)}\n{'='*72}")
@@ -237,4 +239,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

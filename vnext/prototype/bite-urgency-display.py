@@ -27,11 +27,11 @@ import os
 import sqlite3
 import sys
 from pathlib import Path
-import tempfile
 from datetime import datetime, timedelta
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_target  # noqa: E402 — какую копию испытываем, решается ОДНИМ местом
+import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
 
 SCRIPTS = str(mezo_target.scripts_root())
 NOW = datetime(2026, 8, 8, 12, 0, 0)          # фиксированное «сейчас»: приёмка не зависит от часов
@@ -50,7 +50,7 @@ def load_live_module():
 
 def build(rows):
     """Песочница: та же форма messages, что в живой базе."""
-    path = os.path.join(tempfile.mkdtemp(prefix="bite-urgency-display-"), "s.db")
+    path = os.path.join(mezo_stand.new("bite-urgency-display-"), "s.db")
     con = sqlite3.connect(path)
     con.execute("""CREATE TABLE messages (id INTEGER PRIMARY KEY, writer_role TEXT,
                    timestamp TEXT, body_md TEXT, tags TEXT, priority TEXT,
@@ -143,4 +143,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

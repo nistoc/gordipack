@@ -14,14 +14,16 @@ bite-ev.py — укус этапа Э-В: РАБОТАЮТ ЛИ КОНТРАКТ
 """
 import sqlite3
 import sys
-import tempfile
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
 
 SCHEMA = Path(__file__).resolve().parent / "schema_vnext.sql"
 
 
 def fresh(fk_on=True):
-    db = Path(tempfile.mkdtemp(prefix="bite-ev-")) / "m.db"
+    db = mezo_stand.new("bite-ev-") / "m.db"
     con = sqlite3.connect(str(db))
     con.executescript(SCHEMA.read_text(encoding="utf-8"))
     con.close()
@@ -170,4 +172,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

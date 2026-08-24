@@ -26,10 +26,10 @@ import sqlite3
 import subprocess
 import sys
 from pathlib import Path
-import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_target  # noqa: E402 — какую копию испытываем, решается ОДНИМ местом
+import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
 
 WRITE = str(mezo_target.script("write-message.py"))
 CASES = DIFFER = 0
@@ -45,7 +45,7 @@ def case(title, ok, detail, differ=False):
 
 
 def build():
-    d = tempfile.mkdtemp(prefix="bite-alongside-")
+    d = str(mezo_stand.new("bite-alongside-"))
     db = os.path.join(d, "s.db")
     con = sqlite3.connect(db)
     con.executescript("""
@@ -135,4 +135,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

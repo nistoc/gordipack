@@ -22,9 +22,11 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 import mezo_paths  # пути машины выводятся, не впечатаны (#153)
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
 
 TOOL = Path(__file__).with_name("check-stale-urgency.py")
 LIVE = mezo_paths.live_db()
@@ -43,7 +45,7 @@ def main() -> int:
     if not LIVE.exists():
         print("⛔ живой базы нет — не на чем проверять")
         return 1
-    tmp = Path(tempfile.mkdtemp(prefix="bite-urgency-"))
+    tmp = mezo_stand.new("bite-urgency-")
     try:
         db = tmp / "copy.db"
         shutil.copy2(LIVE, db)
@@ -110,8 +112,8 @@ def main() -> int:
         print("      а не «все срочные» и не «всё, на что ответили».")
         return 0
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        mezo_stand.release(tmp)  # уборка отложена до исхода прогона
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

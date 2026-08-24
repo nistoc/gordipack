@@ -17,10 +17,11 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
+
+import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
 CASES = DIFFER = 0
 
@@ -88,7 +89,7 @@ def run(guard) -> str:
 
 def main() -> int:
     ok = True
-    tmp = pathlib.Path(tempfile.mkdtemp(prefix="bite-neigh-"))
+    tmp = mezo_stand.new("bite-neigh-")
     try:
         out = run(build(tmp / "a", with_ask=True, with_answer=False, with_box=True))
         ok &= case("① вопрос в ИСХОДЯЩЕЙ СОСЕДА виден, хотя лежит в чужом репозитории",
@@ -233,7 +234,7 @@ def main() -> int:
                    "молчание здесь неотличимо от «вопросов нет», а это разные вещи: "
                    "во втором случае мы просто не туда смотрим", differ=True)
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        mezo_stand.release(tmp)  # уборка отложена до исхода прогона
 
     print()
     print((f"✅ ВОПРОСЫ СОСЕДЕЙ — ПРИНЯТО — случаев {CASES}, различающих {DIFFER}" if ok
@@ -242,4 +243,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

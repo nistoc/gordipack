@@ -22,11 +22,12 @@ import os
 import re
 import sqlite3
 import sys
-import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import mezo_target  # noqa: E402 — какую копию испытываем, решается ОДНИМ местом
+
+import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
 
 def load_module():
@@ -52,7 +53,7 @@ def case(title, verdict, detail, differ=False):
 
 
 def fresh():
-    db = os.path.join(tempfile.mkdtemp(prefix="bite-sj-"), "m.db")
+    db = os.path.join(mezo_stand.new("bite-sj-"), "m.db")
     con = sqlite3.connect(db)
     con.execute("CREATE TABLE schema_migrations (version TEXT PRIMARY KEY,"
                 " applied_at TEXT DEFAULT CURRENT_TIMESTAMP, note TEXT, fingerprint TEXT)")
@@ -139,7 +140,7 @@ def main() -> int:
                f"note: …{note[-60:]}", differ=True)
 
     # ⑤ НЕТ КОЛОНКИ ОТПЕЧАТКА — «сверять нечем», а не «чисто».
-    db5 = os.path.join(tempfile.mkdtemp(prefix="bite-sj5-"), "m.db")
+    db5 = os.path.join(mezo_stand.new("bite-sj5-"), "m.db")
     con5 = sqlite3.connect(db5)
     con5.execute("CREATE TABLE schema_migrations (version TEXT PRIMARY KEY, note TEXT)")
     good, why = SJ.verify(con5)
@@ -149,7 +150,7 @@ def main() -> int:
 
     # ⑥ КОЛОНКА ЕСТЬ, ОТПЕЧАТКОВ НЕТ — второй, ДРУГОЙ пустой ответ. Оба обязаны звучать
     #    отказом: «у тебя нет» и «никто не заполнял» — разные случаи.
-    con6 = sqlite3.connect(os.path.join(tempfile.mkdtemp(prefix="bite-sj6-"), "m.db"))
+    con6 = sqlite3.connect(os.path.join(mezo_stand.new("bite-sj6-"), "m.db"))
     con6.execute("CREATE TABLE schema_migrations (version TEXT PRIMARY KEY,"
                  " note TEXT, fingerprint TEXT)")
     con6.execute("INSERT INTO schema_migrations (version, note) VALUES ('x','без отпечатка')")
@@ -290,4 +291,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

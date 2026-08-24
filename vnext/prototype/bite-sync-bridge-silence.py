@@ -27,7 +27,6 @@ import pathlib
 import shutil
 import sqlite3
 import sys
-import tempfile
 import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -35,6 +34,8 @@ import mezo_paths  # noqa: E402 — пути машины выводятся, н
 
 sys.path.insert(0, str(mezo_paths.live_scripts()))
 import sync_backoff  # noqa: E402 — испытываем ЖИВОЙ механизм, а не копию рядом
+
+import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
 CASES = DIFFER = 0
 
@@ -86,7 +87,7 @@ def дважды(db, писать=None) -> dict:
 
 def main() -> int:
     ok = True
-    tmp = pathlib.Path(tempfile.mkdtemp(prefix="bite-sync-bridge-"))
+    tmp = mezo_stand.new("bite-sync-bridge-")
     try:
         # ① КОНТРОЛЬ. Без него всё дальнейшее ничего не значит: молчать можно и от слепоты.
         db, своя, общая, чужая = стенд(tmp / "a")
@@ -186,7 +187,7 @@ def main() -> int:
                    f"было {было}, стало {стало} — обнулив её, механизм объявил бы новым "
                    "весь мост при следующем удачном чтении", differ=True)
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        mezo_stand.release(tmp)  # уборка отложена до исхода прогона
 
     print()
     print(f"{'✅ РИТМ И МОСТ — ПРИНЯТО' if ok else '🔴 НЕ ПРИНЯТО'} — случаев {CASES}, "
@@ -195,4 +196,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

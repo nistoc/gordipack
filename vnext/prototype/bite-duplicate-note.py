@@ -17,10 +17,11 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
+
+import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
 CASES = DIFFER = 0
 NL = chr(10)
@@ -50,7 +51,7 @@ def main() -> int:
     # у копии в публичном образце «два уровня вверх» указывают в пустоту,
     # и приёмка падала ещё до первого случая (замер 2026-08-19 16:34 UTC).
     live = mezo_paths.container_root(__file__) / ".mezosync"
-    tmp = pathlib.Path(tempfile.mkdtemp(prefix="bite-dup-"))
+    tmp = mezo_stand.new("bite-dup-")
     try:
         scripts = tmp / "scripts"
         shutil.copytree(live / "scripts", scripts)
@@ -100,7 +101,7 @@ def main() -> int:
                    "все три пары дублей за день различались ТОЛЬКО минутой подписи: сличение "
                    "с подписью пропустило бы каждую из них", differ=True)
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        mezo_stand.release(tmp)  # уборка отложена до исхода прогона
 
     print()
     print((f"✅ ОТКАЗ ОТ ДУБЛЕЙ — ПРИНЯТО — случаев {CASES}, различающих {DIFFER}" if ok
@@ -109,4 +110,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

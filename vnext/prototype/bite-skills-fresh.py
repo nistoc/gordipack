@@ -31,6 +31,8 @@ import tempfile
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402 — пути машины выводятся, не впечатаны (#153)
 
+import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
+
 ЗДЕСЬ = pathlib.Path(__file__).resolve().parent
 СТОРОЖ = ЗДЕСЬ / "guard-skills-fresh.py"
 ГЕНЕРАТОР = ЗДЕСЬ / "rules-to-skills.py"
@@ -48,7 +50,7 @@ def case(title, ok, detail, differ=False):
 
 def свод(правила) -> pathlib.Path:
     """Копия свода: (ключ, тело, статус, час правки)."""
-    d = pathlib.Path(tempfile.mkdtemp(prefix="bite-skills-"))
+    d = mezo_stand.new("bite-skills-")
     db = d / "rules.db"
     con = sqlite3.connect(str(db))
     con.execute("""CREATE TABLE rules (id INTEGER PRIMARY KEY, rule_key TEXT UNIQUE, body TEXT,
@@ -62,7 +64,7 @@ def свод(правила) -> pathlib.Path:
 
 
 def навык(имя: str, отпечаток: dict | None, описание="короткое описание навыка") -> pathlib.Path:
-    d = pathlib.Path(tempfile.mkdtemp(prefix="bite-skills-out-"))
+    d = mezo_stand.new("bite-skills-out-")
     p = d / имя / "SKILL.md"
     p.parent.mkdir(parents=True)
     L = ["---", f"name: {имя}", f'description: "{описание}"', "---", "", f"# {имя}", "", "тело", ""]
@@ -139,7 +141,7 @@ def main() -> int:
                differ=True)
 
     # ⑥ НАВЫКОВ НЕТ ВОВСЕ — сказано вслух. «Всё свежо» здесь было бы ложью.
-    пусто = pathlib.Path(tempfile.mkdtemp(prefix="bite-skills-пусто-"))
+    пусто = mezo_stand.new("bite-skills-пусто-")
     out6, code6 = сторож(пусто, db)
     ok &= case("⑥ навыков нет вовсе — сказано вслух, а не выдано за чистоту",
                code6 == 0 and "судить не о чем" in out6 and "НЕ «всё свежо»" in out6,
@@ -162,7 +164,7 @@ def main() -> int:
     # ⑨ ГЕНЕРАТОР: правила нет в своде — ОТКАЗ. Навык без правила читался бы как
     #    «правила не существует», а это неправда о своде.
     пустой = свод([("другое-правило", ТЕЛО, "active", "2026-08-01 10:00")])
-    out9, code9 = генератор(пустой, pathlib.Path(tempfile.mkdtemp()))
+    out9, code9 = генератор(пустой, mezo_stand.new("bite-skills-fresh-"))
     ok &= case("⑨ генератор: правила нет в своде — ОТКАЗ собрать",
                code9 != 0 and "НЕ ЗАПУСТИЛСЯ" in out9,
                "навык с пропущенным правилом читается как «правила нет» — неправда о своде",
@@ -173,7 +175,7 @@ def main() -> int:
     снятые = свод([(k, ТЕЛО, "revoked", "2026-08-01 10:00")
                    for k in ("full-scan-every-tick", "no-pipe-tool-output",
                              "ack-deadline", "escalation-and-ground-truth")])
-    out10, code10 = генератор(снятые, pathlib.Path(tempfile.mkdtemp()))
+    out10, code10 = генератор(снятые, mezo_stand.new("bite-skills-fresh-"))
     ok &= case("⑩ генератор: правило СНЯТО — ОТКАЗ собрать",
                code10 != 0 and "СНЯТО" in out10,
                "иначе навык раздаёт отменённую норму, а проверка краснеет на своём же изделии",
@@ -186,4 +188,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

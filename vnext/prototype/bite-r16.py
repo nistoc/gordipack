@@ -44,8 +44,10 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
 
 ROLE = "PROTO"
 
@@ -98,7 +100,7 @@ def workbench(sandbox):
     if not src_db.exists():
         die(f"нет песочницы: {src_db}",
             "подними её: python vnext/sandbox/bootstrap.py")
-    tmp = Path(tempfile.mkdtemp(prefix="bite-r16-"))
+    tmp = mezo_stand.new("bite-r16-")
     shutil.copy2(src_db, tmp / "mezosync.db")
     for extra in ("mezosync.db-wal", "mezosync.db-shm"):
         if (sandbox / extra).exists():
@@ -455,7 +457,7 @@ def selftest(target, sandbox):
     """Проверяем ЧУВСТВИТЕЛЬНОСТЬ укуса: на испорченном ридере он обязан краснеть,
     и краснеть ИМЕННО тем свойством, которое сломано."""
     src = target.read_text(encoding="utf-8")
-    tmpdir = Path(tempfile.mkdtemp(prefix="bite-r16-mutants-"))
+    tmpdir = mezo_stand.new("bite-r16-mutants-")
     dep = target.parent / "mezo_paths.py"
     if dep.exists():
         shutil.copy2(dep, tmpdir / "mezo_paths.py")
@@ -555,4 +557,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main() or 0)
+    sys.exit(mezo_stand.finish(main() or 0))

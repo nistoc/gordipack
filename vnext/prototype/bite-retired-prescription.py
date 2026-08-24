@@ -16,7 +16,8 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-import tempfile
+
+import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # Испытуемый: --check → РЯДОМ → тулкит. «Рядом» добавлено @PROTO 09.08: приёмка живёт
@@ -80,14 +81,14 @@ def build_src(root, unsaved_lines):
 
 
 def run(lines, push_version=2, trace=True):
-    tmp = tempfile.mkdtemp(prefix="bite-presc-")
+    tmp = str(mezo_stand.new("bite-presc-"))
     db = os.path.join(tmp, "c.db")
     root = os.path.join(tmp, "src")
     build_db(db, push_version, trace)
     build_src(root, lines)
     r = subprocess.run([sys.executable, CHECK, "--db", db, "--root", root, "--only", "no-push-without-owner"],
                        capture_output=True, text=True, encoding="utf-8", errors="replace")
-    shutil.rmtree(tmp, ignore_errors=True)
+    mezo_stand.release(tmp)  # уборка отложена до исхода прогона
     return (r.stdout or "") + (r.stderr or ""), r.returncode
 
 
@@ -154,4 +155,4 @@ print(f"   испытуемый: {CHECK}")
 for t, ok, why in cases:
     print(f"   {'✅' if ok else '🔴'} {t}" + (f"   ← {why}" if not ok else ""))
 print(f"   ИТОГ: {len(cases) - bad}/{len(cases)} · различающих {differ}")
-sys.exit(1 if bad else 0)
+sys.exit(mezo_stand.finish(1 if bad else 0))

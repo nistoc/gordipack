@@ -26,7 +26,8 @@ import re
 import sqlite3
 import subprocess
 import sys
-import tempfile
+
+import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CHECK = os.path.join(HERE, "check-rule-basis.py")
@@ -100,7 +101,7 @@ def with_control(tmp: str, name: str, rule, title: str, expect_blind: int) -> bo
 
 
 def main() -> int:
-    tmp = tempfile.mkdtemp(prefix="bite-rule-basis-")
+    tmp = str(mezo_stand.new("bite-rule-basis-"))
     ok = True
 
     # ① слепое находится
@@ -247,4 +248,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

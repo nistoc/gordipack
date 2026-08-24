@@ -32,9 +32,11 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-import tempfile
 from collections import defaultdict
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
 import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
 LIVE_SCRIPTS = mezo_paths.live_scripts()
@@ -211,7 +213,7 @@ def main() -> int:
 
     root = Path(a.scripts_root)
     forms, n_src, mentions = collect(a.db)
-    work = Path(tempfile.mkdtemp(prefix="forms-"))
+    work = mezo_stand.new("forms-")
     db_copy = work / "copy.db"
     shutil.copy(a.db, db_copy)
     ctx = {"file": str(work / "text.md"), "dir": str(work)}
@@ -365,4 +367,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

@@ -25,12 +25,12 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_target  # noqa: E402 — какую копию испытываем, решается ОДНИМ местом
 import mezo_paths  # пути машины выводятся, не впечатаны (#153)
+import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
 
 TOOL = Path(__file__).resolve().parent / "guard-launcher-forms.py"
 LIVE_SCRIPTS = mezo_target.scripts_root()
@@ -49,7 +49,7 @@ def case(title, ok, detail, differ=False):
 
 def sandbox():
     """Копия каталога скриптов + копия базы, где память переписана на этот каталог."""
-    d = Path(tempfile.mkdtemp(prefix="bite-forms-"))
+    d = mezo_stand.new("bite-forms-")
     # Песочница — НАСТОЯЩАЯ раскладка контура (.mezosync/scripts + база рядом), а не файлы
     # рядом. С 20.08 помощник путей отказывает ГРОМКО, если корень не найден: в прежней
     # раскладке КАЖДЫЙ механизм падал ещё до разбора доводов, и поломка флага переставала
@@ -224,4 +224,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

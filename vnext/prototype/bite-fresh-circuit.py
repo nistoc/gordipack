@@ -24,6 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_paths  # пути машины ВЫВОДЯТСЯ, не впечатаны (карточка #208)
+import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
 
 import os
 import shutil
@@ -31,7 +32,6 @@ import subprocess
 import pathlib
 import sqlite3
 import sys
-import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -59,7 +59,7 @@ def case(title, verdict, detail, differ=False):
 
 def main() -> int:
     ok = True
-    tmp = Path(tempfile.mkdtemp(prefix="bite-fresh-"))
+    tmp = mezo_stand.new("bite-fresh-")
     try:
         mez = tmp / ".mezosync"
         r = subprocess.run([sys.executable, str(PACK / "scripts" / "init-group.py"),
@@ -170,7 +170,7 @@ def main() -> int:
                    " неотличим от проверки", differ=True)
 
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        mezo_stand.release(tmp)  # уборка отложена до исхода прогона
 
     print()
     print(f"{'✅ СБОРКА КОНТУРА ПРИНЯТА' if ok else '🔴 СБОРКА НЕ ПРИНЯТА'} — случаев {CASES},"
@@ -182,4 +182,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

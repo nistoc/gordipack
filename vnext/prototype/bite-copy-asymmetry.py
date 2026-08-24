@@ -11,7 +11,8 @@ r"""ПРИЁМКА признака «доедет ли инструмент д�
 import os
 import subprocess
 import sys
-import tempfile
+
+import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -74,7 +75,7 @@ def stand(tmp, name, runtime_files, template_files):
 
 
 def main() -> int:
-    tmp = tempfile.mkdtemp(prefix="bite-copy-asym-")
+    tmp = str(mezo_stand.new("bite-copy-asym-"))
     ok = True
     A = {"a.py": "print(1)\n"}
 
@@ -140,4 +141,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

@@ -18,11 +18,11 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
+import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
 
 TOOL = Path(__file__).resolve().parent / "measure-old-words.py"
 CASES = DIFFER = 0
@@ -66,7 +66,7 @@ def main() -> int:
         print(f"⛔ НЕ ЗАПУСТИЛАСЬ: испытуемого нет — {TOOL}")
         return 2
 
-    tmp = Path(tempfile.mkdtemp(prefix="bite-yard-"))
+    tmp = mezo_stand.new("bite-yard-")
     try:
         out7, _ = run(стенд(tmp, 7))
         ok &= case("① мерка названа: версия правила-словаря взята ИЗ БАЗЫ",
@@ -98,7 +98,7 @@ def main() -> int:
                    "именно короткую строку роль видит при каждом пробуждении; мерка, "
                    "выпавшая из неё, не существует для читателя", differ=True)
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        mezo_stand.release(tmp)  # уборка отложена до исхода прогона
 
     print()
     print(f"{'✅ МЕРКА НАЗВАНА — ПРИНЯТО' if ok else '🔴 НЕ ПРИНЯТО'} — "
@@ -107,4 +107,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

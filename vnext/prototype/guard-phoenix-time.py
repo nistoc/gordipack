@@ -52,7 +52,6 @@ import argparse
 import re
 import sqlite3
 import sys
-import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 import mezo_paths  # пути машины выводятся, не впечатаны (#153)
@@ -154,6 +153,9 @@ def run_phoenix(db, role=None):
 # ровно этот словарь я писал пятый раз за двое суток и каждый раз ошибался в одну из
 # двух сторон. Тема (ABOUT_TIME) остаётся СВОЕЙ — приметы общие, предмет у каждого свой.
 import mention  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
 # 🎯 ПОПРАВКА ОБЯЗАНА БЫТЬ ПРО ЭТО. Замер 09.08 21:12 UTC: без требования темы гасились
 # 186 записок при 10 реально дефектных, и одна поправка «про другое» тушила чужие по одной
 # лишь ссылке — тот же класс #151 (гашение по соседству), только через номера.
@@ -343,7 +345,7 @@ def selftest():
         cases += 1
         print(f"{'✅' if good else '🔴'} 🔴={got} (ждём {want})  «{body[:45]}»  saved={saved[:16]}")
     # и отказ на пустой БД — молчание вместо отказа было дефектом соседнего инструмента
-    tmp = Path(tempfile.mkdtemp(prefix="guard-ptime-")) / "m.db"
+    tmp = mezo_stand.new("guard-ptime-") / "m.db"
     con = sqlite3.connect(str(tmp))
     con.execute("CREATE TABLE phoenix (role TEXT, section TEXT, body TEXT, saved_at TEXT)")
     con.execute("CREATE TABLE messages (id INTEGER, writer_role TEXT, body_md TEXT, timestamp TEXT)")
@@ -355,7 +357,7 @@ def selftest():
     cases += 1
     print(f"{'✅' if good else '🔴'} пустая БД (обе таблицы) → rc={rc} (ждём 2: отказ, а не «чисто»)")
     # messages видит СВОЙ класс отдельно от phoenix — не только «пришит к той же функции»
-    tmp2 = Path(tempfile.mkdtemp(prefix="guard-ptime-")) / "m2.db"
+    tmp2 = mezo_stand.new("guard-ptime-") / "m2.db"
     con = sqlite3.connect(str(tmp2))
     con.execute("CREATE TABLE phoenix (role TEXT, section TEXT, body TEXT, saved_at TEXT)")
     con.execute("CREATE TABLE messages (id INTEGER, writer_role TEXT, body_md TEXT, timestamp TEXT)")
@@ -395,4 +397,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

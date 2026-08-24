@@ -15,7 +15,8 @@ import os
 import sqlite3
 import subprocess
 import sys
-import tempfile
+
+import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CHECK = os.path.join(HERE, "check-retold-numbers.py")
@@ -59,7 +60,7 @@ def stand(tmp, name, body, open_cards=3):
 
 
 def main() -> int:
-    tmp = tempfile.mkdtemp(prefix="bite-retold-num-")
+    tmp = str(mezo_stand.new("bite-retold-num-"))
     ok = True
     # стендовая правда: карточек открытых 3 · правил живых 5, всего 6 · шагов 4
 
@@ -125,4 +126,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

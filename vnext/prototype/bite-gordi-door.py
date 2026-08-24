@@ -26,11 +26,11 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
+import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
 
 LIVE_DB = mezo_paths.live_db()
 LIVE_SCRIPTS = mezo_paths.live_scripts()
@@ -65,7 +65,7 @@ def run(argv, role=None):
 
 
 def main() -> int:
-    d = Path(tempfile.mkdtemp(prefix="bite-door-"))
+    d = mezo_stand.new("bite-door-")
     # Стенд — НАСТОЯЩАЯ раскладка контура: .mezosync/scripts рядом с .mezosync/mezosync.db.
     # Иначе механизмы не находят корень и отказывают (громкая редакция помощника, 20.08).
     контур = d / ".mezosync"
@@ -170,7 +170,7 @@ def main() -> int:
                o1 == o2 and c1 == c2 == 0,
                "без этого случая совпадения выше могли бы держаться на случайности")
 
-    shutil.rmtree(d, ignore_errors=True)
+    mezo_stand.release(d)  # уборка отложена до исхода прогона
     print()
     if ok:
         print(f"✅ ВСПОМОГАТЕЛЬНЫЙ ЗАПУСК — ПРИНЯТ — случаев {CASES}, различающих {DIFFER}")
@@ -180,4 +180,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

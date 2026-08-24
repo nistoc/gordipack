@@ -29,6 +29,9 @@ import tempfile
 from pathlib import Path
 import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
+
 LIVE_DB = Path(str(mezo_paths.live_db()))
 # Путь ВНУТРИ КОМАНДЫ, а не любой путь в тексте: прозу про каталоги не трогаем.
 PATH_IN_CMD = re.compile(r"(?<=python )([A-Za-z]:\\[^\s`'\"]+)")
@@ -101,7 +104,7 @@ def main():
 def selftest():
     """Главное свойство после находки @TAXO: на НЕИЗВЕСТНОЙ роли — громкий отказ (rc=2),
     а не пустой успех. Плюс сама замена работает."""
-    tmp = Path(tempfile.mkdtemp(prefix="fix-slash-selftest-"))
+    tmp = mezo_stand.new("fix-slash-selftest-")
     db = tmp / "m.db"
     con = sqlite3.connect(str(db))
     con.execute("CREATE TABLE phoenix (role TEXT, section TEXT, body TEXT)")
@@ -138,4 +141,4 @@ def selftest():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

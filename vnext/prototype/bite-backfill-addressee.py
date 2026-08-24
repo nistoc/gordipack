@@ -25,8 +25,9 @@ import os
 import sqlite3
 import subprocess
 import sys
-import tempfile
 import mezo_paths  # пути машины выводятся, не впечатаны (#153)
+
+import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
 SCRIPT = os.path.join(str(mezo_paths.live_scripts()), "migrations",
                       "20260808-backfill-addressee.py")
@@ -43,7 +44,7 @@ def case(title, ok, detail, differ=False):
 
 
 def build(msgs, declared=()):
-    d = tempfile.mkdtemp(prefix="bite-backfill-")
+    d = str(mezo_stand.new("bite-backfill-"))
     db = os.path.join(d, "s.db")
     con = sqlite3.connect(db)
     con.execute("""CREATE TABLE messages (id INTEGER PRIMARY KEY, writer_role TEXT,
@@ -152,4 +153,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

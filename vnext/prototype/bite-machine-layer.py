@@ -23,10 +23,10 @@ import os
 import sqlite3
 import sys
 from pathlib import Path
-import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_target  # noqa: E402 — какую копию испытываем, решается ОДНИМ местом
+import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
 
 SCRIPTS = str(mezo_target.scripts_root())
 
@@ -42,7 +42,7 @@ def load_live():
 
 
 def build(msgs, cursor=None, phoenix=(), rules=(), cards=()):
-    path = os.path.join(tempfile.mkdtemp(prefix="bite-machine-"), "s.db")
+    path = os.path.join(mezo_stand.new("bite-machine-"), "s.db")
     con = sqlite3.connect(path)
     con.execute("""CREATE TABLE backlog (id INTEGER PRIMARY KEY, role TEXT, title TEXT,
                    status TEXT, done_when TEXT)""")
@@ -135,7 +135,7 @@ def main() -> int:
                "отсутствие отметки прочитанного обязано быть НАЗВАНО: молчание тут читается как «всё в порядке»",
                differ=True)
 
-    text4 = "\n".join(m.machine_block(os.path.join(tempfile.mkdtemp(), "нет-такой.db"), "PROTO"))
+    text4 = "\n".join(m.machine_block(os.path.join(mezo_stand.new("bite-machine-layer-"), "нет-такой.db"), "PROTO"))
     ok &= case("⑦ база недоступна — блок ГОВОРИТ об этом, а не возвращает пустоту",
                "НЕ СОБРАН" in text4 and "НЕ «всё в порядке»" in text4,
                "третий исход отдельно: «не собрано» слитое с «чисто» и есть ложный ноль",
@@ -170,4 +170,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

@@ -34,11 +34,11 @@ import os
 import sqlite3
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_target  # noqa: E402  — какую копию испытываем, решается ОДНИМ местом
+import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
 
 CLI = str(mezo_target.script("read-messages.py"))
 CASES = DIFFER = 0
@@ -82,7 +82,7 @@ def case(title, ok, detail, differ=False):
 
 def build(cursor_at, to_whom=None):
     """Песочница: три записки; курсор роли — на cursor_at. to_whom — кому адресована #3."""
-    db = os.path.join(tempfile.mkdtemp(prefix="bite-tome-"), "s.db")
+    db = os.path.join(mezo_stand.new("bite-tome-"), "s.db")
     con = sqlite3.connect(db)
     con.executescript(DDL)
     for i in (1, 2, 3):
@@ -170,4 +170,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

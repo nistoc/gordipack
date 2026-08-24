@@ -20,8 +20,10 @@
 import os
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
 
 GUARD = Path(__file__).with_name("guard-argument-dropped.py")
 
@@ -44,7 +46,7 @@ def run(d):
 
 
 def sandbox(files: dict) -> str:
-    d = tempfile.mkdtemp(prefix="bite-argdrop-")
+    d = str(mezo_stand.new("bite-argdrop-"))
     for name, text in files.items():
         Path(d, name).write_text(text, encoding="utf-8")
     return d
@@ -106,4 +108,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

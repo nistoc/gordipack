@@ -17,8 +17,9 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-import tempfile
 import mezo_paths  # пути машины выводятся, не впечатаны (#153)
+
+import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
 GUARD = str(mezo_paths.live_scripts() / "guard-all.py")
 LIVE = mezo_paths.live_db()
@@ -38,7 +39,7 @@ def run_on(db):
     return (r.stdout or "") + (r.stderr or ""), r.returncode
 
 
-tmp = pathlib.Path(tempfile.mkdtemp(prefix="wiring-"))
+tmp = mezo_stand.new("wiring-")
 
 # ── ① ПРАВИЛО ИСЧЕЗЛО: набор обязан доработать до конца и назвать отказ отказом
 db1 = tmp / "no-rule.db"
@@ -86,5 +87,5 @@ print("🔬 ПРИЁМКА ПРОВЕРКИ: «источники не учат 
 for name, ok, detail in cases:
     print(f"   {'✅' if ok else '🔴'} {name}" + (f"   ← {detail}" if detail and not ok else ""))
 print(f"   ИТОГ: {len(cases) - bad}/{len(cases)}")
-shutil.rmtree(tmp, ignore_errors=True)
-sys.exit(1 if bad else 0)
+mezo_stand.release(tmp)  # уборка отложена до исхода прогона
+sys.exit(mezo_stand.finish(1 if bad else 0))

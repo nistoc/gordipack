@@ -27,8 +27,9 @@ import re
 import sqlite3
 import subprocess
 import sys
-import tempfile
 from datetime import datetime, timedelta
+
+import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MEASURE = os.path.join(HERE, "measure-urgency-threshold.py")
@@ -109,7 +110,7 @@ def differentiating(tmp: str, name: str, bogus_rows, what: str) -> bool:
 
 
 def main() -> int:
-    tmp = tempfile.mkdtemp(prefix="bite-urgency-")
+    tmp = str(mezo_stand.new("bite-urgency-"))
     ok = True
     global CASES, DIFFERENTIATING
     CASES = DIFFERENTIATING = 0
@@ -186,4 +187,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

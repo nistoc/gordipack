@@ -18,7 +18,8 @@ import re
 import sqlite3
 import subprocess
 import sys
-import tempfile
+
+import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -119,7 +120,7 @@ NEAR_TOMB = ["# Ниже — форма аварийной записи:", ORDER
 
 
 def main() -> int:
-    tmp = tempfile.mkdtemp(prefix="bite-retired-")
+    tmp = str(mezo_stand.new("bite-retired-"))
     ok = True
 
     def stand(name, phx, wrt, version=5, key=RULE, trace=True):
@@ -241,4 +242,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

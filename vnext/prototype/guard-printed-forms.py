@@ -73,6 +73,9 @@ DB_OK = re.compile(r"необязателен|не обязателен|толь
 # я писал здесь пятый раз за двое суток; каждая своя редакция ошибалась по-своему.
 import mention  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
+
 OWN_MARK = re.compile(r"(⛔|⚠️|НЕЛЬЗЯ|нельзя|не зови|вместо|F20|R15a"
                      r"|прежн|раньше|было:)", re.I)
 # ⚖️ РОДЫ ВЫБРАНЫ ЗАМЕРОМ, А НЕ ВКУСОМ — три прогона против baseline «до перевода»:
@@ -499,7 +502,7 @@ EXPECT = {"dirty_bare.py": 1, "dirty_rel_db.py": 2, "clean_computed.py": 0, "tom
 
 def selftest():
     import tempfile
-    tmp = Path(tempfile.mkdtemp(prefix="guard-printed-"))
+    tmp = mezo_stand.new("guard-printed-")
     (tmp / "scripts").mkdir()
     for name, body in SAMPLES.items():
         (tmp / "scripts" / name).write_text(body, encoding="utf-8")
@@ -588,4 +591,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

@@ -30,6 +30,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402 — пути машины выводятся, не впечатаны (#153)
+import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
 
 TOOL = Path(__file__).resolve().parent / "guard-machine-paths.py"
 МОЙ = str(mezo_paths.container_root())          # путь ЭТОЙ машины — выводим, не впечатываем
@@ -52,7 +53,7 @@ def run(root: Path):
 
 
 def дерево(имя: str, файлы: dict[str, str]) -> Path:
-    d = Path(tempfile.mkdtemp(prefix=f"bite-mp-{имя}-"))
+    d = mezo_stand.new(f"bite-mp-{имя}-")
     for отн, текст in файлы.items():
         p = d / отн
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -149,4 +150,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

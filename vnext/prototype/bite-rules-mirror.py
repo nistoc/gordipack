@@ -32,9 +32,11 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 import mezo_paths  # пути машины выводятся, не впечатаны (#153)
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
 
 # Шаблон ищется ПРИЗНАКОМ (scripts/init-group.py вверх по дереву), а не позицией файла:
 # приёмка живёт в ДВУХ каталогах (рабочий и шаблон), и parents[2] из рабочего указывал
@@ -79,7 +81,7 @@ def state(mirror: Path):
 
 
 def main() -> int:
-    tmp = Path(tempfile.mkdtemp(prefix="bite-tpl-mirror-"))
+    tmp = mezo_stand.new("bite-tpl-mirror-")
     fails = []
     try:
         mezo, db, scripts = build_contour(tmp)
@@ -178,8 +180,8 @@ def main() -> int:
         print("      расхождение называется поимённо, провал генератора не отменяет запись.")
         return 0
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        mezo_stand.release(tmp)  # уборка отложена до исхода прогона
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

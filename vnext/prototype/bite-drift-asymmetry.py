@@ -19,8 +19,9 @@ import pathlib
 import shutil
 import subprocess
 import sys
-import tempfile
 import mezo_paths  # пути машины выводятся, не впечатаны (#153)
+
+import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
 GUARD = str(mezo_paths.live_scripts() / "guard-scripts-drift.py")
 cases, bad = [], 0
@@ -36,7 +37,7 @@ def check(name, ok, detail=""):
 def run(rt, tpl):
     """Сторож на ВРЕМЕННЫХ каталогах. Первую пару (рантайм↔репо) уводим туда же,
     чтобы приёмка не трогала ни живой тулкит, ни репозиторий-бэкап."""
-    tmp = pathlib.Path(tempfile.mkdtemp(prefix="drift-run-"))
+    tmp = mezo_stand.new("drift-run-")
     (tmp / "rt").mkdir()
     (tmp / "repo").mkdir()
     (tmp / "rt" / "x.py").write_text("# одинаково\n", encoding="utf-8")
@@ -45,12 +46,12 @@ def run(rt, tpl):
                         "--runtime", str(tmp / "rt"), "--repo", str(tmp / "repo"),
                         "--vnext-runtime", str(rt), "--vnext-template", str(tpl)],
                        capture_output=True, text=True, encoding="utf-8", errors="replace")
-    shutil.rmtree(tmp, ignore_errors=True)
+    mezo_stand.release(tmp)  # уборка отложена до исхода прогона
     return (r.stdout or "") + (r.stderr or ""), r.returncode
 
 
 def pair(consumer_files, template_files):
-    tmp = pathlib.Path(tempfile.mkdtemp(prefix="drift-pair-"))
+    tmp = mezo_stand.new("drift-pair-")
     rt, tpl = tmp / "consumer", tmp / "template"
     rt.mkdir()
     tpl.mkdir()
@@ -66,7 +67,7 @@ tmp, rt, tpl = pair({"a.py": "1\n", "своя.py": "2\n"}, {"a.py": "1\n"})
 out, _ = run(rt, tpl)
 check("① файл потребителя, которого нет в шаблоне — НЕ ДОЕДЕТ, назван поимённо",
       "НЕ ДОЕДЕТ" in out and "своя.py" in out, out.strip()[-200:])
-shutil.rmtree(tmp, ignore_errors=True)
+mezo_stand.release(tmp)  # уборка отложена до исхода прогона
 
 # ② ✅ ВСТРЕЧНЫЙ: ТОЛЬКО В ШАБЛОНЕ — НОРМА, и это главный случай правки
 tmp, rt, tpl = pair({"a.py": "1\n"}, {"a.py": "1\n", "лишняя.py": "3\n"})
@@ -75,13 +76,13 @@ check("② файл только в шаблоне — НОРМА, а не де�
       "НЕ ДОЕДЕТ" not in out and "НОРМА" in out, out.strip()[-200:])
 check("② и такой файл НЕ назван виновником поимённо",
       "🔴 лишняя.py" not in out, out.strip()[-200:])
-shutil.rmtree(tmp, ignore_errors=True)
+mezo_stand.release(tmp)  # уборка отложена до исхода прогона
 
 # ③ 🔴 ДРЕЙФ содержимого — по-прежнему красное
 tmp, rt, tpl = pair({"a.py": "СТАРОЕ\n"}, {"a.py": "НОВОЕ\n"})
 out, _ = run(rt, tpl)
 check("③ разное содержимое общего файла — ДРЕЙФ", "РАСХОДЯТСЯ" in out, out.strip()[-200:])
-shutil.rmtree(tmp, ignore_errors=True)
+mezo_stand.release(tmp)  # уборка отложена до исхода прогона
 
 # ④ ✅ полное совпадение — тихо, но с НАЗВАННОЙ границей
 tmp, rt, tpl = pair({"a.py": "1\n"}, {"a.py": "1\n"})
@@ -89,17 +90,17 @@ out, _ = run(rt, tpl)
 check("④ совпадение — зелёное", "не доедет — ноль" in out, out.strip()[-200:])
 check("④ зелёное САМО называет свою границу (файлы ≠ работоспособность)",
       "ГРАНИЦА" in out and "ПРОГОНОМ" in out, out.strip()[-200:])
-shutil.rmtree(tmp, ignore_errors=True)
+mezo_stand.release(tmp)  # уборка отложена до исхода прогона
 
 # ⑤ отказ мерить: каталога нет — это не «совпадает»
 tmp, rt, tpl = pair({"a.py": "1\n"}, {"a.py": "1\n"})
 out, _ = run(rt, tpl / "нет-такого")
 check("⑤ отсутствующий каталог — сверка НЕ ВЫПОЛНЕНА, а не «чисто»",
       "НЕ ВЫПОЛНЕНА" in out, out.strip()[-200:])
-shutil.rmtree(tmp, ignore_errors=True)
+mezo_stand.release(tmp)  # уборка отложена до исхода прогона
 
 print("🔬 ПРИЁМКА: асимметрия пары копий в guard-scripts-drift")
 for name, ok, detail in cases:
     print(f"   {'✅' if ok else '🔴'} {name}" + (f"   ← {detail}" if detail and not ok else ""))
 print(f"   ИТОГ: {len(cases) - bad}/{len(cases)}")
-sys.exit(1 if bad else 0)
+sys.exit(mezo_stand.finish(1 if bad else 0))

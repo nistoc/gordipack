@@ -24,11 +24,11 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
+import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
 
 TOOL = Path(__file__).resolve().parent / "role-card.py"
 CASES = DIFFER = 0
@@ -88,7 +88,7 @@ def main() -> int:
         print(f"⛔ НЕ ЗАПУСТИЛАСЬ: испытуемого нет — {TOOL}")
         return 2
 
-    tmp = Path(tempfile.mkdtemp(prefix="bite-card-"))
+    tmp = mezo_stand.new("bite-card-")
     try:
         db = tmp / "c.db"
         build_db(db)
@@ -236,7 +236,7 @@ def main() -> int:
                    "без имени группы отличить обмен контуров от чужой переписки нечем; "
                    "разложить «на всякий случай везде» — тихо сделать не то", differ=True)
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        mezo_stand.release(tmp)  # уборка отложена до исхода прогона
 
     print()
     print(f"{'✅ КАРТОЧКА РОЛИ — ПРИНЯТО' if ok else '🔴 НЕ ПРИНЯТО'} — "
@@ -245,4 +245,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

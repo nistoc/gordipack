@@ -18,7 +18,8 @@ import importlib.util
 import os
 import sqlite3
 import sys
-import tempfile
+
+import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 GUARD = os.path.join(HERE, "guard-phoenix-time.py")
@@ -44,7 +45,7 @@ def case(title, verdict, detail, differ=False):
 
 def build(rows):
     """rows: (id, role, ts, tags, body)."""
-    db = os.path.join(tempfile.mkdtemp(prefix="bite-time-corr-"), "m.db")
+    db = os.path.join(mezo_stand.new("bite-time-corr-"), "m.db")
     con = sqlite3.connect(db)
     con.execute("CREATE TABLE messages (id INTEGER PRIMARY KEY, writer_role TEXT,"
                 " timestamp TEXT, body_md TEXT, tags TEXT)")
@@ -140,4 +141,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

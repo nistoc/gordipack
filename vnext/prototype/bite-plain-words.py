@@ -34,11 +34,11 @@ import ast
 import re
 import shutil
 import sys
-import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
+import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
 
 # Выдуманные слова и иносказания. Список ЖИВОЙ: добавляя своё словцо в вывод, впиши сюда —
 # иначе следующее поколение выучит его как норму.
@@ -192,7 +192,7 @@ def main() -> int:
                 + ("" if not hits else "\n   " + "\n   ".join(hits[:12]))), differ=True)
 
     # ── ②③④ НАРОЧНЫЕ ПОЛОМКИ И ГРАНИЦЫ ───────────────────────────────────────
-    d = Path(tempfile.mkdtemp(prefix="bite-words-"))
+    d = mezo_stand.new("bite-words-")
     sand = d / "s"
     sand.mkdir()
     probe = sand / "probe_tool.py"
@@ -330,7 +330,7 @@ def main() -> int:
     подопытный.unlink()
     helper_shown.unlink()
 
-    shutil.rmtree(d, ignore_errors=True)
+    mezo_stand.release(d)  # уборка отложена до исхода прогона
 
     # ── ⑤ КОНТРОЛЬ: ПРИЁМКА ВООБЩЕ СМОТРИТ ───────────────────────────────────
     ok &= case("⑤ контроль: приёмке было на что смотреть",
@@ -347,4 +347,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

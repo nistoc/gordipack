@@ -19,11 +19,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_paths  # пути машины ВЫВОДЯТСЯ, не впечатаны (карточка #208)
+import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
 
 import importlib.util
 import shutil
 import sys
-import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -53,7 +53,7 @@ def case(title, verdict, detail, differ=False):
 
 def stand():
     """Игрушечная пара «живой контур ↔ шаблон» — предмет строится, а не берётся живой."""
-    tmp = Path(tempfile.mkdtemp(prefix="bite-roots-"))
+    tmp = mezo_stand.new("bite-roots-")
     live, tpl = tmp / "live", tmp / "tpl"
     live.mkdir(), tpl.mkdir()
     (live / "guard-all.py").write_text(
@@ -109,7 +109,7 @@ def main() -> int:
                    "молчащая граница превращает «не нашли» в «этого нет»")
 
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        mezo_stand.release(tmp)  # уборка отложена до исхода прогона
 
     print()
     print(f"{'✅ КОРНИ ПЕРЕНОСА ПРИНЯТЫ' if ok else '🔴 НЕ ПРИНЯТЫ'} — случаев {CASES}, "
@@ -118,4 +118,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

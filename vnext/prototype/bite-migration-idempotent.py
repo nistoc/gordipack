@@ -17,8 +17,9 @@ import pathlib
 import sqlite3
 import subprocess
 import sys
-import tempfile
 import mezo_paths  # пути машины выводятся, не впечатаны (#153)
+
+import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
 STEP = mezo_paths.live_scripts() / "migrations" / "20260807-addressed-by-unset.py"
 
@@ -67,7 +68,7 @@ def schema_of(path, name="messages"):
     return sql[0] if sql else ""
 
 
-tmp = pathlib.Path(tempfile.mkdtemp(prefix="bite-idem-"))
+tmp = mezo_stand.new("bite-idem-")
 db = tmp / "probe.db"
 build(db)
 
@@ -125,4 +126,4 @@ print(f"   испытана СВЕЖЕПОСТРОЕННАЯ база: {tmp} (ж
 for name, ok, detail in cases:
     print(f"   {'✅' if ok else '🔴'} {name}" + (f"   ← {detail}" if detail and not ok else ""))
 print(f"   ИТОГ: {len(cases) - failed}/{len(cases)}")
-sys.exit(1 if failed else 0)
+sys.exit(mezo_stand.finish(1 if failed else 0))

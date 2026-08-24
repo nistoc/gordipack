@@ -27,10 +27,11 @@ import pathlib
 import shutil
 import subprocess
 import sys
-import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402 — пути машины выводятся, не впечатаны (#153)
+
+import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
 СВЕРКА = mezo_paths.live_scripts() / "guard-scripts-drift.py"
 CASES = DIFFER = 0
@@ -47,7 +48,7 @@ def case(title, ok, detail, differ=False):
 
 def main() -> int:
     ok = True
-    tmp = pathlib.Path(tempfile.mkdtemp(prefix="bite-drift-sanitize-"))
+    tmp = mezo_stand.new("bite-drift-sanitize-")
     try:
         контейнер = tmp / "контейнер"
         (контейнер / "alpha-repo" / ".git").mkdir(parents=True)   # репозиторий НА ДИСКЕ
@@ -103,7 +104,7 @@ def main() -> int:
                    "сверка байтов — не сверка содержимого (правило bytes-are-not-content)",
                    differ=True)
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        mezo_stand.release(tmp)  # уборка отложена до исхода прогона
 
     print()
     print(f"{'✅ СВЕРКА С ОБРАЗЦОМ ПРИНЯТА' if ok else '🔴 НЕ ПРИНЯТА'} — случаев {CASES}, "
@@ -112,4 +113,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

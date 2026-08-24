@@ -25,10 +25,11 @@ import pathlib
 import sqlite3
 import subprocess
 import sys
-import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402 — пути машины выводятся, не впечатаны (#153)
+
+import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
 TOOL = pathlib.Path(__file__).resolve().parent / "guard-seed-rules.py"
 ДОГОН = "2026-08-20 23:05"
@@ -46,7 +47,7 @@ def case(title, ok, detail, differ=False):
 
 def стенд(правила, метка=ДОГОН, посев_битый=False):
     """Свод в копии базы + файл посева. Оба — во временном каталоге."""
-    d = pathlib.Path(tempfile.mkdtemp(prefix="bite-seed-"))
+    d = mezo_stand.new("bite-seed-")
     db = d / "live.db"
     con = sqlite3.connect(str(db))
     con.execute("""CREATE TABLE rules (id INTEGER PRIMARY KEY, rule_key TEXT UNIQUE, body TEXT,
@@ -153,4 +154,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

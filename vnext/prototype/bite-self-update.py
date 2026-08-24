@@ -19,10 +19,11 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
+
+import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
 CASES = DIFFER = 0
 NL = chr(10)
@@ -42,7 +43,7 @@ def case(title, ok, detail, differ=False):
 
 def main() -> int:
     ok = True
-    tmp = pathlib.Path(tempfile.mkdtemp(prefix="bite-selfupd-"))
+    tmp = mezo_stand.new("bite-selfupd-")
     try:
         r = subprocess.run([sys.executable, str(INIT), "--name", "biteupd",
                             "--path", str(tmp / ".mezosync"), "--roles", "COORD"],
@@ -159,7 +160,7 @@ def main() -> int:
                    "молчаливое обновление здесь неотличимо от затирания чужой правки; "
                    "цена названа ДО действия и требует явного согласия", differ=True)
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        mezo_stand.release(tmp)  # уборка отложена до исхода прогона
 
     print()
     print((f"✅ САМОСТОЯТЕЛЬНОСТЬ КОНТУРА — ПРИНЯТО — случаев {CASES}, различающих {DIFFER}"
@@ -168,4 +169,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

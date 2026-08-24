@@ -37,11 +37,11 @@ import os
 import sqlite3
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_target  # noqa: E402  — какую копию испытываем, решается ОДНИМ местом
+import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
 
 # ⚡ 2026-08-09 (карточка #148): путь больше не вписан в приёмку. Прежде он вёл в живой контур
 # всегда, и прогон «по шаблону» на деле испытывал оригинал — а описание таблицы приёмка
@@ -61,7 +61,7 @@ def case(title, ok, detail, differ=False):
 
 
 def build():
-    db = os.path.join(tempfile.mkdtemp(prefix="bite-rights-"), "s.db")
+    db = os.path.join(mezo_stand.new("bite-rights-"), "s.db")
     con = sqlite3.connect(db)
     ddl = DDL.split('DDL = """')[1].split('"""')[0]
     con.executescript(ddl)
@@ -199,4 +199,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

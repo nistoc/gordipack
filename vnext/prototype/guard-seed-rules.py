@@ -30,10 +30,11 @@ import argparse
 import pathlib
 import sqlite3
 import sys
-import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402 — пути машины выводятся, не впечатаны (#153)
+
+import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
 # 🪤 ПЕРВАЯ РЕДАКЦИЯ СУДИЛА ПО ДЛИНЕ — и была неправа по существу: посев КОРОЧЕ живого
 # НАМЕРЕННО, из него убраны случаи контура-донора. По длине выходило «отстали 30» сразу
@@ -46,7 +47,7 @@ import mezo_paths  # noqa: E402 — пути машины выводятся, н
 
 def посев_как_база(файл: pathlib.Path) -> dict[str, str]:
     """Применяем файл посева так же, как это делает сборка контура."""
-    d = pathlib.Path(tempfile.mkdtemp(prefix="seed-check-"))
+    d = mezo_stand.new("seed-check-")
     con = sqlite3.connect(str(d / "seed.db"))
     con.execute("""CREATE TABLE rules (id INTEGER PRIMARY KEY, rule_key TEXT UNIQUE, body TEXT,
                    locked_by TEXT, version INT, basis TEXT, authorized TEXT, source_ref TEXT,
@@ -143,4 +144,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

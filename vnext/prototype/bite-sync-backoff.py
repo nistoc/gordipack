@@ -29,10 +29,10 @@ import os
 import sqlite3
 import sys
 from pathlib import Path
-import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_target  # noqa: E402 — какую копию испытываем, решается ОДНИМ местом
+import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
 
 sys.path.insert(0, str(mezo_target.scripts_root()))
 import sync_backoff as sb  # noqa: E402
@@ -50,7 +50,7 @@ def case(title, ok, detail, differ=False):
 
 
 def build():
-    db = os.path.join(tempfile.mkdtemp(prefix="bite-backoff-"), "s.db")
+    db = os.path.join(mezo_stand.new("bite-backoff-"), "s.db")
     con = sqlite3.connect(db)
     con.execute("""CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT,
                    writer_role TEXT, body_md TEXT)""")
@@ -125,7 +125,7 @@ def main() -> int:
                all(x in ln for x in ("начало", "шаг", "потолок")),
                ln[:120])
 
-    bad = sb.line(os.path.join(tempfile.mkdtemp(), "нет.db"), "PROTO")
+    bad = sb.line(os.path.join(mezo_stand.new("bite-sync-backoff-"), "нет.db"), "PROTO")
     ok &= case("⑨ база недоступна — строка ГОВОРИТ об отказе, а не молчит",
                "НЕ ПОСЧИТАН" in bad and "НЕ «спи сколько хочешь»" in bad,
                "молчание тут прочлось бы как разрешение спать сколько угодно")
@@ -137,4 +137,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

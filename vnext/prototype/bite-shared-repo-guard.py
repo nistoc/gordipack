@@ -33,8 +33,9 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-import tempfile
 import time
+
+import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
 МЕХАНИЗМ = pathlib.Path(__file__).resolve().parent / "hook-shared-repo-guard.py"
 CASES = DIFFER = 0
@@ -94,7 +95,7 @@ def main() -> int:
     ok = True
     if not МЕХАНИЗМ.exists():
         sys.exit(f"⛔ НЕ ЗАПУСТИЛАСЬ: нет механизма — {МЕХАНИЗМ}")
-    tmp = pathlib.Path(tempfile.mkdtemp(prefix="bite-shared-repo-"))
+    tmp = mezo_stand.new("bite-shared-repo-")
     try:
         # ① ПРАВКА СВОЕГО. Прогон «своя сторона» из критерия ③.
         контейнер, репо = контур(tmp / "a")
@@ -221,7 +222,7 @@ def main() -> int:
                    "выключатель, гаснущий от чего угодно непустого, гасится опечаткой "
                    "и молча", differ=True)
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        mezo_stand.release(tmp)  # уборка отложена до исхода прогона
 
     print()
     print(f"{'✅ ЗАХВАТ ЧУЖОГО — ПРИНЯТО' if ok else '🔴 НЕ ПРИНЯТО'} — случаев {CASES}, "
@@ -230,4 +231,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

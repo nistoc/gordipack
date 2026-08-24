@@ -20,8 +20,10 @@ bite-printed-names.py — приёмка на признак `guard-printed-name
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
 
 GUARD = Path(__file__).with_name("guard-printed-names.py")
 
@@ -133,7 +135,7 @@ def rules_hit(text: str, fname: str) -> set:
 
 
 def main() -> int:
-    tmp = Path(tempfile.mkdtemp(prefix="bite-printed-"))
+    tmp = mezo_stand.new("bite-printed-")
     try:
         sick_dir, ok_dir = tmp / "sick", tmp / "healthy"
         lay_out(sick_dir, SICK)
@@ -178,8 +180,8 @@ def main() -> int:
         print("   из 6. Ложная причина, ложный срок и подмена источника ловятся только глазами.")
         return 0
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        mezo_stand.release(tmp)  # уборка отложена до исхода прогона
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

@@ -45,6 +45,9 @@ REL_CALL = re.compile(r"python\s+[.\\/]*\.?mezosync[\\/]scripts[\\/]", re.IGNORE
 # и тот же род ослеп: правила сами состоят из запретов — перевод там ОТКЛОНЁН замером).
 import mention  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
+
 
 class _Quench:
     """Совместимая обёртка .search(): своё предметное ИЛИ общие роды из mention."""
@@ -841,7 +844,7 @@ def selftest():
     приведённый — молчать. Требование @TAXO (#2769): «порча, которую не удаётся навести,
     не доказательство прочности, пока не названа причина, по которой её нельзя навести»."""
     import tempfile
-    tmp = Path(tempfile.mkdtemp(prefix="guard-std-")) / "m.db"
+    tmp = mezo_stand.new("guard-std-") / "m.db"
     con = sqlite3.connect(str(tmp))
     con.execute("CREATE TABLE phoenix (role TEXT, section TEXT, body TEXT, saved_at TEXT)")
     # ⚡ ТАБЛИЦА ФАКТОВ ДЛЯ ④+ (карточка #159). Без неё признак «число неверно» в самопроверке
@@ -990,4 +993,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

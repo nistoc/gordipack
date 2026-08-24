@@ -27,11 +27,11 @@ import sqlite3
 import subprocess
 import sys
 from pathlib import Path
-import tempfile
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_target  # noqa: E402 — какую копию испытываем, решается ОДНИМ местом
+import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
 
 SAVE = str(mezo_target.script("save-phoenix.py"))
 CASES = DIFFER = 0
@@ -47,7 +47,7 @@ def case(title, ok, detail, differ=False):
 
 
 def build(with_confirmed=True):
-    d = tempfile.mkdtemp(prefix="bite-confirmed-")
+    d = str(mezo_stand.new("bite-confirmed-"))
     db = os.path.join(d, "s.db")
     con = sqlite3.connect(db)
     cols = "role TEXT, section TEXT, body TEXT, saved_at TEXT"
@@ -139,4 +139,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

@@ -28,12 +28,12 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402  (пути выводятся, не впечатаны)
+import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
 
 LIVE_DB = mezo_paths.live_db()
 SCRIPTS = mezo_paths.live_scripts()
@@ -71,7 +71,7 @@ def main() -> int:
         sys.exit(f"⛔ НЕ ЗАПУСТИЛАСЬ: инструмента нет — {SAVE}")
 
     ok = True
-    d = Path(tempfile.mkdtemp(prefix="bite-confirm-"))
+    d = mezo_stand.new("bite-confirm-")
     db = d / "copy.db"
     shutil.copyfile(LIVE_DB, db)
     body1 = d / "b1.md"
@@ -173,7 +173,7 @@ def main() -> int:
                "без этого случая краснота ⑥ ничего не доказывала бы: проверка, красящая всё, "
                "не различает")
 
-    shutil.rmtree(d, ignore_errors=True)
+    mezo_stand.release(d)  # уборка отложена до исхода прогона
     print()
     if ok:
         print(f"✅ ОТМЕТКА ВЗГЛЯДА ПРИНЯТА — случаев {CASES}, различающих {DIFFER}")
@@ -183,4 +183,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

@@ -21,10 +21,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_paths  # пути машины ВЫВОДЯТСЯ, не впечатаны (карточка #208)
+import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
 
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -67,7 +67,7 @@ def run_checker(*args):
 
 def main() -> int:
     ok = True
-    tmp = Path(tempfile.mkdtemp(prefix="bite-sig-"))
+    tmp = mezo_stand.new("bite-sig-")
 
     # ── ② ИСТОРИЧЕСКАЯ КОПИЯ write-message ДО починки справки --to (правило А) ──
     old_wm = git_show("0c19a23^:scripts/write-message.py")
@@ -146,4 +146,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))
