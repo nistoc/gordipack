@@ -12,6 +12,7 @@ r"""ПРИЁМКА признака «пересказ измеримого» (c
 ⛔ Число случаев печатает прогон.
 """
 import os
+import pathlib
 import sqlite3
 import subprocess
 import sys
@@ -118,6 +119,73 @@ def main() -> int:
     ok &= case("⑨ слепков нет — отказ мерить, отдельный код",
                r.returncode == 2 and "нечего" in r.stdout,
                f"код {r.returncode}", differ=True)
+
+    # ⑩–⑬ ШЕСТЬ ЖИВЫХ ЛОЖНЫХ СРАБАТЫВАНИЙ, взятых ЗАМЕРОМ по памятям ролей
+    #      (PROTO 2026-08-24 17:20 UTC). Признак «правила» срабатывал шесть раз и все
+    #      шесть — мимо; настоящего пересказа не было ни одного. Каждый случай ниже —
+    #      дословная живая строка, а не выдуманная.
+    out, code = stand(tmp, "j", "08.08  правил право в трёх местах памяти, а их было четыре")
+    ok &= case("⑩ «08.08 правил» — молчит: дата плюс глагол «правил», а не число правил",
+               code == 0,
+               f"код {code}; признак ловил «08 правил» и объявлял пересказом дату",
+               differ=True)
+
+    out, code = stand(tmp, "k", "секцию я правил 09.08 своей рукой — смотрел на пути")
+    ok &= case("⑪ «правил 09.08» — молчит: та же дата с другой стороны",
+               code == 0, f"код {code}; ловилось «правил 09»", differ=True)
+
+    out, code = stand(tmp, "l", "заголовков `## ` — 14, ВНУТРИ тел правил 13 ⇒ резать нельзя")
+    ok &= case("⑫ «ВНУТРИ тел правил 13» — молчит: 13 ЗАГОЛОВКОВ, а не 13 правил",
+               code == 0,
+               f"код {code}; число относится к другому предмету, «правил» тут определение",
+               differ=True)
+
+    out, code = stand(tmp, "m", "список 15 правил вне посева с пометками подан")
+    ok &= case("⑬ «15 правил вне посева» — молчит: подмножество, названное ограничением",
+               code == 0, f"код {code}; часть свода — не свод", differ=True)
+
+    # ⑭ ВСТРЕЧНЫЙ КО ВСЕМ ЧЕТЫРЁМ: сужение не должно погасить настоящее.
+    #    🎯 Без него ⑩–⑬ доказывали бы только, что признак замолчал, — а замолчать он
+    #       мог и совсем. Настоящий пересказ обязан остаться красным.
+    out, code = stand(tmp, "n", "правил 11 — сверить свод")
+    ok &= case("⑭ ВСТРЕЧНЫЙ: настоящий пересказ «правил 11» остался КРАСНЫМ",
+               code == 1 and "живых 5" in out,
+               f"код {code}; гасители требуют признака ИНОГО предмета, а не отсутствия своего",
+               differ=True)
+
+    # ⑮ ОБРАТНЫЙ ХОД: снимаем гасители и требуем, чтобы ⑫ снова покраснел.
+    #    Без него зелень ⑩–⑬ означала бы «сегодня не болит», а не «сужение работает».
+    import shutil
+    d15 = pathlib.Path(str(mezo_stand.new("bite-retold-old-")))
+    цел = pathlib.Path(CHECK).read_text(encoding="utf-8")
+    поломка = цел.replace("if m and RULES_ALIEN.search(line):", "if m and False:", 1)
+    if поломка == цел:
+        ok &= case("⑮ ОБРАТНЫЙ ХОД: без гасителей случай ⑫ краснеет",
+                   False,
+                   "⛔ НЕ ЗАПУСТИЛСЯ: место гасителей не найдено — проверка менялась, "
+                   "правь приёмку. Молча пропустить нельзя: это был бы зелёный без опыта")
+    else:
+        прежний = d15 / "прежний.py"
+        прежний.write_text(поломка, encoding="utf-8")
+        shutil.copy(pathlib.Path(CHECK).with_name("mezo_paths.py"), d15 / "mezo_paths.py")
+        shutil.copy(pathlib.Path(CHECK).with_name("mention.py"), d15 / "mention.py")
+        db15 = os.path.join(tmp, "o.db")
+        con = sqlite3.connect(db15)
+        con.execute("CREATE TABLE phoenix (role TEXT, section TEXT, saved_at TEXT, body TEXT)")
+        con.execute("CREATE TABLE backlog (id INTEGER PRIMARY KEY, role TEXT, status TEXT)")
+        con.execute("CREATE TABLE rules (id INTEGER PRIMARY KEY, body TEXT)")
+        con.execute("CREATE TABLE schema_migrations (version TEXT PRIMARY KEY)")
+        con.execute("INSERT INTO phoenix VALUES ('T','state','2026-08-09 12:00', ?)",
+                    ("заголовков `## ` — 14, ВНУТРИ тел правил 13 ⇒ резать нельзя",))
+        for _ in range(5):
+            con.execute("INSERT INTO rules (body) VALUES ('живое правило')")
+        con.commit(); con.close()
+        r15 = subprocess.run([sys.executable, str(прежний), "--db", db15],
+                             capture_output=True, text=True, encoding="utf-8")
+        ok &= case("⑮ ОБРАТНЫЙ ХОД: без гасителей случай ⑫ краснеет",
+                   r15.returncode == 1,
+                   f"код прежней редакции {r15.returncode} против 0 у нынешней — "
+                   "разница и есть доказательство сужения", differ=True)
 
     print()
     print(f"{'✅ ПРИЗНАК ПРИНЯТ' if ok else '🔴 ПРИЗНАК НЕ ПРИНЯТ'} — случаев {CASES}, "
