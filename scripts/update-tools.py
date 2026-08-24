@@ -39,10 +39,11 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
+
+import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
 NEWLINE = chr(10)
 
@@ -57,17 +58,36 @@ def digest(data: bytes) -> str:
 
 
 def fetch(source: str) -> tuple[pathlib.Path, str, bool]:
-    """Возвращает каталог с шаблоном, его версию и признак «это временная копия»."""
+    """Возвращает каталог с шаблоном, его версию и признак «это временная копия».
+
+    🩸 УБОРКА ЗДЕСЬ БЫЛА — И МОЛЧА НЕ РАБОТАЛА (замер PROTO 2026-08-24 16:39 UTC).
+    Стояло `shutil.rmtree(..., ignore_errors=True)` в двух блоках finally, то есть
+    на всех путях выхода. И всё равно во временном каталоге машины лежало 245 копий
+    репозитория образца.
+    ```
+    опыт на КОПИИ одного из остатков:
+      rmtree(ignore_errors=True) .............. каталог ОСТАЛСЯ
+      rmtree со снятием метки только-чтения ... каталог удалён
+    ```
+    ⇒ `git clone` помечает файлы внутри `.git` только для чтения; Windows не даёт их
+    удалить, а `ignore_errors=True` ГЛОТАЕТ этот отказ. Уборка выполнялась, ничего
+    не убирала и ни разу об этом не сказала.
+    🎯 Класс наш же и записанный: **молчащий отказ читается как успех.** Здесь он
+    прожил дольше обычного именно потому, что уборка была НАПИСАНА — её наличие
+    закрывало вопрос, а проверял ли кто-нибудь её действие, никто не спрашивал.
+    ⚖️ И заявка называла причину иначе — «уборка стои́т не на всех путях выхода».
+    Пути были все; ложным было не место, а действие.
+    """
     local = pathlib.Path(source)
     if local.is_dir():
         rev = subprocess.run(["git", "-C", str(local), "rev-parse", "HEAD"],
                              capture_output=True, text=True)
         return local, (rev.stdout or "").strip()[:12] or "версия неизвестна", False
-    tmp = pathlib.Path(tempfile.mkdtemp(prefix="gordi-src-"))
+    tmp = mezo_stand.new("gordi-src-")
     r = subprocess.run(["git", "clone", "--depth", "1", source, str(tmp)],
                        capture_output=True, text=True)
     if r.returncode != 0:
-        shutil.rmtree(tmp, ignore_errors=True)
+        mezo_stand.release(tmp)  # уборка отложена до исхода прогона
         sys.exit(f"⛔ НЕ ЗАБРАЛОСЬ из {source}:{NEWLINE}   "
                  + (r.stderr or "").strip()[:400]
                  + f"{NEWLINE}   Это НЕ «обновлений нет» — источник недоступен.")
@@ -131,7 +151,7 @@ def main() -> int:
             print("   Файлы НЕ тронуты: это режим записи, а не обновления.")
         finally:
             if temporary:
-                shutil.rmtree(src_dir, ignore_errors=True)
+                mezo_stand.release(src_dir)   # 🩸 было `rmtree(ignore_errors=True)`
         return 0
 
     tools = pathlib.Path(mezo_paths.live_scripts())
@@ -251,8 +271,8 @@ def main() -> int:
         return 0
     finally:
         if temporary:
-            shutil.rmtree(src_dir, ignore_errors=True)
+            mezo_stand.release(src_dir)   # 🩸 было `rmtree(ignore_errors=True)` — см. шапку fetch()
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

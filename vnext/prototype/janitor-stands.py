@@ -38,16 +38,49 @@ TOOLS_DIR = Path(__file__).resolve().parent
 PREFIX_RE = re.compile(r'(?:mkdtemp\s*\(\s*prefix\s*=|mezo_stand\.new\s*\(\s*)["\']([^"\']+)["\']')
 
 
-def prefixes_from_sources(tools_dir: Path) -> tuple[set[str], int]:
+def каталоги_инструментов() -> list[Path]:
+    """Все каталоги контура, где живут инструменты, — ПО ПРИЗНАКУ, а не одним путём.
+
+    🩸 Первая редакция брала ОДИН каталог (свой) и знала 72 начала имён. Каталогов
+    оказалось два: инструменты роли и инструменты согласования, и во втором лежали
+    ещё 7 начал — среди них `gordi-src-`, по которому накопилось 245 каталогов
+    (замер PROTO 2026-08-24 16:43 UTC, 0.31 ГБ).
+    ⚖️ Указать второй можно было и руками (`--tools-dir`), но тогда полнота уборки
+    держалась бы ПАМЯТЬЮ зовущего: забыл про второй каталог — утилита честно скажет
+    «убрано», умолчав, что смотрела в половину мест. Ровно то, вместо чего строятся
+    механизмы.
+    """
+    свой = TOOLS_DIR
+    места = [свой]
+    корень = свой.parent
+    for кандидат in (корень / ".mezosync" / "scripts", корень.parent / ".mezosync" / "scripts",
+                     свой.parent / "scripts"):
+        if кандидат.is_dir() and кандидат.resolve() != свой.resolve():
+            места.append(кандидат)
+    # + инструменты соседних репозиториев контура, если контур так разложен
+    try:
+        for d in sorted(корень.iterdir()):
+            к = d / ".mezosync" / "scripts"
+            if к.is_dir() and all(к.resolve() != m.resolve() for m in места):
+                места.append(к)
+    except OSError:
+        pass
+    return места
+
+
+def prefixes_from_sources(tools_dirs) -> tuple[set[str], int]:
     """Собрать начала имён из исходников проверок. Возвращает (начала, сколько файлов прочитано)."""
+    if isinstance(tools_dirs, Path):
+        tools_dirs = [tools_dirs]
     found, read = set(), 0
-    for f in sorted(tools_dir.glob("*.py")):
-        try:
-            text = f.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        read += 1
-        found.update(PREFIX_RE.findall(text))
+    for каталог in tools_dirs:
+        for f in sorted(Path(каталог).glob("*.py")):
+            try:
+                text = f.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            read += 1
+            found.update(PREFIX_RE.findall(text))
     return found, read
 
 
@@ -78,17 +111,22 @@ def main() -> int:
                     help="действительно удалить; без этого указания утилита только показывает")
     ap.add_argument("--temp-dir", default=tempfile.gettempdir(),
                     help="где искать (по умолчанию — временный каталог этой машины)")
-    ap.add_argument("--tools-dir", default=str(TOOLS_DIR),
-                    help="откуда вычитывать начала имён (по умолчанию — каталог этой утилиты)")
+    ap.add_argument("--tools-dir", nargs="*", default=None,
+                    help="откуда вычитывать начала имён. По умолчанию — ВСЕ каталоги "
+                         "инструментов контура, найденные по признаку (их обычно два)")
     a = ap.parse_args()
 
-    tools = Path(a.tools_dir)
-    if not tools.is_dir():
-        print(f"⛔ НЕ ЗАПУСТИЛАСЬ: нет каталога с исходниками проверок — {tools}")
+    места = [Path(x) for x in a.tools_dir] if a.tools_dir else каталоги_инструментов()
+    нет = [м for м in места if not м.is_dir()]
+    if нет:
+        print("⛔ НЕ ЗАПУСТИЛАСЬ: нет каталога с исходниками проверок — "
+              + " · ".join(str(м) for м in нет))
         return 2
-    prefixes, n_files = prefixes_from_sources(tools)
+    tools = места[0]
+    prefixes, n_files = prefixes_from_sources(места)
     if not prefixes:
-        print(f"⛔ НЕ ЗАПУСТИЛАСЬ: в {n_files} файлах каталога {tools} не нашлось ни одного")
+        print(f"⛔ НЕ ЗАПУСТИЛАСЬ: в {n_files} файлах каталогов "
+              + " · ".join(str(м) for м in места) + " не нашлось ни одного")
         print("   начала имени временного каталога. Либо каталог не тот, либо способ")
         print("   заводить каталоги сменился и образец поиска надо перепривязать —")
         print("   молча удалять по пустому списку утилита не станет.")
@@ -114,7 +152,12 @@ def main() -> int:
     print("=" * 78)
     print("СТАРЫЕ ВРЕМЕННЫЕ КАТАЛОГИ ПРОВЕРОК")
     print(f"  где ищу ............ {temp}")
-    print(f"  начал имён ......... {len(prefixes)} (вычитаны из {n_files} файлов в {tools.name})")
+    # ⚠️ Перечисляем ВСЕ каталоги, а не первый: строка «вычитаны из … в vnext-tools»
+    #    при двух просмотренных каталогах — надпись, которая у́же дела. Читающий решит,
+    #    что вторая половина не смотрена, и пойдёт звать утилиту второй раз.
+    print(f"  начал имён ......... {len(prefixes)} (вычитаны из {n_files} файлов)")
+    for м in места:
+        print(f"     · {м}")
     print(f"  порог .............. {порог}")
     print("=" * 78)
 
