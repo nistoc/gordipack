@@ -14,7 +14,7 @@ r"""migrate-addressee-vnext.py — миграция Э-Б НА ПЕСОЧНИЦ�
 ⛔ ЖИВУЮ БАЗУ НЕ ОТКРЫВАЕТ: --db обязателен и обязан НЕ совпадать с живой.
 Отчёт — счётчиками ДО/ПОСЛЕ и поимённо: молчаливая миграция неотличима от несработавшей.
 
-Запуск:  python <КОНТУР>/vnext-tools/migrate-addressee-vnext.py --db <песочница>
+Запуск:  python C:/guts/.atlas/vnext-tools/migrate-addressee-vnext.py --db <песочница>
 """
 import argparse
 import pathlib
@@ -28,11 +28,20 @@ import mezo_paths  # noqa: E402
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="миграция Э-Б: канон адресатов (только песочница)")
-    ap.add_argument("--db", required=True, help="песочница; живая база — отказ")
+    ap.add_argument("--db", required=True, help="песочница; живая база — отказ без --live-by-owner-word")
+    # Живая открывается ТОЛЬКО с этим флагом: слово владельца обязано быть НАЗВАНО
+    # в самом вызове (с датой и часом) и уходит в вывод — накат без слова остаётся
+    # отказом по построению, а не по дисциплине. Дамп-точка отката — ДО вызова.
+    ap.add_argument("--live-by-owner-word", default="", metavar="СЛОВО",
+                    help="накат на ЖИВУЮ: дословное слово владельца с датой и часом UTC "
+                         "(не короче 20 знаков). Без него живая база — отказ")
     a = ap.parse_args()
     db = pathlib.Path(a.db).resolve()
     if db == mezo_paths.live_db().resolve():
-        sys.exit("⛔ ОТКАЗ: это ЖИВАЯ mezosync.db. Миграция Э-Б живёт в песочнице до слова владельца.")
+        if len(a.live_by_owner_word.strip()) < 20:
+            sys.exit("⛔ ОТКАЗ: это ЖИВАЯ mezosync.db. Накат только с --live-by-owner-word "
+                     "«дословное слово владельца с датой и часом UTC» (и дампом-точкой отката до).")
+        print(f"⚠️ НАКАТ НА ЖИВУЮ. Основание: {a.live_by_owner_word.strip()}")
     if not db.exists():
         sys.exit(f"⛔ ОТКАЗ: базы нет — {db}. Это не «мигрировать нечего», это неверный путь.")
 
