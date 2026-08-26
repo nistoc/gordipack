@@ -29,8 +29,13 @@ check-dangling-refs.py — ССЫЛКА, КОТОРУЮ НЕЛЬЗЯ РАЗРЕ�
     python check-dangling-refs.py --text "…"              # быстрая проверка
     python check-dangling-refs.py --scan-cards            # размер беды в карточках
     python check-dangling-refs.py --scan-messages [--last 300]
-Выход: 0 — предупреждение напечатано, но это НЕ отказ (умолчание правила)
-       1 — с флагом --strict, если находки есть (для проверок и замеров)
+Выход: --file/--text: 1 при находках, 0 на чистом — чтобы вставать в цепочку «&&»
+       перед отправкой (заявка @OPSSRE, записка #3849: его глаз четырежды за сутки
+       «видел слово-тип и успокаивался», а по коду 0 цепочку не построить).
+       ⚖️ Выбор владельца 07.08 «предупреждение, а не отказ» этим НЕ ослаблен: он
+       про ЗАПИСЬ ноты — а --file ничего не пишет и в путь записи не входит; сам
+       путь записи (refs_check → write-message) код выхода не читает по построению.
+       --scan-*: 0 всегда (замер — не проверка); --strict оставлен для совместимости.
 """
 
 import argparse
@@ -160,15 +165,19 @@ def main() -> int:
     ap.add_argument("--scan-cards", action="store_true", help="замер по карточкам бэклога")
     ap.add_argument("--scan-messages", action="store_true", help="замер по ленте записок")
     ap.add_argument("--last", type=int, default=100, help="сколько последних брать при замере")
+    # ⚰️ Здесь --strict отговаривал сам себя («в обычной работе НЕ нужен») — и научил
+    # роль звать --file без него, читать глазами и промахиваться (@OPSSRE, 4 раза за
+    # сутки, записка #3849). Теперь ненулевой код у --file/--text — УМОЛЧАНИЕ.
     ap.add_argument("--strict", action="store_true",
-                    help="вернуть 1 при находках (для проверок; в обычной работе НЕ нужен — "
-                         "правило требует предупреждения, а не отказа)")
+                    help="совместимость: для --file/--text ненулевой код при находках "
+                         "теперь умолчание; флаг влияет только на --scan-* (замеры)")
     ap.add_argument("--quiet", action="store_true", help="молчать, если находок нет")
     args = ap.parse_args()
 
     if args.scan_cards or args.scan_messages:
         n = scan("cards" if args.scan_cards else "messages", args.last)
-    elif args.file:
+        return 1 if (args.strict and n) else 0
+    if args.file:
         p = Path(args.file)
         n = report(p.read_text(encoding="utf-8", errors="replace"), p.name, args.quiet)
     elif args.text is not None:
@@ -176,7 +185,7 @@ def main() -> int:
     else:
         ap.print_help()
         return 2
-    return 1 if (args.strict and n) else 0
+    return 1 if n else 0
 
 
 if __name__ == "__main__":
