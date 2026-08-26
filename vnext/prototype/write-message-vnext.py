@@ -96,6 +96,16 @@ def main():
     ap.add_argument("--body", required=True)
     ap.add_argument("--tags", default="")
     ap.add_argument("--priority", default="normal", choices=["normal", "high", "critical"])
+    # Э-Г (карточка #260): critical — дефицит, и дефицит держится ОСНОВАНИЕМ, а не квотой.
+    # Замер живой ленты 26.08: 86 из 89 critical УЖЕ несут основание в теле (слово
+    # владельца · авария · остановка) — требование узаконивает практику, а не вводит новую;
+    # под нож попали бы 3 ноты июля, и глазами все три — high, назвавшийся critical.
+    # Квота отвергнута тем же замером: 2/роль/сутки срезала бы 82% истории, включая дни,
+    # когда владелец сам останавливал работы. Паттерн основания уже в контуре: --again
+    # и --pass-by-index --basis живого писателя.
+    ap.add_argument("--basis", default="",
+                    help="critical: ЧЕМ обосновано (слово владельца с часом · авария · "
+                         "что сломано). Без основания critical отклоняется")
     ap.add_argument("--to", default="", help="адресаты: запятая И пробел — оба разделители")
     ap.add_argument("--cc", default="", help="в копию: те же разделители; «все» — всем")
     args = ap.parse_args()
@@ -106,6 +116,15 @@ def main():
 
     con = sqlite3.connect(f"file:{db}?mode=rw", uri=True, timeout=5)
     con.execute("PRAGMA foreign_keys = ON")
+    if args.priority == "critical" and len(args.basis.strip()) < 12:
+        print("⛔ CRITICAL БЕЗ ОСНОВАНИЯ ОТКЛОНЁН: нужен --basis «чем обосновано»")
+        print("   (не короче 12 знаков — слово владельца с часом · авария · что сломано).")
+        print("   Основание уйдёт ПЕРВОЙ строкой тела: читающий critical первым делом")
+        print("   спрашивает «почему это срочно», и ответ обязан быть до текста.")
+        print("   Если основания нет — это high, и high не требует ничего.")
+        sys.exit(4)
+    if args.priority == "critical":
+        args.body = f"[основание critical: {args.basis.strip()}]\n{args.body}"
     ok, msg = write(con, args.role.upper(), args.body, args.tags, args.priority,
                     разбор_имён(args.to), разбор_имён(args.cc))
     con.close()

@@ -20,6 +20,8 @@ r"""ПРИЁМКА словаря адресатов Э-Б (писатель-п�
   ⑦ МИГРАЦИЯ на копии живой: склеек и ALL после — 0, «всем» помечено
     столько записок, сколько несло ALL; ЧУЖИЕ строки целы числом;
     повторный прогон идемпотентен                                       РАЗЛИЧАЮЩИЙ
+  ⑧ Э-Г (карточка #260): critical БЕЗ основания → отказ, записки НЕТ    РАЗЛИЧАЮЩИЙ
+  ⑨ Э-Г: critical С основанием → записан, основание ПЕРВОЙ строкой      КОНТРОЛЬ
 
 ⛔ Живой базы не пишет: всё — на копии.
 """
@@ -187,6 +189,34 @@ def main() -> int:
                        код6 == 0 and код3 == 1,
                        f"слабая {код6} против настоящей {код3} — различает именно СЛОВАРЬ",
                        differ=True)
+        def сколько_нот(_db):
+            _c = sqlite3.connect(f"file:{pathlib.Path(_db).as_posix()}?mode=ro", uri=True)
+            n = _c.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+            _c.close()
+            return n
+
+        # ⑧ Э-Г: critical без основания — отказ ДО записи, нот не прибыло.
+        было8 = сколько_нот(db)
+        код8, вывод8 = прогон(ПИСАТЕЛЬ, "--db", str(db), "--role", "PROTO",
+                              "--body", "проба Э-Г критик", "--priority", "critical")
+        ok &= case("⑧ critical БЕЗ --basis → отказ, записки НЕТ, отказ учит (high не требует)",
+                   код8 == 4 and сколько_нот(db) == было8
+                   and "это high" in вывод8 and "--basis" in вывод8,
+                   f"код {код8}; нот было {было8}, стало {сколько_нот(db)}; замер в отказе:"
+                   " 86 из 89 живых critical основание уже несли", differ=True)
+
+        # ⑨ Э-Г: critical с основанием — записан, основание первой строкой тела.
+        код9, вывод9 = прогон(ПИСАТЕЛЬ, "--db", str(db), "--role", "PROTO",
+                              "--body", "проба Э-Г критик два", "--priority", "critical",
+                              "--basis", "слово владельца 26.08 13:58 UTC")
+        import sqlite3 as _sq
+        _c = _sq.connect(f"file:{pathlib.Path(db).as_posix()}?mode=ro", uri=True)
+        тело9 = _c.execute("SELECT body_md FROM messages WHERE writer_role='PROTO'"
+                           " ORDER BY id DESC LIMIT 1").fetchone()[0]
+        _c.close()
+        ok &= case("⑨ critical С --basis → записан, основание ПЕРВОЙ строкой тела",
+                   код9 == 0 and тело9.startswith("[основание critical: слово владельца"),
+                   f"код {код9}; первая строка: {тело9.splitlines()[0][:70]}", differ=True)
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
