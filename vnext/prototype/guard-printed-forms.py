@@ -483,17 +483,24 @@ SAMPLES = {
     # ⭐ образцы под признак E (три оборота класса у @COORD, #2871)
     "dirty_broken_path.py": ('def f():\n    print("зови: python {S}scriptsread-messages.py '
                              '--role X")\n'),          # ② escape съел слэш в шаблоне
-    "dirty_backslash.py": ('def f():\n    print("зови: python C:\\\\guts\\\\.atlas\\\\.mezosync'
+    "dirty_backslash.py": ('def f():\n    print("зови: python {CONT_B2}\\\\.mezosync'
                            '\\\\scripts\\\\read-messages.py --role X")\n'),   # ③ Bash съест
     # ⭐ образцы под признак F (@CORE #3448/#3449, @opssre #3441): команда ЧУЖОГО инструмента
-    "dirty_other_tool.py": ('def f():\n    print(r"смотри: git -C C:\\\\guts\\\\.atlas'
+    "dirty_other_tool.py": ('def f():\n    print(r"смотри: git -C {CONT_B2}'
                             '\\\\atlas.core log --oneline -6")\n'),
     # ⚖️ ВСТРЕЧНЫЕ (без них признак F стал бы кричать всегда, и его перестали бы читать):
-    "clean_other_tool.py": ('def f():\n    print("смотри: git -C C:/guts/.atlas/atlas.core '
+    "clean_other_tool.py": ('def f():\n    print("смотри: git -C {CONT}/atlas.core '
                             'log --oneline -6")\n'),          # прямой слэш — исполнимо у всех
-    "clean_prose_tool.py": ('def f():\n    print(r"история git лежит в C:\\\\guts\\\\.atlas '
+    "clean_prose_tool.py": ('def f():\n    print(r"история git лежит в {CONT_B2} '
                             'и переживёт чат")\n'),           # ПРОЗА о пути, не команда
 }
+# Путь в фикстурах ВЫВОДИТСЯ от живого контейнера, а не впечатан (карточка #248):
+# впечатанный `C:\guts\.atlas` — диск автора в публичном образце. Фикстуре нужен живой
+# абсолютный путь ИМЕННО ЭТОЙ машины (признаки судят исполнимость здесь), и у чужого
+# контура он свой — с меткой самопроверка одинаково честна на любой машине.
+_CONT = mezo_paths.container_root().as_posix()
+SAMPLES = {k: v.replace("{CONT_B2}", _CONT.replace("/", "\\\\")).replace("{CONT}", _CONT)
+           for k, v in SAMPLES.items()}
 EXPECT = {"dirty_bare.py": 1, "dirty_rel_db.py": 2, "clean_computed.py": 0, "tombstone.py": 0,
           "dirty_tomb_next_line.py": 1,          # #151: соседнее надгробие НЕ гасит
           "dirty_broken_path.py": 1, "dirty_backslash.py": 1,

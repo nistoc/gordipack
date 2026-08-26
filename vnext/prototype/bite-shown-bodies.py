@@ -12,7 +12,7 @@
 ⚖️ Дороже всего здесь не сама ошибка, а её адресат: неправда говорится ТРЕТЬЕМУ лицу
 (писавшему), которое проверить её не может и переспросит по уже разобранному.
 
-    python C:/guts/.atlas/vnext-tools/bite-shown-bodies.py
+    python <КОНТУР>/vnext-tools/bite-shown-bodies.py
 """
 from __future__ import annotations
 

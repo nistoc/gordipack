@@ -17,14 +17,15 @@ r"""ПРОВЕРКА: публичный образец не несёт путе
    и требовать от них чистоты значит требовать переписать верный текст ради нуля в замере.
 
 Зовут так (пример намеренно без пути одной машины — им же и меряемся):
-    python C:/guts/.atlas/vnext-tools/guard-machine-paths.py            # образец
-    python C:/guts/.atlas/vnext-tools/guard-machine-paths.py --root .   # любое дерево
+    python <КОНТУР>/vnext-tools/guard-machine-paths.py            # образец
+    python <КОНТУР>/vnext-tools/guard-machine-paths.py --root .   # любое дерево
 """
 from __future__ import annotations
 
 import argparse
 import ast
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -65,8 +66,39 @@ def ведёт_на_эту_машину(кусок: str) -> bool:
     return any(ровно.startswith(k) for k in КОРНИ)
 
 
-СМОТРИМ = {".py", ".md", ".sql", ".json", ".ps1", ".sh", ".yml", ".yaml"}
+СМОТРИМ = {".py", ".md", ".sql", ".json", ".ps1", ".sh", ".yml", ".yaml",
+           ".paths", ".txt", ".cfg", ".ini", ".toml"}
 МИМО = {".git", "__pycache__", "node_modules", ".venv", "venv"}
+# В git-режиме белого списка нет — есть чёрный: бинарное не читаем, ОСТАЛЬНОЕ судим всё.
+БИНАРНЫЕ = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".db", ".sqlite", ".pyc", ".exe",
+            ".dll", ".zip", ".gz", ".7z", ".woff", ".woff2", ".ttf", ".pdf", ".bak"}
+# Файл-КОНФИГ: путь в нём не проза и не пример — его ИСПОЛНЯЕТ механизм. Любая находка красная.
+КОНФИГ = {".paths", ".cfg", ".ini", ".toml", ".json", ".yml", ".yaml"}
+
+
+def файлы_для_суда(root: Path):
+    """Что судим — и почему двумя ветвями (карточка #248: область у́же предмета).
+
+    В git-репозитории судим ровно ПУБЛИКУЕМОЕ (`git ls-files`): local.paths и прочее
+    из .gitignore наружу не уезжает и долгом образца НЕ является — прежний обход по
+    диску обвинял законный локальный файл. И наоборот: файл ЛЮБОГО расширения,
+    попавший в git, судится — белый список расширений пропускал `.paths` молча,
+    и попади он в git, никто бы не узнал.
+    Вне git (--root на живое дерево) — прежний обход по белому списку."""
+    if (root / ".git").exists():
+        try:
+            out = subprocess.run(["git", "-C", str(root), "ls-files"],
+                                 capture_output=True, text=True, encoding="utf-8",
+                                 timeout=60, check=True).stdout
+            файлы = [root / f for f in out.splitlines()
+                     if (root / f).is_file() and (root / f).suffix.lower() not in БИНАРНЫЕ]
+            return файлы, "публикуемое: git ls-files минус бинарные"
+        except (OSError, subprocess.SubprocessError) as e:
+            print(f"⚠️ git ls-files не удался ({e}) — сужаюсь до обхода по расширениям")
+    файлы = [p for p in sorted(root.rglob("*"))
+             if p.is_file() and p.suffix.lower() in СМОТРИМ
+             and not any(часть in МИМО for часть in p.parts)]
+    return файлы, "обход диска по белому списку расширений"
 
 
 def строки_кода(src: str) -> set[int]:
@@ -129,7 +161,10 @@ def разобрать(path: Path):
             кусок = m.group(0)
             if ЗАПОЛНИТЕЛЬ.search(кусок) or not ведёт_на_эту_машину(кусок):
                 continue
-            if path.suffix == ".py" and n in код:
+            if path.suffix.lower() in КОНФИГ:
+                красные.append((n, line.strip()[:120],
+                                "рабочий конфиг: путь исполняет механизм, не читатель"))
+            elif path.suffix == ".py" and n in код:
                 красные.append((n, line.strip()[:120], "в коде: у чужого механизм мёртв"))
             elif path.suffix == ".md" and n in примеры:
                 красные.append((n, line.strip()[:120],
@@ -151,21 +186,17 @@ def main() -> int:
         print(f"⛔ НЕ ЗАПУСТИЛАСЬ: смотреть нечего — {root}")
         return 2
 
-    файлов = 0
+    файлы, откуда = файлы_для_суда(root)
     все_красные, все_жёлтые = [], []
-    for p in sorted(root.rglob("*")):
-        if p.suffix.lower() not in СМОТРИМ or not p.is_file():
-            continue
-        if any(часть in МИМО for часть in p.parts):
-            continue
-        файлов += 1
+    for p in файлы:
         к, ж = разобрать(p)
         все_красные += [(p, *x) for x in к]
         все_жёлтые += [(p, *x) for x in ж]
 
     print("=" * 84)
     print(f"ПУТИ ОДНОЙ МАШИНЫ В ОБРАЗЦЕ — смотрено: {root}")
-    print(f"  файлов {файлов} · 🔴 живых {len(все_красные)} · 🟡 в прозе {len(все_жёлтые)}")
+    print(f"  файлов {len(файлы)} ({откуда}) · 🔴 живых {len(все_красные)} "
+          f"· 🟡 в прозе {len(все_жёлтые)}")
     print("=" * 84)
 
     for p, n, текст, почему in все_красные:

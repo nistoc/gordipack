@@ -21,8 +21,8 @@ r"""ПРОВЕРКА: свод правил в посеве не отстал о
      Механизм этого не знает и не притворяется, что знает.
 
 Зовут так:
-    python C:/guts/.atlas/vnext-tools/guard-seed-rules.py
-    python C:/guts/.atlas/vnext-tools/guard-seed-rules.py --show <ключ>   # тела рядом
+    python <КОНТУР>/vnext-tools/guard-seed-rules.py
+    python <КОНТУР>/vnext-tools/guard-seed-rules.py --show <ключ>   # тела рядом
 """
 from __future__ import annotations
 

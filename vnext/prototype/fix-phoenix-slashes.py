@@ -106,10 +106,14 @@ def selftest():
     а не пустой успех. Плюс сама замена работает."""
     tmp = mezo_stand.new("fix-slash-selftest-")
     db = tmp / "m.db"
+    # Вход фикстуры ВЫВОДИТСЯ от mezo_paths, а не впечатан (карточка #248): впечатанный
+    # `C:\guts\...` совпадал с эталоном только на машине автора — на чужой самопроверка
+    # красная по построению, и красное там врало бы про ИНСТРУМЕНТ, а не про фикстуру.
+    живой = str(mezo_paths.live_scripts() / "guard-all.py").replace("/", "\\")
     con = sqlite3.connect(str(db))
     con.execute("CREATE TABLE phoenix (role TEXT, section TEXT, body TEXT)")
-    con.execute("INSERT INTO phoenix VALUES ('SOMEROLE','rebirth',"
-                r"'шаг 1: python C:\guts\.atlas\.mezosync\scripts\guard-all.py')")
+    con.execute("INSERT INTO phoenix VALUES ('SOMEROLE','rebirth', ?)",
+                (f"шаг 1: python {живой}",))
     con.commit()
     con.close()
     ok = True
@@ -126,11 +130,15 @@ def selftest():
 
     src = rows[0][1]
     got = fix_line(src)
-    good = str(mezo_paths.live_scripts() / "guard-all.py") in got and "\\" not in got
+    # Эталон — в ТОЙ ЖЕ форме слэшей, что и починенный вид (as_posix): прежнее str(Path)
+    # давало бекслеши, и «замена слэшей» была красной ВСЕГДА, даже на машине автора, —
+    # никто не видел, потому что самопроверку не гоняли после правки сравнения.
+    good = (mezo_paths.live_scripts() / "guard-all.py").as_posix() in got and "\\" not in got
     ok &= good
     print(f"{'✅' if good else '🔴'} замена слэшей: {got[:70]}")
 
-    proza = r"каталог C:\guts\.atlas\.mezosync — тут python не зовут"
+    proza = ("каталог " + str(mezo_paths.live_db().parent).replace("/", "\\")
+             + " — тут python не зовут")
     good = fix_line(proza) == proza
     ok &= good
     print(f"{'✅' if good else '🔴'} проза без вызова python НЕ тронута")

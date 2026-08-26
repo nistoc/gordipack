@@ -8,7 +8,7 @@
 за месяц (3 перевода против 142 закрытий, последний 07.08) — механизм существовал и был
 мёртв, потому что ставящему он не давал ничего, а коллеги всё равно не видели.
 
-    python C:/guts/.atlas/vnext-tools/bite-work-visible.py
+    python <КОНТУР>/vnext-tools/bite-work-visible.py
 """
 from __future__ import annotations
 

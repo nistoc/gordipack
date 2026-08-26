@@ -109,7 +109,10 @@ def main() -> int:
 
     # ⑫ ЖИВОЙ СЛУЧАЙ 09.08 23:44: слово-примета ВНУТРИ ИМЕНИ ФАЙЛА. Перевод второго
     #    потребителя на общий словарь сделал красное зелёным именно здесь.
-    named = ("python C:/guts/.atlas/.mezosync/scripts/check-retired-mechanism.py"
+    # Путь в фикстуре выведен, не впечатан (карточка #248): предмет случая — слово
+    # в ИМЕНИ файла, а не диск автора; живой путь этой машины держит случай настоящим.
+    import mezo_paths
+    named = (f"python {mezo_paths.live_scripts().as_posix()}/check-retired-mechanism.py"
              " --db <копия> --root <кат>")
     ok &= case("⑫ «retired» ВНУТРИ имени файла — НЕ примета (имена и пути не говорят)",
                not mention.is_mention(named),

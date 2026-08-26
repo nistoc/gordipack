@@ -25,9 +25,9 @@ r"""ГЕНЕРАТОР НАВЫКОВ ИЗ СВОДА ПРАВИЛ: правил
 Переезжают только ПРОЦЕДУРЫ: «когда делаешь X — вот как», у них есть момент срабатывания.
 
 Зовут так:
-    python C:/guts/.atlas/vnext-tools/rules-to-skills.py            # показать, не писать
-    python C:/guts/.atlas/vnext-tools/rules-to-skills.py --write    # собрать навыки
-    python C:/guts/.atlas/vnext-tools/rules-to-skills.py --only atlas-owner-reply --write
+    python <КОНТУР>/vnext-tools/rules-to-skills.py            # показать, не писать
+    python <КОНТУР>/vnext-tools/rules-to-skills.py --write    # собрать навыки
+    python <КОНТУР>/vnext-tools/rules-to-skills.py --only atlas-owner-reply --write
 """
 from __future__ import annotations
 

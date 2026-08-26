@@ -8,7 +8,7 @@
 завели правило: роль не помнит, отправила ли она уже, а ответ приходит не сразу. Правилом
 класс не лечится — поэтому механизм.
 
-    python C:/guts/.atlas/vnext-tools/bite-duplicate-note.py
+    python <КОНТУР>/vnext-tools/bite-duplicate-note.py
 """
 from __future__ import annotations
 

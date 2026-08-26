@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """bite-phoenix-confirm — приёмка отметки «секцию перечитал, правок нет» (карточка #160).
 
-    python C:/guts/.atlas/vnext-tools/bite-phoenix-confirm.py
+    python <КОНТУР>/vnext-tools/bite-phoenix-confirm.py
 
 ЧТО ИСПЫТЫВАЕТСЯ. Механизм обязан РАЗЛИЧАТЬ снаружи три состояния секции памяти:
     · правили ..................... текст новый, взгляда после него не было
