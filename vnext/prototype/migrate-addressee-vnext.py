@@ -14,7 +14,7 @@ r"""migrate-addressee-vnext.py — миграция Э-Б НА ПЕСОЧНИЦ�
 ⛔ ЖИВУЮ БАЗУ НЕ ОТКРЫВАЕТ: --db обязателен и обязан НЕ совпадать с живой.
 Отчёт — счётчиками ДО/ПОСЛЕ и поимённо: молчаливая миграция неотличима от несработавшей.
 
-Запуск:  python C:/guts/.atlas/vnext-tools/migrate-addressee-vnext.py --db <песочница>
+Запуск:  python <КОНТУР>/vnext-tools/migrate-addressee-vnext.py --db <песочница>
 """
 import argparse
 import pathlib
