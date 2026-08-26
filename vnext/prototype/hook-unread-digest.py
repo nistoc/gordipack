@@ -11,9 +11,11 @@ r"""Хук UserPromptSubmit: одна строка о непрочитанном
 ⚖️ ГРАНИЦЫ, НАЗВАННЫЕ ВСЛУХ:
   · хук НЕ знает, какая роль в этой сессии (роль определяется чатом, не каталогом) —
     поэтому печатает сводку по ВСЕМ ролям с долгом; роль находит своё имя сама;
-  · «адресовано в шапке» — механический признак (@РОЛЬ в первых 200 знаках), он ЖЁСТЧЕ
-    упоминания в теле (то даёт 30–63 % ленты и не фильтрует ничего) и мягче честного
-    поля адресата; уточнение — в плане «адресат полем»;
+  · «адресовано» — ОБЪЕДИНЕНИЕ двух признаков: ПОЛЕ адресата (message_addressee,
+    kind='to'; живёт с 08.08, покрывает 56 % записок — замер Э-Б 26.08) ИЛИ @РОЛЬ
+    в первых 200 знаках прозы. Объединение, а не замещение: поле видит адресата без
+    @имени в шапке, регулярка — прозу тех, кто поле не заполнил; порознь каждый
+    признак слепнет на половине. В базе без таблицы поля — регулярка одна, как было;
   · строка — УКАЗАТЕЛЬ, не доставка: чтение и подтверждение остаются штатными
     (read-messages + ack). Правило «читать ленту целиком» это НЕ ослабляет.
 
@@ -39,6 +41,11 @@ def main() -> int:
             return 0
         con = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True, timeout=1.0)
         con.execute("PRAGMA query_only=ON")
+        # Поле адресата есть не в каждой базе (свежий контур из образца). Нет таблицы —
+        # честно считаем регуляркой одной, как до Э-Б; молча ронять сводку нельзя.
+        есть_поле = bool(con.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table'"
+            " AND name='message_addressee'").fetchone())
         части = []
         # 🩸 ВАЖНОСТИ ВЗЯТЫ ЗАМЕРОМ ПО БАЗЕ, а не по памяти. Первая редакция считала
         # только high — а в базе живут normal 1632 · high 638 · critical 89, и одна
@@ -48,13 +55,19 @@ def main() -> int:
         # не сменив вида». Отдельный значок 🔴 — самое срочное видно отдельно и громче.
         for role, cursor in con.execute(
                 "SELECT reader_role, last_read_id FROM read_cursors ORDER BY reader_role"):
+            # «адресовано» = поле (kind='to') ИЛИ @РОЛЬ в шапке — объединение, см. шапку.
+            поле_или_шапка = (
+                "(SUBSTR(m.body_md,1,200) LIKE ? OR EXISTS(SELECT 1 FROM message_addressee a"
+                " WHERE a.message_id = m.id AND a.role = ? AND a.kind = 'to'))"
+                if есть_поле else "SUBSTR(m.body_md,1,200) LIKE ?")
+            args = ([f"%@{role}%", role] if есть_поле else [f"%@{role}%"])
             total, addr, high, crit = con.execute(
                 "SELECT COUNT(*),"
-                " SUM(CASE WHEN SUBSTR(body_md,1,200) LIKE ? THEN 1 ELSE 0 END),"
+                f" SUM(CASE WHEN {поле_или_шапка} THEN 1 ELSE 0 END),"
                 " SUM(CASE WHEN priority='high' THEN 1 ELSE 0 END),"
                 " SUM(CASE WHEN priority='critical' THEN 1 ELSE 0 END)"
-                " FROM messages WHERE id > ? AND writer_role <> ?",
-                (f"%@{role}%", cursor or 0, role)).fetchone()
+                " FROM messages m WHERE m.id > ? AND m.writer_role <> ?",
+                (*args, cursor or 0, role)).fetchone()
             if total:
                 хвост = ""
                 if crit:
@@ -66,7 +79,7 @@ def main() -> int:
                 части.append(f"{role} {total}{хвост}")
         con.close()
         строка = " · ".join(части) if части else "долгов нет"
-        print(f"📬 MEZO непрочитано (🔴 critical · ✉ адресовано в шапке · ⚠ high): {строка}")
+        print(f"📬 MEZO непрочитано (🔴 critical · ✉ адресовано полем или в шапке · ⚠ high): {строка}")
         # пульс наблюдателей пилота (файлы .watch-state-*.json кладёт watch-feed.py)
         for st in sorted(here.glob(".watch-state-*.json")):
             try:

@@ -9,7 +9,11 @@ r"""Наблюдатель ленты (ПИЛОТ, слово владельца
 ⚖️ ТРИ РЕШЕНИЯ, ПРИНЯТЫЕ ДО КОДА (разбор для владельца 26.08 12:17 UTC):
   ① фильтр МЕХАНИЧЕСКИЙ, без модели: модельный судья промахивается молча, и промах
     выглядит как «новостей нет» — класс «молчащий отказ читается как успех»;
-    упоминание @РОЛЬ в ТЕЛЕ не годится тоже — замер дал 30–63 % ленты (cc и пересказы);
+    упоминание @РОЛЬ в ТЕЛЕ не годится тоже — замер дал 30–63 % ленты (cc и пересказы).
+    С 26.08 (Э-Б) «адресовано» = ОБЪЕДИНЕНИЕ: ПОЛЕ адресата (message_addressee,
+    kind='to') ИЛИ @РОЛЬ в первых 200 знаках. Поле покрывает 56 % записок и видит
+    адресата без @имени; регулярка держит прозу тех, кто поле не заполнил.
+    В базе без таблицы поля — регулярка одна, как было;
   ② событие несёт УКАЗАТЕЛЬ, не тело: чтение и подтверждение остаются штатными
     (read-messages + ack), правило «читать ленту целиком» не ослабляется;
   ③ прежний ритм опроса ленты ОСТАЁТСЯ полом: наблюдатель — ускоритель осведомлённости,
@@ -32,9 +36,9 @@ r"""Наблюдатель ленты (ПИЛОТ, слово владельца
 событие сессию, ждущую человека) держатся на ней.
 
 ЗАПУСК:
-    python <КОНТУР>/vnext-tools/watch-feed.py --role PROTO                 # цикл (для Monitor)
-    python <КОНТУР>/vnext-tools/watch-feed.py --role PROTO --once          # один опрос (проверка)
-    python <КОНТУР>/vnext-tools/watch-feed.py --role PROTO --db <копия>    # стенд, не живая
+    python C:/guts/.atlas/vnext-tools/watch-feed.py --role PROTO                 # цикл (для Monitor)
+    python C:/guts/.atlas/vnext-tools/watch-feed.py --role PROTO --once          # один опрос (проверка)
+    python C:/guts/.atlas/vnext-tools/watch-feed.py --role PROTO --db <копия>    # стенд, не живая
 """
 import argparse
 import json
@@ -78,16 +82,28 @@ def опрос(db: pathlib.Path, role: str, st: dict) -> list[str]:
         return [f"👁 наблюдатель {role} взведён (пилот): опрос ленты, точка отсчёта — "
                 f"записка #{st['last_seen']}. Событие = указатель; читать штатно: "
                 f"read-messages + ack"]
-    rows = con.execute(
-        "SELECT id, writer_role, priority, SUBSTR(body_md,1,200), timestamp"
-        " FROM messages WHERE id > ? ORDER BY id", (st["last_seen"],)).fetchall()
+    есть_поле = bool(con.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table'"
+        " AND name='message_addressee'").fetchone())
+    if есть_поле:
+        # «адресовано» = поле (kind='to') ИЛИ @РОЛЬ в шапке — объединение, см. шапку ①.
+        rows = con.execute(
+            "SELECT m.id, m.writer_role, m.priority, SUBSTR(m.body_md,1,200), m.timestamp,"
+            " EXISTS(SELECT 1 FROM message_addressee a WHERE a.message_id = m.id"
+            "        AND a.role = ? AND a.kind = 'to')"
+            " FROM messages m WHERE m.id > ? ORDER BY m.id",
+            (role, st["last_seen"])).fetchall()
+    else:
+        rows = [(*r, 0) for r in con.execute(
+            "SELECT id, writer_role, priority, SUBSTR(body_md,1,200), timestamp"
+            " FROM messages WHERE id > ? ORDER BY id", (st["last_seen"],))]
     con.close()
     события = []
-    for mid, writer, prio, шапка, ts in rows:
+    for mid, writer, prio, шапка, ts, полем in rows:
         st["last_seen"] = mid
         if writer == role:
             continue
-        адресовано = f"@{role}" in (шапка or "")
+        адресовано = bool(полем) or f"@{role}" in (шапка or "")
         # 🩸 high И critical — важности взяты замером по базе (normal·high·critical),
         # первая редакция знала только high: та же щель, что в строке сводки, найденная
         # @OPSSRE (записка #3788). Одно место починки мало — меряй по каталогу.
