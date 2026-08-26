@@ -25,6 +25,16 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/vnext-tools/hook-unread-digest.py\""
+          }
+        ]
+      }
     ]
   }
 }
