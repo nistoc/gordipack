@@ -81,7 +81,12 @@ def main() -> int:
         строка = " · ".join(части) if части else "долгов нет"
         print(f"📬 MEZO непрочитано (🔴 critical · ✉ адресовано полем или в шапке · ⚠ high): {строка}")
         # пульс наблюдателей пилота (файлы .watch-state-*.json кладёт watch-feed.py)
+        # ⛔ файлы «-stand» — состояние ПРОВЕРОК на копии базы, не живой наблюдатель:
+        # их пульс законно стар, и строка «похоже, мёртв» о них — ложная тревога
+        # (случилось 26.08 через 8 минут после первого же стенда).
         for st in sorted(here.glob(".watch-state-*.json")):
+            if st.stem.endswith("-stand"):
+                continue
             try:
                 data = json.loads(st.read_text(encoding="utf-8"))
                 возраст = int(time.time() - data.get("ts", 0))
