@@ -36,9 +36,9 @@ r"""Наблюдатель ленты (ПИЛОТ, слово владельца
 событие сессию, ждущую человека) держатся на ней.
 
 ЗАПУСК:
-    python C:/guts/.atlas/vnext-tools/watch-feed.py --role PROTO                 # цикл (для Monitor)
-    python C:/guts/.atlas/vnext-tools/watch-feed.py --role PROTO --once          # один опрос (проверка)
-    python C:/guts/.atlas/vnext-tools/watch-feed.py --role PROTO --db <копия>    # стенд, не живая
+    python <КОНТУР>/vnext-tools/watch-feed.py --role PROTO                 # цикл (для Monitor)
+    python <КОНТУР>/vnext-tools/watch-feed.py --role PROTO --once          # один опрос (проверка)
+    python <КОНТУР>/vnext-tools/watch-feed.py --role PROTO --db <копия>    # стенд, не живая
 """
 import argparse
 import json
