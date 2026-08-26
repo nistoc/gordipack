@@ -6,8 +6,9 @@ r"""migrate-addressee-vnext.py — миграция Э-Б НА ПЕСОЧНИЦ�
   ② склейки «CHROME CORE STUD» в message_addressee разводятся по именам
     (kind и linked_by сохраняются; происхождение развода — 'backfill': это разбор
     машиной, а не слово руки писавшего);
-  ③ строки role='ALL' → broadcast=1 у записки, строка адресата удаляется
-    (роли «ALL» не существует — строка о ней лгала о реестре);
+  ③ строки role IN ('ALL','ВСЕ') → broadcast=1 у записки, строка адресата удаляется
+    (ролей «ALL»/«ВСЕ» не существует — строка о них лгала о реестре; «ВСЕ» кладёт
+    живой писатель, не знающий канона, — до его починки строки будут прибывать);
   ④ 'ВЛАДЕЛЕЦ' не трогается: законное спец-имя.
 
 ⛔ ЖИВУЮ БАЗУ НЕ ОТКРЫВАЕТ: --db обязателен и обязан НЕ совпадать с живой.
@@ -64,15 +65,15 @@ def main() -> int:
 
     # ③ ALL → свойство записки.
     строки_all = con.execute(
-        "SELECT DISTINCT message_id FROM message_addressee WHERE role='ALL'").fetchall()
+        "SELECT DISTINCT message_id FROM message_addressee WHERE role IN ('ALL','ВСЕ')").fetchall()
     for (mid,) in строки_all:
         con.execute("UPDATE messages SET broadcast=1 WHERE id=?", (mid,))
-    n = con.execute("DELETE FROM message_addressee WHERE role='ALL'").rowcount
+    n = con.execute("DELETE FROM message_addressee WHERE role IN ('ALL','ВСЕ')").rowcount
     print(f"③ ALL: записок помечено «всем» — {len(строки_all)}, строк адресата снято — {n}")
 
     con.commit()
     итог = con.execute("SELECT COUNT(*) FROM message_addressee WHERE role LIKE '% %'"
-                       " OR role='ALL'").fetchone()[0]
+                       " OR role IN ('ALL','ВСЕ')").fetchone()[0]
     bc = con.execute("SELECT COUNT(*) FROM messages WHERE broadcast=1").fetchone()[0]
     con.close()
     print(f"ИТОГО ПОСЛЕ: склеек и ALL — {итог} (обязано быть 0) · записок «всем» — {bc}")

@@ -78,9 +78,9 @@ def main() -> int:
         склеек_до = con.execute("SELECT COUNT(*) FROM message_addressee"
                                 " WHERE role LIKE '% %'").fetchone()[0]
         all_нот_до = con.execute("SELECT COUNT(DISTINCT message_id) FROM message_addressee"
-                                 " WHERE role='ALL'").fetchone()[0]
+                                 " WHERE role IN ('ALL','ВСЕ')").fetchone()[0]
         чужие_до = con.execute("SELECT COUNT(*) FROM message_addressee"
-                               " WHERE role NOT LIKE '% %' AND role<>'ALL'").fetchone()[0]
+                               " WHERE role NOT LIKE '% %' AND role NOT IN ('ALL','ВСЕ')").fetchone()[0]
         нот_до = con.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
         con.close()
 
