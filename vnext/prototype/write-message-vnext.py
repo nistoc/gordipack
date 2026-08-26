@@ -1,27 +1,28 @@
 # -*- coding: utf-8 -*-
 """
-write-message-vnext.py — ПРОТОТИП записи ноты в v-next: R15a + адресат полем + закрытие вопроса.
+write-message-vnext.py — ПРОТОТИП записи ноты в v-next: адресат полем + словарь имён (Э-Б).
 
-Доказывает ТРИ свойства (все — из оплаченных фрикций, ни одно не из головы):
-  · R15a  — путь к БД не зависит от CWD (было: роль звала из чужого каталога и молча
-            попадала в другую живую БД — F20);
-  · R3/Э-Б — адресат ПОЛЕМ при записи (`--to`/`--cc`/`--broadcast`), а не прозой в теле.
-            Замер 05.08: конвенция уже сложилась сама (0 % нот без адресата за последние
-            200), поле её УЗАКОНИВАЕТ, а не навязывает — и `addressed_by='field'` отличает
-            заявленное от восстановленного регекспом;
-  · Э-Г/B — `--closes <id>`: закрытие вопроса гасит срочность исходной ноты.
+Доказывает свойства (все — из оплаченных фрикций, ни одно не из головы):
+  · R15a — путь к БД не зависит от CWD (было: роль звала из чужого каталога и молча
+           попадала в другую живую БД — F20);
+  · R3/Э-Б — адресат ПОЛЕМ при записи (`--to`/`--cc`), а не прозой в теле;
+  · Э-Б/Р1 — разделители: запятая И пробел. Живой писатель делит только по запятой,
+           и 26.08 в живом поле лежали 8 склеек «CHROME CORE STUD» одной строкой —
+           отбор «только моё» такие записки не показывал НИКОМУ из склеенных;
+  · Э-Б/Р2-Р3 — словарь имён ЗАПРОСОМ к таблице ролей (+спец-имена), нераспознанное
+           имя — ОТКАЗ ДО ЗАПИСИ с названным словарём: адресат опечаткой = нота-призрак;
+  · Э-Б/Р4 — «всем» — СВОЙСТВО ЗАПИСКИ (колонка broadcast), не роль-адресат:
+           роли «ВСЕ» не существует, строка о ней лгала бы о реестре.
 
-⛔ ГЛАВНОЕ ПРО `--closes` — ПОЧЕМУ ЭТО НЕ ОТДЕЛЬНАЯ КОМАНДА:
-   прежнее поле `resolved` не заполнялось (1 нота из 1483), и я объяснил это дисциплиной —
-   ошибочно. Замер 05.08: его НЕЧЕМ поставить, единственный писатель `check-errors.py --resolve`
-   бьёт по `WHERE tags LIKE '%"DWERR"%'`. Отдельная команда «пометь закрытым» повторила бы ту же
-   судьбу: лишний ход не делают не из лени — его не делают. Поэтому закрытие прицеплено к тому,
-   что роль УЖЕ делает, отвечая: пишет ответную ноту и добавляет одно слово.
+⚰️ Прежняя редакция (05.08) писала в песочницу СВОЕЙ формы (addressed_by,
+message_closure) — форма разошлась и со схемой Э-В, и с живой (замер 26.08,
+08-addressee-dictionary.md Р4½). Теперь прототип пишет в КОПИЮ ЖИВОЙ схемы после
+migrate-addressee-vnext.py; `--closes` уехал в Э-Г вместе со своей таблицей.
 
 ⛔ Живую БД не открывает: прототип пишет только в песочницу.
 """
 import argparse
-import json
+import re
 import sqlite3
 import sys
 from pathlib import Path
@@ -31,87 +32,82 @@ from mezo_paths import resolve_db                           # noqa: E402
 import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
 LIVE_DB = mezo_paths.live_db()
+СПЕЦ = {"ВЛАДЕЛЕЦ"}                       # адресуемо, но роли в реестре нет
+СИНОНИМЫ = {"OWNER": "ВЛАДЕЛЕЦ", "ALL": "ВСЕ"}   # канон — русские имена контура
 
 
-def known_roles(con) -> set:
-    return {r for r, in con.execute("SELECT role FROM roles")}
+def разбор_имён(s: str) -> list:
+    """Запятая И пробел — оба разделители; @ и регистр не значимы; синонимы к канону."""
+    имена = []
+    for x in re.split(r"[,\s]+", s or ""):
+        x = x.strip().upper().lstrip("@")
+        if x:
+            имена.append(СИНОНИМЫ.get(x, x))
+    return имена
 
 
-def write(con, role, body, tags_json, priority, to, cc, broadcast, closes):
-    """Возвращает (ok, message). Все отказы — ДО записи: частичная нота хуже ненаписанной."""
-    roles = known_roles(con)
-    for r in list(to) + list(cc):
-        if r not in roles:
-            return False, (f"⛔ ОТКАЗ: роль {r} не в реестре (есть: {', '.join(sorted(roles))}). "
-                           f"Адресат опечаткой = нота-призрак: отправлена и не дошла никому.")
-    if closes is not None:
-        row = con.execute("SELECT writer_role, priority FROM messages WHERE id = ?",
-                          (closes,)).fetchone()
-        if row is None:
-            return False, f"⛔ ОТКАЗ: закрываемой ноты #{closes} нет в ленте."
-        if con.execute("SELECT 1 FROM message_closure WHERE message_id = ?", (closes,)).fetchone():
-            return False, (f"⛔ ОТКАЗ: #{closes} уже закрыта. Повторное закрытие затёрло бы "
-                           f"того, кто закрыл первым — это стирание факта.")
+def write(con, role, body, tags, priority, to, cc):
+    """→ (ok, message). Все отказы — ДО записи: частичная нота хуже ненаписанной."""
+    словарь = {r for r, in con.execute("SELECT role FROM roles")} | СПЕЦ
+    всем = "ВСЕ" in to or "ВСЕ" in cc
+    to = [r for r in to if r != "ВСЕ"]
+    cc = [r for r in cc if r != "ВСЕ"]
+    for r in to + cc:
+        if r not in словарь:
+            return False, (f"⛔ ОТКАЗ: имени «{r}» нет в словаре адресатов.\n"
+                           f"   Словарь: {', '.join(sorted(словарь))} + «все» (широковещательно).\n"
+                           f"   Адресат опечаткой = нота-призрак: отправлена и не дошла никому.")
+    if всем and not (to or cc) and not body:
+        return False, "⛔ ОТКАЗ: пустая нота."
 
-    # Защита ДВОЙНАЯ: проверки выше + контракт схемы (PK/FK/CHECK). Второй слой не
-    # избыточность: проверку в CLI обходит любой второй писатель — этот класс контур уже
-    # оплачивал (`.upper()` жил в одном скрипте, расщепление заводил любой другой).
-    # Отказ схемы обязан выглядеть как отказ, а не как падение стектрейсом на роль.
+    cols = {r[1] for r in con.execute("PRAGMA table_info(messages)")}
+    if "broadcast" not in cols:
+        return False, ("⛔ ОТКАЗ: в этой песочнице нет колонки broadcast — прогони"
+                       " migrate-addressee-vnext.py. Писать «всем» строкой-адресатом"
+                       " не стану: роль «ВСЕ» — ложь о реестре.")
+
+    # Защита ДВОЙНАЯ: словарь выше + контракт схемы (PK/FK/CHECK). Второй слой не
+    # избыточность: проверку в CLI обходит любой второй писатель.
     try:
         cur = con.execute(
-            "INSERT INTO messages (writer_role, body_md, tags, priority, broadcast, addressed_by) "
-            "VALUES (?,?,?,?,?, 'field')", (role, body, tags_json, priority, int(broadcast)))
+            "INSERT INTO messages (writer_role, body_md, tags, priority, timestamp, broadcast)"
+            " VALUES (?,?,?,?,datetime('now'),?)",
+            (role, body, tags, priority, int(всем)))
         mid = cur.lastrowid
-        for r in to:
-            con.execute("INSERT INTO message_addressee (message_id, role, kind) VALUES (?,?,'to')",
-                        (mid, r))
-        for r in cc:
-            con.execute("INSERT INTO message_addressee (message_id, role, kind) VALUES (?,?,'cc')",
-                        (mid, r))
-        note = ""
-        if closes is not None:
-            con.execute("INSERT INTO message_closure (message_id, closed_by, closed_role) "
-                        "VALUES (?,?,?)", (closes, mid, role))
-            was = con.execute("SELECT priority FROM messages WHERE id = ?", (closes,)).fetchone()[0]
-            note = (f"\n   🔻 #{closes} закрыта этой нотой: срочность {was} → normal "
-                    f"(priority в ноте НЕ переписан — гаснет производная urgency, история цела)")
+        for kind, names in (("to", to), ("cc", cc)):
+            for r in names:
+                con.execute(
+                    "INSERT OR REPLACE INTO message_addressee (message_id, role, kind, linked_by)"
+                    " VALUES (?,?,?,'field')", (mid, r, kind))
         con.commit()
     except sqlite3.IntegrityError as e:
         con.rollback()
-        return False, (f"⛔ ОТКАЗ СХЕМЫ (второй слой защиты сработал, значит проверка выше "
-                       f"была обойдена или неполна): {e}")
-    addr = (f"to={sorted(to) or '—'} cc={sorted(cc) or '—'}"
-            f"{' broadcast' if broadcast else ''}")
-    return True, f"OK #{mid} [{role}] {addr} priority={priority}{note}"
+        return False, (f"⛔ ОТКАЗ СХЕМЫ (второй слой защиты сработал, значит проверка выше"
+                       f" была обойдена или неполна): {e}")
+    addr = (f"to={sorted(to) or '—'} cc={sorted(cc) or '—'}{' ВСЕМ' if всем else ''}")
+    return True, f"OK #{mid} [{role}] {addr} priority={priority}"
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Записать ноту (прототип v-next)")
+    ap = argparse.ArgumentParser(description="Записать ноту (прототип v-next, Э-Б)")
     ap.add_argument("--db", default=None,
                     help="необязателен: по умолчанию — БД рядом со скриптом (см. mezo_paths)")
     ap.add_argument("--role", required=True)
     ap.add_argument("--body", required=True)
     ap.add_argument("--tags", default="")
     ap.add_argument("--priority", default="normal", choices=["normal", "high", "critical"])
-    ap.add_argument("--to", default="", help="адресаты через запятую (требуют действия)")
-    ap.add_argument("--cc", default="", help="в копию через запятую (для сведения)")
-    ap.add_argument("--broadcast", action="store_true", help="касается всех — ЯВНО, а не молчанием")
-    ap.add_argument("--closes", type=int, default=None,
-                    help="id ноты, вопрос которой эта нота закрывает (гасит её срочность)")
+    ap.add_argument("--to", default="", help="адресаты: запятая И пробел — оба разделители")
+    ap.add_argument("--cc", default="", help="в копию: те же разделители; «все» — всем")
     args = ap.parse_args()
 
     db = resolve_db(args.db, __file__)
-    if db == LIVE_DB.resolve():
+    if Path(db).resolve() == LIVE_DB.resolve():
         sys.exit("⛔ ОТКАЗ: это ЖИВАЯ mezosync.db. Прототип работает только по песочнице.")
-
-    role = args.role.upper()          # R5: нормализация в одной точке входа
-    split = lambda s: {x.strip().upper() for x in s.split(",") if x.strip()}
-    tags = json.dumps([t.strip() for t in args.tags.split(",") if t.strip()], ensure_ascii=False)
 
     con = sqlite3.connect(f"file:{db}?mode=rw", uri=True, timeout=5)
     con.execute("PRAGMA foreign_keys = ON")
-    ok, msg = write(con, role, args.body, tags, args.priority,
-                    split(args.to), split(args.cc), args.broadcast, args.closes)
+    ok, msg = write(con, args.role.upper(), args.body, args.tags, args.priority,
+                    разбор_имён(args.to), разбор_имён(args.cc))
     con.close()
     print(msg)
     sys.exit(0 if ok else 1)
