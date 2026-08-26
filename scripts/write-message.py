@@ -260,6 +260,13 @@ def main():
                         "броадкасты COORD #2023 и ING #2111. Файл минует shell-обработку целиком.")
     parser.add_argument("--tags", default="", help="Теги через запятую (F-24,TRACK-X)")
     parser.add_argument("--priority", default="normal", choices=["normal", "high", "critical"])
+    # Правило critical-needs-basis (слово владельца 26.08.2026 18:05 UTC, чат PROTO;
+    # замер: 86 из 89 живых critical основание УЖЕ несли — узаконена практика, не введена
+    # новая). Квоты на high/critical НЕТ и не вводится: она наказывала бы аврал.
+    parser.add_argument("--basis", default="", metavar="ЧЕМ",
+                        help="critical: чем обосновано (слово владельца с часом UTC · авария · "
+                             "что сломано). Ляжет ПЕРВОЙ строкой тела; без него critical "
+                             "отклоняется ДО записи. high не требует ничего")
     parser.add_argument("--again", metavar="ПРИЧИНА",
                         help="осознанно повторить записку, текст которой уже отправлен: причина уйдёт в ленту первой строкой")
     # ── ТРИ РУЧКИ К СОСУДАМ, ВНЕСЁННЫМ НАКАТОМ (замер @PROTO #3089: все три пусты при 90 нотах,
@@ -296,9 +303,15 @@ def main():
                              " и читающий вразбивку берёт его как истину")
     parser.add_argument("--task", type=int, metavar="N",
                         help="номер карточки бэклога, которой касается нота")
-    parser.add_argument("--reviewed", default=None, metavar="ФАЙЛ",
-                        help="Я ПРОЧЁЛ И РАЗОБРАЛ записку моста <ФАЙЛ> (можно несколько через"
-                             " запятую). Гасит признак «записка моста без ноты» ЖЕСТОМ, а не"
+    # ⚰️ Здесь стояло объявление БЕЗ накопления: три «--reviewed X» подряд молча
+    # оставляли последнее имя, а роль читала строку об одном записанном жесте как
+    # подтверждение ВСЕЙ операции (карточка #253, COORD 25.08: названо 3, записано 1,
+    # о двух не сказано). Повтор флага — обычная форма «нескольких значений», и молча
+    # терять её нельзя. Теперь копятся ОБЕ формы: повтор флага И список через запятую.
+    parser.add_argument("--reviewed", action="append", default=None, metavar="ФАЙЛ",
+                        help="Я ПРОЧЁЛ И РАЗОБРАЛ записку моста <ФАЙЛ> (несколько — повтором"
+                             " флага ИЛИ через запятую; обе формы равны)."
+                             " Гасит признак «записка моста без ноты» ЖЕСТОМ, а не"
                              " упоминанием имени: замер @opssre 07.08 16:36 UTC — прежде признак"
                              " гасило ЛЮБОЕ появление имени файла в ленте, и погасила его его же"
                              " жалоба на то, что записку никто не разобрал. Цитата не разбор.")
@@ -381,6 +394,20 @@ def main():
             print(f"ERR: файл ноты не найден: {src}", file=sys.stderr)
             sys.exit(1)
         args.body = src.read_text(encoding="utf-8")
+
+    # ── CRITICAL ТРЕБУЕТ ОСНОВАНИЯ (правило critical-needs-basis, 🔒owner, 26.08.2026).
+    # Отказ ДО записи: нота-призрак не рождается. Читающий critical первым делом
+    # спрашивает «почему это срочно» — ответ обязан стоять до текста, первой строкой.
+    if has_note and args.priority == "critical":
+        if len(args.basis.strip()) < 12:
+            print("⛔ CRITICAL БЕЗ ОСНОВАНИЯ ОТКЛОНЁН: нужен --basis «чем обосновано»")
+            print("   (не короче 12 знаков — слово владельца с часом UTC · авария · что сломано).")
+            print("   Основание ляжет ПЕРВОЙ строкой тела: читающий critical первым делом")
+            print("   спрашивает «почему это срочно», и ответ обязан быть до текста.")
+            print("   Если основания нет — это high, и high не требует ничего.")
+            print("   Правило: set-rule.py --key critical-needs-basis --show")
+            sys.exit(4)
+        args.body = f"[основание critical: {args.basis.strip()}]{NEWLINE}{args.body}"
 
     # ⚠️ ПРЕДУПРЕЖДЕНИЕ О НЕРАЗРЕШИМЫХ ССЫЛКАХ — ДО записи, а не после (правило task-discipline
     # v3, слово владельца 07.08 13:01 UTC). Стоит здесь, потому что чинится это ТОЛЬКО сейчас:
@@ -547,7 +574,10 @@ def main():
                 "  note_id   INTEGER REFERENCES messages(id),"
                 "  at        TEXT NOT NULL DEFAULT (datetime('now')),"
                 "  PRIMARY KEY (file_name, role))")
-            for name in [n.strip() for n in args.reviewed.split(",") if n.strip()]:
+            # args.reviewed — СПИСОК (накопление повтором флага); каждый элемент может
+            # нести несколько имён через запятую — обе формы дают одни и те же жесты.
+            for name in [n.strip() for кусок in args.reviewed
+                         for n in кусок.split(",") if n.strip()]:
                 conn.execute(
                     "INSERT OR REPLACE INTO bridge_reviewed (file_name, role, note_id, at)"
                     " VALUES (?, ?, ?, datetime('now'))", (name, args.role, msg_id))
