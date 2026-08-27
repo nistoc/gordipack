@@ -94,7 +94,7 @@ lines = backlog_view.reminder_block(str(db), "ZZV")
 case("① просрочка видна в обзоре пробуждения любой роли",
      any("молчит над" in l for l in lines))
 _, tv = run(SCRIPTS / "track.py", "view", "--id", "TRACK-ZZOD", db=db)
-case("① просрочка видна на витрине пула", "молчит над" in tv or "истёк" in tv)
+case("① просрочка видна в просмотре пула", "молчит над" in tv or "истёк" in tv)
 
 # ② после release строки нет
 run(BK, "claim", str(ids["late"]), "--actor", "ZZW", "--release",

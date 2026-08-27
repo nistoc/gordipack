@@ -40,7 +40,9 @@ from pathlib import Path
 import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
 # Б: слова обязательности в help-тексте
-MANDATORY = re.compile(r"обязател|required|нельзя без", re.I)
+MANDATORY = re.compile(r"(?<!не)обязател|required|нельзя без", re.I)
+# (?<!не): «НЕобязателен» содержит «обязателен» подстрокой — без просмотра назад признак
+# обвинял честный help (track.py --db, найдено прогоном 28.08). Отрицание — не обещание.
 # исключение к Б: обязательность, о которой говорит help, может навязываться НЕ argparse,
 # а отказом в теле — тогда рядом с dest обязан жить sys.exit/raise/refuse
 ENFORCE = re.compile(r"sys\.exit|raise |refuse|return 2|печат\w+ отказ", re.I)

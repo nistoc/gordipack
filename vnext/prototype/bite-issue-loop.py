@@ -60,10 +60,10 @@ good = stand / "good.md"
 good.write_text("## ЗАМЕР\nотказ дословно: «нет пути»\n## КЛАСС\nмолчащий отказ\n"
                 "## ПРЕДЛОЖЕНИЕ\nпечатать причину; цена — час\n", encoding="utf-8")
 
-# ① ворота пройдены (dry-run, сеть не зовётся)
+# ① разделы полны (dry-run, сеть не зовётся)
 rc, out = run(GI, "create", "--role", "COORD", "--title", "проба",
               "--body-file", str(good), "--pool", "TRACK-X", "--dry-run")
-case("① три раздела непусты → ворота пройдены, команда gh собрана",
+case("① три раздела непусты → отказа нет, команда gh собрана",
      rc == 0 and "gh issue create" in out and "pool-TRACK-X" in out)
 
 # ② пустой раздел — поимённо
@@ -135,12 +135,12 @@ shutil.copy(SCRIPTS / "mezo_paths.py", weak / "mezo_paths.py")
 src = (weak / "gordi-issue.py").read_text(encoding="utf-8")
 ANCHOR = "if missing:"
 if ANCHOR not in src:
-    raise SystemExit("ПРИЁМКА НЕ СОСТОЯЛАСЬ: якорь ворот разделов не найден")
+    raise SystemExit("ПРИЁМКА НЕ СОСТОЯЛАСЬ: якорь проверки разделов не найден")
 (weak / "gordi-issue.py").write_text(src.replace(ANCHOR, "if False:"), encoding="utf-8")
 rc, out9 = run(weak / "gordi-issue.py", "create", "--role", "COORD", "--title", "проба",
                "--body-file", str(bad), "--dry-run")
-case("⑨ обратный ход: ворота сняты → пустой раздел проходит (② краснеет)",
-     rc == 0 and "ворота пройдены" in out9)
+case("⑨ обратный ход: проверка разделов снята → пустой раздел проходит (② краснеет)",
+     rc == 0 and "разделы полны" in out9)
 
 # ⑩ close без слов
 rc, outA = run(GI, "close", "--role", "COORD", "--number", "55", "--dry-run")

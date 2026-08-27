@@ -124,7 +124,7 @@ con = sqlite3.connect(str(db))
 zzid2 = con.execute("SELECT id FROM backlog WHERE title='проба в пуле'").fetchone()[0]
 con.close()
 rc7, out7 = run(weak / "backlog.py", "status", str(zzid2), "frozen", "--actor", "ZZR", db=db)
-case("⑦ обратный ход: ворота сняты → заморозка без условия ПРОХОДИТ (④ краснеет)",
+case("⑦ обратный ход: проверка условия снята → заморозка без условия ПРОХОДИТ (④ краснеет)",
      rc7 == 0 and "УСЛОВИЯ РАЗМОРОЗКИ" not in out7)
 
 live_after = (LIVE_DB.stat().st_size, LIVE_DB.stat().st_mtime_ns)
