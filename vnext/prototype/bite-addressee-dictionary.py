@@ -17,9 +17,10 @@ r"""ПРИЁМКА словаря адресатов Э-Б (писатель-п�
   ⑤ живой ЧИТАТЕЛЬ на мигрированной песочнице: --to-me широковещательную
     НЕ показывает и НЕ падает от новой колонки                          РАЗЛИЧАЮЩИЙ
   ⑥ ОБРАТНЫЙ ХОД: словарь отключён → случай ③ зеленеет у сломанной      РАЗЛИЧАЮЩИЙ
-  ⑦ МИГРАЦИЯ на копии живой: склеек и ALL после — 0, «всем» помечено
-    столько записок, сколько несло ALL; ЧУЖИЕ строки целы числом;
-    повторный прогон идемпотентен                                       РАЗЛИЧАЮЩИЙ
+  ⑦а МИГРАЦИЯ на копии живой С ПОСЕВОМ: склейки разведены поимённо,
+    «всем» ПРИРОСЛО ровно на число нот ALL, чужие строки не убыли       РАЗЛИЧАЮЩИЙ
+  ⑦б повторный прогон миграции идемпотентен                             РАЗЛИЧАЮЩИЙ
+  ⑦в ОБРАТНЫЙ ХОД: пометка «всем» выключена → ⑦а краснеет               РАЗЛИЧАЮЩИЙ
   ⑧ Э-Г (карточка #260): critical БЕЗ основания → отказ, записки НЕТ    РАЗЛИЧАЮЩИЙ
   ⑨ Э-Г: critical С основанием → записан, основание ПЕРВОЙ строкой      КОНТРОЛЬ
 
@@ -56,9 +57,16 @@ def case(title, verdict, detail, differ=False):
 
 
 def прогон(скрипт, *доводы):
+    # PYTHONPATH на каталог инструментов: ослабленная копия миграции (случай ⑦в)
+    # живёт во временной папке и без этого умерла бы на импорте mezo_paths —
+    # а «упало на импорте» выглядит как «обратный ход показал красное», хотя
+    # ослабления никто не проверял.
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(
+        [p for p in (str(HERE), env.get("PYTHONPATH", "")) if p])
     r = subprocess.run([sys.executable, str(скрипт), *доводы],
                        capture_output=True, text=True, encoding="utf-8",
-                       errors="replace", timeout=300)
+                       errors="replace", timeout=300, env=env)
     return r.returncode, (r.stdout or "") + (r.stderr or "")
 
 
@@ -70,39 +78,97 @@ def адресаты(db, mid):
     return rows
 
 
+def _есть_broadcast(con):
+    return any(r[1] == "broadcast" for r in con.execute("PRAGMA table_info(messages)"))
+
+
+def посеять(db):
+    """Досеять в КОПИЮ то, что случай проверяет: склейку и обе формы «всем».
+
+    ⚠️ Без посева случай зависел от того, мигрирована ли живая база СЕГОДНЯ, —
+    то есть проверял не миграцию, а погоду. Сеем в копию: живой не касаемся.
+    Ноты берём с broadcast=0 — пометив уже помеченную, прироста не получишь
+    и проверка соврёт в зелёную сторону.
+    """
+    con = sqlite3.connect(db)
+    условие = " WHERE COALESCE(broadcast,0)=0" if _есть_broadcast(con) else ""
+    ноты = [r[0] for r in con.execute(
+        f"SELECT id FROM messages{условие} ORDER BY id DESC LIMIT 3")]
+    if len(ноты) < 3:
+        con.close()
+        raise SystemExit("⛔ ПРИЁМКА НЕ СОСТОЯЛАСЬ: в копии меньше трёх пригодных записок,"
+                         " сеять не на чем. Молчать об этом нельзя — вышло бы зелёное")
+    склейка, all_, все_ = ноты
+    for mid, роль in ((склейка, "CORE STUD"), (all_, "ALL"), (все_, "ВСЕ")):
+        con.execute("INSERT OR REPLACE INTO message_addressee(message_id, role, kind,"
+                    " linked_by) VALUES(?,?,?,'field')", (mid, роль, "to"))
+    con.commit()
+    con.close()
+    return {"склейка": склейка, "all": all_, "все": все_}
+
+
+def снять(db):
+    """Величины ДО/ПОСЛЕ одной меркой — чтобы разность имела смысл."""
+    con = sqlite3.connect(f"file:{pathlib.Path(db).as_posix()}?mode=ro", uri=True)
+    в = {}
+    в["склеек"] = con.execute("SELECT COUNT(*) FROM message_addressee"
+                              " WHERE role LIKE '% %' OR role IN ('ALL','ВСЕ')").fetchone()[0]
+    if _есть_broadcast(con):
+        в["всем"] = con.execute("SELECT COUNT(*) FROM messages"
+                                " WHERE COALESCE(broadcast,0)=1").fetchone()[0]
+        в["all_ноты"] = con.execute(
+            "SELECT COUNT(DISTINCT message_id) FROM message_addressee"
+            " WHERE role IN ('ALL','ВСЕ') AND message_id IN"
+            " (SELECT id FROM messages WHERE COALESCE(broadcast,0)=0)").fetchone()[0]
+    else:
+        в["всем"] = 0
+        в["all_ноты"] = con.execute(
+            "SELECT COUNT(DISTINCT message_id) FROM message_addressee"
+            " WHERE role IN ('ALL','ВСЕ')").fetchone()[0]
+    в["чужие"] = con.execute("SELECT COUNT(*) FROM message_addressee"
+                             " WHERE role NOT LIKE '% %'"
+                             " AND role NOT IN ('ALL','ВСЕ')").fetchone()[0]
+    con.close()
+    return в
+
+
 def main() -> int:
     ok = True
     d = pathlib.Path(tempfile.mkdtemp(prefix="bite-addr-"))
     try:
         db = d / "sand.db"
         shutil.copy(ЖИВАЯ, db)
-        con = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
-        склеек_до = con.execute("SELECT COUNT(*) FROM message_addressee"
-                                " WHERE role LIKE '% %'").fetchone()[0]
-        all_нот_до = con.execute("SELECT COUNT(DISTINCT message_id) FROM message_addressee"
-                                 " WHERE role IN ('ALL','ВСЕ')").fetchone()[0]
-        чужие_до = con.execute("SELECT COUNT(*) FROM message_addressee"
-                               " WHERE role NOT LIKE '% %' AND role NOT IN ('ALL','ВСЕ')").fetchone()[0]
-        нот_до = con.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
-        con.close()
+        # 🩸 ПОЧИНЕНО 2026-08-27 09:02 UTC (замер @COORD, записка #3926 §③⑥). Прежняя
+        # редакция ⑦а НАДЕЯЛАСЬ на состояние живой базы: ждала «склеек до > 0» и
+        # «всем ПОСЛЕ = числу нот ALL ДО». Оба ожидания были верны ровно до того часа,
+        # когда живую МИГРИРОВАЛИ моей же рукой (26.08 21:22 UTC): в копии склеек стало 0,
+        # а «всем» пришло уже равным 28 — и случай покраснел НАВСЕГДА, при исправной
+        # миграции. Сторож, кричащий на исправном, учит не слышать крик.
+        # Починка тройная, и третье нашлось попутно:
+        #   ① случай СЕЕТ сам то, что проверяет, вместо надежды на чужое состояние;
+        #   ② «всем» меряется ПРИРОСТОМ, а не абсолютом — прирост не зависит от того,
+        #      мигрирована живая или нет, и потому переживает собственную починку;
+        #   ③ подпись обещала «чужого не убыло», а величины чужие_до/чужие_после
+        #      СНИМАЛИСЬ И НЕ СРАВНИВАЛИСЬ НИ РАЗУ — обещание без проверки читается
+        #      как проверка, причём снятая величина рядом делает вид, что она сверена.
+        зерно = посеять(db)
+        до = снять(db)
 
         # ⑦а МИГРАЦИЯ — сперва: писатель требует колонку broadcast.
         код, вывод = прогон(МИГРАЦИЯ, "--db", str(db))
-        con = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
-        склеек_после = con.execute("SELECT COUNT(*) FROM message_addressee"
-                                   " WHERE role LIKE '% %' OR role='ALL'").fetchone()[0]
-        всем = con.execute("SELECT COUNT(*) FROM messages WHERE broadcast=1").fetchone()[0]
-        чужие_после = con.execute("SELECT COUNT(*) FROM message_addressee"
-                                  " WHERE role NOT LIKE '% %' AND role<>'ALL'"
-                                  " AND linked_by='field'").fetchone()[0]
-        con.close()
-        # чужие_до считал field+backfill вместе; после развода склеек чужих строк
-        # СТАЛО БОЛЬШЕ (имена из склеек легли поимённо) — целость меряем «не убыло».
-        ok &= case("⑦а миграция: склеек и ALL — 0, «всем» = числу нот ALL, чужого не убыло",
-                   код == 0 and склеек_после == 0 and всем == all_нот_до
-                   and склеек_до > 0,
-                   f"код {код}; склеек было {склеек_до}, стало 0 · нот ALL было {all_нот_до},"
-                   f" «всем» стало {всем}", differ=True)
+        после = снять(db)
+        прирост = после["всем"] - до["всем"]
+        поимённо = {роль for роль, _ in адресаты(db, зерно["склейка"])}
+        ok &= case("⑦а миграция: склейки разведены поимённо, «всем» приросло ровно на число"
+                   " нот ALL, чужие строки не убыли",
+                   код == 0 and до["склеек"] > 0 and после["склеек"] == 0
+                   and прирост == до["all_ноты"] and до["all_ноты"] > 0
+                   and {"CORE", "STUD"} <= поимённо
+                   and после["чужие"] >= до["чужие"],
+                   f"код {код}; склеек {до['склеек']}→{после['склеек']} ·"
+                   f" нот ALL было {до['all_ноты']}, «всем» {до['всем']}→{после['всем']}"
+                   f" (прирост {прирост}) · чужих {до['чужие']}→{после['чужие']} ·"
+                   f" из склейки легли: {sorted(поимённо)}", differ=True)
 
         # ⑦б идемпотентность: второй прогон ничего не меняет и не падает.
         код2, вывод2 = прогон(МИГРАЦИЯ, "--db", str(db))
@@ -110,6 +176,34 @@ def main() -> int:
                    код2 == 0 and "уже есть" in вывод2 and "склеек нет" in вывод2,
                    f"код {код2}; миграция, падающая на втором прогоне, учит бояться прогонов",
                    differ=True)
+
+        # ⑦в ОБРАТНЫЙ ХОД: ослабляем РОВНО ту ветку, которую стережёт ⑦а, — пометку
+        # «всем». Без него ⑦а доказывает лишь, что числа сошлись, а не что их что-то
+        # держит: прежняя редакция ⑦а сошлась бы и с выключенной пометкой, потому что
+        # сравнивала абсолют с абсолютом.
+        db2 = d / "sand-reverse.db"
+        shutil.copy(ЖИВАЯ, db2)
+        посеять(db2)
+        до2 = снять(db2)
+        текст_миграции = МИГРАЦИЯ.read_text(encoding="utf-8")
+        КУСОК = 'con.execute("UPDATE messages SET broadcast=1 WHERE id=?", (mid,))'
+        if текст_миграции.count(КУСОК) != 1:
+            ok &= case("⑦в ОБРАТНЫЙ ХОД: ослабить пометку «всем»", False,
+                       f"⛔ строка пометки найдена {текст_миграции.count(КУСОК)} раз —"
+                       " ослабление НЕ состоялось. Молчание тут читалось бы как успех:"
+                       " обратный ход, который нельзя заставить сработать, — украшение",
+                       differ=True)
+        else:
+            слабая = d / "migrate-weak.py"
+            слабая.write_text(текст_миграции.replace(КУСОК, "pass  # ОСЛАБЛЕНО приёмкой ⑦в"),
+                              encoding="utf-8")
+            код3, _ = прогон(слабая, "--db", str(db2))
+            после2 = снять(db2)
+            прирост2 = после2["всем"] - до2["всем"]
+            ok &= case("⑦в ОБРАТНЫЙ ХОД: пометка «всем» выключена → ⑦а обязана покраснеть",
+                       код3 == 0 and до2["all_ноты"] > 0 and прирост2 != до2["all_ноты"],
+                       f"код {код3}; ждали прирост {до2['all_ноты']}, получили {прирост2}"
+                       " — эта разница и есть то, что стережёт ⑦а", differ=True)
 
         # ① пробелы — разделитель.
         код, вывод = прогон(ПИСАТЕЛЬ, "--db", str(db), "--role", "PROTO",

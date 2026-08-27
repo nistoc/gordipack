@@ -45,6 +45,7 @@
  "migrations/20260816-tool-leases.py": "56f5ef3b03b4",
  "migrations/20260820-role-skills.py": "99f6b238faa2",
  "migrations/20260822-sync-backoff-bridge-mtime.py": "a8c995128ea6",
+ "migrations/20260823-phoenix-history.py": "5f145b6f717f",
  "read-broadcasts.py": "dcc84b8f38f8",
  "read-messages.py": "a95bdc9dd38a",
  "read-phoenix.py": "191de0236a6f",
