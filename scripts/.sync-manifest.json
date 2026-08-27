@@ -1,6 +1,6 @@
 {
  "atomic-install.py": "db3ba1ab3206",
- "backlog.py": "7bb53bd1d987",
+ "backlog.py": "212a13eaddce",
  "backlog_view.py": "9b5e8ea61182",
  "backup-db.py": "7c73c6257b32",
  "bite-backlog-view.py": "572d53dcfbc2",
@@ -12,6 +12,7 @@
  "check-errors.py": "58d92e0a446c",
  "check-retired-mechanism.py": "77a0a4099099",
  "dashboard.py": "466f5cfe5bd9",
+ "db-q.py": "0db7bbc5b876",
  "dryrun.py": "5adcec321ec1",
  "export-channels.py": "94a58be18512",
  "export-markdown.py": "9efc8ced30ea",
@@ -49,7 +50,7 @@
  "read-broadcasts.py": "dcc84b8f38f8",
  "read-messages.py": "a95bdc9dd38a",
  "read-phoenix.py": "191de0236a6f",
- "refs_check.py": "c65a18a6a044",
+ "refs_check.py": "85a8e37ddd24",
  "role-rights.py": "b85f3369bfe4",
  "rule_status.py": "8b6e42b5259b",
  "save-phoenix.py": "22a97d70ef9f",
@@ -63,5 +64,5 @@
  "unsaved.py": "48bac01210ea",
  "update-tools.py": "01dbd596d8bf",
  "urgency.py": "6c36841045ba",
- "write-message.py": "ef87ac7cc260"
+ "write-message.py": "e0b9ee805fad"
 }
