@@ -155,11 +155,14 @@ case("⑤ done по карточке пула → role_status записан т�
      (row[0][:100] if row else f"строки нет; rc={rc}"))
 case("⑤ и вызов сам сказал об этом", "тем же вызовом" in out5.lower() or "ТЕМ ЖЕ" in out5)
 
-# ⑥ встречный: закрытие карточки ВНЕ пула статус не трогает
+# ⑥ встречный (ПЕРЕПИСАН 28.08 заходом 2.2): закрытие ВНЕ пула теперь ТОЖЕ пишет
+# статус (закрытие — событие «чем занята роль»), но БЕЗ пометки пула. Различие
+# пул/не-пул живёт в ТЕКСТЕ статуса, а не в факте записи.
 rc6, _ = run(SCRIPTS / "backlog.py", "status", "9003", "done", "--actor", "ZZEMPTY", db=db)
 row6 = con.execute("SELECT status FROM role_status WHERE role='ZZEMPTY'").fetchone()
-case("⑥ done вне пула → role_status НЕ тронут", rc6 == 0 and row6 is None,
-     f"rc={rc6}, запись: {'есть — ЛОЖНАЯ' if row6 else 'нет'}")
+case("⑥ done вне пула → статус записан БЕЗ пометки пула (2.2)",
+     rc6 == 0 and row6 and "#9003" in row6[0] and "(пул " not in row6[0],
+     (row6[0][:90] if row6 else "записи нет"))
 
 # ⑦ встречный-2: промежуточная смена карточки пула статус не трогает
 before7 = con.execute("SELECT status FROM role_status WHERE role='ZZR'").fetchone()[0]
