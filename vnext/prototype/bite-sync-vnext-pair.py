@@ -201,6 +201,53 @@ def main() -> int:
                                       encoding="utf-8").read(),
                "иначе починка ⑬ отняла бы у замыкания его работу целиком", differ=True)
 
+    # ⑮–⑱ ДОКУМЕНТЫ ПАРЫ (карточка #303). Строитель сводил только .py и МОЛЧАЛ о .md:
+    # два документа не доехали вовсе, расхождение третьего читалось как «всё сведено».
+    # Направление — надмножеством строк: перенос разрешён только туда, где он ничего
+    # не стирает; «богаче образец» затёр бы историю строкой «доставляю недостающее».
+    p = stand(tmp, "fifteen", {**BASE, "doc.md": "a\nb\n", "same.md": "x\n"},
+              {**BASE, "same.md": "x\n"})
+    out, code = run(p, "--apply")
+    доехал = os.path.exists(os.path.join(p["template"], "doc.md"))
+    ok &= case("⑮ документ есть в рабочем, в шаблоне нет — назван «НЕ ДОЕДЕТ», --apply переносит",
+               code == 1 and "doc.md" in out and "НЕ ДОЕДЕТ" in out and доехал
+               and "равны по строкам: 1" in out,
+               "нечего стирать — перенос безопасен; равный документ посчитан, не назван",
+               differ=True)
+
+    p = stand(tmp, "sixteen", {**BASE, "doc.md": "a\nb\n"},
+              {**BASE, "doc.md": "a\nb\nЗАПИСЬ-СДАНО\n"})
+    out, code = run(p, "--apply")
+    тело = open(os.path.join(p["template"], "doc.md"), encoding="utf-8").read()
+    ok &= case("⑯ документ богаче в ОБРАЗЦЕ — назван, и --apply его НЕ трогает",
+               "богаче ОБРАЗЕЦ" in out and "ЗАПИСЬ-СДАНО" in тело,
+               "перенос рабочий→образец стёр бы историю; уникальная строка образца на месте",
+               differ=True)
+
+    p = stand(tmp, "seventeen", {**BASE, "doc.md": "a\nСВОЁ-РАБОЧЕГО\n"},
+              {**BASE, "doc.md": "a\nСВОЁ-ОБРАЗЦА\n"})
+    out, code = run(p, "--apply")
+    тело = open(os.path.join(p["template"], "doc.md"), encoding="utf-8").read()
+    своё = open(os.path.join(p["runtime"], "doc.md"), encoding="utf-8").read()
+    ok &= case("⑰ документ разошёлся В ОБЕ СТОРОНЫ — сводить рукой, --apply не трогает НИ ОДНУ",
+               "В ОБЕ СТОРОНЫ" in out and "СВОЁ-ОБРАЗЦА" in тело and "СВОЁ-РАБОЧЕГО" in своё,
+               "автомат тут может только стирать; обе уникальные строки на местах",
+               differ=True)
+
+    # ⑱ ВСТРЕЧНЫЙ: «богаче РАБОЧИЙ» едет, и едет В ДОМ документа (этажом выше), без дубля.
+    # Без него ⑯–⑰ зеленели бы оттого, что строитель перестал переносить документы вообще.
+    p = stand(tmp, "eighteen", {**BASE, "doc.md": "a\nb\nНОВОЕ-РАБОЧЕГО\n"}, BASE)
+    выше = os.path.join(os.path.dirname(p["template"]), "doc.md")
+    with open(выше, "w", encoding="utf-8") as f:
+        f.write("a\nb\n")
+    out, code = run(p, "--apply")
+    ok &= case("⑱ ВСТРЕЧНЫЙ: «богаче РАБОЧИЙ» --apply переносит — в дом документа, без дубля",
+               "богаче РАБОЧИЙ" in out
+               and "НОВОЕ-РАБОЧЕГО" in open(выше, encoding="utf-8").read()
+               and not os.path.exists(os.path.join(p["template"], "doc.md")),
+               "иначе починка отняла бы у сведения документов его работу целиком; "
+               "дубль рядом с кодом раздвоил бы истину", differ=True)
+
     print()
     print(f"✅ СТРОИТЕЛЬ ПРИНЯТ — случаев {CASES}, различающих {DIFFERENTIATING}, "
           f"у каждого различающего встречный" if ok

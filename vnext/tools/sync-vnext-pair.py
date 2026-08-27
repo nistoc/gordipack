@@ -17,7 +17,9 @@ bite-all из РАБОЧЕГО ... держится 26 · сломано 2 · Н
 ```
 ① рабочий → шаблон .... ВСЁ, чего в шаблоне нет или что разошлось. Это направление
                         обязательно: чего нет в шаблоне, того НЕ БУДЕТ У ПОТРЕБИТЕЛЯ,
-                        и он об этом не узнает — сверка молчит (@RCC #3338)
+                        и он об этом не узнает — сверка молчит (@RCC #3338).
+                        Документы (.md) сводятся С НАПРАВЛЕНИЕМ по надмножеству строк:
+                        «богаче образец» и «в обе стороны» НЕ переносятся (#303)
 ② шаблон → рабочий .... НИЧЕГО не тянет автоматически. Вместо переноса — ПРОВЕРКА:
                         всё, что живой контур ЗОВЁТ, обязано в рабочем быть
 ⛔ приведение путей ... НЕ делает — и с 09.08 20:43 UTC оно НЕ НУЖНО: пути машины больше
@@ -90,6 +92,38 @@ def called_by_live() -> set:
     for p in LIVE_SCRIPTS.glob("*.py"):
         names |= set(CALLS.findall(p.read_text(encoding="utf-8", errors="replace")))
     return names
+
+
+def doc_home(name: str, tpl: Path):
+    """Где документ живёт у шаблона: рядом с кодом (prototype) или этажом выше (vnext).
+
+    Дом документов у шаблона исторически двухэтажный; искать только рядом с кодом —
+    объявить «нет в шаблоне» файлу, который лежит этажом выше и БОГАЧЕ рабочего."""
+    for cand in (tpl / name, tpl.parent / name):
+        if cand.exists():
+            return cand
+    return None
+
+
+def doc_direction(рабочий: Path, шаблон: Path):
+    """Направление сведения документа — НАДМНОЖЕСТВОМ СТРОК, не датой и не размером.
+
+    mtime после git-checkout врёт, размер не говорит, ЧЬИ строки пропадут. Строгое
+    надмножество — единственный признак, при котором перенос заведомо ничего не стирает;
+    всё остальное — работа рукой. 🩸 Оплачено (карточка #303): образец нёс 101 строку
+    записей «сдано», которых не было в рабочей копии, — перенос рабочий→образец стёр бы
+    историю, показав это строкой, которая читается как «доставляю недостающее».
+    """
+    w = {l.rstrip() for l in рабочий.read_text(encoding="utf-8", errors="replace").splitlines()}
+    t = {l.rstrip() for l in шаблон.read_text(encoding="utf-8", errors="replace").splitlines()}
+    only_w, only_t = len(w - t), len(t - w)
+    if not only_w and not only_t:
+        return ("равны", 0, 0)
+    if not only_t:
+        return ("богаче_рабочий", only_w, 0)
+    if not only_w:
+        return ("богаче_образец", 0, only_t)
+    return ("обе_стороны", only_w, only_t)
 
 
 def closure(name: str, pool: dict, seen=None) -> set:
@@ -189,6 +223,38 @@ def main() -> int:
         print("⚠️ вызовов из живых скриптов НЕ НАЙДЕНО — это может значить и «их нет»,"
               " и «замер не сработал». Проверь, тот ли каталог живых скриптов")
 
+    # ── документы: сведение С НАПРАВЛЕНИЕМ, не копией байтов (карточка #303).
+    # Раньше строитель сводил только .py и МОЛЧАЛ о документах: два не доехали вовсе,
+    # а расхождение третьего читалось как «всё сведено».
+    rd = {p.name: p for p in rt.glob("*.md")}
+    doc_missing, doc_ok, doc_carry, doc_hand = [], [], [], []
+    for n in sorted(rd):
+        home = doc_home(n, tpl)
+        if home is None:
+            doc_missing.append(n)
+            continue
+        verdict, ow, ot = doc_direction(rd[n], home)
+        где = home.parent.name + "/" + n
+        if verdict == "равны":
+            doc_ok.append(n)
+        elif verdict == "богаче_рабочий":
+            doc_carry.append((n, home, ow))
+        elif verdict == "богаче_образец":
+            doc_hand.append((n, f"⛔ богаче ОБРАЗЕЦ ({ot} строк только там; {где}) — "
+                                f"перенос рабочий→образец СТЁР БЫ историю, сводить рукой"))
+        else:
+            doc_hand.append((n, f"⚠️ разошлись В ОБЕ СТОРОНЫ (у рабочего {ow} своих строк, "
+                                f"у образца {ot}; {где}) — сводить РУКОЙ, авто-перенос "
+                                f"запрещён в обе стороны"))
+    if rd:
+        print(f"\n📄 ДОКУМЕНТЫ ПАРЫ: {len(rd)} в рабочем · равны по строкам: {len(doc_ok)}")
+        for n in doc_missing:
+            print(f"   · {n:40} 🔴 нет в шаблоне — НЕ ДОЕДЕТ (перенос: --apply)")
+        for n, home, ow in doc_carry:
+            print(f"   · {n:40} богаче РАБОЧИЙ ({ow} строк только там) — перенос разрешён (--apply)")
+        for n, why in doc_hand:
+            print(f"   · {n:40} {why}")
+
     if a.apply and plan:
         for n in plan:
             (tpl / n).write_bytes(r[n].read_bytes())
@@ -196,10 +262,18 @@ def main() -> int:
     elif plan:
         print("\n⚖️ это ЗАМЕР. Перенести: --apply")
 
+    if a.apply and (doc_missing or doc_carry):
+        for n in doc_missing:
+            (tpl / n).write_bytes(rd[n].read_bytes())
+        for n, home, _ in doc_carry:
+            home.write_bytes(rd[n].read_bytes())
+        print(f"✅ документы перенесены: {len(doc_missing) + len(doc_carry)} "
+              f"(только «нет в шаблоне» и «богаче рабочий» — остальное рукой)")
+
     print("⚖️ ГРАНИЦА: сведены ФАЙЛЫ. Совпадение байтов НЕ означает, что копии равносильны:"
           " инструмент зависит от того, что лежит рядом. Обратное направление НЕ переносится"
           " намеренно — из десяти приёмок шаблона переносимы две (замер 09.08).")
-    return 1 if (plan or lost) else 0
+    return 1 if (plan or lost or doc_missing or doc_hand) else 0
 
 
 if __name__ == "__main__":
