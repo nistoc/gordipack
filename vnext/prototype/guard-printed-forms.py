@@ -19,12 +19,20 @@ guard-printed-forms.py — УЧАЩАЯ ПОВЕРХНОСТЬ ШИРЕ ПАМЯ
   · строковые литералы и f-строки в .py (то, что скрипт может НАПЕЧАТАТЬ или показать),
     включая docstring — их читают так же, как вывод;
   · готовые артефакты (.md витрины) — там форма уже вычислена генератором;
-  · две приметы: вызов скрипта мезосинка НЕ абсолютным путём · `--db` в печатаемой строке.
+  · СВОД ПРАВИЛ — rules.body живой БД, только active (с 27.08, заход 1 пула): правило
+    свода учило формой, отменённой каноном месяц назад, и ни один сторож этого не видел;
+  · НАКАЗЫ-ФАЙЛЫ планировщика (<задача>/SKILL.md, с 27.08): наказ роль слушается РАНЬШЕ
+    памяти, а стерёг его никто (живой случай 27.08: наказ победил верную память роли);
+  · приметы: вызов не абсолютным путём · `--db` · команда, РАЗОРВАННАЯ переносом (швы
+    склеиваются предпроходом seams и судятся как строка, которой они были) ·
+    относительная форма БЕЗ имени файла (признак G, случай file-map:3).
 
 ЧЕГО НЕ ВИДИТ (называю сам, чтобы зелёное не читалось шире, чем оно есть)
   · форму, собранную из кусков в рантайме (`" ".join([...])`) — литерала нет, увидеть нечем;
   · комментарии в коде: их роль не читает как инструкцию (и AST их не отдаёт);
-  · текст, приходящий из БД (ноты, памяти) — это зона `guard-role-standard.py`;
+  · ПАМЯТЬ РОЛЕЙ — зона guard-launcher-forms.py; ЛЕНТУ и историю сообщений — это история,
+    её не переписывают; ПРОЧИЕ столбцы rules (basis и др. — там форма не инструкция);
+  · наказы, живущие В СТЕНОГРАММАХ сессий (.jsonl) — файлом не правятся, суду недоступны;
   · СМЫСЛ: строку «⛔ так больше не зовут» отличаю от инструкции только по приметам отзыва
     В ТОЙ ЖЕ СТРОКЕ (REVOKED_MARK). Это приблизительный детектор, и его ЕДИНИЦА — строка.
 
@@ -36,6 +44,7 @@ guard-printed-forms.py — УЧАЩАЯ ПОВЕРХНОСТЬ ШИРЕ ПАМЯ
 import argparse
 import ast
 import re
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -118,6 +127,10 @@ REVOKED_MARK = _Revoked()
 OTHER_TOOL = re.compile(
     r"\b(?P<tool>git|docker|dotnet|curl|npm|node|pwsh|powershell|psql)\b"
     r"(?P<mid>[^\n`'\"\u0400-\u04FF]{0,60}?)(?P<path>[A-Za-z]:\\[^\s`'\"]+)")
+# \u041F\u0440\u0438\u0437\u043D\u0430\u043A G: `.mezosync/scripts/` (\u0438\u043B\u0438 \u0441 `\`) \u0411\u0415\u0417 \u0438\u043C\u0435\u043D\u0438 \u0444\u0430\u0439\u043B\u0430 \u0441\u043B\u0435\u0434\u043E\u043C \u2014 \u0444\u043E\u0440\u043C\u0430-\u043E\u0431\u0440\u0443\u0431\u043E\u043A
+# \u0432\u0438\u0434\u0430 `python .mezosync\scripts\\u2026`. \u0421 \u0438\u043C\u0435\u043D\u0435\u043C \u0444\u0430\u0439\u043B\u0430 \u0441\u0442\u0440\u043E\u043A\u0443 \u0441\u0443\u0434\u0438\u0442 \u043F\u0440\u0438\u0437\u043D\u0430\u043A A \u2014 \u0437\u0430\u0434\u0432\u043E\u0435\u043D\u0438\u0435
+# \u0440\u0435\u0436\u0435\u0442 \u043E\u0442\u0440\u0438\u0446\u0430\u0442\u0435\u043B\u044C\u043D\u044B\u0439 \u043F\u0440\u043E\u0441\u043C\u043E\u0442\u0440 (\u0431\u0435\u0437 \u043D\u0435\u0433\u043E 149 \u043B\u043E\u0436\u043D\u044B\u0445 \u043F\u043E \u043A\u043E\u043D\u0442\u0443\u0440\u0443, \u0437\u0430\u043C\u0435\u0440 27.08 \u0414\u041E \u043A\u043E\u0434\u0430).
+REL_NO_NAME = re.compile(r"\.mezosync[\\/]scripts[\\/](?![\w\-]+\.py)")
 
 
 def materialize(path, name, scripts):
@@ -216,6 +229,19 @@ def classify(text, known, proven=(), scripts=None, observed=False):
             out.append((f"🔴 F ЧУЖОЙ ИНСТРУМЕНТ (`{m.group('tool')}`) С `\\` — НЕ ОТКРОЕТСЯ "
                         f"В BASH, нужен прямой слэш",
                         text[max(0, m.start() - 20):m.end() + 40].strip()))
+
+    # ── ПРИЗНАК G: ОТНОСИТЕЛЬНАЯ ФОРМА БЕЗ ИМЕНИ ФАЙЛА (случай file-map:3, заход 1) ──
+    # Правило учило «зови `python .mezosync\scripts\…`» — формой, отменённой каноном 26.07,
+    # и НИ ОДИН сторож этого не видел: CALL требует имени `.py`, а тут его нет по построению.
+    # ⚖️ Отрицательный просмотр «дальше НЕ имя.py» ОБЯЗАТЕЛЕН: без него признак задваивает
+    # находки признака A и даёт 149 ложных по контуру (замерено ДО кода, 27.08). Слово
+    # `python` в той же строке отличает УЧЕНИЕ ФОРМЕ от упоминания каталога в прозе.
+    # Одна находка на строку: два вхождения в одной строке — один и тот же урок читателю.
+    if (not REVOKED_MARK.search(text) and re.search(r"\bpython3?\b", text)
+            and REL_NO_NAME.search(text)):
+        out.append(("🔴 G ОТНОСИТЕЛЬНАЯ ФОРМА БЕЗ ИМЕНИ ФАЙЛА — учит отозванной F20-форме "
+                    "(канон 26.07: относительная форма ЗАПРЕЩЕНА)",
+                    text.strip()[:110]))
     return out
 
 
@@ -340,17 +366,150 @@ def scan_canon(path, known, scripts):
     """
     if not path.exists():
         return None                                    # отсутствие канона — сказать вслух
+    hits = []
+    defs = canon_defs(path)
+    for i, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+        for kind, frag in classify(expand_abbrev(line, defs), known, (), scripts):
+            hits.append((i, "R1", kind, frag))         # канон читается КАЖДЫМ — ранг рабочего вывода
+    return hits
+
+
+def canon_defs(path):
+    """Словарь сокращений канона (`<s>` = путь) — ровно прежний разбор scan_canon,
+    вынесен: с 27.08 сокращениями пользуются и СВОД ПРАВИЛ, и наказы-файлы, а вторая
+    копия разбора разошлась бы с этой молча. Канона нет → None: судить свод без словаря
+    значит выдать ложные красные за находки (замерено 27.08: 2 ложных)."""
+    if not path.exists():
+        return None
     text = path.read_text(encoding="utf-8", errors="replace")
     defs = {}
     for m in re.finditer(r"`?<([\w-]+)>`?\s*=\s*`?([A-Za-z]:[/\\][^\s`'\"]+)`?", text):
         defs[m.group(1)] = m.group(2).rstrip("/\\")
+    return defs
+
+
+def expand_abbrev(line, defs):
+    """Раскрыть сокращения канона ПЕРЕД судом — ровно прежние замены scan_canon, плюс
+    ГОЛОЕ `<s>` (без разделителя следом): склейка разорванной переносом команды даёт
+    `python <s>ead-messages.py`, и без голого раскрытия сторож на ней молчит; с ним
+    имя не находится в списке и срабатывает УЖЕ НАПИСАННАЯ ветка «имя, вероятно,
+    сломано». Вердикт выносит старое правило — здесь только собирается кандидат.
+    Цена замерена 27.08: прогон свода с голым раскрытием и без — побайтно одинаков.
+    Порядок замен важен: формы с разделителем — раньше голой, иначе голая съест их
+    и удвоит разделитель."""
+    for name, root in (defs or {}).items():
+        line = (line.replace(f"<{name}>/", root + "/")
+                    .replace(f"<{name}>\\", root + "\\")
+                    .replace(f"<{name}>", root + "/"))
+    return line
+
+
+def seams(lines):
+    """Предпроход «КОМАНДА РАЗОРВАНА ПЕРЕНОСОМ» (заход 1 п.1.3). НЕ внутри classify:
+    её единица — одна строка (оплачено карточками #151/#152), а шов живёт в ДВУХ.
+    Восстанавливает строку, какой она была до разрыва, и отдаёт её обычному суду.
+
+    Шесть условий, все обязательны, у каждого свой встречный (приёмка ослабляет порознь):
+      голова: ① «python + один довод + конец строки» ② довод путь-подобен и не флаг
+              ③ в голове нет `.py` ④ голова НЕ кончается на `\\` (законный перенос)
+      хвост:  ⑤ с НУЛЕВОЙ колонки «имя.py» и дальше пробел/конец ⑥ не новая команда
+    ③ и ④ — две независимые ветки под ОДИН встречный (tool-edit-announce:7 кончается
+    на `\\` И содержит lease.py): срезать их в одну — одна умрёт незамеченной.
+    Возвращает [(номер головы, склеенная строка, «СКЛЕЙКА N+N+1»), …]."""
+    out = []
+    for i in range(len(lines) - 1):
+        head, tail = lines[i], lines[i + 1]
+        m = re.match(r"^\s*python3?\s+(?P<arg>\S+)\s*$", head)
+        if not m:
+            continue                                   # ① голова: python + ровно один довод
+        arg = m.group("arg")
+        if arg.startswith("-") or not ("/" in arg or "\\" in arg or arg.startswith("<")):
+            continue                                   # ② довод путь-подобен, не флаг
+        if ".py" in head:
+            continue                                   # ③ имени в голове нет — иначе цела
+        if head.rstrip().endswith("\\"):
+            continue                                   # ④ явный перенос длинной команды
+        if not re.match(r"^[\w\-]+\.py(\s|$)", tail):
+            continue                                   # ⑤ хвост: имя.py с нулевой колонки
+        if re.match(r"^\s*python3?\b", tail):
+            continue                                   # ⑥ хвост — новая команда, не обломок
+        out.append((i + 1, head.strip() + tail.strip(), f"СКЛЕЙКА {i + 1}+{i + 2}"))
+    return out
+
+
+def judged_lines(lines, known, scripts, defs):
+    """Общий суд строк источника из БД или файла-наказа: построчный classify после
+    раскрытия сокращений + швы предпроходом. Склейка ИСПОЛНИМА → 🟡 (жёлтое не роняет
+    код возврата: роль всё равно копирует по строке — предупреждаем, не запрещаем);
+    склейка мертва → красные признаки старых правил с припиской происхождения."""
+    out = []
+    seam_list = seams(lines)
+    seam_heads = {lineno for lineno, _, _ in seam_list}
+    for i, line in enumerate(lines, 1):
+        for kind, frag in classify(expand_abbrev(line, defs), known, (), scripts):
+            # Голова шва (`python <s>` без имени) после голого раскрытия выглядит для
+            # признака G формой-обрубком — но её дефект ШОВ, и его судит склейка ниже
+            # с происхождением. Две находки об одном дефекте — спор сторожей об одном
+            # источнике, шум плотностью; G здесь гасится ПОИМЁННО, не окрестностью.
+            if i in seam_heads and " G " in kind:
+                continue
+            out.append((i, kind, frag))
+    for lineno, joined, origin in seam_list:
+        # 🟢 «норма канона» находкой шва НЕ считается: исполнимая склейка — это ровно
+        # случай «склеенное исполнимо, но роль копирует ПО СТРОКЕ», ему положено 🟡.
+        found = [x for x in classify(expand_abbrev(joined, defs), known, (), scripts)
+                 if not x[0].startswith("🟢")]
+        if found:
+            out += [(lineno, f"{kind} [{origin}]", frag) for kind, frag in found]
+        else:
+            out.append((lineno, f"🟡 РАЗОРВАНА ПЕРЕНОСОМ [{origin}] — склеенное исполнимо, "
+                                f"но роль копирует ПО СТРОКЕ", joined.strip()[:110]))
+    return out
+
+
+def scan_rules(db, known, scripts, defs):
+    """СВОД ПРАВИЛ (rules.body) — учащая поверхность, которую до 27.08 не читал НИ ОДИН
+    сторож: правило file-map учило относительной формой, отменённой каноном 26.07, месяц.
+    Судятся только active: отозванное — история (как цитаты в телах нот у витрин),
+    надгробий не переписывают; счёт отозванных говорится ВСЛУХ, а не молчит.
+    Возвращает (находки, отозванных, ошибка): база недоступна → (None, 0, текст) —
+    «НЕ ПРОВЕРЕН» не равно «чисто»."""
+    try:
+        conn = sqlite3.connect(f"file:{Path(db).as_posix()}?mode=ro", uri=True)
+        rows = conn.execute("SELECT rule_key, body, status FROM rules ORDER BY rule_key").fetchall()
+        conn.close()
+    except sqlite3.Error as e:
+        return None, 0, 0, f"{type(e).__name__}: {e}"
+    hits, inactive, tombstoned = [], 0, 0
+    for key, body, status in rows:
+        if status != "active":                         # revoked И superseded — история
+            inactive += 1
+            continue
+        lines = (body or "").splitlines()
+        for line in lines:
+            el = expand_abbrev(line, defs)
+            # «Погашено надгробием» считается ВСЛУХ: молчание о гашении неотличимо
+            # от «форм не было» (класс #151 — надгробие обязано быть видно, не только
+            # действовать). Счёт, не находка: надгробие — норма, а не долг.
+            if REVOKED_MARK.search(el) and (CALL.search(el) or REL_NO_NAME.search(el)):
+                tombstoned += 1
+        for lineno, kind, frag in judged_lines(lines, known, scripts, defs):
+            hits.append((f"{key}:{lineno}", kind, frag))
+    return hits, inactive, tombstoned, None
+
+
+def scan_tasks(tasks_dir, known, scripts, defs):
+    """НАКАЗЫ-ФАЙЛЫ планировщика (<задача>/SKILL.md) — наказ роль слушается РАНЬШЕ своей
+    памяти, а не стерёг его никто (живой случай 27.08: общий наказ синка победил верную
+    запись в памяти роли). Наказы в СТЕНОГРАММАХ сессий сюда не входят — файлом
+    не правятся, граница названа в шапке. Каталога нет → None: «НЕ ПРОВЕРЕНЫ» вслух."""
+    if not tasks_dir.exists():
+        return None
     hits = []
-    for i, line in enumerate(text.splitlines(), 1):
-        expanded = line
-        for name, root in defs.items():
-            expanded = expanded.replace(f"<{name}>/", root + "/").replace(f"<{name}>\\", root + "\\")
-        for kind, frag in classify(expanded, known, (), scripts):
-            hits.append((i, "R1", kind, frag))         # канон читается КАЖДЫМ — ранг рабочего вывода
+    for p in sorted(tasks_dir.glob("*/SKILL.md")):
+        lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+        for lineno, kind, frag in judged_lines(lines, known, scripts, defs):
+            hits.append((f"{p.parent.name}:{lineno}", kind, frag))
     return hits
 
 
@@ -409,8 +568,10 @@ def run(scripts, artifacts, quiet=False, do_run=True, role="PROTO"):
     if not quiet:
         print(f"[проверка печатаемых форм] скрипты: {scripts} ({len(known)} шт) · файлы из базы: "
               f"{artifacts if artifacts.exists() else '— нет каталога, файлы из базы НЕ проверены'}")
-        print("   вижу: литералы/f-строки .py + строки .md · приметы: не-абсолютный вызов · --db")
-        print("   НЕ вижу: форму, собранную в рантайме · комментарии · текст из БД\n")
+        print("   вижу: литералы/f-строки .py + строки .md + свод правил (rules.body, active) "
+              "+ наказы-файлы · приметы: не-абсолютный вызов · --db · шов переноса · форма без имени")
+        print("   НЕ вижу: форму, собранную в рантайме · комментарии · память ролей "
+              "(guard-launcher-forms) · ленту и историю · наказы в стенограммах\n")
     obs_hits, obs_n, obs_skip = ([], 0, []) if not do_run else observe(scripts, role)
     if do_run and not quiet:
         print(f"── НАБЛЮДЕНИЕ: прогнано {obs_n} команд (--help + read-phoenix --role {role})"
@@ -577,6 +738,12 @@ def main():
     ap.add_argument("--no-run", action="store_true",
                     help="не прогонять скрипты (без наблюдения шаблоны судить нечем)")
     ap.add_argument("--role", default="PROTO", help="роль для read-only прогона read-phoenix")
+    ap.add_argument("--db", default=str(mezo_paths.live_db()),
+                    help="живая БД — источник СВОДА ПРАВИЛ (rules.body, active; с 27.08)")
+    ap.add_argument("--no-rules", action="store_true", help="свод правил не судить")
+    ap.add_argument("--tasks-dir", default=str(Path.home() / ".claude" / "scheduled-tasks"),
+                    help="наказы-файлы планировщика (<задача>/SKILL.md; с 27.08). Наказы "
+                         "в стенограммах сессий НЕ судятся — граница вслух")
     a = ap.parse_args()
     if a.selftest:
         return selftest()
@@ -587,14 +754,54 @@ def main():
     hits = scan_canon(canon, known, Path(a.scripts))
     if hits is None:
         print(f"⚠️ КАНОН НЕ НАЙДЕН: {canon} — НЕ ПРОВЕРЕН (это не «чисто»)")
-        return rc
-    red = [(n, k, f) for n, _, k, f in hits if k.startswith("🔴")]
-    for n, k, f in red:
-        print(f"── КАНОН {canon.name}:{n}\n   [R1] {k}\n      {f[:110]}")
-    print(f"{'🔴' if red else '✅'} канон {canon.name}: 🔴 {len(red)} "
-          f"(сокращения, объявленные в файле, раскрыты перед судом; "
-          f"глобальный CLAUDE.md пользователя НЕ сканирован)")
-    return 1 if red else rc
+    else:
+        red = [(n, k, f) for n, _, k, f in hits if k.startswith("🔴")]
+        for n, k, f in red:
+            print(f"── КАНОН {canon.name}:{n}\n   [R1] {k}\n      {f[:110]}")
+        print(f"{'🔴' if red else '✅'} канон {canon.name}: 🔴 {len(red)} "
+              f"(сокращения, объявленные в файле, раскрыты перед судом; "
+              f"глобальный CLAUDE.md пользователя НЕ сканирован)")
+        rc = 1 if red else rc
+
+    # ── СВОД ПРАВИЛ: секцией после канона. Без канона НЕ судится — суд без словаря
+    # сокращений выдаёт ложные красные за находки (замерено 27.08: 2), а ложная находка
+    # дороже пропуска: перестают верить проверке целиком.
+    defs = canon_defs(canon)
+    if a.no_rules:
+        print("⚠️ СВОД ПРАВИЛ ПРОПУЩЕН по --no-rules — НЕ ПРОВЕРЕН (это не «чисто»)")
+    elif defs is None:
+        print("⛔ СВОД ПРАВИЛ НЕ СУЖДЕН: канона нет, словаря сокращений нет — суд дал бы "
+              "ложные красные. НЕ ПРОВЕРЕН ≠ чисто")
+        rc = max(rc, 1)
+    else:
+        rhits, inactive, tombstoned, err = scan_rules(a.db, known, Path(a.scripts), defs)
+        if rhits is None:
+            print(f"⛔ СВОД ПРАВИЛ НЕ ПРОВЕРЕН: база недоступна ({err}) — это не «чисто»")
+            rc = max(rc, 1)
+        else:
+            rred = [(w, k, f) for w, k, f in rhits if k.startswith("🔴")]
+            ryel = [(w, k, f) for w, k, f in rhits if k.startswith("🟡")]
+            for w, k, f in rred + ryel:
+                print(f"── СВОД {w}\n   [R1] {k}\n      {f[:110]}")
+            print(f"{'🔴' if rred else '✅'} свод правил: 🔴 {len(rred)} · 🟡 {len(ryel)} "
+                  f"(судились active; отозвано/замещено: {inactive} — история, долг не считается; "
+                  f"погашено надгробием в той же строке: {tombstoned})")
+            rc = 1 if rred else rc
+
+    # ── НАКАЗЫ-ФАЙЛЫ: судятся ТЕМ ЖЕ судом (сокращения + швы), что и свод.
+    tdir = Path(a.tasks_dir)
+    thits = scan_tasks(tdir, known, Path(a.scripts), defs)
+    if thits is None:
+        print(f"⚠️ НАКАЗЫ-ФАЙЛЫ НЕ ПРОВЕРЕНЫ: нет каталога {tdir} (это не «чисто»)")
+    else:
+        tred = [(w, k, f) for w, k, f in thits if k.startswith("🔴")]
+        tyel = [(w, k, f) for w, k, f in thits if k.startswith("🟡")]
+        for w, k, f in tred + tyel:
+            print(f"── НАКАЗ {w}\n   [R1] {k}\n      {f[:110]}")
+        print(f"{'🔴' if tred else '✅'} наказы-файлы: 🔴 {len(tred)} · 🟡 {len(tyel)} "
+              f"(наказы в стенограммах сессий НЕ судятся — файлом не правятся)")
+        rc = 1 if tred else rc
+    return rc
 
 
 if __name__ == "__main__":

@@ -33,8 +33,14 @@ import subprocess
 import sys
 from pathlib import Path
 
-SCRIPTS = Path(r"C:\guts\.atlas\.mezosync\scripts")
-LIVE_DB = SCRIPTS.parent / "mezosync.db"
+# Пути ВЫВОДЯТСЯ, не впечатаны (карточка #153): впечатанный путь — диск автора
+# в публичном образце, у чужого механизм мёртв. Первый прогон гарда путей это
+# пропустил ПО СЛЕПОТЕ: файл ещё не был в git ls-files — зелёное не по своей причине.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mezo_paths  # noqa: E402
+
+SCRIPTS = mezo_paths.live_scripts()
+LIVE_DB = mezo_paths.live_db()
 sys.path.insert(0, str(SCRIPTS))
 import mezo_stand  # noqa: E402
 

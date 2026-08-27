@@ -87,12 +87,21 @@ def main():
                          ensure_ascii=False, indent=2))
         sys.exit(0 if not findings else 1)
 
+    # ═══ ГРАНИЦА ВСЛУХ (заход 1 п.1.7, 27.08). Образец REL требует ИМЕНИ `.py` после
+    # scripts/ — форма-обрубок `.mezosync\scripts\…` (живой случай file-map:3) этому гарду
+    # НЕВИДИМА ПО ПОСТРОЕНИЮ, и месяц его «✅ чисто» отвечало на вопрос, которого никто
+    # не задавал (зелёное по слепоте). Её судит признак G guard-printed-forms.py — два
+    # сторожа не должны спорить об одном источнике, поэтому здесь граница, а не второй суд.
+    ГРАНИЦА = ("   ⚖️ форму БЕЗ имени файла (`.mezosync\\scripts\\…`) НЕ сужу — её судит "
+               "guard-printed-forms.py (признак G)")
     if not findings:
         print(f"✅ относительных вызовов нет (абсолютных: {abs_total})")
+        print(ГРАНИЦА)
         sys.exit(0)
 
     print(f"⛔ относительная форма вызова: {rel_total} шт. в {len(findings)} местах "
           f"(абсолютных рядом: {abs_total})")
+    print(ГРАНИЦА)
     for f in findings:
         print(f"   {f['where']:28} {f['relative']:2} отн. / {f['absolute']:2} абс.   "
               f"{', '.join(f['samples'])}")
