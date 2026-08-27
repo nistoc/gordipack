@@ -40,7 +40,11 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
 
 HERE = pathlib.Path(__file__).resolve().parent
-ПИСАТЕЛЬ = HERE / "write-message-vnext.py"
+# ⚡ ПЕРЕНАЦЕЛЕНО НА ЖИВОГО ПИСАТЕЛЯ 2026-08-27 (карточка #258, вторая половина сдана):
+# словарь адресатов перенесён из прототипа в живой инструмент, и приёмка обязана
+# испытывать ТО, ЧТО РАБОТАЕТ, а не то, что было черновиком. Прототип остаётся в дереве
+# как история решения; гонять его дальше значило бы проверять копию вместо продукта.
+ПИСАТЕЛЬ = mezo_paths.container_root(__file__) / ".mezosync" / "scripts" / "write-message.py"
 МИГРАЦИЯ = HERE / "migrate-addressee-vnext.py"
 ЧИТАТЕЛЬ = mezo_paths.container_root(__file__) / ".mezosync" / "scripts" / "read-messages.py"
 ЖИВАЯ = mezo_paths.live_db()
@@ -234,7 +238,7 @@ def main() -> int:
         нот_зaписано = con.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
         con.close()
         ok &= case("③ имя «COODR» (опечатка) → ОТКАЗ до записи, словарь назван, записки НЕТ",
-                   код3 == 1 and "ОТКАЗ" in вывод3 and "Словарь:" in вывод3
+                   код3 == 5 and "ОТКАЗ" in вывод3 and "Словарь:" in вывод3
                    and нот_зaписано == нот_перед,
                    f"код {код3}; нота-призрак не родилась: было {нот_перед} нот, осталось столько же",
                    differ=True)
@@ -273,15 +277,27 @@ def main() -> int:
             # копия живёт вне контейнера ⇒ live_db() в её заголовке не найдёт маркера;
             # контейнер отдаём средой — иначе копия падает НА ИМПОРТЕ, и «красный»
             # у сломанной был бы смертью копии, а не работой словаря (поймано прогоном)
-            env = dict(os.environ, MEZO_CONTAINER=str(mezo_paths.container_root(__file__)))
+            # PYTHONPATH на каталог ЖИВОГО писателя: он импортирует соседей (dryrun,
+            # urgency, refs_check…), которых во временном каталоге нет. Без этого копия
+            # умирает НА ИМПОРТЕ — и её ненулевой код читался бы как «словарь сработал».
+            # 🩸 Ровно это и вышло при первом прогоне после переноса: обратный ход был
+            # зелёным по виду и пустым по существу, пока случай не начал печатать ПРИЧИНУ.
+            env = dict(os.environ, MEZO_CONTAINER=str(mezo_paths.container_root(__file__)),
+                       PYTHONPATH=str(ПИСАТЕЛЬ.parent))
             r6 = subprocess.run([sys.executable, str(слаб), "--db", str(db), "--role",
                                  "PROTO", "--body", "проба Р3 слабой", "--to", "COODR"],
                                 capture_output=True, text=True, encoding="utf-8",
                                 errors="replace", timeout=300, env=env)
             код6 = r6.returncode
+            _хвост = ((r6.stdout or "") + (r6.stderr or "")).strip().splitlines()
+            _почему = _хвост[0][:90] if _хвост else "(молча)"
+            # ⚠️ Печатаем ПРИЧИНУ отказа слабой копии. Без неё «слабая тоже отказала»
+            # читается как работа словаря, хотя копия могла умереть на чём угодно —
+            # и тогда обратный ход доказывает не то, ради чего заведён.
             ok &= case("⑥ ОБРАТНЫЙ ХОД: словарь отключён — случай ③ ЗЕЛЕНЕЕТ у сломанной",
-                       код6 == 0 and код3 == 1,
-                       f"слабая {код6} против настоящей {код3} — различает именно СЛОВАРЬ",
+                       код6 == 0 and код3 == 5,
+                       f"слабая {код6} против настоящей {код3} — различает именно СЛОВАРЬ."
+                       f" Слабая сказала: {_почему}",
                        differ=True)
         def сколько_нот(_db):
             _c = sqlite3.connect(f"file:{pathlib.Path(_db).as_posix()}?mode=ro", uri=True)
