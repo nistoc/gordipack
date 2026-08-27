@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# PLANTS: canon rules tasks printed vitrina
 r"""
 bite-printed-forms-sources.py — приёмка захода 1 пула (план snuggly-sniffing-planet.md,
 п.1.6): guard-printed-forms.py судит ДВА НОВЫХ ИСТОЧНИКА — свод правил (rules.body,
@@ -292,6 +293,35 @@ m_r8 = wmod(stand, guard_src, "(?![\\w\\-]+\\.py)", "", "Р8 отрицател�
 h17w = [k for k, _ in m_r8.classify(line17, real_known, (), LIVE_SCRIPTS) if " G " in k]
 case("Р8 снят отрицательный просмотр → ⑰ получает ложную G (без него 149 по контуру)",
      bool(h17w))
+
+# ── ㉑㉒ подсадка в КАЖДЫЙ объявленный источник (заход 4 ⑦): гард объявляет
+# SURFACES: canon rules tasks printed vitrina — canon/rules/tasks подсажены выше,
+# printed и vitrina до 28.08 не подсаживались ВОВСЕ: их зелёное было не доказано.
+import re as _re                                       # noqa: E402
+
+dirty_py = sb_scripts / "zzprobe-print.py"
+dirty_py.write_text('print("зови: python .mezosync/scripts/zzprobe-tool.py --x")\n',
+                    encoding="utf-8")
+h21 = [k for _ln, _rk, k, _f in mod.scan_py(dirty_py, KNOWN, sb_scripts)
+       if not k.startswith("🟢")]
+case("㉑ printed: грязная форма в ПЕЧАТАЕМОЙ строке скрипта → находка",
+     bool(h21), " · ".join(h21[:2]))
+clean_py = sb_scripts / "zzprobe-print-clean.py"
+clean_py.write_text(f'print("зови: python {ROOT}/zzprobe-tool.py --x")\n',
+                    encoding="utf-8")
+h21b = [k for _ln, _rk, k, _f in mod.scan_py(clean_py, KNOWN, sb_scripts)
+        if not k.startswith("🟢")]
+case("㉑б встречный: абсолютная печатаемая форма → тихо", not h21b,
+     " · ".join(h21b[:2]))
+
+vit = stand / "zzprobe-vitrina.md"
+vit.write_text("подвал: python .mezosync/scripts/zzprobe-tool.py --x\n", encoding="utf-8")
+tpl21 = [_re.compile(_re.escape("python .mezosync/scripts/zzprobe-tool.py"))]
+h22 = mod.scan_md(vit, KNOWN, templates=tpl21, scripts=sb_scripts)
+case("㉒ vitrina: форма, напечатанная ГЕНЕРАТОРОМ витрины → долг", bool(h22))
+h22b = mod.scan_md(vit, KNOWN, templates=[], scripts=sb_scripts)
+case("㉒б встречный: та же строка как ЦИТАТА тела ноты → не долг (история)",
+     not h22b, "цитату не чинят — её напечатал не генератор, а прошлое")
 
 # ⑳ живая база не тронута
 live_after = (LIVE_DB.stat().st_size, LIVE_DB.stat().st_mtime_ns)

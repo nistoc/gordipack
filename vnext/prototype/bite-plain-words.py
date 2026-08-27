@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # SURFACES: printed
 # -*- coding: utf-8 -*-
+# PLANTS: printed
 """bite-plain-words — приёмка: инструменты говорят общепонятными словами (слово владельца).
 
     python <КОНТУР>/vnext-tools/bite-plain-words.py

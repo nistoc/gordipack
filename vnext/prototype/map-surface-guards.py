@@ -57,15 +57,35 @@ MAP = [
      "backlog-bodies", None),          # ⚠️ БЕЗ СТОРОЖА
 ]
 
+# ── подсадки (заход 4 ⑦): у каждой проверки — приёмка, подсаживающая дефект в КАЖДЫЙ
+# её объявленный источник. Приёмка объявляет подсаженное строкой `# PLANTS: <ключи>`;
+# источник без подсадки — красное: его зелёное НЕ ДОКАЗАНО, это и есть зелёное по слепоте.
+BITE_OF = {
+    "guard-printed-forms.py":   "bite-printed-forms-sources.py",
+    "guard-rule-expiry.py":     "bite-rule-expiry.py",
+    "check-rule-basis.py":      "bite-rule-basis.py",
+    "guard-launcher-forms.py":  "bite-launcher-forms.py",
+    "bite-plain-words.py":      "bite-plain-words.py",   # сама себе: случай «нарочная поломка»
+    "check-false-signature.py": "bite-false-signature.py",
+    "measure-docs-retired.py":  "bite-docs-retired.py",
+    "guard-machine-paths.py":   "bite-machine-paths.py",
+    "guard-skills-fresh.py":    "bite-skills-fresh.py",
+}
+
 DECLARE = re.compile(r"^#\s*SURFACES:\s*(.+)$", re.M)
+PLANTS = re.compile(r"^#\s*PLANTS:\s*(.+)$", re.M)
+
+
+def declared(guard_file: Path, rx):
+    """Машинное объявление в шапке файла; None — строки нет (не то же, что «пусто»)."""
+    head = "\n".join(guard_file.read_text(encoding="utf-8",
+                                          errors="replace").splitlines()[:40])
+    m = rx.search(head)
+    return set(m.group(1).split()) if m else None
 
 
 def declared_surfaces(guard_file: Path):
-    """Машинное объявление сторожа; None — строки нет (не то же, что «пусто»)."""
-    head = "\n".join(guard_file.read_text(encoding="utf-8",
-                                          errors="replace").splitlines()[:40])
-    m = DECLARE.search(head)
-    return set(m.group(1).split()) if m else None
+    return declared(guard_file, DECLARE)
 
 
 def main() -> int:
@@ -113,6 +133,29 @@ def main() -> int:
     if undeclared:
         print(f"· без машинного объявления SURFACES: {len(undeclared)} "
               f"({', '.join(undeclared)}) — сверка по ним односторонняя")
+
+    # ── подсадки: SURFACES проверки ⊆ PLANTS её приёмки, иначе зелёное не доказано
+    for g, keys in sorted(guard_keys.items()):
+        b = BITE_OF.get(g)
+        if b is None:
+            red += 1
+            print(f"🔴 у проверки {g} НЕ НАЗНАЧЕНА приёмка — её зелёное не доказано ничем")
+            continue
+        bp = tools / b
+        if not bp.exists():
+            red += 1
+            print(f"🔴 приёмка {b} (проверки {g}) НЕ СУЩЕСТВУЕТ файлом")
+            continue
+        plants = declared(bp, PLANTS)
+        if plants is None:
+            red += 1
+            print(f"🔴 приёмка {b} не объявляет подсадок (нет строки PLANTS) — "
+                  f"что она доказывает проверке {g}, не сказано")
+            continue
+        for k in sorted(keys - plants):
+            red += 1
+            print(f"🔴 {g}: источник «{k}» БЕЗ ПОДСАДКИ в приёмке {b} — "
+                  f"его зелёное не доказано (зелёное по слепоте)")
 
     print(f"\nитого: клеток {len(MAP)} · пустых {empty} · красных {red}")
     if empty:

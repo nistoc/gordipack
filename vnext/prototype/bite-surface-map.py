@@ -17,7 +17,11 @@ MAPTOOL = HERE / "map-surface-guards.py"
 
 GUARDS = ["guard-printed-forms.py", "guard-rule-expiry.py", "check-rule-basis.py",
           "guard-launcher-forms.py", "bite-plain-words.py", "check-false-signature.py",
-          "measure-docs-retired.py", "guard-machine-paths.py", "guard-skills-fresh.py"]
+          "measure-docs-retired.py", "guard-machine-paths.py", "guard-skills-fresh.py",
+          # приёмки проверок — их PLANTS сверяются картой (заход 4 ⑦)
+          "bite-printed-forms-sources.py", "bite-rule-expiry.py", "bite-rule-basis.py",
+          "bite-launcher-forms.py", "bite-false-signature.py", "bite-docs-retired.py",
+          "bite-machine-paths.py", "bite-skills-fresh.py"]
 
 CASES, OK = 0, True
 
@@ -88,6 +92,26 @@ def main() -> int:
     case("⑥ проверка БЕЗ строки SURFACES — названа счётом, не красное",
          code == 0 and "без машинного объявления" in out and "check-rule-basis.py" in out,
          "отсутствие контракта — не дефект; молчать о нём — дефект")
+
+    # ⑦а: у приёмки урезан PLANTS — источник её проверки остаётся БЕЗ подсадки → красное
+    d = fresh_stand(tmp, "plant-cut")
+    g = d / "bite-printed-forms-sources.py"
+    g.write_text(g.read_text(encoding="utf-8").replace(
+        "# PLANTS: canon rules tasks printed vitrina",
+        "# PLANTS: canon rules tasks printed"), encoding="utf-8")
+    out, code = run(d)
+    case("⑦а источник без подсадки в приёмке → красное «зелёное не доказано»",
+         code == 1 and "БЕЗ ПОДСАДКИ" in out and "vitrina" in out,
+         "ровно так жило зелёное по слепоте: проверка объявляла, приёмка не подсаживала")
+
+    # ⑦б: у приёмки нет строки PLANTS вовсе → красное, а не пропуск
+    d = fresh_stand(tmp, "plant-none")
+    g = d / "bite-rule-expiry.py"
+    g.write_text(re.sub(r"^# PLANTS:.*\n", "", g.read_text(encoding="utf-8"),
+                        count=1, flags=re.M), encoding="utf-8")
+    out, code = run(d)
+    case("⑦б приёмка без строки PLANTS → красное «что доказывает — не сказано»",
+         code == 1 and "не объявляет подсадок" in out and "bite-rule-expiry.py" in out)
 
     print()
     print(f"{'✅ КАРТА ПРИНЯТА' if OK else '🔴 НЕ ПРИНЯТА'} — случаев {CASES}")

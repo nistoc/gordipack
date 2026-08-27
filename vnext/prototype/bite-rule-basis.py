@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+# PLANTS: rules
 """
 ПРИЁМКА проверки «правило без прослеживаемого основания» (check-rule-basis.py).
 
