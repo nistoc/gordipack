@@ -549,7 +549,7 @@ def main():
     if not a.baseline:
         die("demo требует --baseline <ДО-версия read-messages.py>",
             "именно этого не хватало прежней версии приёмки: точка отсчёта бралась молча "
-            "из песочницы и после врезки оказывался уже почищенным (COORD #2748)")
+            "из песочницы и после вставки оказывался уже почищенным (COORD #2748)")
     bp = Path(a.baseline).resolve()
     if not bp.exists():
         die(f"нет baseline: {bp}")

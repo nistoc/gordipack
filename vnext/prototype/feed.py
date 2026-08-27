@@ -301,7 +301,7 @@ def cmd_ack(conn, role, token):
                        (token, role)).fetchone()
     if row is None:
         sys.exit(f"⛔ ACK ОТКЛОНЁН: токен «{token}» для {role} не найден "
-                 f"(потрачен, чужой или опечатка). Курсор НЕ сдвинут.")
+                 f"(потрачен, чужой или опечатка). Отметка прочитанного НЕ сдвинута.")
     prev = conn.execute("SELECT last_read_id FROM read_cursors WHERE reader_role=?",
                         (role,)).fetchone()[0]
     new = max(prev, row[0])

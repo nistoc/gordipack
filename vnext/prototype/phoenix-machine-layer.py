@@ -85,7 +85,7 @@ def main() -> int:
         (role,)).fetchone()
     if last:
         print(f"\n📝 ПОСЛЕДНЯЯ СВОЯ ЗАПИСКА: #{last[0]} от {last[1][:16]} UTC"
-              "  ← ЧИТАТЬ ПЕРВОЙ: слепок сохраняется ДО неё, отозванное там живёт как факт")
+              "  ← ЧИТАТЬ ПЕРВОЙ: память сохраняется ДО неё, отозванное там живёт как факт")
     for sec, ln, at in con.execute(
             "SELECT section, length(body), saved_at FROM phoenix WHERE role=? ORDER BY section",
             (role,)):
