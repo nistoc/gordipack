@@ -91,6 +91,10 @@ public static class ApiEndpoints
         api.MapGet("/rules", (SnapshotStore store) =>
             store.Current is { } s ? Results.Ok(s.Rules) : NoSnapshot(store));
 
+        // ── пул (П③ нового порядка): план, части по ролям, «кто где», застрявшее ──
+        api.MapGet("/pool", (SnapshotStore store) =>
+            store.Current is { } s ? Results.Ok(s.Pools) : NoSnapshot(store));
+
         // ── задачи ───────────────────────────────────────────────────────────
         api.MapGet("/tasks", (SnapshotStore store, string? status, string? role, bool? missingCriterion) =>
         {

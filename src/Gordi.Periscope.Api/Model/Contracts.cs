@@ -173,6 +173,43 @@ public sealed record SchemaReportDto(
     IReadOnlyList<string> PresentButUnknownToPeriscope,
     string Note);
 
+// ── Пул (П③ нового порядка, 28.08) ──────────────────────────────────────────
+
+/// <summary>Карточка пула. Ownerless = role SHARED: «часть без хозяина» — витрина
+/// обязана показать это словами, а не отсутствием строки.</summary>
+public sealed record PoolCardDto(
+    long Id, string? Role, string? Title, string? Status, string? Priority,
+    bool HasCriterion, bool Ownerless);
+
+/// <summary>Объявление работы над карточкой пула («кто где»). Overdue = срок вышел,
+/// карточка не закрыта, объявление не снято, и после срока от роли ни одного события.
+/// ⚠️ КАНОН предиката — backlog.py::live_and_overdue (живой контур); эта копия на C#
+/// обязана меняться ВМЕСТЕ с ним — расхождение витрины с инструментом хуже отсутствия.</summary>
+public sealed record PoolClaimDto(
+    long CardId, string? Role, string? UntilUtc, string? Note, bool Overdue, long? OverdueHours);
+
+public sealed record PoolVerdictDto(string? Role, string? Kind, string? Verdict);
+
+public sealed record PoolDto(
+    string TrackId,
+    string? Title,
+    string? OwnerWord,
+    string? Skills,          // null = «скиллы под пул не названы» — фронт говорит словами
+    string? PlanHead,        // первые строки словесного слоя; null = план не записан
+    int CardsTotal,
+    int CardsClosed,
+    IReadOnlyList<PoolCardDto> Cards,          // отсортированы role,id — группировка фронта
+    IReadOnlyList<PoolClaimDto> LiveClaims,
+    IReadOnlyList<PoolClaimDto> OverdueClaims,
+    IReadOnlyList<PoolCardDto> Stuck,          // blocked | awaiting_word — «застряло»
+    IReadOnlyList<PoolVerdictDto> Verdicts);
+
+/// <summary>Витрина пулов. Note несёт причину пустоты/неполноты — пустой список без
+/// причины читался бы как «пулов нет», даже когда таблицы tracks нет вовсе.</summary>
+public sealed record PoolsDto(
+    IReadOnlyList<PoolDto> Active,
+    string? Note);
+
 // ── Снимок ───────────────────────────────────────────────────────────────────
 
 /// <summary>
@@ -188,4 +225,5 @@ public sealed record PeriscopeSnapshot(
     IReadOnlyList<TaskDto> Tasks,
     RolesDto Roles,
     IReadOnlyList<RuleDto> Rules,
-    SchemaReportDto Schema);
+    SchemaReportDto Schema,
+    PoolsDto Pools);

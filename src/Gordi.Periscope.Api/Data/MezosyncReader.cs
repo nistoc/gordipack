@@ -602,6 +602,166 @@ public static class MezosyncReader
          status.Equals("canceled", StringComparison.OrdinalIgnoreCase) ||
          status.Equals("отозвано", StringComparison.OrdinalIgnoreCase));
 
+    // ── пул (П③ нового порядка, 28.08) ──────────────────────────────────────
+
+    public static PoolsDto ReadPools(SqliteConnection c, SchemaCapabilities s)
+    {
+        // Пустой список БЕЗ причины читался бы как «пулов нет» и тогда, когда таблицы
+        // нет вовсе, — тот же класс, что у критерия приёмки в обзоре.
+        if (!s.Has("tracks"))
+            return new PoolsDto([], "таблицы tracks в этой базе нет — пулы показать нечем");
+        if (!s.Has("backlog"))
+            return new PoolsDto([], "таблицы backlog нет — пул без карточек показать нечем");
+
+        var hasSkills = s.HasColumn("tracks", "skills");
+        var hasVerdicts = s.Has("track_verdicts");
+        var pools = new List<PoolDto>();
+
+        using (var cmd = c.CreateCommand())
+        {
+            cmd.CommandText = hasSkills
+                ? "SELECT track_id, title, owner_decision, skills, plan_md FROM tracks WHERE status='active' ORDER BY track_id"
+                : "SELECT track_id, title, owner_decision, NULL, plan_md FROM tracks WHERE status='active' ORDER BY track_id";
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+            {
+                var trackId = r.GetString(0);
+                var plan = r.IsDBNull(4) ? null : r.GetString(4);
+                var planHead = plan is null
+                    ? null
+                    : string.Join('\n', plan.Trim().Split('\n').Take(8));
+                pools.Add(new PoolDto(
+                    TrackId: trackId,
+                    Title: r.IsDBNull(1) ? null : r.GetString(1),
+                    OwnerWord: r.IsDBNull(2) ? null : r.GetString(2),
+                    Skills: r.IsDBNull(3) ? null : r.GetString(3),
+                    PlanHead: planHead,
+                    CardsTotal: 0, CardsClosed: 0,
+                    Cards: [], LiveClaims: [], OverdueClaims: [], Stuck: [], Verdicts: []));
+            }
+        }
+
+        for (var i = 0; i < pools.Count; i++)
+            pools[i] = FillPool(c, s, pools[i], hasVerdicts);
+
+        var note = pools.Count == 0
+            ? "активного пула нет (это опрошено, а не предположено)"
+            : pools.Count > 1
+                ? $"активных пулов {pools.Count} — норма нового порядка: ОДИН"
+                : null;
+        return new PoolsDto(pools, note);
+    }
+
+    private static PoolDto FillPool(SqliteConnection c, SchemaCapabilities s, PoolDto pool, bool hasVerdicts)
+    {
+        var criterionSupported = s.HasColumn("backlog", "done_when");
+        var cards = new List<PoolCardDto>();
+        using (var cmd = c.CreateCommand())
+        {
+            cmd.CommandText = "SELECT id, role, title, status, priority" +
+                              (criterionSupported ? ", done_when" : ", NULL") +
+                              " FROM backlog WHERE parent_track = $t ORDER BY role, id";
+            cmd.Parameters.AddWithValue("$t", pool.TrackId);
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+            {
+                var role = r.IsDBNull(1) ? null : r.GetString(1);
+                cards.Add(new PoolCardDto(
+                    Id: r.GetInt64(0),
+                    Role: role,
+                    Title: r.IsDBNull(2) ? null : r.GetString(2),
+                    Status: r.IsDBNull(3) ? null : r.GetString(3),
+                    Priority: r.IsDBNull(4) ? null : r.GetString(4),
+                    HasCriterion: !r.IsDBNull(5) && !string.IsNullOrWhiteSpace(r.GetString(5)),
+                    // «Часть без хозяина» — витрина говорит СЛОВАМИ (П③: «⚠️ без хозяина»)
+                    Ownerless: string.Equals(role, "SHARED", StringComparison.OrdinalIgnoreCase)));
+            }
+        }
+
+        string[] closed = ["done", "failed", "dropped"];
+        var openCards = cards.Where(k => !closed.Contains(k.Status ?? "")).ToArray();
+        var stuck = openCards.Where(k => k.Status is "blocked" or "awaiting_word").ToArray();
+        var (live, overdue) = ReadClaims(c, s, openCards.Select(k => k.Id).ToArray());
+
+        var verdicts = new List<PoolVerdictDto>();
+        if (hasVerdicts)
+        {
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = "SELECT role, kind, verdict FROM track_verdicts WHERE track_id = $t ORDER BY id";
+            cmd.Parameters.AddWithValue("$t", pool.TrackId);
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+                verdicts.Add(new PoolVerdictDto(
+                    r.IsDBNull(0) ? null : r.GetString(0),
+                    r.IsDBNull(1) ? null : r.GetString(1),
+                    r.IsDBNull(2) ? null : r.GetString(2)));
+        }
+
+        return pool with
+        {
+            CardsTotal = cards.Count,
+            CardsClosed = cards.Count(k => closed.Contains(k.Status ?? "")),
+            Cards = cards,
+            LiveClaims = live,
+            OverdueClaims = overdue,
+            Stuck = stuck,
+            Verdicts = verdicts
+        };
+    }
+
+    /// <summary>
+    /// Живые и просроченные объявления. ⚠️ КАНОН предиката — backlog.py::live_and_overdue
+    /// (его зовут список карточек, обзор пробуждения, витрина пула и механизм сна);
+    /// эта копия на C# меняется ВМЕСТЕ с ним. Просрочено = срок вышел, карточка
+    /// не закрыта, объявление не снято, и ПОСЛЕ срока от роли на карточке ни события.
+    /// </summary>
+    private static (IReadOnlyList<PoolClaimDto> live, IReadOnlyList<PoolClaimDto> overdue)
+        ReadClaims(SqliteConnection c, SchemaCapabilities s, long[] cardIds)
+    {
+        if (!s.Has("backlog_events") || cardIds.Length == 0) return ([], []);
+        var live = new List<PoolClaimDto>();
+        var overdue = new List<PoolClaimDto>();
+        foreach (var id in cardIds)
+        {
+            using var cmd = c.CreateCommand();
+            cmd.CommandText =
+                "SELECT actor_role, event_type, body_md FROM backlog_events " +
+                "WHERE backlog_id = $id AND event_type IN ('claim','claim_release') " +
+                "ORDER BY id DESC LIMIT 1";
+            cmd.Parameters.AddWithValue("$id", id);
+            string? actor = null, body = null;
+            using (var r = cmd.ExecuteReader())
+            {
+                if (!r.Read() || r.GetString(1) == "claim_release") continue;
+                actor = r.IsDBNull(0) ? null : r.GetString(0);
+                body = r.IsDBNull(2) ? null : r.GetString(2);
+            }
+            var m = System.Text.RegularExpressions.Regex.Match(
+                body ?? "", @"^до (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) UTC · (.*)$",
+                System.Text.RegularExpressions.RegexOptions.Singleline);
+            if (!m.Success) continue;
+            var until = m.Groups[1].Value;
+            var note = m.Groups[2].Value;
+            var expired = ScalarLong(c, $"SELECT datetime('now') > '{until}'") == 1;
+            if (!expired)
+            {
+                live.Add(new PoolClaimDto(id, actor, until, note, false, null));
+                continue;
+            }
+            using var later = c.CreateCommand();
+            later.CommandText = "SELECT 1 FROM backlog_events WHERE backlog_id = $id " +
+                                "AND actor_role = $a AND at > $u LIMIT 1";
+            later.Parameters.AddWithValue("$id", id);
+            later.Parameters.AddWithValue("$a", actor ?? "");
+            later.Parameters.AddWithValue("$u", until);
+            if (later.ExecuteScalar() is not null) continue;      // роль подавала голос — не «молчит»
+            var hours = ScalarLong(c,
+                $"SELECT CAST((julianday('now') - julianday('{until}')) * 24 AS INTEGER)");
+            overdue.Add(new PoolClaimDto(id, actor, until, note, true, hours));
+        }
+        return (live, overdue);
+    }
+
     // ── схема ────────────────────────────────────────────────────────────────
 
     public static SchemaReportDto ReadSchemaReport(SchemaCapabilities s)
