@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# SURFACES: template-docs
 # -*- coding: utf-8 -*-
 r"""ПРОВЕРКА: публичный образец не несёт путей ОДНОЙ КОНКРЕТНОЙ МАШИНЫ.
 

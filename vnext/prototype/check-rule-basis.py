@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# SURFACES: rules
 # -*- coding: utf-8 -*-
 """
 ПРАВИЛО КАНОНА, У КОТОРОГО НЕЛЬЗЯ НАЙТИ ОСНОВАНИЕ.

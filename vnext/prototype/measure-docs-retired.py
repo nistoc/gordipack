@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SURFACES: template-docs
 """measure-docs-retired.py — документы образца, УЧАЩИЕ СНЯТОМУ (зона PROTO, заход 3 ④).
 
 ЧТО СЧИТАЕТСЯ УЧЕНИЕМ СНЯТОМУ (и только это — долг):

@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SURFACES: canon rules tasks printed vitrina
 """
 guard-printed-forms.py — УЧАЩАЯ ПОВЕРХНОСТЬ ШИРЕ ПАМЯТИ.
 

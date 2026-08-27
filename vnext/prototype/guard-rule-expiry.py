@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SURFACES: rules
 """
 guard-rule-expiry.py — НАСТУПЛЕНИЕ СРОКОВ ГОДНОСТИ ЗНАНИЯ (заход 2.3 плана «Роли
 не забывают»). Поле условий у правил ЕСТЬ (expiry_kind/expiry_cond), а наступление

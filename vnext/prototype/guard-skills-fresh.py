@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# SURFACES: skills
 # -*- coding: utf-8 -*-
 r"""ПРОВЕРКА: навык не отстал от свода правил, из которого собран.
 
