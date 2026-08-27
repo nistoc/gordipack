@@ -89,10 +89,10 @@ import mezo_paths  # noqa: E402 — пути машины выводятся, н
     },
     "atlas-shared-edit": {
         "описание": "Зови перед правкой общего инструмента или договора: объявить до "
-                    "правки, договор-дифф до кода, версию поднимать тем же ходом.",
+                    "правки, четыре шага до отправки, версию поднимать тем же ходом.",
         "когда": "Правишь инструмент, который зовут коллеги · меняешь формат общего файла.",
-        "правила": ["tool-edit-announce", "contract-diff-before-commit",
-                    "revision-bump-same-stroke"],
+        "правила": ["shared-text-edit-sequence", "tool-edit-announce",
+                    "contract-diff-before-commit", "revision-bump-same-stroke"],
     },
     "atlas-memory-rebirth": {
         "описание": "Зови при сохранении памяти, пробуждении и заведении роли: сохранение "
