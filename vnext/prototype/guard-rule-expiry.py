@@ -15,7 +15,7 @@ guard-rule-expiry.py — НАСТУПЛЕНИЕ СРОКОВ ГОДНОСТИ З
 ЧЕГО НЕ СУДИТ (вслух): СМЫСЛ условия; forever и пустые условия (счёт печатается);
 отозванные — история.
 
-    python C:/guts/.atlas/vnext-tools/guard-rule-expiry.py [--days 30] [--db ...]
+    python <КОНТУР>/vnext-tools/guard-rule-expiry.py [--days 30] [--db ...]
 """
 import argparse
 import re
