@@ -146,7 +146,11 @@ def loss_report(prev_body, body, limit=6):
                        "СРАВНИВАТЬ НЕЧЕМ, это НЕ «всё исчезло». Суди по строкам ниже"
                        % (kind, len(old_b), kind_new))
         elif gone_b:
-            rep.append("   ИСЧЕЗАЮТ БЛОКИ (%s): %d из %d" % (kind, len(gone_b), len(old_b)))
+            # «было → стало» — предложение @ING (записка #4175 ②): его ложная тревога
+            # и настоящая потеря того же дня различались бы одной этой парой чисел
+            # (9 → 9 против 9 → 7). Пара печатается В САМОЙ тревоге, где данных мало.
+            rep.append("   ИСЧЕЗАЮТ БЛОКИ (%s): %d из %d · всего блоков было %d → стало %d"
+                       % (kind, len(gone_b), len(old_b), len(old_b), len(new_b)))
             rep += ["      · " + b[:100] for b in gone_b[:limit]]
             if len(gone_b) > limit:
                 rep.append("      · … и ещё %d" % (len(gone_b) - limit))

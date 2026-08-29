@@ -115,7 +115,12 @@ def check(db, script_file, quiet: bool = False, readonly: bool | None = None) ->
     _id, role, tools, reason, taken_at, until = live[0]
     scripts = Path(script_file).resolve().parent
     ask = f"python {(scripts / 'lease.py').as_posix()} status"
+    # Срок — ВЕРХНЯЯ ГРАНИЦА, не прогноз: замер @OPSSRE 29.08 (записка #4183) — четыре
+    # объявления из четырёх сняты досрочно (на 2–44 мин), и по напечатанному сроку зря
+    # прождали четверо. Обещание, прочитанное как состояние, протухает молча.
     head = (f"🔒 {tool} В РАБОТЕ у роли {role} (объявление #{_id}) до {until} UTC\n"
+            f"   ⏱ срок — верхняя граница: объявления обычно снимают РАНЬШЕ. Не жди срока —\n"
+            f"     спроси состояние (команда ниже)\n"
             f"   причина ..... {reason}\n"
             f"   взято ....... {taken_at} UTC\n"
             f"   закрыто ..... {tools}\n"
