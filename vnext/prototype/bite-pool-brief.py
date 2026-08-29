@@ -57,10 +57,10 @@ shutil.copy(LIVE_DB, db)
 con = sqlite3.connect(str(db))
 con.execute("UPDATE tracks SET status='paused' WHERE status='active'")
 con.execute("INSERT INTO tracks (track_id, title, status, skills) VALUES "
-            "('TRACK-ZZBR','пул пайка','active','скилл-до-задачи: чинить предикаты')")
-con.execute("INSERT INTO roles (role, lifecycle, zone) VALUES ('ZZB','alive','проба пайка')")
+            "('TRACK-ZZBR','пул сводки','active','скилл-до-задачи: чинить предикаты')")
+con.execute("INSERT INTO roles (role, lifecycle, zone) VALUES ('ZZB','alive','проба сводки')")
 con.execute("INSERT INTO backlog (role, title, body_md, status, priority, tags, parent_track, "
-            "created_by, done_when) VALUES ('ZZB','часть пайка','тело','open','normal','[]',"
+            "created_by, done_when) VALUES ('ZZB','часть сводки','тело','open','normal','[]',"
             "'TRACK-ZZBR','PROTO','критерий')")
 con.execute("INSERT INTO role_skill (role, skill, evidence, measured_at, written_by) "
             "VALUES ('ZZB','живое умение пробы','записка-проба','2026-08-27 10:00','ZZB')")
@@ -73,10 +73,10 @@ con.close()
 # ①② участница пула
 rc, out = brief(db, "ZZB")
 case("① целые источники → зона+права+формы+свод, без «НЕ ПРОЧИТАН»",
-     rc == 0 and "проба пайка" in out and "ФОРМЫ ВЫЗОВА" in out and "СВОД" in out
+     rc == 0 and "проба сводки" in out and "ФОРМЫ ВЫЗОВА" in out and "СВОД" in out
      and "НЕ ПРОЧИТАН" not in out)
-case("② паёк участницы: пул + карточки + скиллы пула",
-     "TRACK-ZZBR" in out and "часть пайка" in out and "скилл-до-задачи" in out)
+case("② стартовая сводка участницы: пул + карточки + скиллы пула",
+     "TRACK-ZZBR" in out and "часть сводки" in out and "скилл-до-задачи" in out)
 
 # ③ роль вне пула
 rc3, out3 = brief(db, "CHROME")
@@ -93,7 +93,7 @@ case("④ скиллы пула не названы → СЛОВАМИ", "НЕ �
 
 # ⑤ протухшее умение скрыто и посчитано
 _, out5 = brief(db, "ZZB")
-case("⑤ протухшее умение НЕ в пайке, живое — в пайке, скрытое посчитано",
+case("⑤ протухшее умение НЕ в сводке, живое — в сводке, скрытое посчитано",
      "живое умение пробы" in out5 and "протухшее умение пробы" not in out5
      and "протухших скрыто 1" in out5)
 

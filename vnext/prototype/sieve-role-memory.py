@@ -258,7 +258,7 @@ def sieve(db: str, role: str, show_excused: bool, remeasure_days: int = 2) -> in
             remeasure.append((sec, i, line.strip(), (m.start(), m.end()), age))
     if remeasure:
         print(f"── УТВЕРЖДЕНИЕ О ЖИВОМ МИРЕ СТАРШЕ {remeasure_days} СУТОК — ПЕРЕМЕРЬ")
-        print("   Это не находка, а требование перемера: прибор не знает, отозвано ли, —")
+        print("   Это не находка, а требование перемера: проверка не знает, отозвано ли, —")
         print("   но знает, что утверждение старое и ПРОВЕРЯЕМОЕ. Спроси мир, не память.")
         for sec, i, line, span, age in remeasure:
             print(f"   [{sec}:{i:3}] ({age} сут) {_window(line, span)}")

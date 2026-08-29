@@ -40,6 +40,11 @@ from pathlib import Path
 START_SEC = 5 * 60          # с чего начинаем и куда возвращаемся при сбросе
 STEP_SEC = 5 * 60           # на сколько прибавляем за каждую тишину подряд
 MAX_SEC = 50 * 60           # потолок: дальше не растём
+# П② пула (27.08): пока в АКТИВНОМ пуле есть живые объявления, потолок сна УЧАСТНИЦЫ
+# пула ниже — коллеги работают прямо сейчас, спать 50 минут рядом с живой работой
+# значит вернуть девять параллельных списков. Участница = роль с открытой карточкой
+# в активном пуле. Не участницы и мёртвый пул живут прежним потолком.
+POOL_MAX_SEC = 15 * 60
 
 
 def _table(conn):
@@ -207,6 +212,28 @@ def next_sleep(db_path, role: str, prev_sec: int = None) -> dict:
     # ⛔ Отметку моста двигаем ТОЛЬКО когда его прочитали. Иначе неудачное чтение стёрло бы
     # её в ноль, и следующий опрос счёл бы новым весь мост целиком — либо, при обратном
     # порядке, объявил бы разобранным то, чего никто не видел.
+    # ═══ П② (27.08): потолок участницы живого пула. Считается ПОСЛЕ основной ветки:
+    # сон уже выбран прежним правилом, здесь он только ПРИЖИМАЕТСЯ. Поломка предиката
+    # не роняет расчёт сна — но говорит о себе вслух, а не молчит («молчащий отказ
+    # читается как успех» — оплаченный класс).
+    try:
+        from backlog import active_pool_tracks, live_and_overdue, pool_open_ids
+        pools = active_pool_tracks(conn)
+        if pools and sleep > POOL_MAX_SEC:
+            ph = ",".join("?" * len(pools))
+            моя = conn.execute(
+                f"SELECT 1 FROM backlog WHERE role=? AND parent_track IN ({ph}) "
+                f"AND status IN ('open','in_progress','blocked','awaiting_word','in_review') "
+                f"LIMIT 1", (role, *pools)).fetchone()
+            if моя:
+                живые, _ = live_and_overdue(conn, pool_open_ids(conn, pools))
+                if живые:
+                    sleep = POOL_MAX_SEC
+                    reason += (f" · ПУЛ ЖИВ (объявлений {len(живые)}): потолок участницы "
+                               f"{POOL_MAX_SEC // 60} мин")
+    except Exception as exc:                                       # noqa: BLE001
+        reason += f" · ⚠️ пул-потолок НЕ посчитан ({exc.__class__.__name__}) — сон прежний"
+
     bridge_to_save = bridge_head if мост_исход == "прочитано" else None
     conn.execute("INSERT INTO sync_backoff (role, sleep_sec, quiet_streak, last_seen_id, "
                  "last_bridge_mtime, updated_at) VALUES (?,?,?,?,?, datetime('now')) "
@@ -247,7 +274,7 @@ def reset(db_path, role: str) -> None:
 
 if __name__ == "__main__":
     import argparse
-    ap = argparse.ArgumentParser(description="сколько спать до следующего синка (одно место)")
+    ap = argparse.ArgumentParser(description="сколько спать до следующей сверки (одно место)")
     ap.add_argument("--db", default=str(Path(__file__).resolve().parent.parent / "mezosync.db"))
     ap.add_argument("--role", required=True)
     ap.add_argument("--prev-min", type=int, default=None,
