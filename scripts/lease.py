@@ -63,11 +63,19 @@ def _live(con, tool: str):
     return [r for r in rows if tool in (r[2] or "").split()]
 
 
-def check(db, script_file, quiet: bool = False) -> None:
+def check(db, script_file, quiet: bool = False, readonly: bool | None = None) -> None:
     """Проверка перед работой. Зовётся из ЕДИНОЙ точки (mezo_paths.resolve_db).
 
     Пишущему инструменту — отказ (код 3), читающему — предупреждение в stderr.
     Своё объявление и просроченное не мешают никому.
+
+    readonly — характер ТЕКУЩЕГО ВЫЗОВА, названный самим инструментом (карточка #391):
+    True — вызов читающий (предупреждение), False — пишущий (отказ), None — инструмент
+    не назвал, судим по ИМЕНИ файла прежней эвристикой. Нужен инструментам со смешанными
+    подкомандами: backlog.py целиком считался пишущим, и приёмщик под чужим объявлением
+    не мог прочитать ТЕЛО карточки — судил бы по пересказу критерия из записок
+    (замер @CHROME, записка #4143 §④). Список читающих подкоманд живёт В САМОМ
+    инструменте — здесь только выбор ветки по уже названному признаку.
     """
     tool = Path(script_file).name
     # 🪤 САМ ИНСТРУМЕНТ ОБЪЯВЛЕНИЙ НИКОГДА НЕ ЗАКРЫВАЕТСЯ ОБЪЯВЛЕНИЕМ. Найдено живым
@@ -107,7 +115,7 @@ def check(db, script_file, quiet: bool = False) -> None:
     _id, role, tools, reason, taken_at, until = live[0]
     scripts = Path(script_file).resolve().parent
     ask = f"python {(scripts / 'lease.py').as_posix()} status"
-    head = (f"🔒 {tool} В РАБОТЕ у роли {role} до {until} UTC\n"
+    head = (f"🔒 {tool} В РАБОТЕ у роли {role} (объявление #{_id}) до {until} UTC\n"
             f"   причина ..... {reason}\n"
             f"   взято ....... {taken_at} UTC\n"
             f"   закрыто ..... {tools}\n"
@@ -120,10 +128,15 @@ def check(db, script_file, quiet: bool = False) -> None:
               + " — работаю, но правящая роль об этом не знает.", file=sys.stderr)
         return
 
-    if READING.match(tool):
+    # Признак, названный инструментом, главнее эвристики по имени: инструмент знает,
+    # ЧТО делает текущая подкоманда, эвристика — только как файл называется.
+    reading = readonly if readonly is not None else bool(READING.match(tool))
+    if reading:
         if not quiet:
-            print(head + "\n   ⚖️ Инструмент ЧИТАЮЩИЙ — работаю дальше. Знай: поведение "
-                         "может меняться прямо сейчас.", file=sys.stderr)
+            kind = ("Подкоманда ЧИТАЮЩАЯ (названа самим инструментом)" if readonly
+                    else "Инструмент ЧИТАЮЩИЙ")
+            print(head + f"\n   ⚖️ {kind} — работаю дальше: читаешь во время чужой "
+                         "правки, поведение может меняться прямо сейчас.", file=sys.stderr)
         return
 
     print(head + "\n   ⛔ Инструмент ПИШУЩИЙ — отказ: правка во время чужой отладки "
