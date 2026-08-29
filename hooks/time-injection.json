@@ -7,7 +7,7 @@
           {
             "type": "command",
             "shell": "powershell",
-            "command": "$t = Get-Date -Format 'yyyy-MM-dd HH:mm:ss K'; @{ hookSpecificOutput = @{ hookEventName = 'UserPromptSubmit'; additionalContext = \"CURRENT_LOCAL_TIME=$t. Print this exact time at the START of your reply, and print the current time again at the END when you stop and wait for the user.\" } } | ConvertTo-Json -Compress"
+            "command": "$t = Get-Date -Format 'yyyy-MM-dd HH:mm:ss K'; $u = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm'); $l = Get-Date -Format 'HH:mm'; @{ hookSpecificOutput = @{ hookEventName = 'UserPromptSubmit'; additionalContext = \"CURRENT_UTC_TIME=$u UTC. CURRENT_LOCAL_TIME=$t. At the START of your reply print exactly: 🕐 $u UTC ($l местное). At the END, when you stop and wait for the user, print the CURRENT time in the same form 'HH:mm UTC (HH:mm местное)' — derive it from the latest STEP_TIME (local) and the offset in CURRENT_LOCAL_TIME. Never print a UTC label on a local value.\" } } | ConvertTo-Json -Compress"
           }
         ]
       }
