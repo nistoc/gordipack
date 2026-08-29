@@ -499,6 +499,30 @@ def scan_rules(db, known, scripts, defs):
     return hits, inactive, tombstoned, None
 
 
+def task_tombstoned(path):
+    """Карточка #381: наказ под НАДГРОБИЕМ — история, не долг. Канонная примета — слово
+    «НАДГРОБИЕ» (капсом) в ШАПКЕ: в description фронтматтера или в ПЕРВОЙ непустой строке
+    тела. Строкой НИЖЕ шапки — не гасит (класс карточки #151: гашение обязано быть видно
+    тому, кто читает начало). Живой наказ со снятым ЗАДАНИЕМ (⚰️ + «этот файл — живой»)
+    слова «НАДГРОБИЕ» в шапке не несёт и судится как живой — различено чтением всех
+    наказов контура 29.08 (мёртвых 2, живых 7)."""
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    head = []
+    i = 0
+    if lines and lines[0].strip() == "---":          # фронтматтер: description — часть шапки
+        i = 1
+        while i < len(lines) and lines[i].strip() != "---":
+            if lines[i].lstrip().startswith("description:"):
+                head.append(lines[i])
+            i += 1
+        i += 1
+    for j in range(i, len(lines)):                   # первая непустая строка тела
+        if lines[j].strip():
+            head.append(lines[j])
+            break
+    return any("НАДГРОБИЕ" in h for h in head)
+
+
 def scan_tasks(tasks_dir, known, scripts, defs):
     """НАКАЗЫ-ФАЙЛЫ планировщика (<задача>/SKILL.md) — наказ роль слушается РАНЬШЕ своей
     памяти, а не стерёг его никто (живой случай 27.08: общий наказ синка победил верную
@@ -803,10 +827,22 @@ def main():
     if thits is None:
         print(f"⚠️ НАКАЗЫ-ФАЙЛЫ НЕ ПРОВЕРЕНЫ: нет каталога {tdir} (это не «чисто»)")
     else:
+        # ── карточка #381: наказ под надгробием — история, не долг. Красное по могиле
+        # учило бы чинить показание вместо предмета (@ING, записка #4112: строку в своё
+        # надгробие не вписал НАРОЧНО). Пропуск — ВСЛУХ, с именами.
+        dead = {p.parent.name for p in sorted(tdir.glob("*/SKILL.md"))
+                if task_tombstoned(p)}
+        if dead:
+            thits = [(w, k, f) for w, k, f in thits
+                     if w.split(":", 1)[0] not in dead]
+            print(f"⚰️ наказы под надгробием: {len(dead)} ({', '.join(sorted(dead))}) "
+                  f"— история, не долг (примета: «НАДГРОБИЕ» в шапке; карточка #381)")
         # ── карточка #375: наказ ОБЯЗАН вести к правилу ответов владельцу.
         # Ссылка (ключ правила или имя навыка) — да; СКОПИРОВАННОЕ тело — нет:
         # вторая редакция разошлась бы со сводом молча.
         for _tf in sorted(tdir.glob("*/SKILL.md")):
+            if _tf.parent.name in dead:
+                continue
             _tb = _tf.read_text(encoding="utf-8", errors="replace")
             _tw = _tf.parent.name + "/SKILL.md"
             if "третьекурсник" in _tb:
