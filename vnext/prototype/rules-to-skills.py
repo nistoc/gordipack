@@ -51,7 +51,9 @@ import mezo_paths  # noqa: E402 — пути машины выводятся, н
                     "выдуманных слов, перемер посылок и вопросы вариантами.",
         "когда": "Перед любым ответом владельцу — отчётом, ответом на вопрос, предложением.",
         "правила": ["owner-reply-format", "plain-words", "questions-via-interface",
-                    "proactive-next-steps", "remeasure-before-ask"],
+                    "proactive-next-steps", "remeasure-before-ask",
+                    # карточка #430 ①: норма разбора замысла доезжает НАВЫКОМ, а не памятью
+                    "interview-before-recommend"],
     },
     "atlas-acceptance": {
         "описание": "Зови, когда пишешь проверку, судишь её вывод или собираешься "
