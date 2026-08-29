@@ -157,6 +157,13 @@ add_rule(db, "zzprobe-15-tomb-below",
 add_rule(db, "zzprobe-16-no-name", "зови python .mezosync\\scripts\\… отсюда")
 add_rule(db, "zzprobe-18-basis", "чистое правило без форм.",
          basis="python .mezosync/scripts/zzprobe-tool.py")
+# Карточка #361: значок внимания — примета ВНИМАНИЯ, не примета ОТМЕНЫ.
+add_rule(db, "zzprobe-22-sign-prescribe",
+         "⚠️ Зови так: python .mezosync/scripts/zzprobe-tool.py --x")
+add_rule(db, "zzprobe-23-sign-bare",
+         "⛔ python .mezosync/scripts/zzprobe-tool.py")
+add_rule(db, "zzprobe-24-word-tomb",
+         "вместо неё: python .mezosync/scripts/zzprobe-tool.py")
 
 hits, inactive, tomb = zz(mod, db, KNOWN, sb_scripts, DEFS)
 by_rule = {}
@@ -213,6 +220,16 @@ h17 = [k for k, _ in mod.classify(line17, real_known, (), LIVE_SCRIPTS)
 case("⑰ встречный: абсолютная С именем (живой литерал .mezosync/scripts) → тихо",
      not h17, " · ".join(h17) or "тихо")
 case("⑱ граница: грязь в столбце basis НЕ обвиняется", "zzprobe-18-basis" not in by_rule)
+# ── карточка #361: значок внимания не гасит ПРЕДПИСАНИЕ ──────────────────────────────
+case("⑳ «⚠️ Зови так: <относительная форма>» — предписание СУДИТСЯ, значок не гасит",
+     any(k.startswith("🔴") for k in by_rule.get("zzprobe-22-sign-prescribe", [])),
+     " · ".join(by_rule.get("zzprobe-22-sign-prescribe", []))
+     or "тихо — ЛОЖНОЕ МОЛЧАНИЕ (дефект карточки #361 жив)")
+case("⑳б встречный: ГОЛЫЙ значок без предписания — честное надгробие, тихо",
+     "zzprobe-23-sign-bare" not in by_rule,
+     "значки из словаря не выкинуты — запрет тела карточки соблюдён")
+case("⑳в встречный-2: надгробие СЛОВОМ («вместо») — гасится, как прежде",
+     "zzprobe-24-word-tomb" not in by_rule)
 
 bad = mod.scan_rules(stand / "нет-такой.db", KNOWN, sb_scripts, DEFS)
 case("⑲ база недоступна → None+ошибка («НЕ ПРОВЕРЕН» ≠ «чисто»)",
@@ -293,6 +310,30 @@ m_r8 = wmod(stand, guard_src, "(?![\\w\\-]+\\.py)", "", "Р8 отрицател�
 h17w = [k for k, _ in m_r8.classify(line17, real_known, (), LIVE_SCRIPTS) if " G " in k]
 case("Р8 снят отрицательный просмотр → ⑰ получает ложную G (без него 149 по контуру)",
      bool(h17w))
+
+# Р9/Р10 — карточка #361, обе стороны ПОРОЗНЬ: снятие одной роняет ровно свой случай.
+m_r9 = wmod(stand, guard_src, "if SIGN_MARK.search(t) and not PRESCRIBE.search(t):",
+            "if SIGN_MARK.search(t):", "Р9 различитель предписания")
+h, _, _ = zz(m_r9, db, KNOWN, sb_scripts, DEFS)
+br = {}
+for w, k in h:
+    br.setdefault(w.split(":")[0], []).append(k)
+case("Р9 различитель предписания снят → ⑳ гаснет (значок снова гасит всё), ①/⑳в как были",
+     "zzprobe-22-sign-prescribe" not in br
+     and any(k.startswith("🔴") for k in br.get("zzprobe-01-rel", []))
+     and "zzprobe-24-word-tomb" not in br)
+
+m_r10 = wmod(stand, guard_src,
+             "m = WORD_MARK.search(t) or (mention.is_mention(t, kinds=_MENTION_KINDS) or None)",
+             "m = None", "Р10 словесная ветвь отзыва")
+h, _, _ = zz(m_r10, db, KNOWN, sb_scripts, DEFS)
+br = {}
+for w, k in h:
+    br.setdefault(w.split(":")[0], []).append(k)
+case("Р10 словесная ветвь снята → ⑳в получает находку, ⑳ красный, ⑳б тихий как был",
+     any(k.startswith("🔴") for k in br.get("zzprobe-24-word-tomb", []))
+     and any(k.startswith("🔴") for k in br.get("zzprobe-22-sign-prescribe", []))
+     and "zzprobe-23-sign-bare" not in br)
 
 # ── ㉑㉒ подсадка в КАЖДЫЙ объявленный источник (заход 4 ⑦): гард объявляет
 # SURFACES: canon rules tasks printed vitrina — canon/rules/tasks подсажены выше,
