@@ -22,7 +22,9 @@ list --role <та же роль>`, а разошлись бы они молча 
 
 import sqlite3
 
-from backlog import OPEN_STATUSES, PRIORITY_ORDER   # ЕДИНСТВЕННЫЙ источник предиката
+from backlog import (OPEN_STATUSES, PRIORITY_ORDER,      # ЕДИНСТВЕННЫЙ источник предиката
+                     active_pool_tracks, pool_sort_key,  # и порядка «пул первым» (шаг 0, 27.08)
+                     live_and_overdue, pool_open_ids)    # и просрочки объявлений (П②, 27.08)
 
 PRIO_MARK = {"critical": "‼️", "high": "⬆️", "normal": " ·", "low": "⬇️"}
 STATUS_ICON = {"open": "○", "in_progress": "◐", "blocked": "⛔", "in_review": "👀",
@@ -47,10 +49,13 @@ def open_cards(conn, role):
     params = roles + list(OPEN_STATUSES)
     rows = conn.execute(
         "SELECT id, role, title, status, priority, done_when, "
-        "       CAST(julianday('now') - julianday(created_at) AS INTEGER) "
+        "       CAST(julianday('now') - julianday(created_at) AS INTEGER), parent_track "
         f"FROM backlog WHERE role IN ({','.join('?' * len(roles))}) "
         f"AND status IN ({','.join('?' * len(OPEN_STATUSES))})", params).fetchall()
-    return sorted(rows, key=lambda r: (PRIORITY_ORDER.get(r[4], 9), r[0]))
+    # Порядок — ИМПОРТИРОВАННЫМ ключом backlog.py (пул первым, дальше срочность и номер):
+    # критерий #112 ② требует, чтобы этот список совпадал с `backlog.py list` — своя копия
+    # сортировки разошлась бы с ним молча. parent_track стоит ПОСЛЕДНИМ полем: ключ так ждёт.
+    return sorted(rows, key=pool_sort_key(active_pool_tracks(conn)))
 
 
 def reminder_lines(conn, role, top=5):
@@ -66,12 +71,33 @@ def reminder_lines(conn, role, top=5):
         return []
     no_crit = sum(1 for r in rows if not (r[5] or "").strip())
     oldest = max(r[6] or 0 for r in rows)
+    # ═══ ПУЛ — ПЕРВОЙ СТРОКОЙ ШАПКИ (шаг 0 нового порядка, 27.08). Карточки пула уже
+    # стоят в начале (ключ импортирован из backlog.py); здесь их число называется словами.
+    # «В пуле твоих карточек нет» печатается ИМЕННО словами: пустая секция неотличима
+    # от «пула нет» — класс «молчащий отказ читается как успех».
+    pools = active_pool_tracks(conn)
+    in_pool = sum(1 for r in rows if r[7] in pools) if pools else 0
     head = (f"📋 ТВОИХ НЕЗАКРЫТЫХ КАРТОЧЕК: {len(rows)} · старшей {oldest} дн"
             + (f" · без критерия {no_crit} ⛔ их НЕЛЬЗЯ закрыть" if no_crit else ""))
     out = [head]
-    for bid, _r, title, status, prio, done_when, age in rows[:top]:
+    if pools:
+        имя_пула = ", ".join(sorted(pools))
+        if in_pool:
+            out.append(f"   🎯 пул {имя_пула}: твоих карточек {in_pool} — они первыми")
+        else:
+            out.append(f"   🎯 в пуле ({имя_пула}) твоих карточек нет")
+        # П② (27.08): просрочка объявлений пула — в пробуждении ЛЮБОЙ роли, застрявший
+        # шаг — общая новость. Не больше трёх строк: хвост числом, не молчанием.
+        _, overdue = live_and_overdue(conn, pool_open_ids(conn, pools))
+        for bid, actor, _u, note, hours in overdue[:3]:
+            out.append(f"   ⏰ {actor} молчит над карточкой #{bid} — шаг истёк {hours} ч "
+                       f"({note[:50]})")
+        if len(overdue) > 3:
+            out.append(f"   ⏰ … и ещё {len(overdue) - 3} просроченных объявления пула")
+    for bid, _r, title, status, prio, done_when, age, track in rows[:top]:
         mark = "  " if (done_when or "").strip() else " ✎"
-        out.append(f"   #{bid} {STATUS_ICON.get(status, '?')} {PRIO_MARK.get(prio, ' ·')}{mark} "
+        pool_mark = "🎯" if (pools and track in pools) else ""
+        out.append(f"   {pool_mark}#{bid} {STATUS_ICON.get(status, '?')} {PRIO_MARK.get(prio, ' ·')}{mark} "
                    f"{(age or 0):>3}дн  {title[:72]}")
     if len(rows) > top:
         # ═══ СВЁРНУТОЕ НАЗЫВАЕТ СОСТАВ, А НЕ ТОЛЬКО ЧИСЛО (карточка #237, 20.08 06:39 UTC) ═══

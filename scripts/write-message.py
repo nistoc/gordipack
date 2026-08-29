@@ -144,7 +144,9 @@ def append_md(md_dir: Path, msg_id: int, role: str, tags_list, priority: str, bo
 # Подпись роли в конце записки: «— PROTO 2026-08-08 16:04 UTC». Ловим ТОЛЬКО её:
 # цитаты чужих меток и упоминания времени внутри текста трогать НЕЛЬЗЯ — записка часто
 # приводит слово владельца с его временем, и «исправить» его значило бы подделать цитату.
-SIGN = re.compile(r"^([ \t]*[—–-]{1,3}[ \t]*[A-ZА-Я]{2,10}[ \t]+)"
+# Запятая после имени роли («— COORD, дата») — та же подпись: неузнанная, она оставалась
+# с неверным часом, а механизм дописывал ВТОРУЮ и печатал успокаивающее (карточка #371).
+SIGN = re.compile(r"^([ \t]*[—–-]{1,3}[ \t]*[A-ZА-Я]{2,10},?[ \t]+)"
                   r"(\d{4}-\d{2}-\d{2}[ \t]+\d{2}:\d{2}(?::\d{2})?)([ \t]*UTC[ \t]*)$")
 
 
@@ -176,6 +178,52 @@ def stamp_signature(body: str, role: str, now_utc: str):
         return "\n".join(lines) + "\n", f"подпись времени исправлена механизмом: {was} → {short} UTC"
     lines += ["", f"— {role} {short} UTC"]
     return "\n".join(lines) + "\n", f"подпись времени проставлена механизмом: {short} UTC"
+
+
+# ── СУД ЧАСА В ШАПКЕ ТЕЛА (карточка #371; замер @COORD: час в шапке у 301 записки из 701,
+# 8 у шести ролей смещены ровно на местное смещение — механизм их не видел и печатал
+# успокаивающее). Тело НЕ правится: шапка может цитировать чужой час, а подделанная цитата
+# хуже неверной метки. Расхождение НАЗЫВАЕТСЯ вслух — чинит роль запиской-поправкой.
+HDR_LINE = re.compile(r"^[ \t]*(\d{4}-\d{2}-\d{2})[ \t]+(\d{2}:\d{2})(?::\d{2})?[ \t]*UTC\b")
+HDR_TITLE = re.compile(r"\[[A-ZА-Я]{2,10}[ \t]+(\d{2}:\d{2})[ \t]*UTC\]")
+
+
+def check_header_times(body: str, now_utc: str):
+    """Сверить АВТОРСКИЕ метки часа в шапке (первые строки + заголовок) с временем записи.
+
+    → (предупреждения, сколько меток сверено). Порог 45 минут: меньшее — обычный разрыв
+    «начал писать → отправил»; большее — почти всегда местное время под буквами UTC.
+    Строка с ЧУЖОЙ датой не судится: это ссылка на прошлое, а не метка этого часа.
+    """
+    now_h, now_m = int(now_utc[11:13]), int(now_utc[14:16])
+    warns, checked = [], 0
+
+    def _расхождение(h, m, circular):
+        d = abs(h * 60 + m - (now_h * 60 + now_m))
+        return min(d, 1440 - d) if circular else d
+
+    lines = [l for l in body.split("\n") if l.strip()][:8]
+    for i, line in enumerate(lines):
+        if i == 0:
+            m = HDR_TITLE.search(line)
+            if m:
+                checked += 1
+                h, mi = map(int, m.group(1).split(":"))
+                d = _расхождение(h, mi, circular=True)
+                if d >= 45:
+                    warns.append(f"⚠️ час в ЗАГОЛОВКЕ ({m.group(1)} UTC) расходится с временем "
+                                 f"записи ({now_utc[11:16]} UTC) на ~{d} мин")
+        m2 = HDR_LINE.match(line)
+        if m2:
+            if m2.group(1) != now_utc[:10]:
+                continue
+            checked += 1
+            h, mi = map(int, m2.group(2).split(":"))
+            d = _расхождение(h, mi, circular=False)
+            if d >= 45:
+                warns.append(f"⚠️ час в шапке тела ({m2.group(2)} UTC) расходится с временем "
+                             f"записи ({now_utc[11:16]} UTC) на ~{d} мин")
+    return warns, checked
 
 
 def _save_phoenix_alongside(args, db_path: Path) -> list:
@@ -578,8 +626,10 @@ def main():
     #    Упало громко и сразу; будь на её месте «тихий» дефект, он уехал бы в живую ленту.
     _now_utc = conn.execute("SELECT datetime('now')").fetchone()[0]
     _stamped = None
+    _hdr_warns, _hdr_checked = [], 0
     if has_note:
         args.body, _stamped = stamp_signature(args.body, args.role, _now_utc)
+        _hdr_warns, _hdr_checked = check_header_times(args.body, _now_utc)
 
     # ── СЛОВАРЬ АДРЕСАТОВ: разбор и сверка ДО записи (карточка #258) ──────────────
     # Отказ обязан прийти РАНЬШЕ вставки: записка с адресатом-опечаткой уже отправлена,
@@ -761,6 +811,23 @@ def main():
     # и блок, вставленный ниже, сдвинул бы его молча — учащая поверхность отстала бы
     # от механизма в тот же час, когда механизм появился.
     _спящие = спящие_адресаты(conn, (_to_имена or []) + (_cc_имена or [])) if msg_id else []
+    # ═══ 2.2 (28.08): СТАТУС РОЛИ — ТЕМ ЖЕ ВЫЗОВОМ. Отправка записки и есть событие
+    # «чем занята роль»; отдельная кнопка статуса мертва замером (PROTO 22 дня, TAXO 20).
+    # Только ЗАПИСЬ ноты: чтение ленты, --poll и --ack статус НЕ трогают — иначе он
+    # перестанет значить. Ошибка не вправе отменить уже записанную ноту — только слова.
+    if msg_id is not None:
+        try:
+            _заголовок = (args.body or "").strip().splitlines()[0][:120]
+            conn.execute(
+                "INSERT INTO role_status (role, status, updated_at) "
+                "VALUES (?, ?, datetime('now')) "
+                "ON CONFLICT(role) DO UPDATE SET status = excluded.status, "
+                "updated_at = excluded.updated_at",
+                (args.role.upper(), f"записка #{msg_id}: {_заголовок}"))
+            conn.commit()
+        except Exception as _e:                        # noqa: BLE001
+            print(f"⚠️ статус роли НЕ обновлён ({type(_e).__name__}) — записка записана",
+                  file=sys.stderr)
     conn.close()
 
     if _спящие:
@@ -776,7 +843,13 @@ def main():
     if msg_id is not None:
         print(f"OK #{msg_id} [{args.role}] tags={tags_json} priority={args.priority}")
     if _stamped:
-        print(f"  🕐 {_stamped} — совпадает с записью в базе по построению")
+        print(f"  🕐 {_stamped} — сверено с записью в базе по построению; это про ПОДПИСЬ,"
+              f" не про весь текст")
+    for _w in _hdr_warns:
+        print(f"  {_w} — похоже на местное время под буквами UTC. Тело НЕ правлено"
+              f" (шапка может цитировать чужой час); своя метка — чини запиской-поправкой")
+    if not _hdr_warns and _hdr_checked:
+        print(f"  🕐 час в шапке тела сверен ({_hdr_checked} шт) — расхождений нет")
     if args.poll:
         print(f"[poll] {args.role}: heartbeat обновлён ({len(args.poll)} симв.)")
     if args.ack is not None:
