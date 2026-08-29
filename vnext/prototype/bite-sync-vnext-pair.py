@@ -42,10 +42,11 @@ def stand(tmp, name, runtime, template, live=None):
     return paths
 
 
-def run(paths, *extra):
-    r = subprocess.run([sys.executable, BUILDER, "--runtime", paths["runtime"],
+def run(paths, *extra, builder=None, env=None):
+    e = dict(os.environ, **(env or {}))
+    r = subprocess.run([sys.executable, builder or BUILDER, "--runtime", paths["runtime"],
                         "--template", paths["template"], "--live", paths["live"], *extra],
-                       capture_output=True, text=True, encoding="utf-8")
+                       capture_output=True, text=True, encoding="utf-8", env=e)
     return (r.stdout or "") + (r.stderr or ""), r.returncode
 
 
@@ -247,6 +248,64 @@ def main() -> int:
                and not os.path.exists(os.path.join(p["template"], "doc.md")),
                "иначе починка отняла бы у сведения документов его работу целиком; "
                "дубль рядом с кодом раздвоил бы истину", differ=True)
+
+    # ⑲–㉒ КАРТОЧКА #357: правка ПОВЕРХ заглушки при --apply не затирает «<КОНТУР>».
+    # 🩸 Замер 28.08: вставка одной строки в файл, чей шаблон несёт заглушку, перевела его
+    # в «разошлось» — и --apply перенёс бы его ЦЕЛИКОМ, затерев заглушку путём машины
+    # (класс карточки #297, третий заход: дверь ⑪ и окно ⑬ закрыты, форточка открыта).
+    свой_правленый = f'"""пример: python {КОРЕНЬ}/vnext-tools/x.py"""\nprint(2)  # НОВАЯ РАБОТА\n'
+    p = stand(tmp, "nineteen",
+              {**BASE, "stub.py": свой_правленый,
+               "plain.py": "print(9)  # ПРАВКА-БЕЗ-ЗАГЛУШКИ\n"},
+              {**BASE, "stub.py": шаблонный, "plain.py": "print(8)\n"})
+    out, code = run(p, "--apply")
+    тело19 = open(os.path.join(p["template"], "stub.py"), encoding="utf-8").read()
+    ok &= case("⑲ правка ПОВЕРХ заглушки: --apply доставляет её С ОБРАТНОЙ ПОДСТАНОВКОЙ",
+               "<КОНТУР>" in тело19 and "НОВАЯ РАБОТА" in тело19
+               and КОРЕНЬ not in тело19 and "ОБРАТНОЙ ПОДСТАНОВКОЙ" in out,
+               "правка доехала, заглушка жива, путь одной машины в шаблон не попал",
+               differ=True)
+
+    # ⑳ ВСТРЕЧНЫЙ к ⑲: файл БЕЗ заглушки в шаблоне едет как раньше — байт в байт.
+    тело20 = open(os.path.join(p["template"], "plain.py"), encoding="utf-8").read()
+    блок_подст = out.split("ОБРАТНОЙ ПОДСТАНОВКОЙ")[1] if "ОБРАТНОЙ ПОДСТАНОВКОЙ" in out else ""
+    ok &= case("⑳ ВСТРЕЧНЫЙ: файл без заглушки в шаблоне переносится как раньше, байт в байт",
+               тело20 == "print(9)  # ПРАВКА-БЕЗ-ЗАГЛУШКИ\n"
+               and "plain.py" not in блок_подст.split("⛔")[0],
+               "подстановка касается только файлов, чей шаблон нёс заглушку")
+
+    # ㉑ ГРАНИЦА: путь машины НЕ сводится к заглушке начисто (обратные косые в прозе) —
+    # файл НЕ переносится и назван «сводить РУКОЙ»; заглушка в шаблоне жива.
+    корень_bs = КОРЕНЬ.replace("/", "\\")
+    свой_кривой = f'"""пример: python {корень_bs}\\vnext-tools\\x.py"""\nprint(2)  # НОВАЯ РАБОТА\n'
+    p = stand(tmp, "twenty1", {**BASE, "stub.py": свой_кривой},
+              {**BASE, "stub.py": шаблонный})
+    out, code = run(p, "--apply")
+    тело21 = open(os.path.join(p["template"], "stub.py"), encoding="utf-8").read()
+    ok &= case("㉑ путь с обратными косыми к заглушке не сводится — файл вслух «сводить РУКОЙ»",
+               "РУКОЙ" in out and "stub.py" in out
+               and "<КОНТУР>" in тело21 and "НОВАЯ РАБОТА" not in тело21,
+               "молчаливый перенос отдал бы потребителю путь одной машины; отказ назван",
+               differ=True)
+
+    # ㉒ ОБРАТНЫЙ ХОД: в копии строителя подстановка снята → доставка ⑲ гаснет
+    # (страж следа корня перехватывает файл в «РУКОЙ»), красна ровно своя половина.
+    src = open(BUILDER, encoding="utf-8").read()
+    сломанное = src.replace("новый = текст.replace(корень_prose, ЗАГЛУШКА)",
+                            "новый = текст")
+    if сломанное == src:
+        raise SystemExit("ПРИЁМКА НЕ СОСТОЯЛАСЬ: якорь подстановки ㉒ не найден "
+                         "в строителе — обратный ход не поставлен")
+    сломанный = os.path.join(tmp, "builder_broken.py")
+    with open(сломанный, "w", encoding="utf-8") as f:
+        f.write(сломанное)
+    p = stand(tmp, "twenty2", {**BASE, "stub.py": свой_правленый},
+              {**BASE, "stub.py": шаблонный})
+    out, code = run(p, "--apply", builder=сломанный, env={"PYTHONPATH": HERE})
+    тело22 = open(os.path.join(p["template"], "stub.py"), encoding="utf-8").read()
+    ok &= case("㉒ ОБРАТНЫЙ ХОД: подстановка снята в копии → доставка ⑲ гаснет, заглушка цела",
+               "НОВАЯ РАБОТА" not in тело22 and "<КОНТУР>" in тело22,
+               "разница прогонов на целом и сломанном строителе и есть починка", differ=True)
 
     print()
     print(f"✅ СТРОИТЕЛЬ ПРИНЯТ — случаев {CASES}, различающих {DIFFERENTIATING}, "
