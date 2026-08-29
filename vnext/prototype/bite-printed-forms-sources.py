@@ -318,7 +318,7 @@ vit = stand / "zzprobe-vitrina.md"
 vit.write_text("подвал: python .mezosync/scripts/zzprobe-tool.py --x\n", encoding="utf-8")
 tpl21 = [_re.compile(_re.escape("python .mezosync/scripts/zzprobe-tool.py"))]
 h22 = mod.scan_md(vit, KNOWN, templates=tpl21, scripts=sb_scripts)
-case("㉒ vitrina: форма, напечатанная ГЕНЕРАТОРОМ витрины → долг", bool(h22))
+case("㉒ vitrina: форма, напечатанная ГЕНЕРАТОРОМ готовой выборки → долг", bool(h22))
 h22b = mod.scan_md(vit, KNOWN, templates=[], scripts=sb_scripts)
 case("㉒б встречный: та же строка как ЦИТАТА тела ноты → не долг (история)",
      not h22b, "цитату не чинят — её напечатал не генератор, а прошлое")
