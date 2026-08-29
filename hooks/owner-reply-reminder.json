@@ -1,0 +1,16 @@
+{
+  "_comment": "Гордипак — напоминание формы ответа владельцу в КАЖДЫЙ ход КАЖДОГО чата контура gordi. Реализует правило `owner-reply-format` (rules/universal.sql). Слей ключ hooks.UserPromptSubmit в свой ~/.claude/settings.json (ДОБАВЬ элемент в массив, не затирай существующие). Хук ищет .mezosync/mezosync.db вверх от текущего каталога: нашёл — чат принадлежит контуру, и напоминание указывает на ЖИВОЕ правило ЕГО свода; не нашёл — молчит (чат вне контуров). Полный текст правила хук НЕ несёт: скопированное тело — вторая редакция, она расходится со сводом молча. Только каркас и команда чтения. Парный навык host-уровня: skills/gordi-owner-reply. Контурные добавки (например требование «только UTC» у Atlas) дописывайте отдельной веткой по пути своего контура — образец остаётся общим.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "powershell",
+            "command": "$in = [Console]::In.ReadToEnd() | ConvertFrom-Json; $d = \"$($in.cwd)\"; while ($d) { if (Test-Path (Join-Path $d '.mezosync/mezosync.db')) { $sr = (Join-Path $d '.mezosync/scripts/set-rule.py') -replace '\\\\','/'; @{ hookSpecificOutput = @{ hookEventName = 'UserPromptSubmit'; additionalContext = \"GORDI: чат контура ($d). Отвечая владельцу, соблюдай правило owner-reply-format свода ЭТОГО контура: сводный отчёт -> главы по пунктам поручения -> итог (сделано / НЕ сделано с причиной / рекомендации на выбор); без жаргона контура и выдуманных названий. Полный текст правила: python $sr --key owner-reply-format --show (навык: gordi-owner-reply)\" } } | ConvertTo-Json -Compress; break }; $p = Split-Path $d -Parent; if (-not $p -or $p -eq $d) { break }; $d = $p }"
+          }
+        ]
+      }
+    ]
+  }
+}
