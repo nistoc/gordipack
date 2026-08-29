@@ -125,6 +125,34 @@ def build(conn, role):
         out.append(f"   полнее: python {S}/track.py view")
     section("пул", пул, out)
 
+    def вопросы_владельцу(out):
+        # ═══ Карточка #430 ступень ④ (правило interview-before-recommend): вопросы,
+        # ждущие слова владельца, ДОСТАВЛЯЮТСЯ — роль видит их в стартовой сводке
+        # и несёт в первый отчёт. Замер 29.08: шесть карточек ждали слова МОЛЧА,
+        # старшей 11 суток — владелец не услышал ни об одной.
+        # Возраст — от часа ПОСТАНОВКИ в «жду слова» (событие), не от updated_at:
+        # комментарии двигают updated_at и молодили бы старый вопрос.
+        rows = conn.execute(
+            "SELECT b.id, b.role, b.blocked_reason,"
+            " CAST((julianday('now') - julianday(COALESCE("
+            "   (SELECT MAX(e.at) FROM backlog_events e"
+            "    WHERE e.backlog_id = b.id AND e.to_status = 'awaiting_word'),"
+            "   b.updated_at))) * 24 AS INTEGER)"
+            " FROM backlog b WHERE b.status = 'awaiting_word' ORDER BY 4 DESC").fetchall()
+        if not rows:
+            # ноль ждущих ⇒ НИ ОДНОЙ строки: счётчик, горящий всегда, не значит
+            # ничего и промолчит, когда впервые окажется настоящим (встречный① критерия)
+            return
+        возраст = lambda ч: f"{ч // 24} дн" if ч >= 48 else f"{ч} ч"   # noqa: E731
+        out.append(f"🙋 ЖДУТ СЛОВА ВЛАДЕЛЬЦА: {len(rows)} (старший {возраст(rows[0][3])}) — "
+                   f"старое ПЕРВЫМ, неси в отчёт; отвеченное исчезает само")
+        for bid, r, why, ч in rows[:6]:
+            вопрос = (why or "вопрос в карточке").strip().splitlines()[0]
+            out.append(f"   карточка #{bid} ({r}, {возраст(ч)}) — {вопрос[:84]}")
+        if len(rows) > 6:
+            out.append(f"   … и ещё {len(rows) - 6}")
+    section("вопросы владельцу", вопросы_владельцу, out)
+
     def умения(out):
         rows = conn.execute(
             "SELECT skill, measured_at, until_cond FROM role_skill "
