@@ -11,6 +11,7 @@ import re
 import sqlite3
 import dryrun          # холостой прогон (13.08)
 import sys
+from collections import Counter
 from pathlib import Path
 
 from mezo_paths import resolve_db   # R15a: путь к БД — от расположения скрипта, не от CWD
@@ -86,6 +87,20 @@ def blocks_by(text, kind):
     return [l.strip() for l in text.splitlines() if подходит(l)]
 
 
+def stable_key(b):
+    """Устойчивая часть подписи блока — до первой «[».
+
+    🩸 Карточка #389 (замер @TAXO 29.08): в шапке раздела живёт дата пересмотра
+    в скобках, и обновлять её — обязательная часть честной правки. Подпись, судимая
+    ДОСЛОВНО, читала смену даты как исчезновение единственного блока — самая громкая
+    тревога механизма срабатывала на каждой добросовестной правке, и роль училась
+    смотреть мимо неё. Настоящее переименование меняет устойчивую часть — остаётся видимым.
+    Подпись, начинающаяся со скобки, даёт пустую устойчивую часть — тогда ключ =
+    вся подпись: пустой ключ склеил бы такие блоки в один и потерю прятал бы."""
+    s = b.split("[", 1)[0].strip()
+    return s if s else b
+
+
 def lines_of(text):
     """Содержательные строки. Порог 12 знаков отсекает разделители и «---», иначе доля
     исчезнувшего плавала бы на косметике."""
@@ -106,8 +121,16 @@ def loss_report(prev_body, body, limit=6):
     # чтобы честно назвать СМЕНУ РАЗМЕТКИ, а не выдать её за потерю.
     new_b = blocks_by(body, kind) if kind else []
     kind_new, _ = blocks_of(body)
-    new_bset = set(new_b)
-    gone_b = [b for b in old_b if b not in new_bset]
+    # Ключи считаются СО СЧЁТОМ, а не множеством: у двух блоков устойчивая часть может
+    # совпадать (разные скобки) — потеря одного из них обязана остаться видимой.
+    new_keys = Counter(stable_key(b) for b in new_b)
+    gone_b = []
+    for b in old_b:
+        k = stable_key(b)
+        if new_keys[k] > 0:
+            new_keys[k] -= 1
+        else:
+            gone_b.append(b)
     old_l, new_l = lines_of(prev_body), set(lines_of(body))
     gone_l = [l for l in old_l if l not in new_l]
     share = len(gone_l) / len(old_l) if old_l else 0.0
@@ -143,7 +166,9 @@ def loss_report(prev_body, body, limit=6):
                    "Это НЕ «всё цело», это другой признак")
     rep.append("   содержательных строк было %d, исчезло дословно %d (%d%%)"
                % (len(old_l), len(gone_l), round(share * 100)))
-    if gone_l and not gone_b:
+    # ✂-строки печатаются И ПРИ ИСЧЕЗНУВШИХ БЛОКАХ (карточка #389 ②): прежде тревога
+    # громче — данных меньше, ровно наоборот тому, что нужно в момент подозрения.
+    if gone_l:
         rep += ["      ✂ " + l[:100] for l in gone_l[:3]]
     return share, rep
 
