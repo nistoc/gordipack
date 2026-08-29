@@ -193,6 +193,31 @@ def corrected_ids(con):
     return fixed
 
 
+# ═══ Карточка #438: строка-ЦИТАТА исправляемого в самой поправке. Живой случай 29.08:
+# ING поправил свой час вслух («2026-08-29 23:11 UTC» → читать 21:11 UTC) — и проверка
+# покрасила САМУ ПОПРАВКУ: без цитаты поправка не сообщает ничего, а с цитатой она
+# неотличима от утверждения. Гашение через corrected_ids тут не спасает НАРОЧНО:
+# оно гасит записку ЦЕЛИКОМ и укрыло бы новую ошибку рядом с цитатой.
+СТРЕЛКА_ЦИТАТЫ = "→ читать"
+
+
+def без_цитат_поправки(body, tags):
+    """→ (тело без строк-цитат, сколько строк погашено). Гасится ТОЛЬКО строка,
+    несущая И стрелку цитаты, И часовую метку, И только под тегом correction.
+    📏 Замер 29.08 по всей ленте (124130 строк): стрелка с часом — 2 строки,
+    из них под тегом correction — 1 (та самая поправка). Ложных гашений признак
+    не даёт; НОВАЯ ошибка поправки (своя подпись без стрелки) судится как обычно."""
+    if "correction" not in (tags or ""):
+        return body, 0
+    kept, погашено = [], 0
+    for line in (body or "").splitlines():
+        if СТРЕЛКА_ЦИТАТЫ in line and (STAMP.search(line) or STAMP_DATE_ONLY.search(line)):
+            погашено += 1
+            continue
+        kept.append(line)
+    return "\n".join(kept), погашено
+
+
 def run_messages(db, role=None, since_hours=None):
     """Та же проверка на публичной учащей поверхности — нотах (#2887, @COORD).
 
@@ -222,14 +247,15 @@ def run_messages(db, role=None, since_hours=None):
     # неотличим от вылеченного. ⇒ непогашенное старьё считается вслух отдельной строкой.
     outside = []
     if since_hours:
-        for mid, wrole, body, ts in con.execute(
-                "SELECT id, writer_role, body_md, timestamp FROM messages "
+        for mid, wrole, body, ts, tags in con.execute(
+                "SELECT id, writer_role, body_md, timestamp, COALESCE(tags,'') FROM messages "
                 f"WHERE timestamp < datetime('now','-{int(since_hours)} hours') ORDER BY id"):
             if mid in fixed:
                 continue
+            body, _ = без_цитат_поправки(body, tags)   # карточка #438: та же мерка, что в окне
             if check_section(body, ts, ref_label="timestamp ноты"):
                 outside.append((mid, wrole))
-    q = "SELECT id, writer_role, body_md, timestamp FROM messages"
+    q = "SELECT id, writer_role, body_md, timestamp, COALESCE(tags,'') FROM messages"
     conds, args = [], []
     if role:
         conds.append("UPPER(writer_role)=UPPER(?)")
@@ -248,8 +274,10 @@ def run_messages(db, role=None, since_hours=None):
         print(f"⚠️ messages не прочитаны ({e}) — эта поверхность НЕ проверена")
         return None
     con.close()
-    red = yellow = healed = 0
-    for mid, wrole, body, ts in rows:
+    red = yellow = healed = цитат = 0
+    for mid, wrole, body, ts, tags in rows:
+        body, гашено = без_цитат_поправки(body, tags)   # карточка #438
+        цитат += гашено
         hits = check_section(body, ts, ref_label="timestamp ноты")
         if not hits:
             continue
@@ -265,6 +293,11 @@ def run_messages(db, role=None, since_hours=None):
         yellow += sum(1 for k, _, _ in hits if k.startswith("🟡"))
     print(f"{'🔴' if red else '✅'} messages (ноты): 🔴 {red} · 🟡 {yellow} · "
           f"нот проверено {len(rows)}" + (f" · погашено ПОПРАВКОЙ {healed}" if healed else ""))
+    if цитат:
+        # Карточка #438, встречный ③: граница печатается В ВЫВОДЕ, а не живёт в карточке.
+        print(f"⚖️ погашено ЦИТАТ ПОПРАВКИ: {цитат} — строка «{СТРЕЛКА_ЦИТАТЫ}» с часом "
+              f"под тегом correction не судится (цитата исправляемого); НОВАЯ ошибка "
+              f"в той же поправке краснеет как обычно")
     if since_hours:
         if outside:
             roles = sorted({r for _, r in outside})
@@ -345,10 +378,19 @@ def selftest():
         cases += 1
         print(f"{'✅' if good else '🔴'} 🔴={got} (ждём {want})  «{body[:45]}»  saved={saved[:16]}")
     # и отказ на пустой БД — молчание вместо отказа было дефектом соседнего инструмента
-    tmp = mezo_stand.new("guard-ptime-") / "m.db"
-    con = sqlite3.connect(str(tmp))
-    con.execute("CREATE TABLE phoenix (role TEXT, section TEXT, body TEXT, saved_at TEXT)")
-    con.execute("CREATE TABLE messages (id INTEGER, writer_role TEXT, body_md TEXT, timestamp TEXT)")
+    # ⚠️ Стенды несут колонку tags НАРОЧНО: гашение (corrected_ids) читает её, и стенд
+    # без неё РОНЯЕТ прогон трассировкой. Ровно так эта самопроверка умерла молча:
+    # колонку добавили в живую схему, стенды не догнали — найдено при работе
+    # по карточке #438 (прогон падал «no such column: tags»).
+    def стенд_база(имя):
+        p = mezo_stand.new("guard-ptime-") / имя
+        c = sqlite3.connect(str(p))
+        c.execute("CREATE TABLE phoenix (role TEXT, section TEXT, body TEXT, saved_at TEXT)")
+        c.execute("CREATE TABLE messages (id INTEGER, writer_role TEXT, body_md TEXT, "
+                  "timestamp TEXT, tags TEXT DEFAULT '')")
+        return c, p
+
+    con, tmp = стенд_база("m.db")
     con.commit()
     con.close()
     rc = run(tmp)
@@ -357,12 +399,10 @@ def selftest():
     cases += 1
     print(f"{'✅' if good else '🔴'} пустая БД (обе таблицы) → rc={rc} (ждём 2: отказ, а не «чисто»)")
     # messages видит СВОЙ класс отдельно от phoenix — не только «пришит к той же функции»
-    tmp2 = mezo_stand.new("guard-ptime-") / "m2.db"
-    con = sqlite3.connect(str(tmp2))
-    con.execute("CREATE TABLE phoenix (role TEXT, section TEXT, body TEXT, saved_at TEXT)")
-    con.execute("CREATE TABLE messages (id INTEGER, writer_role TEXT, body_md TEXT, timestamp TEXT)")
+    con, tmp2 = стенд_база("m2.db")
     con.execute("INSERT INTO phoenix VALUES ('X','state','чисто','2026-07-28 09:00:00')")
-    con.execute("INSERT INTO messages VALUES (1,'X','местное время 2026-07-28 11:05 UTC','2026-07-28 09:04:50')")
+    con.execute("INSERT INTO messages (id, writer_role, body_md, timestamp) "
+                "VALUES (1,'X','местное время 2026-07-28 11:05 UTC','2026-07-28 09:04:50')")
     con.commit()
     con.close()
     red, yellow, n = run_messages(tmp2, role=None)
@@ -370,6 +410,24 @@ def selftest():
     ok &= good
     cases += 1
     print(f"{'✅' if good else '🔴'} messages ловит СВОЙ дефект (не только phoenix) → 🔴{red} нот={n}")
+    # ── Карточка #438: цитата исправляемого в САМОЙ поправке ──
+    con, tmp3 = стенд_база("m3.db")
+    con.executemany(
+        "INSERT INTO messages (id, writer_role, body_md, timestamp, tags) VALUES (?,?,?,?,?)",
+        [(1, "X", "шапка «2026-08-29 23:11 UTC» → читать 21:11 UTC",
+          "2026-08-29 21:13:00", '["correction"]'),
+         (2, "X", "было «2026-08-29 23:12 UTC» → читать 21:12 UTC\n— X 2026-08-29 23:13 UTC",
+          "2026-08-29 21:14:00", '["correction"]'),
+         (3, "X", "цитирую: «2026-08-29 23:20 UTC» → читать 21:20 UTC",
+          "2026-08-29 21:21:00", "")])
+    con.commit()
+    con.close()
+    red, yellow, n = run_messages(tmp3, role=None)
+    good = red == 2 and n == 3
+    ok &= good
+    cases += 1
+    print(f"{'✅' if good else '🔴'} карточка #438: цитата поправки ГАСИТСЯ (ровно под тегом), "
+          f"НОВАЯ ошибка в поправке и стрелка БЕЗ тега КРАСНЕЮТ → 🔴{red} нот={n} (ждём 🔴2 из 3)")
 
     # Ноль случаев — это КРАСНЫЙ, замаскированный под зелёный. Отказываем вслух.
     if cases == 0:
