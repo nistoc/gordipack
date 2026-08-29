@@ -20,6 +20,17 @@ r"""ПРИЁМКА ступени А направления-фокуса — к�
   ⑧ перевод в in_progress вне направления → то же предупреждение          КОНТРОЛЬ
   ⑨ сводка роли при одном активном несёт строку НАПРАВЛЕНИЕ               КОНТРОЛЬ
 
+Карточка #405 (замер @CHROME при приёмке #399: при двух наборах лазейка отвечала
+«карточка в направлении» и молча теряла причину — обе половины сообщения врали):
+  ⑩ наборов ДВА + --off-pool «причина» → причина ЗАПИСАНА событием,
+    сообщение говорит «направления сейчас НЕТ», а не «в направлении»      РАЗЛИЧАЮЩИЙ
+  ⑪ встречный: направление ЕСТЬ, карточка В нём + причина → прежнее
+    «причина не нужна», событие НЕ пишется                                КОНТРОЛЬ
+  ⑫ встречный-2: наборов два + ПУСТАЯ причина → отказ (един для всех
+    состояний мира)                                                       КОНТРОЛЬ
+  ⑬ ОБРАТНЫЙ ХОД: в копии инструмента запись события в ветке «направления
+    нет» снята → случай ⑩ гаснет — краснеет ровно своя половина           РАЗЛИЧАЮЩИЙ
+
 ⛔ Живой базы не касается: копия в песочнице; в копии второй активный набор ставится
 на паузу, чтобы направление стало единственным (на живой это решает слово владельца).
 """
@@ -54,8 +65,10 @@ def case(title, verdict, detail, differ=False):
     return verdict
 
 
-def run(tool, db, *args):
+def run(tool, db, *args, extra_env=None):
     env = dict(os.environ, MEZO_ROLE="PROTO", MEZO_LEASE_TEST="")
+    if extra_env:
+        env.update(extra_env)
     p = subprocess.run([sys.executable, tool, "--db", str(db), *args],
                        capture_output=True, text=True, encoding="utf-8",
                        errors="replace", env=env)
@@ -71,6 +84,10 @@ def main() -> int:
     # Направление в копии — ЕДИНСТВЕННОЕ: прочие активные ставятся на паузу.
     con.execute("UPDATE tracks SET status='paused' WHERE status='active' AND track_id<>?",
                 (НАПР,))
+    # Живые объявления о правке приезжают в копию вместе с базой (оплачено в
+    # bite-lease-read-subcommands): гасим, чтобы стенд судил ворота фокуса, а не их.
+    con.execute("UPDATE tool_leases SET released_at=datetime('now') "
+                "WHERE released_at IS NULL")
     con.commit()
     con.close()
 
@@ -176,6 +193,82 @@ def main() -> int:
     ok &= case("⑨ сводка роли называет НАПРАВЛЕНИЕ первой строкой секции набора",
                rc == 0 and "НАПРАВЛЕНИЕ КОНТУРА" in out and НАПР in out,
                "роль узнаёт направление из живой сводки, а не из чьей-то памяти")
+
+    # ── Карточка #405: три состояния мира в лазейке ─────────────────────────────
+    # ⑩ наборов ДВА: причина не теряется и сообщение не врёт.
+    con = sqlite3.connect(db)
+    con.execute("UPDATE tracks SET status='active' WHERE track_id='TRACK-NEWUX'")
+    con.commit()
+    con.close()
+    rc, out = run(BACKLOG, db, "claim", bid3, "--actor", "PROTO",
+                  "--note", "стендовое взятие при двух наборах с причиной",
+                  "--off-pool", "законная стендовая причина при двух наборах")
+    con = sqlite3.connect(db)
+    ev3 = con.execute("SELECT COUNT(*) FROM backlog_events WHERE backlog_id=? "
+                      "AND event_type='off_pool'", (bid3,)).fetchone()[0]
+    con.close()
+    ok &= case("⑩ наборов ДВА + причина → ЗАПИСАНА, сообщение говорит «направления НЕТ»",
+               rc == 0 and ev3 == 1 and "направления сейчас НЕТ" in out
+               and "карточка в направлении" not in out,
+               "летопись «кто брал вне направления и почему» не несёт дыру за период "
+               "двух наборов", differ=True)
+
+    # ⑫ встречный-2: пустая причина при двух наборах → отказ (тот же, что при одном).
+    rc, out = run(BACKLOG, db, "claim", bid3, "--actor", "PROTO",
+                  "--note", "стендовое взятие", "--off-pool", " ")
+    ok &= case("⑫ встречный-2: наборов два + ПУСТАЯ причина → отказ",
+               rc != 0 and "ПРИЧИНУ" in out,
+               "отказ на пустую причину един для всех состояний мира")
+    con = sqlite3.connect(db)
+    con.execute("UPDATE tracks SET status='paused' WHERE track_id='TRACK-NEWUX'")
+    con.commit()
+    con.close()
+
+    # ⑪ встречный: направление есть, карточка В нём + причина → прежнее сообщение.
+    rc, out = run(BACKLOG, db, "claim", bid2, "--actor", "PROTO",
+                  "--note", "стендовое взятие своей карточки с лишней причиной",
+                  "--off-pool", "лишняя причина")
+    con = sqlite3.connect(db)
+    ev2 = con.execute("SELECT COUNT(*) FROM backlog_events WHERE backlog_id=? "
+                      "AND event_type='off_pool'", (bid2,)).fetchone()[0]
+    con.close()
+    ok &= case("⑪ встречный: карточка В направлении + причина → «не нужна», события нет",
+               rc == 0 and ev2 == 0 and "причина --off-pool не нужна" in out,
+               "журнал «вне направления» обязан значить ровно это")
+
+    # ⑬ ОБРАТНЫЙ ХОД: копия инструмента без записи события в ветке «направления нет».
+    src = pathlib.Path(BACKLOG).read_text(encoding="utf-8")
+    маркер = 'иначе летопись '
+    assert маркер in src, "ПРИЁМКА НЕ СОСТОЯЛАСЬ: якорь ветки #405 не найден в инструменте"
+    сломанный = stand / "backlog_broken.py"
+    тело = src.replace('_event(conn, a.id, a.actor, "off_pool", off.strip())\n'
+                       '            print("📝 направления сейчас НЕТ',
+                       'print("📝 направления сейчас НЕТ')
+    if тело == src:
+        raise SystemExit("ПРИЁМКА НЕ СОСТОЯЛАСЬ: якорь замены ⑬ не совпал — "
+                         "обратный ход не поставлен, зелёное было бы ложным")
+    сломанный.write_text(тело, encoding="utf-8")
+    con = sqlite3.connect(db)
+    con.execute("UPDATE tracks SET status='active' WHERE track_id='TRACK-NEWUX'")
+    con.execute("DELETE FROM backlog_events WHERE backlog_id=? AND event_type='off_pool'",
+                (bid3,))
+    con.commit()
+    con.close()
+    # Копия живёт в песочнице — соседей (mezo_paths, dryrun) ей даёт PYTHONPATH.
+    rc, out = run(str(сломанный), db, "claim", bid3, "--actor", "PROTO",
+                  "--note", "стендовое взятие на сломанной копии",
+                  "--off-pool", "причина, которой суждено потеряться",
+                  extra_env={"PYTHONPATH": str(СКРИПТЫ)})
+    con = sqlite3.connect(db)
+    ev_br = con.execute("SELECT COUNT(*) FROM backlog_events WHERE backlog_id=? "
+                        "AND event_type='off_pool'", (bid3,)).fetchone()[0]
+    con.execute("UPDATE tracks SET status='paused' WHERE track_id='TRACK-NEWUX'")
+    con.commit()
+    con.close()
+    ok &= case("⑬ ОБРАТНЫЙ ХОД: запись события снята в копии → случай ⑩ гаснет",
+               rc == 0 and ev_br == 0,
+               "краснеет ровно своя половина: разница двух прогонов и есть починка",
+               differ=True)
 
     print()
     print(f"{'✅ СТУПЕНЬ А НАПРАВЛЕНИЯ-ФОКУСА ПРИНЯТА' if ok else '🔴 НЕ ПРИНЯТО'} — "
