@@ -232,7 +232,7 @@ def main() -> int:
     ap.add_argument("--db", default=str(LIVE_DB), help="откуда брать память ролей (только чтение)")
     ap.add_argument("--scripts-root", default=str(LIVE_SCRIPTS),
                     help="какой каталог считать живым. Меняется, чтобы испытать КОПИЮ, а не оригинал")
-    ap.add_argument("--only", help="подстрока имени скрипта")
+    ap.add_argument("--only", help="подстрока ИМЕНИ ФАЙЛА механизма (не роли!); пустой отбор — отказ, не зелёное (карточка #368)")
     ap.add_argument("--verbose", action="store_true", help="показывать вывод падений целиком")
     a = ap.parse_args()
 
@@ -256,10 +256,12 @@ def main() -> int:
     print("=" * 84)
 
     ok_n = red = skip = 0
+    matched = 0
     reds, skips = [], []
     for (script, sub, flags), info in sorted(forms.items()):
         if a.only and a.only not in script:
             continue
+        matched += 1
         shown = f"{script} {sub} {' '.join(flags)}".strip()
         where = ", ".join(sorted(info["where"])[:3])
 
@@ -295,6 +297,15 @@ def main() -> int:
                               where))
             continue
 
+        # ── карточка #374 (тело @STUD): память ролей для этой проверки — ВХОД,
+        # записанные формы ЗАПУСКАЮТСЯ. Запуск САМОГО СЕБЯ — вложенный полный прогон,
+        # он всегда дольше предела, и честная запись имени прибора красила бы прибор.
+        if Path(exe).resolve() == Path(__file__).resolve():
+            skip += 1
+            skips.append((shown, "сам себя не запускаю: вложенный полный прогон всегда "
+                                 "дольше предела, а имя в памяти — законная запись "
+                                 "(карточка #374); память для этой проверки — ВХОД", where))
+            continue
         if exe.name in LONG_BY_NATURE:
             # «работает минуты» ≠ «висит»: полный прогон здесь лгал бы порогом (#203).
             # Форма сверяется разборщиком аргументов самой команды — --help с теми же флагами
@@ -375,6 +386,15 @@ def main() -> int:
             mark = "" if how in ("по пути из памяти", "путь не назван, лежит рядом") else f"  ⚠️ {how}"
             print(f"✅ {shown:58} {where[:30]}{mark}")
 
+    # ── карточка #368: пустой отбор — отказ. «0 из 0» читалось как «чисто»
+    # у трёх ролей за сутки (ING → STUD → CORE): --only отбирает по подстроке
+    # ИМЕНИ ФАЙЛА механизма, а роли подставляли имя роли.
+    if a.only and matched == 0:
+        print(f"⛔ СУД НЕ СОСТОЯЛСЯ: --only {a.only!r} не совпал НИ С ОДНИМ именем "
+              f"механизма — отбор идёт по подстроке ИМЕНИ ФАЙЛА (например "
+              f"read-messages), НЕ по имени роли.")
+        print(f"   форм всего {len(forms)} · проверено 0 — «0 из 0» это НЕ «чисто».")
+        return 1
     for shown, why, where in reds:
         print(f"🔴 {shown:58} {where[:30]}")
         print(f"     {why}")

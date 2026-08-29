@@ -748,6 +748,14 @@ def main():
     a = ap.parse_args()
     if a.selftest:
         return selftest()
+    # ── карточка #368: суд по ПУСТОМУ словарю имён зеленил бы и наказы, и канон.
+    # Два независимых случая за один день (заявка TAXO + случай COORD): роль сузила
+    # --scripts ради короткого вывода — и получила ложное алиби при живой подсадке.
+    if not any(Path(a.scripts).glob("*.py")):
+        raise SystemExit(
+            f"⛔ СУД НЕ СОСТОЯЛСЯ: в каталоге инструментов ({a.scripts}) нет ни одного "
+            f".py — словарь известных имён ПУСТ, зелёное на нём было бы ложным алиби. "
+            f"Сузил --scripts — сузь и суждение (карточка #368).")
     rc = run(Path(a.scripts), Path(a.artifacts), do_run=not a.no_run, role=a.role)
     # ── КАНОН: отдельной секцией ПОСЛЕ основного прогона, со своим счётом.
     canon = Path(a.canon)
@@ -795,6 +803,23 @@ def main():
     if thits is None:
         print(f"⚠️ НАКАЗЫ-ФАЙЛЫ НЕ ПРОВЕРЕНЫ: нет каталога {tdir} (это не «чисто»)")
     else:
+        # ── карточка #375: наказ ОБЯЗАН вести к правилу ответов владельцу.
+        # Ссылка (ключ правила или имя навыка) — да; СКОПИРОВАННОЕ тело — нет:
+        # вторая редакция разошлась бы со сводом молча.
+        for _tf in sorted(tdir.glob("*/SKILL.md")):
+            _tb = _tf.read_text(encoding="utf-8", errors="replace")
+            _tw = _tf.parent.name + "/SKILL.md"
+            if "третьекурсник" in _tb:
+                thits.append((f"{_tw}: тело правила ответов СКОПИРОВАНО",
+                              "🔴 ВТОРАЯ РЕДАКЦИЯ owner-reply-format — разойдётся со "
+                              "сводом молча; держи ссылку, не тело",
+                              "замени тело командой show (set-rule --key owner-reply-format)"))
+            elif "owner-reply-format" not in _tb and "atlas-owner-reply" not in _tb:
+                thits.append((f"{_tw}: ссылки на правило ответов НЕТ",
+                              "🔴 наказ не ведёт к owner-reply-format — роль в сверке "
+                              "ответит владельцу без формы (карточка #375)",
+                              "строка-ссылка: set-rule.py --key owner-reply-format --show "
+                              "или имя навыка atlas-owner-reply"))
         tred = [(w, k, f) for w, k, f in thits if k.startswith("🔴")]
         tyel = [(w, k, f) for w, k, f in thits if k.startswith("🟡")]
         for w, k, f in tred + tyel:
