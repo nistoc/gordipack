@@ -90,6 +90,28 @@ def active_pool_tracks(conn):
         return set()
 
 
+def direction_focus(conn):
+    """Направление-фокус (карточка #399, слово владельца 29.08 14:39 UTC) → (имя | None).
+
+    Механизм опирается на ЕДИНСТВЕННЫЙ активный набор задач: при нуле или нескольких
+    активных возвращает None — ворота фокуса НЕ судятся. Судить «вне направления» при
+    двух направлениях значит красить всё; замер 29.08: активных два, и это само по себе
+    размывает направление (норма нового порядка — один, судьба лишнего — слово владельца)."""
+    pools = active_pool_tracks(conn)
+    return next(iter(pools)) if len(pools) == 1 else None
+
+
+def offpool_share(conn, direction):
+    """Живая доля взятий ВНЕ направления за 3 суток → (вне, всего). Не хранится —
+    вычисляется при каждом чтении (тот же довод, что у просрочки П②)."""
+    row = conn.execute(
+        "SELECT COUNT(*), SUM(CASE WHEN COALESCE(b.parent_track,'') <> ? THEN 1 ELSE 0 END) "
+        "FROM backlog_events e JOIN backlog b ON b.id = e.backlog_id "
+        "WHERE e.event_type='claim' AND e.at > datetime('now','-3 day')",
+        (direction,)).fetchone()
+    return (row[1] or 0), (row[0] or 0)
+
+
 def pool_sort_key(pools):
     """Ключ «карточки пула первыми, внутри — прежний порядок (срочность, номер)».
     ЕДИНСТВЕННОЕ место, где живёт этот порядок: его же импортирует витрина пробуждения
@@ -204,6 +226,31 @@ def cmd_claim(conn, a):
     if not a.note.strip():
         sys.exit(f"⛔ скажи, ЧТО делаешь: коллега видит эту строку и по ней решает, ждать "
                  f"ему или браться самому. «Работаю» ему не говорит ничего.")
+    # ═══ Карточка #399 ступень ② (слово владельца 29.08 14:39 UTC): взятие карточки ВНЕ
+    # ЕДИНСТВЕННОГО активного набора — ПРЕДУПРЕЖДЕНИЕ с живой долей (ступень А; отказ —
+    # только отдельным ходом по замеру этой доли: ложный отказ дороже пропуска).
+    # Лазейка --off-pool «причина» — для законного вне-направления (срочная починка
+    # инструмента, слово владельца): причина ложится СОБЫТИЕМ в журнал карточки и видна
+    # поимённо. Пустая причина неотличима от её отсутствия — отказ.
+    направление = direction_focus(conn)
+    off = getattr(a, "off_pool", None)
+    if направление and (track or "") != направление:
+        if off is not None:
+            if not off.strip():
+                sys.exit("⛔ --off-pool требует ПРИЧИНУ словами: пустая причина "
+                         "не отличима от её отсутствия")
+            _event(conn, a.id, a.actor, "off_pool", off.strip())
+            print(f"📝 взято ВНЕ направления {направление} с причиной вслух — "
+                  f"она в журнале карточки")
+        else:
+            вне, всего = offpool_share(conn, направление)
+            print(f"⚠️ карточка ВНЕ направления контура ({направление}). За 3 суток "
+                  f"так взято {вне} из {всего}. Есть причина — назови её вслух: "
+                  f"--off-pool \"<причина>\" (ляжет событием в журнал)")
+    elif off is not None and off.strip():
+        # Причина при взятии карточки САМОГО направления — не ошибка, но событие не пишем:
+        # журнал «вне направления» обязан значить ровно это.
+        print("ℹ️ карточка в направлении — причина --off-pool не нужна, событие не пишется")
     # ═══ П② (27.08): шаг карточки ПУЛА — 60 минут вместо 120; длиннее 90 — предупреждение.
     # Короткая итерация встроена ВОРОТАМИ инструмента, а не попрошена правилом.
     minutes = a.minutes if a.minutes is not None else (60 if in_pool else 120)
@@ -280,25 +327,41 @@ def cmd_add(conn, a):
     warn_dangling(body, label="тело карточки")
     warn_dangling(done_when, label="критерий")
 
-    # ═══ П① (27.08): при живом пуле НОВОЕ — В ПУЛ. ПРЕДУПРЕЖДЕНИЕ, не запрет: законное
-    # вне-пульное существует (санитарная мелочь, чужая просьба), а сломанный запрет
-    # обходят. Встречный случай держится сам: пула нет — строки нет (вечно горящее слепит).
+    # ═══ П① (27.08): при живом пуле НОВОЕ — В ПУЛ. Предупреждение осталось для случая
+    # «активных наборов не один». Встречный держится сам: пула нет — строки нет.
+    # ═══ Карточка #399 ступень ③ (слово владельца 29.08 14:39 UTC): при ЕДИНСТВЕННОМ
+    # активном наборе новое ВНЕ его рождается ЗАМОРОЖЕННЫМ с условием разморозки —
+    # заявка не теряется, но и не становится открытым соблазном взять её мимо
+    # направления (замер 29.08: за 3 суток 71% новых карточек — вне наборов).
+    # Слово владельца в чате роли всегда выше этих ворот.
     pools = active_pool_tracks(conn)
+    направление = next(iter(pools)) if len(pools) == 1 else None
+    статус, причина_мороза = "open", None
     if pools and not a.track:
-        print(f"⚠️ новое — только в пул ({', '.join(sorted(pools))}): назови пул "
-              f"(--track) или причину, почему карточка живёт вне его")
+        if направление:
+            статус = "frozen"
+            причина_мороза = (f"направление-фокус: заведена вне направления {направление} — "
+                              f"разморозка после закрытия набора; раньше — слово владельца "
+                              f"или status <id> open --note <причина>")
+            print(f"🧊 направление контура — {направление}: карточка ВНЕ его заводится "
+                  f"ЗАМОРОЖЕННОЙ (заявка не теряется и не соблазняет). Разморозить: "
+                  f"после закрытия набора, раньше — слово владельца или причина вслух")
+        else:
+            print(f"⚠️ активных наборов {len(pools)} — норма ОДИН, фокус не судится; "
+                  f"новое — только в пул ({', '.join(sorted(pools))}): назови пул "
+                  f"(--track) или причину, почему карточка живёт вне его")
 
     cur = conn.execute(
-        "INSERT INTO backlog (role, title, body_md, priority, tags, parent_id, parent_track, created_by, done_when) "
-        "VALUES (?,?,?,?,?,?,?,?,?)",
-        (a.role.upper(), a.title, body, a.priority, tags, a.parent, a.track,
-         (a.actor or a.role).upper(), done_when))
+        "INSERT INTO backlog (role, title, body_md, status, blocked_reason, priority, tags, parent_id, parent_track, created_by, done_when) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (a.role.upper(), a.title, body, статус, причина_мороза, a.priority, tags, a.parent,
+         a.track, (a.actor or a.role).upper(), done_when))
     bid = cur.lastrowid
-    _event(conn, bid, a.actor or a.role, "created", f"created: {a.title}", None, "open")
+    _event(conn, bid, a.actor or a.role, "created", f"created: {a.title}", None, статус)
     if done_when:
         _event(conn, bid, a.actor or a.role, "criterion_set", f"критерий: {done_when}")
     conn.commit()
-    print(f"✅ backlog #{bid} [{a.role.upper()}] «{a.title}» ({a.priority}, open)")
+    print(f"✅ backlog #{bid} [{a.role.upper()}] «{a.title}» ({a.priority}, {статус})")
     if done_when:
         print(f"   🎯 критерий: {done_when}")
         # Приём обязан быть так же честен, как отказ — просьба @ING (#3231) с двумя его
@@ -532,12 +595,23 @@ def cmd_status(conn, a):
     if a.new_status not in STATUSES:
         print(f"ERR: статус должен быть из {STATUSES}", file=sys.stderr)
         sys.exit(1)
-    row = conn.execute("SELECT status, done_when, title, role FROM backlog WHERE id = ?",
+    row = conn.execute("SELECT status, done_when, title, role, parent_track FROM backlog WHERE id = ?",
                        (a.id,)).fetchone()
     if not row:
         print(f"ERR: backlog #{a.id} не найден", file=sys.stderr)
         sys.exit(1)
-    old, done_when, title, owner = row
+    old, done_when, title, owner, card_track = row
+
+    # ═══ Карточка #399 ступень ② (та же, что у claim): перевод В РАБОТУ карточки вне
+    # ЕДИНСТВЕННОГО активного набора — предупреждение с живой долей. Только in_progress:
+    # закрытия, заморозки и возвраты не судятся — они не «взятие».
+    if a.new_status == "in_progress":
+        направление = direction_focus(conn)
+        if направление and (card_track or "") != направление:
+            вне, всего = offpool_share(conn, направление)
+            print(f"⚠️ карточка ВНЕ направления контура ({направление}). За 3 суток "
+                  f"взятий вне направления {вне} из {всего}. Есть причина — возьми через "
+                  f"claim с --off-pool \"<причина>\": она ляжет событием в журнал")
 
     # ⛔ ВОРОТА: чужую карточку двигаешь — НАЗОВИ её владельца, инструмент сверит имя с базой.
     #
@@ -819,6 +893,10 @@ def main():
                          "прочие 2 ч)")
     pw.add_argument("--note", default="", help="что именно делаешь — это увидят коллеги")
     pw.add_argument("--release", action="store_true", help="снять объявление досрочно")
+    pw.add_argument("--off-pool", dest="off_pool", default=None,
+                    help="причина взятия карточки ВНЕ направления контура (карточка #399): "
+                         "непустая, ложится событием в журнал карточки. Слово владельца "
+                         "и срочная починка инструмента — законные причины")
 
     pc = sub.add_parser("comment")
     dryrun.add_argument(pc)
