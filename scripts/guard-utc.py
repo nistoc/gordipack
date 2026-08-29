@@ -33,6 +33,11 @@ from pathlib import Path
 SUSPECT = re.compile(r"astimezone|localtime|datetime\.now\(\s*\)|\bnow\(\s*\)\.strftime")
 # Легитимно: явный UTC.
 LEGIT = re.compile(r"now\(\s*(datetime\.)?timezone\.utc\s*\)|utcnow")
+# Карточка #384, слово владельца 29.08.2026 12:08 UTC («брать местное время машины, где
+# запускается скрипт»): показ «UTC (местное)» разрешён — но конвертация живёт в ОДНОМ
+# файле. Его находки печатаются ОТДЕЛЬНО и вслух (принцип этого гарда: ничего не прятать),
+# в любом другом файле astimezone по-прежнему красное.
+SANCTIONED = "local_time.py"
 
 
 def code_lines(path: Path) -> set:
@@ -63,7 +68,7 @@ def main():
     args = ap.parse_args()
 
     files = sorted(Path(args.dir).glob("*.py"))
-    real, prose = [], []
+    real, prose, sanct = [], [], []
 
     for f in files:
         if f.name == Path(__file__).name:
@@ -76,9 +81,18 @@ def main():
                 continue
             hit = (f.name, i, line.strip())
             # В КОДЕ или в тексте (комментарий/докстринг)? Оба показываем — но по-разному.
-            (real if i in code else prose).append(hit)
+            if i in code and f.name == SANCTIONED:
+                sanct.append(hit)          # разрешено поимённо — но НЕ молча
+            else:
+                (real if i in code else prose).append(hit)
 
     print(f"guard-utc: просмотрено файлов: {len(files) - 1}")
+
+    if sanct:
+        print(f"\n🕐 Разрешено поимённо ({SANCTIONED}, карточка #384, слово владельца "
+              f"29.08.2026) — {len(sanct)}; в любом другом файле это было бы красное:")
+        for name, i, line in sanct:
+            print(f"   {name}:{i}  {line[:96]}")
 
     if prose:
         print(f"\nℹ️  Упоминания в ТЕКСТЕ (комментарии/докстринги) — {len(prose)}. "

@@ -40,6 +40,7 @@ denied by the Claude Code auto mode classifier. Reason: Blocked by classifier.»
 import argparse
 import datetime
 import json
+import re
 import sqlite3
 import sys
 import time
@@ -67,19 +68,97 @@ except Exception:                          # noqa: BLE001 — любая пол�
 #     от «жду чужую работу»: в первом случае дело стоит из-за меня и молчит об этом владельцу.
 #   failed — ПРОБОВАЛИ, НЕ ВЫШЛО. Раньше писалось как dropped, то есть «передумали делать»;
 #     неудача, записанная отменой, стирает сам факт попытки и её причину.
+#   frozen — ЗАМОРОЖЕНА (П① пула, 27.08). НЕ то же, что blocked: blocked значит «жду
+#     ЧУЖУЮ работу» (дело движется не мной), frozen — «сознательно отложена ВНЕ пула,
+#     разбудит НАЗВАННОЕ УСЛОВИЕ». Слить их — повторить оплаченный класс «одно значение
+#     на две беды». Условие разморозки ОБЯЗАТЕЛЬНО и живёт в blocked_reason (оно уже
+#     на витрине). frozen НЕ входит в открытые: открытый список — то, что живо сейчас.
 STATUSES = ["open", "in_progress", "blocked", "awaiting_word", "in_review", "done",
-            "failed", "dropped"]
+            "failed", "dropped", "frozen"]
 OPEN_STATUSES = ["open", "in_progress", "blocked", "awaiting_word", "in_review"]
 PRIORITY_ORDER = {"critical": 0, "high": 1, "normal": 2, "low": 3}
 
 
-def utc_to_local(s):
-    """UTC → UTC. Оставлено имя ради совместимости вызовов; конвертации БОЛЬШЕ НЕТ.
-    Правило timestamp-utc-in-sqlite v2 (владелец 2026-07-16): контур живёт в ОДНОЙ
-    шкале — UTC. Две шкалы брали налог вниманием и породили фантом «синк умер 2 часа
-    назад» (разница ровно 2ч была ЗОНОЙ, не лагом). Конвертация, которой нет, не может
-    быть забыта. Суффикс UTC печатаем явно: метка без зоны неотличима от локальной."""
-    return f"{s} UTC" if s else "—"
+def active_pool_tracks(conn):
+    """Живые пулы (tracks.status='active'). Новый порядок (слово владельца 27.08 18:33 UTC):
+    весь контур работает над ОДНИМ пулом связанных задач за раз, карточки пула — первыми.
+    Пустое множество = пула нет, и тогда порядок прежний и никакой «секции пула» не печатается.
+    Таблицы tracks может не быть (копия-песочница старой схемы) — это не повод ронять список."""
+    try:
+        return {r[0] for r in conn.execute("SELECT track_id FROM tracks WHERE status='active'")}
+    except sqlite3.OperationalError:
+        return set()
+
+
+def pool_sort_key(pools):
+    """Ключ «карточки пула первыми, внутри — прежний порядок (срочность, номер)».
+    ЕДИНСТВЕННОЕ место, где живёт этот порядок: его же импортирует витрина пробуждения
+    (backlog_view) — вторая копия ключа разошлась бы с этой молча при первой правке.
+    Ожидает кортежи, где [4] = priority, [0] = id, ПОСЛЕДНЕЕ поле = parent_track."""
+    def key(r):
+        return (0 if (pools and r[-1] in pools) else 1,
+                PRIORITY_ORDER.get(r[4], 9), r[0])
+    return key
+
+
+def live_and_overdue(conn, card_ids):
+    """Живые и ПРОСРОЧЕННЫЕ объявления по карточкам — ЕДИНСТВЕННЫЙ источник предиката
+    (П② пула, 27.08): его зовут список карточек, обзор пробуждения, витрина пула
+    (track.py) и механизм сна. Предикат НЕ хранится — вычисляется при каждом чтении:
+    хранимое поле гашения умерло с нулём вызовов, вычисляемая срочность живёт.
+    Просрочено = срок объявления вышел, карточка не закрыта, объявление не снято,
+    и ПОСЛЕ срока от роли на карточке ни одного события. Демона нет.
+    Возвращает (живые[(id, роль, до, что)], просроченные[(id, роль, до, что, часов)])."""
+    alive, overdue = [], []
+    now = conn.execute("SELECT datetime('now')").fetchone()[0]
+    for bid in card_ids:
+        ev = conn.execute(
+            "SELECT actor_role, event_type, body_md FROM backlog_events "
+            "WHERE backlog_id=? AND event_type IN ('claim','claim_release') "
+            "ORDER BY id DESC LIMIT 1", (bid,)).fetchone()
+        if not ev or ev[1] == "claim_release":
+            continue
+        actor, _, body = ev
+        m = re.match(r"до (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) UTC · (.*)", body or "")
+        if not m:
+            continue
+        until, note = m.group(1), m.group(2)
+        status = conn.execute("SELECT status FROM backlog WHERE id=?", (bid,)).fetchone()[0]
+        if status in ("done", "failed", "dropped"):
+            continue
+        if until >= now:
+            alive.append((bid, actor, until, note))
+        else:
+            later = conn.execute(
+                "SELECT 1 FROM backlog_events WHERE backlog_id=? AND actor_role=? AND at>?",
+                (bid, actor, until)).fetchone()
+            if not later:
+                hours = conn.execute(
+                    "SELECT CAST((julianday('now')-julianday(?))*24 AS INTEGER)",
+                    (until,)).fetchone()[0]
+                overdue.append((bid, actor, until, note, hours))
+    return alive, overdue
+
+
+def pool_open_ids(conn, pools):
+    """Открытые карточки живых пулов — ВСЕХ ролей: просрочку видит любой читающий."""
+    if not pools:
+        return []
+    ph = ",".join("?" * len(pools))
+    st = ",".join("?" * len(OPEN_STATUSES))
+    return [r[0] for r in conn.execute(
+        f"SELECT id FROM backlog WHERE parent_track IN ({ph}) AND status IN ({st})",
+        list(pools) + list(OPEN_STATUSES))]
+
+
+# карточка #384 (слово владельца 29.08.2026): показ «UTC (местное)» вернулся — но ОДНИМ
+# местом, модулем local_time.py (зона host OS на дату записи; хранение — только UTC).
+# Прежнее надгробие «конвертации больше нет» снято тем же словом; разбор — в модуле.
+try:
+    from local_time import utc_to_local
+except Exception:  # noqa: BLE001 — без модуля витрина живёт: прежний показ «только UTC»
+    def utc_to_local(s, tz=None):
+        return f"{s} UTC" if s else "—"
 
 def _text(inline, file_arg):
     if file_arg:
@@ -105,11 +184,19 @@ def _event(conn, bid, actor, etype, body="", frm=None, to=None):
 
 def cmd_claim(conn, a):
     """Объявить работу над карточкой. Видно коллегам при пробуждении и в общем прогоне."""
-    row = conn.execute("SELECT role, status, title FROM backlog WHERE id=?", (a.id,)).fetchone()
+    row = conn.execute("SELECT role, status, title, parent_track FROM backlog WHERE id=?",
+                       (a.id,)).fetchone()
     if not row:
         sys.exit(f"⛔ карточки #{a.id} нет")
-    owner, status, title = row
+    owner, status, title, track = row
+    in_pool = track and track in active_pool_tracks(conn)
     if a.release:
+        # П② (27.08): снятие с ПУСТЫМ «что получилось» — предупреждение, не отказ.
+        # Пустой итог у коллеги читается как «бросил молча»; доля пустых замеряется
+        # по событиям, принуждать рано.
+        if not (a.note or "").strip():
+            print("⚠️ снимаешь объявление БЕЗ итога: что получилось? Коллега увидит "
+                  "только «работа окончена» — добавь --note")
         _event(conn, a.id, a.actor, "claim_release", a.note or "работа окончена или отложена")
         conn.commit()
         print(f"🔓 снято объявление о работе над #{a.id} «{title[:50]}»")
@@ -117,7 +204,13 @@ def cmd_claim(conn, a):
     if not a.note.strip():
         sys.exit(f"⛔ скажи, ЧТО делаешь: коллега видит эту строку и по ней решает, ждать "
                  f"ему или браться самому. «Работаю» ему не говорит ничего.")
-    until = conn.execute("SELECT datetime('now', ?)", (f"+{a.minutes} minutes",)).fetchone()[0]
+    # ═══ П② (27.08): шаг карточки ПУЛА — 60 минут вместо 120; длиннее 90 — предупреждение.
+    # Короткая итерация встроена ВОРОТАМИ инструмента, а не попрошена правилом.
+    minutes = a.minutes if a.minutes is not None else (60 if in_pool else 120)
+    if in_pool and minutes > 90:
+        print(f"⚠️ шаг длинный ({minutes} мин) для карточки пула — раздели: "
+              f"норма пула 60, потолок без вопросов 90")
+    until = conn.execute("SELECT datetime('now', ?)", (f"+{minutes} minutes",)).fetchone()[0]
     _event(conn, a.id, a.actor, "claim", f"до {until} UTC · {a.note}")
     if status == "open":
         conn.execute("UPDATE backlog SET status='in_progress', updated_at=datetime('now')"
@@ -129,6 +222,19 @@ def cmd_claim(conn, a):
     print("   Видно коллегам при пробуждении и в общем прогоне проверок. Гаснет само —")
     print("   снимать не обязательно; досрочно: backlog.py claim {} --actor {} --release"
           .format(a.id, a.actor))
+    # 2.2 (28.08): claim и есть «чем занята роль» — статус тем же вызовом, кнопки нет.
+    try:
+        conn.execute(
+            "INSERT INTO role_status (role, status, updated_at) "
+            "VALUES (?, ?, datetime('now')) "
+            "ON CONFLICT(role) DO UPDATE SET status = excluded.status, "
+            "updated_at = excluded.updated_at",
+            (a.actor.upper(), f"взял в работу карточку #{a.id} (до {until[:16]} UTC): "
+                              f"{a.note[:140]}"))
+        conn.commit()
+    except Exception as e:                            # noqa: BLE001
+        print(f"⚠️ статус роли НЕ обновлён ({type(e).__name__}) — объявление записано",
+              file=sys.stderr)
 
 def cmd_add(conn, a):
     body = _text(a.body, a.body_file)
@@ -173,6 +279,14 @@ def cmd_add(conn, a):
     # со стороны будет трудно». Смешать их значило бы утопить отказ в шуме.
     warn_dangling(body, label="тело карточки")
     warn_dangling(done_when, label="критерий")
+
+    # ═══ П① (27.08): при живом пуле НОВОЕ — В ПУЛ. ПРЕДУПРЕЖДЕНИЕ, не запрет: законное
+    # вне-пульное существует (санитарная мелочь, чужая просьба), а сломанный запрет
+    # обходят. Встречный случай держится сам: пула нет — строки нет (вечно горящее слепит).
+    pools = active_pool_tracks(conn)
+    if pools and not a.track:
+        print(f"⚠️ новое — только в пул ({', '.join(sorted(pools))}): назови пул "
+              f"(--track) или причину, почему карточка живёт вне его")
 
     cur = conn.execute(
         "INSERT INTO backlog (role, title, body_md, priority, tags, parent_id, parent_track, created_by, done_when) "
@@ -278,10 +392,11 @@ def cmd_list(conn, a):
         where_age = f"created_at <= datetime('now', '-{int(a.older_than_days)} days')"
         age_note = f" · старше {a.older_than_days} сут (свежие скрыты)"
 
+    pools = active_pool_tracks(conn)
     rows = conn.execute(
-        f"SELECT id, role, title, status, priority, tags, done_when FROM backlog "
+        f"SELECT id, role, title, status, priority, tags, done_when, parent_track FROM backlog "
         f"WHERE {where_role} AND {where_status} AND {where_age}", params).fetchall()
-    rows.sort(key=lambda r: (PRIORITY_ORDER.get(r[4], 9), r[0]))
+    rows.sort(key=pool_sort_key(pools))
 
     if not rows:
         print(f"📭 [{a.role.upper()}] backlog пуст (status={a.status}{age_note}).")
@@ -296,10 +411,32 @@ def cmd_list(conn, a):
     else:
         подпись = f"status={next(iter(состав))}"
     print(f"📋 backlog [{a.role.upper()}{'' if a.only_mine else ' + SHARED'}] — {len(rows)} задач ({подпись}{age_note})\n")
+    # ═══ ПУЛ ПЕРВЫМ (шаг 0 нового порядка, слово владельца 27.08 18:33 UTC) ═══
+    # Карточки активного пула стоят В НАЧАЛЕ списка и помечены 🎯. У роли без карточек
+    # пула это сказано СЛОВАМИ: пустая секция неотличима от «пула нет» — класс
+    # «молчащий отказ читается как успех», он в контуре уже оплачен.
+    if pools:
+        in_pool = sum(1 for r in rows if r[7] in pools)
+        имя_пула = ", ".join(sorted(pools))
+        if len(pools) > 1:
+            print(f"⚠️ активных пулов {len(pools)} ({имя_пула}) — норма нового порядка: ОДИН")
+        if in_pool:
+            print(f"🎯 пул {имя_пула}: твоих карточек {in_pool} — они первыми")
+        else:
+            print(f"🎯 в пуле ({имя_пула}) твоих карточек нет")
+        # ═══ П② (27.08): ПРОСРОЧЕННЫЕ объявления пула — при КАЖДОМ чтении, у ЛЮБОЙ
+        # роли (не только виновной): застрявший шаг пула — общая новость. Предикат
+        # вычисляется сейчас, не хранится; демона нет. Роль БЕЗ объявления просрочки
+        # не имеет: молчание без объявления законно.
+        _, overdue = live_and_overdue(conn, pool_open_ids(conn, pools))
+        for bid, actor, _until, note, hours in overdue:
+            print(f"⏰ {actor} молчит над карточкой #{bid} — шаг истёк {hours} ч назад "
+                  f"({note[:60]})")
+        print()
     icon = {"open": "○", "in_progress": "◐", "blocked": "⛔", "awaiting_word": "🙋",
-            "in_review": "👀", "done": "✅", "failed": "💥", "dropped": "✗"}
+            "in_review": "👀", "done": "✅", "failed": "💥", "dropped": "✗", "frozen": "🧊"}
     no_criterion = 0
-    for bid, role, title, status, prio, tags, done_when in rows:
+    for bid, role, title, status, prio, tags, done_when, track in rows:
         pr = {"critical": "‼️", "high": "⬆️", "normal": "·", "low": "⬇️"}.get(prio, "·")
         tg = " ".join(f"#{t}" for t in json.loads(tags or "[]"))
         shared = " (SHARED)" if role == "SHARED" else ""
@@ -309,7 +446,8 @@ def cmd_list(conn, a):
         mark = "  " if done_when else " ✎"
         if not done_when and status in OPEN_STATUSES:
             no_criterion += 1
-        print(f"  #{bid} {icon.get(status,'?')} {pr}{mark} {title}{shared}  {tg}")
+        pool_mark = "🎯" if (pools and track in pools) else ""
+        print(f"  {pool_mark}#{bid} {icon.get(status,'?')} {pr}{mark} {title}{shared}  {tg}")
         digest = _criterion_digest(done_when)
         if digest:
             print(f"        🎯 {digest}")
@@ -322,6 +460,11 @@ def cmd_list(conn, a):
                 "AND body_md IS NOT NULL AND TRIM(body_md) != '' "
                 "ORDER BY id DESC LIMIT 1", (bid,)).fetchone()
             print(f"        ✗ причина: {why[0][:140] if why else 'НЕ ЗАПИСАНА (карточка закрыта до того, как причину стали требовать, 14.08)'}")
+        # Замороженная обязана показывать, ЧТО её разбудит, — условие без витрины
+        # умирает как всякое поле «пишется-не-читается» (П① пула, 27.08).
+        if status == "frozen":
+            cond = conn.execute("SELECT blocked_reason FROM backlog WHERE id=?", (bid,)).fetchone()
+            print(f"        🧊 {cond[0][:140] if cond and cond[0] else 'условие разморозки НЕ ЗАПИСАНО — так быть не должно, ворота его требуют'}")
     if no_criterion:
         print(f"\n✎ без критерия готовности: {no_criterion} из {len(rows)} "
               f"— чем докажешь, что сделано?")
@@ -486,8 +629,20 @@ def cmd_status(conn, a):
               f'--note "причина; заменено: карточка #N"', file=sys.stderr)
         sys.exit(1)
 
-    # причина стоянки хранится одна и та же и для «жду чужую работу», и для «жду слово»
-    blocked_reason = note if a.new_status in ("blocked", "awaiting_word") else None
+    # ⛔ ВОРОТА: «заморожена» БЕЗ УСЛОВИЯ РАЗМОРОЗКИ не бывает (П① пула, 27.08).
+    # Заморозка без условия — это dropped, стесняющийся себя: карточка молчит, ЧТО её
+    # разбудит, и лежит вечно. Условие — событие или дата, а не «когда-нибудь».
+    if a.new_status == "frozen" and not note.strip():
+        print(f"⛔ backlog #{a.id} «{title}» — ЗАМОРОЗИТЬ БЕЗ УСЛОВИЯ РАЗМОРОЗКИ нельзя.",
+              file=sys.stderr)
+        print("   Что её разбудит? Событие или дата. «Отпала насовсем» — это dropped.",
+              file=sys.stderr)
+        print(f'   backlog.py status {a.id} frozen --actor {a.actor} '
+              f'--note "условие разморозки: <событие или дата>"', file=sys.stderr)
+        sys.exit(1)
+
+    # причина стоянки хранится одинаково для «жду чужую работу», «жду слово» и «заморожена»
+    blocked_reason = note if a.new_status in ("blocked", "awaiting_word", "frozen") else None
     conn.execute(
         "UPDATE backlog SET status = ?, blocked_reason = ?, updated_at = datetime('now') WHERE id = ?",
         (a.new_status, blocked_reason, a.id))
@@ -498,6 +653,68 @@ def cmd_status(conn, a):
     чьё = "" if actor == owner_u else f" [карточка {owner}]"
     print(f"✅ backlog #{a.id}{чьё} «{title}»: {old} → {a.new_status}"
           + (f" ({note})" if note else ""))
+
+    # ═══ П⑤ (27.08): карточка, рождённая каналом issues, при закрытии напоминает
+    # закрыть и issue — иначе заявка снаружи висит открытой при сделанной работе,
+    # и читатель образца решает, что контур молчит.
+    if a.new_status in ("done", "dropped", "failed"):
+        try:
+            теги = conn.execute("SELECT tags FROM backlog WHERE id=?", (a.id,)).fetchone()[0]
+            m = re.search(r"gordi-issue #(\d+)", теги or "")
+            if m:
+                print(f"📮 карточка несёт тег gordi-issue #{m.group(1)} — закрой и issue "
+                      f"ссылкой на коммит: gordi-issue.py close --role COORD "
+                      f"--number {m.group(1)} --note \"починено: <коммит>\" (рукой COORD)")
+        except Exception:                             # noqa: BLE001
+            pass
+
+    # ═══ П② (27.08): взятие карточки ПУЛА в работу требует ЖИВОГО объявления — пока
+    # ПРЕДУПРЕЖДЕНИЕМ (доля замеряется по событиям). Объявление говорит коллегам ЧТО
+    # и НА СКОЛЬКО; смена статуса без него — молчаливая работа, её не видит витрина пула.
+    if a.new_status == "in_progress":
+        try:
+            pools = active_pool_tracks(conn)
+            трек = conn.execute("SELECT parent_track FROM backlog WHERE id=?",
+                                (a.id,)).fetchone()[0]
+            if трек and трек in pools:
+                alive, _ = live_and_overdue(conn, [a.id])
+                if not alive:
+                    print(f"⚠️ карточка пула взята в работу БЕЗ живого объявления — "
+                          f"скажи, что и на сколько: backlog.py claim {a.id} "
+                          f"--actor {a.actor} --note \"…\"")
+        except Exception as e:                        # noqa: BLE001
+            print(f"⚠️ проверка объявления не выполнена ({type(e).__name__})", file=sys.stderr)
+
+    # ═══ СТАТУС РОЛИ — ТЕМ ЖЕ ВЫЗОВОМ (шаг 0 пула, слово владельца 27.08 18:33 UTC) ═══
+    # Отдельная кнопка статуса мертва замером 27.08: PROTO не трогал её 22 дня, TAXO 20,
+    # STUD 16. Закрытие карточки активного пула и есть событие «чем занята роль» —
+    # оно записывается в role_status тем же ходом, кнопку помнить не надо.
+    # Только ЗАКРЫВАЮЩИЕ статусы: чтение и промежуточные смены статус не трогают, иначе
+    # он перестанет значить. 2.2 (28.08): расширено с карточек ПУЛА на любое закрытие —
+    # закрытие и есть событие «чем занята роль». Время в текст не пишется — оно уже
+    # в updated_at, вторая шкала родила бы расхождение (класс двух шкал оплачен).
+    # Ошибка здесь не вправе отменить уже сделанную смену статуса карточки — только слова.
+    if a.new_status in ("done", "failed", "dropped"):
+        try:
+            pools = active_pool_tracks(conn)
+            карточкин_пул = conn.execute(
+                "SELECT parent_track FROM backlog WHERE id = ?", (a.id,)).fetchone()[0]
+            в_пуле = bool(карточкин_пул) and карточкин_пул in pools
+            текст = (f"карточка #{a.id} «{title[:70]}» → {a.new_status}"
+                     + (f" — {note[:120]}" if note else "")
+                     + (f" (пул {карточкин_пул})" if в_пуле else "")
+                     + " [записано закрытием карточки]")
+            conn.execute(
+                "INSERT INTO role_status (role, status, updated_at) "
+                "VALUES (?, ?, datetime('now')) "
+                "ON CONFLICT(role) DO UPDATE SET status = excluded.status, "
+                "updated_at = excluded.updated_at", (actor, текст))
+            conn.commit()
+            print(f"📌 статус роли {actor} обновлён ТЕМ ЖЕ вызовом"
+                  + (f" (пул {карточкин_пул})" if в_пуле else ""))
+        except Exception as e:                    # noqa: BLE001
+            print(f"⚠️ статус роли НЕ обновлён ({type(e).__name__}) — карточка закрыта, "
+                  f"статус запиши рукой", file=sys.stderr)
 
 
 def cmd_comment(conn, a):
@@ -586,7 +803,9 @@ def main():
     dryrun.add_argument(pw)
     pw.add_argument("id", type=int)
     pw.add_argument("--actor", required=True)
-    pw.add_argument("--minutes", type=int, default=120, help="на сколько берёшь (по умолчанию 2 ч)")
+    pw.add_argument("--minutes", type=int, default=None,
+                    help="на сколько берёшь (по умолчанию: карточка пула 60 мин — П②, "
+                         "прочие 2 ч)")
     pw.add_argument("--note", default="", help="что именно делаешь — это увидят коллеги")
     pw.add_argument("--release", action="store_true", help="снять объявление досрочно")
 

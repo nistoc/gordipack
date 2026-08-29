@@ -25,12 +25,18 @@ from pathlib import Path
 from mezo_paths import resolve_db   # R15a: путь к БД — от расположения скрипта, не от CWD
 
 
+# карточка #384 (слово владельца 29.08.2026): показ «UTC (местное)» вернулся — ОДНИМ
+# местом, модулем local_time.py (зона host OS на дату записи; хранение — только UTC).
+# Обёртка сохраняет здешнее отсечение секунд ([:16]) — оно про ширину строки, не про зону.
+try:
+    from local_time import utc_to_local as _utc_local_full
+except Exception:  # noqa: BLE001 — без модуля показ живёт: прежний «только UTC»
+    def _utc_local_full(s, tz=None):
+        return f"{s} UTC" if s else "—"
+
+
 def utc_to_local(s):
-    """UTC → UTC. Имя оставлено ради совместимости вызовов; конвертации БОЛЬШЕ НЕТ.
-    Правило timestamp-utc-in-sqlite v2 (владелец 2026-07-16 12:12 UTC): одна шкала — UTC.
-    Суффикс UTC обязателен: метка без зоны неотличима от локальной.
-    Этот файл гард пропустил вместе со stats.py — подробности в stats.py:utc_to_local."""
-    return f"{s[:16]} UTC" if s else "—"
+    return _utc_local_full(s[:16] if s else s)
 
 
 def ensure_acks_table(conn):
