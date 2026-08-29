@@ -17,6 +17,18 @@
 ⚖️ ГРАНИЦА, НАЗЫВАЮ ВСЛУХ: решето ищет ЗНАКОМЫЕ ФОРМЫ. Отменённое решение, сформулированное
 непривычными словами, оно не найдёт ВООБЩЕ — как не нашло бы «поднять такт синка», не будь
 в списке слова «такт». Пустой вывод здесь означает «знакомых форм нет», а не «память чиста».
+
+ВТОРОЙ ВОПРОС (карточка #392, замер @CHROME 29.08): самый дорогой класс — ПРОТУХШИЙ
+ПРИКАЗ — знакомой формы не имеет вовсе: «делай X — НЕ отозвано» выглядит ровно как живой
+приказ, и прибор был силён там, где беда дешёвая (число), и молчал там, где дорогая
+(приказ). Поэтому рядом со списком форм задаётся второй вопрос: строка, УТВЕРЖДАЮЩАЯ
+О ЖИВОМ МИРЕ («не отозвано», «ждёт», «блокер», «живёт в», «стоит на») и несущая ЧАС
+СТАРШЕ ПОРОГА, печатается отдельным разрядом «перемерь». Это НЕ находка, а требование
+перемера: прибор не может знать, отозвано ли, — но может знать, что утверждение старое
+и проверяемое. Встречная граница: та же строка под надгробием («⚰️ отозвано словом
+от <час>») в разряд не попадает — иначе роль, честно похоронившая приказ, наказывается
+за честность. Второй источник того же класса — «нельзя» в УЧАЩИХ ТЕКСТАХ вне памяти
+(замер @OPSSRE, записка #4157 §②) — этим прибором НЕ судится: у него другой хозяин-файл.
 """
 from __future__ import annotations
 
@@ -121,6 +133,46 @@ FORMS = {
 }
 
 
+# ═══ ВТОРОЙ ВОПРОС: разряд «перемерь» (карточка #392) ══════════════════════════════
+# Маркеры утверждения о ЖИВОМ мире — из замера @CHROME (карточка #392) плюс «в силе».
+# «стои́т» с ударением и без: в памятях встречаются оба написания.
+_REMEASURE_MARKERS = re.compile(
+    r"не\s+отозван\w*|не\s+снят\w*|жд[её]т\b|блокер|жив[её]т\s+в\b"
+    r"|стои́?т\s+на\b|в\s+силе\b", re.IGNORECASE)
+# Надгробие гасит разряд. Просмотры назад с «не » — потому что «НЕ отозвано»/«не снято» —
+# это, наоборот, живое утверждение, и глушить его его же словом было бы дырой в сам предмет.
+_REMEASURE_TOMB = re.compile(
+    r"⚰|надгроб|(?<!не )(?<!НЕ )отозван|(?<!не )(?<!НЕ )отмен|(?<!не )(?<!НЕ )сня[лт]",
+    re.IGNORECASE)
+_REMEASURE_DATE = re.compile(
+    r"(?P<y>20\d\d)-(?P<m>\d\d)-(?P<d>\d\d)"
+    r"|(?<![\d.])(?P<d2>\d{1,2})\.(?P<m2>\d\d)(?:\.(?P<y2>20\d\d))?(?![\d.])")
+
+
+def _claim_age_days(line: str, now) -> float | None:
+    """Возраст САМОЙ СТАРОЙ даты в строке, в сутках; None — дат нет.
+
+    Судим по старейшей: утверждение «живо с 26.08» протухает от часа УТВЕРЖДЕНИЯ,
+    а не от свежей даты, дописанной рядом. День.месяц без года — текущий год;
+    вышло будущее — это прошлый год (декабрьская запись, читаемая в январе)."""
+    import datetime as _dt
+    oldest = None
+    for m in _REMEASURE_DATE.finditer(line):
+        try:
+            if m.group("y"):
+                d = _dt.date(int(m.group("y")), int(m.group("m")), int(m.group("d")))
+            else:
+                y = int(m.group("y2")) if m.group("y2") else now.year
+                d = _dt.date(y, int(m.group("m2")), int(m.group("d2")))
+                if not m.group("y2") and d > now:
+                    d = _dt.date(y - 1, d.month, d.day)
+        except ValueError:
+            continue                      # 32.13 и подобное — не дата
+        if oldest is None or d < oldest:
+            oldest = d
+    return None if oldest is None else (now - oldest).days
+
+
 def _window(line: str, span: tuple[int, int], width: int = 150) -> str:
     """Окно ВОКРУГ совпадения, а не начало строки.
 
@@ -139,7 +191,7 @@ def _window(line: str, span: tuple[int, int], width: int = 150) -> str:
     return ("…" if left > 0 else "") + line[left:right] + ("…" if right < len(line) else "")
 
 
-def sieve(db: str, role: str, show_excused: bool) -> int:
+def sieve(db: str, role: str, show_excused: bool, remeasure_days: int = 2) -> int:
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     rows = con.execute(
         "SELECT section, body, saved_at FROM phoenix WHERE UPPER(role)=? ORDER BY section",
@@ -189,7 +241,31 @@ def sieve(db: str, role: str, show_excused: bool) -> int:
                 print(f"   [{sec}:{i:3}] {_window(line, span)}{mark}")
             print()
 
-    print(f"ИТОГО кандидатов: {hits} · прощено как надгробия и уроки: {excused}")
+    # ═══ ВТОРОЙ ВОПРОС (карточка #392): протухший приказ знакомой формы не имеет ═════
+    import datetime as _dt
+    today = _dt.datetime.now(_dt.timezone.utc).date()
+    remeasure = []
+    for sec, body, _ in rows:
+        if sec == "history":
+            continue                       # хроника по построению: там всё — рассказ
+        for i, line in enumerate(body.splitlines(), 1):
+            m = _REMEASURE_MARKERS.search(line)
+            if not m or _REMEASURE_TOMB.search(line):
+                continue
+            age = _claim_age_days(line, today)
+            if age is None or age < remeasure_days:
+                continue
+            remeasure.append((sec, i, line.strip(), (m.start(), m.end()), age))
+    if remeasure:
+        print(f"── УТВЕРЖДЕНИЕ О ЖИВОМ МИРЕ СТАРШЕ {remeasure_days} СУТОК — ПЕРЕМЕРЬ")
+        print("   Это не находка, а требование перемера: прибор не знает, отозвано ли, —")
+        print("   но знает, что утверждение старое и ПРОВЕРЯЕМОЕ. Спроси мир, не память.")
+        for sec, i, line, span, age in remeasure:
+            print(f"   [{sec}:{i:3}] ({age} сут) {_window(line, span)}")
+        print()
+
+    print(f"ИТОГО кандидатов: {hits} · прощено как надгробия и уроки: {excused}"
+          f" · требуют перемера: {len(remeasure)}")
     print("⚖️ Кандидат — НЕ находка: каждого разбирай ГЛАЗАМИ. Прощённые тоже смотри —")
     print("   если среди них живой приказ, проверка промолчала ЗРЯ, и чинить надо проверку.")
     print("⚠️ Ищутся ЗНАКОМЫЕ формы. Отменённое непривычными словами не найдётся ВООБЩЕ:")
@@ -203,9 +279,13 @@ def main() -> int:
     ap.add_argument("--db", default=None)
     ap.add_argument("--show-excused", action="store_true",
                     help="показать и прощённые строки: они бывают живым приказом в маске урока")
+    ap.add_argument("--remeasure-days", type=int, default=2, dest="remeasure_days",
+                    help="порог разряда «перемерь» в сутках (карточка #392): утверждение "
+                         "о живом мире со часом старше порога требует перемера. "
+                         "По умолчанию 2 — настоящие протухания замера жили 1–3 суток")
     a = ap.parse_args()
     db = a.db or str(mezo_paths.live_db())
-    return sieve(db, a.role, a.show_excused)
+    return sieve(db, a.role, a.show_excused, a.remeasure_days)
 
 
 if __name__ == "__main__":
