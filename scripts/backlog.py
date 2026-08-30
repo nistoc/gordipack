@@ -429,9 +429,41 @@ def вид_и_вопросы(tags_json):
     return ВОПРОСЫ_ПРОЧЕЕ
 
 
+def _parse_tags(raw):
+    """Карточка #447: форма меток проверяется НА ВХОДЕ. Единственная форма — через
+    запятую «a,b,c». Прежний код принимал ЛЮБУЮ строку: JSON-список оборачивался
+    второй раз и портился молча (отбор по метке не находил карточку никогда).
+    Возврат: (список меток, слово-предупреждение или None). Негодная форма — отказ
+    СО СЛОВОМ (не молчаливым кодом возврата): что не так и как правильно."""
+    raw = (raw or "").strip()
+    if not raw:
+        return [], None
+    if raw[0] in "[{":
+        print(f"⛔ метки НЕ приняты — вход похож на JSON: {raw[:60]!r}", file=sys.stderr)
+        print('   форма меток ЕДИНСТВЕННАЯ — через запятую: --tags "a,b,c"', file=sys.stderr)
+        print("   JSON не разбирается НАМЕРЕННО: вторая законная форма входа — вторая жизнь"
+              " этой же порчи (карточка #447)", file=sys.stderr)
+        sys.exit(1)
+    метки = [t.strip() for t in raw.split(",")]
+    if any(not t for t in метки):
+        print(f"⛔ метки НЕ приняты — пустая метка между запятыми: {raw!r}", file=sys.stderr)
+        print('   форма: --tags "a,b,c" без пустот; не нужны метки — не передавай --tags',
+              file=sys.stderr)
+        sys.exit(1)
+    слово = None
+    if метки != raw.split(","):
+        # Принято, но не молча: пробел у запятой прежде уезжал ВНУТРЬ метки —
+        # роль обязана видеть, что записалось не байт-в-байт её строке.
+        # Показ СПИСКОМ, не строкой через «, »: строка "a, b" неотличима глазом
+        # от необрезанного входа — слово было бы правдой, а показ лгал бы рядом.
+        слово = f"⚠️ пробелы вокруг меток обрезаны, записано: {метки}"
+    return метки, слово
+
+
 def cmd_add(conn, a):
     body = _text(a.body, a.body_file)
-    tags = json.dumps([t.strip() for t in a.tags.split(",") if t.strip()], ensure_ascii=False)
+    метки, слово_меток = _parse_tags(a.tags)
+    tags = json.dumps(метки, ensure_ascii=False)
     done_when = _text(a.done_when, getattr(a, "done_when_file", None)).strip() or None
 
     # ⛔ ВОРОТА ЗАВЕДЕНИЯ. Слово владельца 2026-08-07 12:56 UTC (через @PROTO #3228, дословно):
@@ -472,6 +504,8 @@ def cmd_add(conn, a):
     # со стороны будет трудно». Смешать их значило бы утопить отказ в шуме.
     warn_dangling(body, label="тело карточки")
     warn_dangling(done_when, label="критерий")
+    if слово_меток:
+        print(слово_меток)
 
     # ═══ П① (27.08): при живом пуле НОВОЕ — В ПУЛ. Предупреждение осталось для случая
     # «активных наборов не один». Встречный держится сам: пула нет — строки нет.
@@ -1000,7 +1034,11 @@ def main():
     pa.add_argument("--body", default="")
     pa.add_argument("--body-file", dest="body_file")
     pa.add_argument("--priority", default="normal", choices=["low", "normal", "high", "critical"])
-    pa.add_argument("--tags", default="")
+    pa.add_argument("--tags", default="",
+                    # Карточка #447: справка обязана НАЗВАТЬ форму — прежде молчала,
+                    # и роль передавала JSON, который портился молча.
+                    help='метки через запятую: "a,b,c" — единственная форма; '
+                         "JSON и пустые метки отклоняются со словом")
     pa.add_argument("--parent", type=int)
     pa.add_argument("--track")
     pa.add_argument("--actor")
