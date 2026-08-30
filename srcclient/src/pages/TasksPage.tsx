@@ -235,6 +235,27 @@ export function TasksPage({ overview, refreshMs }: { overview: Overview | null; 
    * и теряются. Сворачивание — удобство человека, а не умолчание экрана.
    * Живёт в состоянии страницы, а не в адресе: это не то, чем делятся ссылкой.
    */
+  /**
+   * ПУСТЫЕ НАБОРЫ — СВЁРНУТЫ В ОДНУ СТРОКУ, А НЕ СПРЯТАНЫ. Повод: владелец увидел на
+   * живом экране шесть секций подряд без единой плитки и спросил, зачем они здесь
+   * (передано @PROTO, записка #4608, 2026-08-30 23:47 UTC).
+   * ⚖️ Прежнее решение — рисовать КАЖДУЮ — защищало верное: «набор есть, задач в нём
+   *    нет» и «набора нет» разные новости, и вторую нам никто не сообщает. Но эта
+   *    новость занимала шесть экранов и вытесняла ту работу, ради которой экран заведён.
+   * 👉 Средина: число и ИМЕНА пустых наборов названы ВСЕГДА одной строкой, сами секции —
+   *    по требованию. Ни один набор с экрана не исчезает: он остаётся фишкой в строке
+   *    отбора выше (со своим числом) и назван поимённо здесь.
+   * ⛔ Умолчание не распространяется на отбор ОДНОГО набора: там человек выбрал его сам,
+   *    и прятать выбранное значило бы отвечать молчанием на прямой вопрос.
+   */
+  const emptyGroups = useMemo(() => groups.filter((g) => g.count === 0), [groups]);
+  const filledGroups = useMemo(() => groups.filter((g) => g.count > 0), [groups]);
+  const [showEmpty, setShowEmpty] = useState(false);
+  const visibleGroups = useMemo(
+    () => (showEmpty ? [...filledGroups, ...emptyGroups] : filledGroups),
+    [showEmpty, filledGroups, emptyGroups],
+  );
+
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const toggleCollapsed = (key: string) => setCollapsed((prev) => {
     const next = new Set(prev);
@@ -639,7 +660,7 @@ export function TasksPage({ overview, refreshMs }: { overview: Overview | null; 
         )}
 
         {track === 'all'
-          ? groups.map((g) => {
+          ? visibleGroups.map((g) => {
             const key = g.trackId ?? UNTRACKED_KEY;
             return (
               <TrackSection
@@ -684,6 +705,30 @@ export function TasksPage({ overview, refreshMs }: { overview: Overview | null; 
               onToggle={() => { /* при отборе одного набора сворачивать нечего */ }}
             />
           )}
+
+        {/* Строка о пустых наборах. Стои́т ПОСЛЕ секций и всегда несёт ЧИСЛО И ИМЕНА:
+            свёрнутое, о котором сказано числом и поимённо, — это сжатие; свёрнутое
+            молча — пропажа, и заметить её нечем. */}
+        {track === 'all' && emptyGroups.length > 0 && (
+          <p className="tracksecs__empty muted" data-panel="empty-tracks-summary">
+            <span data-control="empty-tracks-count">
+              наборов без задач: {emptyGroups.length}
+            </span>
+            {' — '}
+            <span data-control="empty-tracks-names">
+              {emptyGroups.map((g) => g.trackId ?? '(без набора)').join(' · ')}
+            </span>
+            {'. '}
+            <button
+              className="linkish"
+              type="button"
+              onClick={() => setShowEmpty((v) => !v)}
+              data-control="empty-tracks-toggle"
+            >
+              {showEmpty ? 'убрать их секции' : 'показать их секциями'}
+            </button>
+          </p>
+        )}
       </div>
     </div>
   );

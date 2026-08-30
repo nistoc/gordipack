@@ -601,6 +601,15 @@ code { background: var(--surface2); padding: 1px 5px; border-radius: 4px; }
    ───────────────────────────────────────────────────────────────────────────── */
 .tracksecs { display: flex; flex-direction: column; gap: 18px; }
 
+/* Строка о пустых наборах: не заголовок и не секция — сноска под списком.
+   Кнопка внутри неё выглядит ссылкой намеренно: она меняет ПОКАЗ, а не данные. */
+.tracksecs__empty { margin: 2px 0 0; font-size: 13px; line-height: 1.5; }
+.linkish {
+  background: none; border: 0; padding: 0; font: inherit; color: var(--accent, #4a8);
+  cursor: pointer; text-decoration: underline; text-underline-offset: 2px;
+}
+.linkish:hover { opacity: .8; }
+
 .tracksec {
   border-top: 1px solid var(--border);
   padding-top: 10px;
