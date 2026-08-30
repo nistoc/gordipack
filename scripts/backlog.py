@@ -265,6 +265,29 @@ def cmd_claim(conn, a):
             print("📝 направления сейчас НЕТ (активных наборов не один) — причина "
                   "всё равно записана событием в журнал карточки: иначе летопись "
                   "«кто брал вне направления и почему» несла бы дыру за этот период")
+    # ═══ Карточка #441 (STUD; два столкновения за 20 минут 29.08): взятие карточки,
+    # которую УЖЕ держит другая роль, называет её имя и час — ПРЕДУПРЕЖДЕНИЕ, не отказ
+    # (двое на одной карточке иногда законны: сдающий и приёмщик). Живое чужое взятие =
+    # последний claim роли без более позднего claim_release, срок которого не истёк;
+    # истёкший шаг тихий — иначе роль научится пролистывать.
+    сейчас = conn.execute("SELECT datetime('now')").fetchone()[0]
+    for кто, тело in conn.execute(
+            "SELECT e.actor_role, e.body_md FROM backlog_events e "
+            "WHERE e.backlog_id=? AND e.event_type='claim' "
+            "AND UPPER(e.actor_role)<>UPPER(?) "
+            "AND e.id=(SELECT MAX(e2.id) FROM backlog_events e2 "
+            "          WHERE e2.backlog_id=e.backlog_id AND e2.event_type='claim' "
+            "          AND UPPER(e2.actor_role)=UPPER(e.actor_role)) "
+            "AND NOT EXISTS (SELECT 1 FROM backlog_events r "
+            "          WHERE r.backlog_id=e.backlog_id AND r.event_type='claim_release' "
+            "          AND UPPER(r.actor_role)=UPPER(e.actor_role) AND r.id>e.id)",
+            (a.id, a.actor)):
+        m = re.match(r"до (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) UTC", тело or "")
+        if m and m.group(1) > сейчас:
+            print(f"⚠️ карточку #{a.id} УЖЕ ДЕРЖИТ {кто} — до {m.group(1)[:16]} UTC: "
+                  f"«{(тело or '').split('·', 1)[-1].strip()[:100]}»")
+            print("   Двое на одной карточке иногда законны (сдающий и приёмщик), чаще — "
+                  "столкновение. Твоё взятие всё равно записано ниже, оба видны в журнале.")
     # ═══ П② (27.08): шаг карточки ПУЛА — 60 минут вместо 120; длиннее 90 — предупреждение.
     # Короткая итерация встроена ВОРОТАМИ инструмента, а не попрошена правилом.
     minutes = a.minutes if a.minutes is not None else (60 if in_pool else 120)
@@ -283,6 +306,10 @@ def cmd_claim(conn, a):
     print("   Видно коллегам при пробуждении и в общем прогоне проверок. Гаснет само —")
     print("   снимать не обязательно; досрочно: backlog.py claim {} --actor {} --release"
           .format(a.id, a.actor))
+    # Карточка #441, третий встречный (случай TAXO/лента): граница названа ЧЕСТНО —
+    # тишина выше не значит «свободна», машина видит только взятия инструментом.
+    print("   ⚖️ проверено ТОЛЬКО против взятий ИНСТРУМЕНТОМ: объявление комментарием "
+          "или запиской в ленте машина не читает")
     # 2.2 (28.08): claim и есть «чем занята роль» — статус тем же вызовом, кнопки нет.
     try:
         conn.execute(
