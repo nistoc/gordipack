@@ -19,6 +19,7 @@
 обновил инструменты раньше, чем прогнал шаги, — но теперь она записывает себя в журнал
 тем же общим модулем, что и этот шаг.
 """
+import argparse
 import sqlite3
 import sys
 from pathlib import Path
@@ -31,7 +32,14 @@ VERSION = "20260822-sync-backoff-bridge-mtime"
 
 
 def main() -> int:
-    db = mezo_paths.live_db()
+    # ⚠️ ПУТЬ К БАЗЕ — ДОВОДОМ, см. разбор в соседнем шаге 20260816: прежняя редакция
+    # звала live_db() и молча игнорировала --db, отвечая успехом о ЖИВОЙ базе.
+    ap = argparse.ArgumentParser(description="шаг схемы: мост сна к соседям по времени правки")
+    ap.add_argument("--db", default=None, help="путь к базе; без него — живая база контура")
+    ap.add_argument("--dry-run", action="store_true", help="ХОЛОСТОЙ прогон: ничего не менять")
+    a = ap.parse_args()
+    db = mezo_paths.resolve_db(a.db, __file__)
+    print(f"📂 БАЗА: {db}")
     con = sqlite3.connect(db)
     есть_таблица = con.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sync_backoff'").fetchone()
@@ -39,6 +47,15 @@ def main() -> int:
                if есть_таблица else set())
     уже = con.execute("SELECT 1 FROM schema_migrations WHERE version=?",
                       (VERSION,)).fetchone()
+
+    if a.dry_run:
+        print(f"⟨ВХОЛОСТУЮ⟩ таблица sync_backoff: {'есть' if есть_таблица else 'НЕТ'} · "
+              f"столбец last_bridge_mtime: "
+              f"{'есть' if 'last_bridge_mtime' in столбцы else 'НЕТ'} · "
+              f"запись в журнале: {'есть' if уже else 'НЕТ'}")
+        print("⟨ВХОЛОСТУЮ⟩ база НЕ тронута.")
+        con.close()
+        return 0
 
     if есть_таблица and "last_bridge_mtime" in столбцы:
         if уже:
