@@ -334,6 +334,62 @@ def cmd_claim(conn, a):
         print(f"⚠️ статус роли НЕ обновлён ({type(e).__name__}) — объявление записано",
               file=sys.stderr)
 
+def cmd_edit(conn, a):
+    """Правка ЗАГОЛОВКА и/или НАБОРА заведённой карточки — со СЛЕДОМ-событием.
+
+    ═══ Карточка #452 (ING; живой случай — заголовок карточки #434 с приметой,
+    которую замер не подтвердил, жил в списках вечно, верное имя легло лишь
+    комментарием). Заголовок — всё, что видно в списках; ошибка в нём — указатель
+    в неверную сторону. Правка ОБЯЗАНА оставлять след: прежнее значение ложится
+    СОБЫТИЕМ с именем правившей роли — иначе переименование становится способом
+    тихо переписать предмет спора (ограничение зоны, записка #4332, усилено
+    критерием карточки). Предмет РОВНО заголовок и набор — тело и критерий
+    правятся своими командами со своей ценой."""
+    row = conn.execute("SELECT role, title, parent_track FROM backlog WHERE id=?",
+                       (a.id,)).fetchone()
+    if not row:
+        sys.exit(f"⛔ карточки #{a.id} нет")
+    owner, old_title, old_track = row
+    if a.title is None and a.track is None:
+        sys.exit("⛔ скажи, ЧТО правишь: --title «новое имя» и/или --track НАБОР")
+    if a.title is not None and not a.title.strip():
+        # Встречный ③ критерия: карточка без заголовка невидима в списках
+        # вернее, чем с неверным.
+        sys.exit("⛔ пустое имя НЕ записывается: карточка без заголовка невидима "
+                 "в списках вернее, чем с неверным")
+    # Ворота чужой карточки — те же, что у смены состояния: сверка НАЗВАННОГО
+    # владельца с базой (знание, а не намерение).
+    actor = (a.actor or "").upper()
+    if actor != (owner or "").upper():
+        named = (a.foreign or "").upper()
+        if named != (owner or "").upper():
+            print(f"⛔ backlog #{a.id} «{old_title[:50]}» принадлежит роли {owner}, "
+                  f"а ты {a.actor}.", file=sys.stderr)
+            if named:
+                print(f"   Ты назвал владельцем {a.foreign} — не совпало с базой. "
+                      "Возможно, это НЕ та карточка.", file=sys.stderr)
+            else:
+                print("   Чужую карточку править можно, но её владельца надо НАЗВАТЬ: "
+                      f"--foreign {owner}", file=sys.stderr)
+            sys.exit(1)
+    if a.title is not None and a.title.strip() != old_title:
+        conn.execute("UPDATE backlog SET title=?, updated_at=datetime('now') WHERE id=?",
+                     (a.title.strip(), a.id))
+        _event(conn, a.id, a.actor, "retitle",
+               f"ПРЕЖНЕЕ имя: «{old_title}» → новое: «{a.title.strip()}»"
+               + (f" · причина: {a.note}" if (a.note or "").strip() else ""))
+        print(f"✏️ заголовок #{a.id} заменён; прежнее имя лежит СОБЫТИЕМ в истории")
+    if a.track is not None:
+        conn.execute("UPDATE backlog SET parent_track=?, updated_at=datetime('now') "
+                     "WHERE id=?", (a.track or None, a.id))
+        _event(conn, a.id, a.actor, "retrack",
+               f"ПРЕЖНИЙ набор: «{old_track or '—'}» → новый: «{a.track or '—'}»"
+               + (f" · причина: {a.note}" if (a.note or "").strip() else ""))
+        print(f"📦 набор #{a.id}: «{old_track or '—'}» → «{a.track or '—'}»; "
+              f"прежний лежит СОБЫТИЕМ в истории")
+    conn.commit()
+
+
 # ═══ Карточка #430 ступень ② (правило interview-before-recommend; слово владельца
 # 29.08 21:24 UTC, чат PROTO). Разбор замысла — ВОПРОСАМИ, и вопросы РАЗНЫЕ для разных
 # видов работы: один набор на всё горит всегда и потому не значит ничего (текст правила).
@@ -1021,6 +1077,18 @@ def main():
     pc.add_argument("--body", default="")
     pc.add_argument("--body-file", dest="body_file")
 
+    pe = sub.add_parser("edit", help="править ЗАГОЛОВОК/НАБОР заведённой карточки — "
+                                     "со следом-событием (карточка #452)")
+    dryrun.add_argument(pe)
+    pe.add_argument("id", type=int)
+    pe.add_argument("--actor", required=True)
+    pe.add_argument("--title", default=None, help="новое имя (прежнее ляжет событием)")
+    pe.add_argument("--track", default=None,
+                    help="новый набор; пустая строка = убрать из набора")
+    pe.add_argument("--foreign", default=None, metavar="РОЛЬ",
+                    help="правишь ЧУЖУЮ карточку — назови её владельца (сверяется с базой)")
+    pe.add_argument("--note", default="", help="причина правки — ляжет в событие")
+
     a = p.parse_args()
     # R15a: от расположения скрипта, не от CWD · #391: характер вызова назван списком выше
     a.db = str(resolve_db(a.db, __file__, readonly=(a.cmd in READ_CMDS)))
@@ -1029,7 +1097,7 @@ def main():
     conn = _conn(a.db, getattr(a, "dry_run", False))
     {"add": cmd_add, "list": cmd_list, "show": cmd_show,
      "status": cmd_status, "comment": cmd_comment, "criterion": cmd_criterion,
-     "claim": cmd_claim}[a.cmd](conn, a)
+     "claim": cmd_claim, "edit": cmd_edit}[a.cmd](conn, a)
     conn.close()
 
 
