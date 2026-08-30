@@ -25,6 +25,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
+import mezo_target  # noqa: E402
+
+# ═══ Карточка #454 (TAXO): испытуемый механизм — ЧЕРЕЗ ВЫБОР КОПИИ, не жёстко из
+# живого. MEZO_SCRIPTS_ROOT действует; MEZO_FORBID_LIVE=1 без подмены — отказ
+# «НЕ ЗАПУСТИЛАСЬ» ЗДЕСЬ, до стенда, а не зелёный прогон по живому.
+# ⚖️ ГРАНИЦА, названная вслух: испытуемый — role-brief.py; стендовый инструментарий
+# (mezo_stand) и копируемая база — из живого ВСЕГДА: они ставят опыт, их не испытываем.
+ИСПЫТУЕМЫЙ = mezo_target.script("role-brief.py")
+print(f"⚖️ испытуется: {mezo_target.label()}")
 
 SCRIPTS = mezo_paths.live_scripts()
 LIVE_DB = mezo_paths.live_db()
@@ -44,7 +53,7 @@ def case(name, cond, detail=""):
 
 def brief(db, role):
     env = dict(os.environ, PYTHONIOENCODING="utf-8")
-    p = subprocess.run([sys.executable, str(SCRIPTS / "role-brief.py"),
+    p = subprocess.run([sys.executable, str(ИСПЫТУЕМЫЙ),
                         "--role", role, "--db", str(db)],
                        capture_output=True, text=True, encoding="utf-8",
                        errors="replace", env=env)
