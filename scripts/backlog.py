@@ -1010,7 +1010,44 @@ def cmd_comment(conn, a):
     print(f"✅ комментарий добавлен к backlog #{a.id}")
 
 
-READ_CMDS = {"show", "list"}
+def cmd_queue(conn, a):
+    """Карточка #422 (TAXO): очередь приёмок по ВСЕМ ролям ОДНОЙ командой.
+    Честный замер стоил девяти вызовов (по одному на роль), а «вспомнить» — нуля:
+    роль под темпом выбирала память и объявляла её замером (три записки подряд).
+    ЧАС ЗАМЕРА печатает МЕХАНИЗМ запросом к базе — роль не может приписать чужому
+    часу свой список; при пустой очереди печатается число просмотренных ролей —
+    «пусто» и «не смотрел» различимы (класс, оплаченный 29.08 трижды)."""
+    час = conn.execute("SELECT strftime('%Y-%m-%d %H:%M:%S', 'now')").fetchone()[0]
+    ролей = conn.execute(
+        "SELECT COUNT(*) FROM roles WHERE lifecycle='alive'").fetchone()[0]
+    rows = conn.execute(
+        "SELECT b.id, b.role, b.title,"
+        " (SELECT MAX(e.at) FROM backlog_events e WHERE e.backlog_id = b.id"
+        "   AND e.to_status = 'in_review') AS сдано,"
+        " CAST((julianday('now') - julianday(COALESCE("
+        "   (SELECT MAX(e.at) FROM backlog_events e WHERE e.backlog_id = b.id"
+        "     AND e.to_status = 'in_review'), b.updated_at))) * 24 AS INTEGER),"
+        " CASE WHEN instr(b.body_md, 'python ') > 0 OR EXISTS("
+        "   SELECT 1 FROM backlog_events e2 WHERE e2.backlog_id = b.id"
+        "    AND e2.event_type = 'comment' AND instr(e2.body_md, 'python ') > 0)"
+        "  THEN 1 ELSE 0 END"
+        " FROM backlog b WHERE b.status = 'in_review' ORDER BY сдано").fetchall()
+    # Строка с часом — КОПИРУЕМАЯ ЦЕЛИКОМ в записку (критерий ③).
+    print(f"🧾 ОЧЕРЕДЬ ПРИЁМОК — замер {час} UTC · ролей просмотрено {ролей} (alive)")
+    if not rows:
+        print("   очередь приёмок ПУСТА: карточек на приёмке (in_review) — 0")
+        return
+    возраст = lambda ч: f"{ч // 24} дн" if ч >= 48 else f"{ч} ч"   # noqa: E731
+    for bid, role, title, сдано, ч, рецепт in rows:
+        метка = "🆕 " if (a.since and сдано and сдано > a.since) else ""
+        print(f"   {метка}карточка #{bid} [{role}] «{title[:64]}» — на приёмке "
+              f"{возраст(ч)} · рецепт (python-строка в теле/комментариях): "
+              f"{'есть' if рецепт else 'НЕ ВИДНО'}")
+    print(f"   итого {len(rows)} · сданное после твоего прошлого запроса помечает "
+          f'--since "{час}"')
+
+
+READ_CMDS = {"show", "list", "queue"}
 # ═══ Карточка #391: читающее/пишущее — СПИСКОМ подкоманд, не эвристикой ══════════════
 # Под чужим объявлением о правке (lease.py) читающие подкоманды получают ПРЕДУПРЕЖДЕНИЕ
 # и работают: приёмщик обязан мочь читать ТЕЛА карточек во время чужой правки — замер
@@ -1127,6 +1164,12 @@ def main():
                     help="правишь ЧУЖУЮ карточку — назови её владельца (сверяется с базой)")
     pe.add_argument("--note", default="", help="причина правки — ляжет в событие")
 
+    pq = sub.add_parser("queue", help="очередь приёмок по ВСЕМ ролям одной командой, "
+                                      "час замера механизмом (карточка #422)")
+    pq.add_argument("--since", default=None, metavar="ЧАС",
+                    help="час прошлого запроса (скопируй из шапки прошлого вывода) — "
+                         "сданное позже помечается 🆕")
+
     a = p.parse_args()
     # R15a: от расположения скрипта, не от CWD · #391: характер вызова назван списком выше
     a.db = str(resolve_db(a.db, __file__, readonly=(a.cmd in READ_CMDS)))
@@ -1135,7 +1178,7 @@ def main():
     conn = _conn(a.db, getattr(a, "dry_run", False))
     {"add": cmd_add, "list": cmd_list, "show": cmd_show,
      "status": cmd_status, "comment": cmd_comment, "criterion": cmd_criterion,
-     "claim": cmd_claim, "edit": cmd_edit}[a.cmd](conn, a)
+     "claim": cmd_claim, "edit": cmd_edit, "queue": cmd_queue}[a.cmd](conn, a)
     conn.close()
 
 
