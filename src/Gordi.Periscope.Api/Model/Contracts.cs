@@ -210,6 +210,52 @@ public sealed record PoolsDto(
     IReadOnlyList<PoolDto> Active,
     string? Note);
 
+// ── Наборы задач ─────────────────────────────────────────────────────────────
+
+/// <summary>
+/// Набор задач. Declared=false — набор, который задачи НАЗЫВАЮТ, а в таблице tracks
+/// его нет вовсе (замер живой базы 2026-08-30 22:39 UTC: таких задач 8, набор «vnext»).
+/// Такой набор обязан быть виден: показать только заявленные значило бы потерять задачи
+/// молча — ровно тот случай, когда список не лжёт построчно и лжёт СОСТАВОМ.
+/// </summary>
+public sealed record TrackInfoDto(
+    string TrackId,
+    string? Title,
+    string? Status,            // active | paused | done — как в базе; null у незаявленного
+    bool Declared,
+    int TaskCount);
+
+/// <summary>Витрина наборов. Untracked — задачи БЕЗ набора: это не набор, и потому
+/// отдельным числом, а не строкой в списке.</summary>
+public sealed record TracksDto(
+    IReadOnlyList<TrackInfoDto> Items,
+    int Untracked,
+    int TasksTotal,
+    string? Note);
+
+/// <summary>
+/// Группа задач одного набора. TrackId=null — группа «без набора»: она есть в ответе
+/// ВСЕГДА, когда такие задачи есть, и стои́т последней.
+/// </summary>
+public sealed record TaskGroupDto(
+    string? TrackId,
+    string? Title,
+    string? Status,
+    bool Declared,
+    int Count,
+    IReadOnlyList<TaskDto> Items);
+
+/// <summary>
+/// Задачи, сгруппированные по наборам. TotalTasks обязан равняться сумме Count по группам —
+/// это и есть проверка «ничего не потеряно»; расхождение называется в Note, а не молчит.
+/// </summary>
+public sealed record TasksGroupedDto(
+    IReadOnlyList<TaskGroupDto> Groups,
+    int TotalTasks,
+    int Ungrouped,             // задач без набора
+    int UndeclaredTracks,      // наборов, которых нет в таблице tracks
+    string? Note);
+
 // ── Снимок ───────────────────────────────────────────────────────────────────
 
 /// <summary>
@@ -226,4 +272,11 @@ public sealed record PeriscopeSnapshot(
     RolesDto Roles,
     IReadOnlyList<RuleDto> Rules,
     SchemaReportDto Schema,
-    PoolsDto Pools);
+    PoolsDto Pools,
+    // Заявленные наборы задач (таблица tracks). Пусто, если таблицы нет — тогда
+    // группировка строится по одним значениям parent_track и говорит об этом словом.
+    IReadOnlyList<TrackDeclarationDto> TrackDeclarations);
+
+/// <summary>Строка таблицы tracks — как она есть, без счёта задач: счёт делается
+/// в ОДНОМ месте (витрина), иначе два счёта однажды разойдутся молча.</summary>
+public sealed record TrackDeclarationDto(string TrackId, string? Title, string? Status);

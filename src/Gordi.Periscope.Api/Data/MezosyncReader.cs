@@ -180,6 +180,30 @@ public static class MezosyncReader
         return list;
     }
 
+    /// <summary>
+    /// Заявленные наборы задач — ВСЕ, а не только активные: карточка живёт дольше
+    /// набора, и задачи закрытого набора обязаны показываться под его именем,
+    /// а не проваливаться в «без набора».
+    /// Таблицы tracks может не быть вовсе — тогда пусто, и витрина говорит об этом словом.
+    /// </summary>
+    public static IReadOnlyList<TrackDeclarationDto> ReadTrackDeclarations(SqliteConnection c, SchemaCapabilities s)
+    {
+        if (!s.Has("tracks")) return [];
+
+        var list = new List<TrackDeclarationDto>();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT * FROM tracks ORDER BY track_id";
+        using var r = cmd.ExecuteReader();
+        var m = Row.Map(r);
+        while (r.Read())
+        {
+            var id = Row.Str(r, m, "track_id");
+            if (string.IsNullOrWhiteSpace(id)) continue;
+            list.Add(new TrackDeclarationDto(id, Row.Str(r, m, "title"), Row.Str(r, m, "status")));
+        }
+        return list;
+    }
+
     // Причины устаревания одним запросом на весь список: последний status_change → dropped
     // с непустой запиской побеждает (ORDER BY id — поздние перезаписывают ранние в словаре).
     // Тот же отбор, что у CLI-списка: NULL/пустое тело причиной не считается.

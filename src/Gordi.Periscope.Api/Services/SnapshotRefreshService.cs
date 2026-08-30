@@ -83,7 +83,8 @@ public sealed class SnapshotRefreshService(
             Roles: MezosyncReader.ReadRoles(c, caps),
             Rules: MezosyncReader.ReadRules(c, caps),
             Schema: MezosyncReader.ReadSchemaReport(caps),
-            Pools: MezosyncReader.ReadPools(c, caps));
+            Pools: MezosyncReader.ReadPools(c, caps),
+            TrackDeclarations: MezosyncReader.ReadTrackDeclarations(c, caps));
 
         store.Publish(snapshot, changed: previous is null || previous.Fingerprint != fingerprint);
     }
