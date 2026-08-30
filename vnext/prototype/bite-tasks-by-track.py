@@ -59,9 +59,13 @@ LIVE_DB = mezo_paths.live_db()
 sys.path.insert(0, str(SCRIPTS))
 import mezo_stand  # noqa: E402
 
-# Путь к службе — переменной среды PERISCOPE_PROJECT: приёмку надо уметь прогнать
-# против ИСПОРЧЕННОЙ КОПИИ проекта, не трогая живой (доказательство «краснеет на поломке»).
-PROJECT = Path(os.environ.get("PERISCOPE_PROJECT", r"C:/github/gordipack/src/Gordi.Periscope.Api"))
+# Путь к службе. Умолчание — РЕЗОЛВОМ от корня образца, а не строкой одной машины:
+# у чужого человека вписанный путь мёртв, и он решит, что сломан механизм (гард машинных
+# путей поймал это 2026-08-30 22:52 UTC у меня же, на первом заходе).
+# Переменной среды PERISCOPE_PROJECT приёмку целят в ИСПОРЧЕННУЮ КОПИЮ проекта —
+# так доказывается, что она краснеет на поломке, а живой проект при этом не трогается.
+PROJECT = Path(os.environ.get("PERISCOPE_PROJECT")
+               or mezo_paths.template_root() / "src" / "Gordi.Periscope.Api")
 
 OK = FAIL = 0
 
