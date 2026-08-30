@@ -75,6 +75,56 @@ export interface Task {
   bodyLength: number;
 }
 
+/**
+ * Набор задач (в базе — таблица `tracks`, у задачи — поле `parent_track`).
+ * `declared: false` — набор, который задачи НАЗЫВАЮТ, а записи о нём нет вовсе:
+ * заголовка и статуса у такого не будет, но задачи его видны. Показать только
+ * заявленные значило бы потерять задачи молча.
+ */
+export interface TrackInfo {
+  trackId: string;
+  title: string | null;
+  status: string | null;   // active | paused | done — как в базе; null у незаявленного
+  declared: boolean;
+  taskCount: number;
+}
+
+/** Витрина наборов. `untracked` — задачи БЕЗ набора: это не набор, потому отдельным числом. */
+export interface TracksResponse {
+  items: TrackInfo[];
+  untracked: number;
+  tasksTotal: number;
+  note: string | null;
+}
+
+/**
+ * Группа задач одного набора. `trackId === null` — группа «без набора»: она приходит
+ * ВСЕГДА, пока такие задачи есть, и стои́т последней. Её отсутствие читалось бы
+ * как «таких задач нет».
+ */
+export interface TaskGroup {
+  trackId: string | null;
+  title: string | null;
+  status: string | null;
+  declared: boolean;
+  count: number;
+  items: Task[];
+}
+
+/**
+ * Задачи, сгруппированные по наборам.
+ * ⚠️ `totalTasks` обязан равняться сумме `count` по группам — это и есть проверка
+ * «ничего не потеряно группировкой». Расхождение служба называет в `note`, а экран
+ * обязан его НАПЕЧАТАТЬ, а не проглотить: молчащая пропажа неотличима от «столько и было».
+ */
+export interface TasksGrouped {
+  groups: TaskGroup[];
+  totalTasks: number;
+  ungrouped: number;          // задач без набора
+  undeclaredTracks: number;   // наборов, которых нет в таблице tracks
+  note: string | null;
+}
+
 export interface TaskEvent {
   id: number;
   at: string | null;

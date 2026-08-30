@@ -1,6 +1,6 @@
 import type {
   Health, Message, MessagePage, Overview, Role, RolesResponse, Rule,
-  SchemaReport, SourceInfo, Task, TaskDetail,
+  SchemaReport, SourceInfo, Task, TaskDetail, TasksGrouped, TracksResponse,
 } from './types';
 
 /**
@@ -71,9 +71,27 @@ export const api = {
   rules: () => get<Rule[]>('/rules'),
   writers: () => get<string[]>('/writers'),
 
-  tasks: (p: { status?: string; role?: string; missingCriterion?: boolean }) =>
+  /**
+   * `track` — отбор по набору, его делает СЛУЖБА, а не клиент:
+   *   имя набора · 'none' — задачи без набора · 'all'/пусто — не отбирать.
+   * ⚠️ 'none' и 'all' служебные. Если такое имя окажется настоящим набором, служба
+   * отвечает отказом СО СЛОВОМ (400) и называет обходной путь — молчаливого «не того
+   * ответа» здесь нет; текст отказа показывается человеку как есть.
+   */
+  tasks: (p: { status?: string; role?: string; track?: string; missingCriterion?: boolean }) =>
     get<Task[]>('/tasks', p),
   task: (id: number) => get<TaskDetail>(`/tasks/${id}`),
+
+  /** Наборы с числом задач в каждом + отдельным числом — задачи БЕЗ набора. */
+  tracks: () => get<TracksResponse>('/tracks'),
+
+  /**
+   * Задачи, сгруппированные по наборам. Группировку делает служба: клиент её
+   * НЕ повторяет своей рукой — иначе два порядка однажды разойдутся, и экран
+   * будет показывать не то, что отдаёт база.
+   */
+  tasksGrouped: (p: { status?: string; role?: string } = {}) =>
+    get<TasksGrouped>('/tasks/grouped', p),
 
   messages: (p: {
     limit?: number; offset?: number; role?: string;
@@ -83,3 +101,4 @@ export const api = {
 };
 
 export type { Role, Rule, Task, Message };
+export type { TaskGroup, TasksGrouped, TrackInfo, TracksResponse } from './types';

@@ -1,14 +1,14 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { api } from '../api';
 import { usePolling } from '../usePolling';
-import type { Overview, Task, TaskDetail } from '../types';
+import type { Overview, Task, TaskDetail, TaskGroup, TasksGrouped } from '../types';
 import { fmtUtc } from '../format';
 import { StatCard } from '../components/MeasureValue';
-import { Rail } from '../components/Rail';
+import { Rail, RailStrip } from '../components/Rail';
 import { PriorityMark, StatusMark } from '../components/TaskTile';
 import { useUrlEnum, useUrlNumber, useUrlParam } from '../useUrlState';
-import { TasksBoard } from './TasksBoard';
+import { TrackSection } from './TrackSection';
 import {
   BOARD_SORTS, BOARD_SORT_KEYS, boardComparator, boardSort,
   isCriterionGap, orderStatuses, statusMeta,
@@ -24,6 +24,16 @@ const STATUS_TITLE: Record<string, string> = {
 };
 
 const DETAIL_RAIL = { defaultWidth: 560, minWidth: 380, maxWidth: 900 };
+
+/**
+ * Служебное значение отбора «задачи БЕЗ набора» — ровно то, что понимает служба
+ * (`GET /api/tasks?track=none`). Держится ЗДЕСЬ одной строкой, а не рассыпано по коду:
+ * разойдись оно со службой на одну букву — отбор молча вернул бы все задачи вместо
+ * задач без набора, и экран выглядел бы исправным.
+ * ⚠️ Если такое имя однажды окажется настоящим набором, служба отвечает отказом СО СЛОВОМ,
+ * а не тихой подменой — этот отказ мы показываем человеку как есть.
+ */
+const UNTRACKED_KEY = 'none';
 
 /**
  * Главная страница: задачи и — прежде всего — те из них, у которых НЕТ критерия
@@ -55,13 +65,17 @@ export function TasksPage({ overview, refreshMs }: { overview: Overview | null; 
   const [statusRaw, setStatusRaw] = useUrlParam('status', 'replace');
   const [roleRaw, setRoleRaw] = useUrlParam('role', 'replace');
   const [gapRaw, setGapRaw] = useUrlParam('gap', 'replace');
+  const [trackRaw, setTrackRaw] = useUrlParam('track', 'replace');
 
   const status = statusRaw ?? 'open';
   const role = roleRaw ?? 'all';
   const onlyMissing = gapRaw === '1';
+  /** Отбор по набору: 'all' — все · UNTRACKED — без набора · иначе имя набора. */
+  const track = trackRaw ?? 'all';
   const setStatus = (v: string) => setStatusRaw(v === 'open' ? null : v);
   const setRole = (v: string) => setRoleRaw(v === 'all' ? null : v);
   const setOnlyMissing = (v: boolean) => setGapRaw(v ? '1' : null);
+  const setTrack = (v: string) => setTrackRaw(v === 'all' ? null : v);
 
   /**
    * ПОРЯДОК ПЛИТОК В КОЛОНКАХ ДОСКИ — тоже в адресе страницы, как и всё остальное
@@ -80,8 +94,30 @@ export function TasksPage({ overview, refreshMs }: { overview: Overview | null; 
   );
   const boardSortMeta = boardSort(boardSortKey);
 
-  const tasks = usePolling<Task[]>(() => api.tasks({ status: 'all' }), refreshMs, []);
-  const all = useMemo(() => tasks.data ?? [], [tasks.data]);
+  /**
+   * ГРУППЫ ПО НАБОРАМ БЕРУТСЯ У СЛУЖБЫ — клиент их НЕ строит.
+   * Порядок групп, признак «набора нет в таблице наборов» и группа «без набора»
+   * приходят готовыми: собери я то же самое своей рукой, два порядка однажды
+   * разошлись бы, и экран показывал бы не то, что отдаёт база.
+   * Запрашиваем ПОЛНЫЙ набор (без status/role): фильтры страницы применяются к плиткам
+   * на клиенте — иначе счётчики фишек считали бы сами себя.
+   */
+  const grouped = usePolling<TasksGrouped | null>(() => api.tasksGrouped(), refreshMs, []);
+  const groups = useMemo<TaskGroup[]>(() => grouped.data?.groups ?? [], [grouped.data]);
+  const all = useMemo(() => groups.flatMap((g) => g.items), [groups]);
+
+  /**
+   * ОТБОР ПО НАБОРУ ДЕЛАЕТ СЛУЖБА, а не фильтр массива в браузере — иначе половина
+   * работы стыка осталась бы непроверенной: отбор был бы «сделан» на экране и никогда
+   * не спрошен у той стороны, которая за него отвечает.
+   * Ответ служит ВСТРЕЧНЫМ СЛУЧАЕМ к группировке: число отобранных обязано совпасть
+   * с числом в одноимённой группе. Разошлись — экран скажет это словами (ниже).
+   */
+  const picked = usePolling<Task[] | null>(
+    () => (track === 'all' ? Promise.resolve(null) : api.tasks({ status: 'all', track })),
+    refreshMs,
+    [track],
+  );
 
   const detail = usePolling<TaskDetail | null>(
     () => (openId === null ? Promise.resolve(null) : api.task(openId)),
@@ -110,17 +146,123 @@ export function TasksPage({ overview, refreshMs }: { overview: Overview | null; 
     return m;
   }, [all, status]);
 
-  const filtered = useMemo(() => all.filter((t) => {
+  /**
+   * Счётчики наборов. Считаются по группам СЛУЖБЫ (полный набор), с поправкой на
+   * фильтры статуса и роли — но НЕ на сам отбор по набору: иначе фишка «набор»
+   * показывала бы, сколько осталось после неё самой.
+   */
+  const trackCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const g of groups) {
+      const key = g.trackId ?? UNTRACKED_KEY;
+      const n = g.items.filter((t) => {
+        if (status !== 'all' && t.status !== status) return false;
+        if (role !== 'all' && t.role !== role) return false;
+        if (onlyMissing && !isCriterionGap(t)) return false;
+        return true;
+      }).length;
+      m.set(key, n);
+    }
+    return m;
+  }, [groups, status, role, onlyMissing]);
+
+  /** Фильтры страницы (статус · роль · «без критерия») — одним правилом на все места. */
+  const passes = useMemo(() => (t: Task) => {
     if (status !== 'all' && t.status !== status) return false;
     if (role !== 'all' && t.role !== role) return false;
     if (onlyMissing && !isCriterionGap(t)) return false;
     return true;
-  }), [all, status, role, onlyMissing]);
+  }, [status, role, onlyMissing]);
+
+  /**
+   * Что показываем: при отборе по набору — ОТВЕТ СЛУЖБЫ (её половина работы),
+   * без отбора — все задачи из групп.
+   */
+  const shownBase = useMemo(
+    () => (track === 'all' ? all : picked.data ?? []),
+    [track, all, picked.data],
+  );
+  const filtered = useMemo(() => shownBase.filter(passes), [shownBase, passes]);
+
+  /** Группа выбранного набора — по ней сверяем ответ отбора (встречный случай). */
+  const pickedGroup = useMemo<TaskGroup | null>(() => {
+    if (track === 'all') return null;
+    const key = track.toLowerCase();
+    return groups.find((g) => (g.trackId ?? UNTRACKED_KEY).toLowerCase() === key) ?? null;
+  }, [groups, track]);
+
+  /**
+   * 🔬 ДВА ОТВЕТА ОБ ОДНОМ ПРЕДМЕТЕ — и экран обязан сказать, если они разошлись.
+   * Отбор по набору и группировка считаются в службе ПОРОЗНЬ. Совпадение чисел — это
+   * проверка, которую нельзя сделать одной ручкой, спрошенной дважды.
+   */
+  const pickMismatch =
+    track !== 'all' && picked.data !== null && pickedGroup !== null
+      ? picked.data.length !== pickedGroup.count
+      : false;
 
   const criterionUnsupported = all.length > 0 && all.every((t) => !t.criterionSupported);
   const statusKeys = orderStatuses(statusCounts.keys());
   const roleKeys = [...roleCounts.keys()].sort();
   const gapsShown = filtered.filter(isCriterionGap).length;
+
+  /** Что видно на экране прямо сейчас — по этому решаем, где рисовать открытую карточку. */
+  const visibleIds = useMemo(() => new Set(filtered.map((t) => t.id)), [filtered]);
+  const selectedTask = useMemo(
+    () => (openId === null ? null : all.find((t) => t.id === openId) ?? null),
+    [all, openId],
+  );
+  const selectedTrackKey = selectedTask
+    ? (selectedTask.parentTrack ?? '').trim() || UNTRACKED_KEY
+    : null;
+  const detailVisibleInSection = openId !== null && visibleIds.has(openId);
+
+  /**
+   * ПОИСК ПО НОМЕРУ КАРТОЧКИ. Отдельным полем, а не «фильтром по номеру»: человек,
+   * знающий номер, хочет ТЕЛО задачи, а не список из одной строки.
+   * Три исхода, и каждый назван словами:
+   *   · номера в базе нет ⇒ так и сказать, ничего не открывать;
+   *   · номер есть и карточка видна ⇒ открыть, показать рядом с её плиткой;
+   *   · номер есть, но фильтры её скрывают ⇒ ОТКРЫТЬ ВСЁ РАВНО и сказать, где она лежит.
+   * Третий исход — главный: молчаливое «ничего не произошло» здесь неотличимо от поломки.
+   */
+  const [findRaw, setFindRaw] = useState('');
+  const [findNote, setFindNote] = useState<string | null>(null);
+
+  /**
+   * Свёрнутые секции наборов. По умолчанию РАЗВЁРНУТЫ ВСЕ, включая «без набора»:
+   * свёрнутая по умолчанию группа — это спрятанная группа, а её задачи ровно так
+   * и теряются. Сворачивание — удобство человека, а не умолчание экрана.
+   * Живёт в состоянии страницы, а не в адресе: это не то, чем делятся ссылкой.
+   */
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const toggleCollapsed = (key: string) => setCollapsed((prev) => {
+    const next = new Set(prev);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  });
+
+  const submitFind = () => {
+    const cleaned = findRaw.trim().replace(/^#/, '');
+    if (cleaned === '') { setFindNote(null); return; }
+    const n = Number(cleaned);
+    if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) {
+      setFindNote(`«${findRaw.trim()}» — это не номер карточки. Номер — целое число, например 492`);
+      return;
+    }
+    const found = all.find((t) => t.id === n) ?? null;
+    if (!found) {
+      setFindNote(`карточки #${n} в этой базе нет — открывать нечего (задач всего ${all.length})`);
+      return;
+    }
+    setOpenId(n);
+    const where = (found.parentTrack ?? '').trim() || 'без набора';
+    setFindNote(
+      passes(found) && (track === 'all' || shownBase.some((t) => t.id === n))
+        ? `#${n} — «${found.title ?? 'без заголовка'}», набор ${where}`
+        : `#${n} открыта, но фильтры её сейчас скрывают: набор ${where}, статус ${found.status ?? '—'}, роль ${found.role ?? '—'}. Карточка показана отдельно выше доски`,
+    );
+  };
 
   /**
    * Рейл открытой карточки. Собран здесь, а не внутри доски: разметку карточки читает
@@ -312,6 +454,96 @@ export function TasksPage({ overview, refreshMs }: { overview: Overview | null; 
         ))}
       </div>
 
+      {/* ── ОТБОР ПО НАБОРУ ──────────────────────────────────────────────────────
+          Фишки идут В ПОРЯДКЕ СЛУЖБЫ (действующие наборы → приостановленные → закрытые →
+          незаявленные → «без набора» последней), а не по алфавиту: порядок здесь сам
+          отвечает на вопрос «чем контур занят сейчас».
+          «Без набора» стои́т такой же фишкой, как остальные, — 381 задача на замере
+          2026-08-30 22:53 UTC, и спрятать их значило бы спрятать три четверти базы. */}
+      <div className="filterbar" data-group="filter-track-bar">
+        <span className="filterbar__label">Набор</span>
+        <button
+          className={`fchip ${track === 'all' ? 'fchip--on' : ''}`}
+          onClick={() => setTrack('all')}
+          data-control="track-all"
+        >
+          все <span className="fchip__n">{[...trackCounts.values()].reduce((a, b) => a + b, 0)}</span>
+        </button>
+        {groups.map((g) => {
+          const key = g.trackId ?? UNTRACKED_KEY;
+          const shown = trackCounts.get(key) ?? 0;
+          return (
+            <button
+              key={key}
+              className={`fchip fchip--track ${g.trackId === null ? 'fchip--untracked' : ''} ${track === key ? 'fchip--on' : ''}`}
+              onClick={() => setTrack(track === key ? 'all' : key)}
+              data-control={`track-${key}`}
+              title={
+                g.trackId === null
+                  ? 'задачи, не приписанные ни к одному набору'
+                  : `${g.title ?? 'заголовка у набора нет'}${g.declared ? '' : ' · этого набора нет в таблице наборов'}`
+              }
+            >
+              {g.trackId === null ? 'без набора' : g.trackId}
+              {!g.declared && g.trackId !== null && <span className="fchip__warn" title="нет в таблице наборов">⚠</span>}
+              <span className="fchip__n">{shown}</span>
+              {shown !== g.count && (
+                <span className="fchip__n muted" title={`всего в наборе: ${g.count}`}>/{g.count}</span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* ── ПОИСК ПО НОМЕРУ КАРТОЧКИ ─────────────────────────────────────────────
+          Не фильтр, а ПЕРЕХОД: человек, знающий номер, хочет тело задачи. Ответ всегда
+          словами — «нет такой», «открыта», «открыта, но её скрывают фильтры». */}
+      <div className="filterbar" data-group="find-by-id-bar">
+        <span className="filterbar__label">Карточка №</span>
+        {/*
+          🔴 ЭТО ФОРМА, А НЕ ПОЛЕ СО СЛУШАТЕЛЕМ КЛАВИШИ — замер 2026-08-30 23:06 UTC.
+          Сперва здесь стоял `onKeyDown={e => e.key === 'Enter' && submitFind()}`. На живом
+          экране кнопка «перейти» работала, а Enter в поле — НЕТ: при том же содержимом поля
+          нажатие не давало ни перехода, ни строки ответа. Тихий отказ: человек жмёт Enter
+          (первое, что делают с полем ввода числа) и видит, что «ничего не произошло», —
+          неотличимо от поломки всей страницы.
+          Форма с кнопкой-отправкой даёт то же поведение штатным путём браузера, а не
+          самодельным разбором клавиши: Enter в единственном текстовом поле формы отправляет
+          её сам. Чинится ПРИЧИНА (своя реализация того, что уже умеет платформа),
+          а не следствие.
+          `display: contents` на форме — чтобы строка фильтров осталась одной строкой.
+        */}
+        <form
+          className="findform"
+          data-group="find-id-form"
+          onSubmit={(e) => { e.preventDefault(); submitFind(); }}
+        >
+          <input
+            className="findbox"
+            type="text"
+            inputMode="numeric"
+            value={findRaw}
+            placeholder="номер, напр. 492"
+            onChange={(e) => setFindRaw(e.target.value)}
+            data-control="find-id-input"
+            aria-label="перейти к карточке по номеру"
+          />
+          <button className="fchip" type="submit" data-control="find-id-go">перейти</button>
+        </form>
+        {findRaw !== '' && (
+          <button
+            className="fchip"
+            onClick={() => { setFindRaw(''); setFindNote(null); }}
+            data-control="find-id-clear"
+          >
+            очистить
+          </button>
+        )}
+        {findNote && (
+          <span className="muted small" data-panel="find-id-note">{findNote}</span>
+        )}
+      </div>
+
       {/* ── ПОРЯДОК ПЛИТОК В КОЛОНКАХ ─────────────────────────────────────────────
           Строка стоит ВПЛОТНУЮ к строкам фильтров, с подписью «в колонках»: порядок
           относится к плиткам ВНУТРИ колонки, а не к самим колонкам — те стоят от самой
@@ -354,19 +586,105 @@ export function TasksPage({ overview, refreshMs }: { overview: Overview | null; 
         </label>
       </div>
 
-      {tasks.error && (
-        <div className="banner banner--error" data-panel="tasks-error">{tasks.error}</div>
+      {grouped.error && (
+        <div className="banner banner--error" data-panel="tasks-error">{grouped.error}</div>
       )}
 
-      <TasksBoard
-        tasks={filtered}
-        allTasks={all}
-        selectedId={openId}
-        onSelect={setOpenId}
-        detailRail={detailRail}
-        order={boardOrder}
-        nowMs={nowMs}
-      />
+      {/* Отказ отбора приходит СО СЛОВОМ (напр. имя набора совпало со служебным
+          значением) — показываем текст службы как есть, а не пустой экран. */}
+      {picked.error && (
+        <div className="banner banner--error" data-panel="track-filter-error">
+          отбор по набору «{track}» не выполнен: {picked.error}
+        </div>
+      )}
+
+      {/* Служба сама говорит, если сумма по группам не сошлась с числом задач или
+          если наборы собраны без таблицы наборов. Печатаем её слово, а не глотаем. */}
+      {grouped.data?.note && (
+        <div className="banner banner--warn" data-panel="grouping-note">{grouped.data.note}</div>
+      )}
+
+      {pickMismatch && pickedGroup && picked.data && (
+        <div className="banner banner--warn" data-panel="track-pick-mismatch">
+          🔴 два ответа службы об одном наборе разошлись: отбор вернул {picked.data.length} карточек,
+          а в группе того же набора их {pickedGroup.count}. Показан ответ отбора; расхождение
+          означает, что одна из двух ручек считает не то — это находка, а не помеха показу.
+        </div>
+      )}
+
+      {/* Карточка, открытая поиском по номеру, но скрытая фильтрами, показывается
+          ОТДЕЛЬНОЙ полосой над досками. Иначе переход по номеру выглядел бы как
+          «ничего не произошло» — то есть неотличимо от поломки. */}
+      {openId !== null && !detailVisibleInSection && (
+        <div className="page__loose-detail" data-panel="detail-outside-board">
+          <p className="muted small">
+            карточка #{openId} открыта отдельно: под текущими фильтрами её плитки на доске нет
+            {selectedTask && (
+              <> — она в наборе {(selectedTask.parentTrack ?? '').trim() || 'без набора'},
+                статус {selectedTask.status ?? '—'}, роль {selectedTask.role ?? '—'}</>
+            )}
+          </p>
+          <RailStrip name="tasks-loose-detail" heightMode="natural">
+            {detailRail}
+          </RailStrip>
+        </div>
+      )}
+
+      {/* ── ЗАДАЧИ ГРУППАМИ ПО НАБОРАМ ───────────────────────────────────────────
+          При отборе одного набора рисуется ровно одна секция — та, что вернула служба;
+          без отбора — все группы в её порядке, включая пустые и «без набора». */}
+      <div className="tracksecs" data-panel="tasks-by-track">
+        {grouped.loading && groups.length === 0 && (
+          <p className="muted" data-panel="tasks-loading">читаю задачи…</p>
+        )}
+
+        {track === 'all'
+          ? groups.map((g) => {
+            const key = g.trackId ?? UNTRACKED_KEY;
+            return (
+              <TrackSection
+                key={key}
+                group={g}
+                tasks={g.items.filter(passes)}
+                allTasks={all}
+                selectedId={openId}
+                onSelect={setOpenId}
+                detailRail={
+                  detailVisibleInSection && selectedTrackKey === key ? detailRail : undefined
+                }
+                order={boardOrder}
+                nowMs={nowMs}
+                collapsed={collapsed.has(key)}
+                onToggle={() => toggleCollapsed(key)}
+              />
+            );
+          })
+          : (
+            <TrackSection
+              group={
+                pickedGroup ?? {
+                  // Набор назван в адресе, а в группах его нет: показываем то, что
+                  // вернул отбор, и не делаем вид, что набора не существует.
+                  trackId: track === UNTRACKED_KEY ? null : track,
+                  title: null,
+                  status: null,
+                  declared: false,
+                  count: filtered.length,
+                  items: [],
+                }
+              }
+              tasks={filtered}
+              allTasks={all}
+              selectedId={openId}
+              onSelect={setOpenId}
+              detailRail={detailVisibleInSection ? detailRail : undefined}
+              order={boardOrder}
+              nowMs={nowMs}
+              collapsed={false}
+              onToggle={() => { /* при отборе одного набора сворачивать нечего */ }}
+            />
+          )}
+      </div>
     </div>
   );
 }
