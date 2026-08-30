@@ -214,16 +214,28 @@ def build(conn, role, полный=False):
         # ЖДУТ; у меня — что ОНА СДАЛА и чьей руки ждёт результат». Цена разная: чужое
         # ожидание живёт в чужой голове и однажды прозвучит, а сданная работа, о которой
         # забыл сдавший, не прозвучит нигде — приёмщик ещё не дошёл, сдавший не помнит.
+        # ═══ Карточка #482 ступень ③: приёмщик — ПОЛЕМ, и он виден ЗДЕСЬ. Поле, которое
+        # заполняют и никто не читает, мертво; поэтому оно печатается там, где роль и так
+        # смотрит, а «не назначен» говорится СЛОВОМ — иначе пустота неотличима от «назначен,
+        # но не показан», и роль не узнает, что её работа не ждёт ничьей руки.
+        есть_поле = "reviewer" in {r[1] for r in conn.execute("PRAGMA table_info(backlog)")}
+        поле = "COALESCE(reviewer,'')" if есть_поле else "''"
         rows = conn.execute(
-            "SELECT id, title, CAST((julianday('now') - julianday(updated_at)) * 24 AS INTEGER)"
-            " FROM backlog WHERE role=? AND status='in_review' ORDER BY updated_at",
+            f"SELECT id, title, CAST((julianday('now') - julianday(updated_at)) * 24 AS INTEGER),"
+            f" {поле}"
+            f" FROM backlog WHERE role=? AND status='in_review' ORDER BY updated_at",
             (role,)).fetchall()
         if not rows:
             return          # ноль здесь — норма дня, а не редкость: вечная строка была бы шумом
+        безрукие = sum(1 for r in rows if not (r[3] or "").strip())
         out.append(f"📤 ТЫ СДАЛ, ЖДЁТ ЧУЖОЙ РУКИ: {len(rows)} — приёмку не торопи, "
-                   f"но и не забывай: о своей сдаче помнишь только ты")
-        for i, t, ч in rows[:6]:
-            out.append(f"   карточка #{i} ({ч} ч на полке) {t[:66]}")
+                   f"но и не забывай: о своей сдаче помнишь только ты"
+                   + (f" · 🫱 БЕЗ НАЗНАЧЕННОГО ПРИЁМЩИКА: {безрукие}" if безрукие else ""))
+        for i, t, ч, кто in rows[:6]:
+            кто = (кто or "").strip()
+            out.append(f"   карточка #{i} ({ч} ч на полке · "
+                       + (f"приёмщик: {кто[:28]}" if кто else "приёмщик НЕ НАЗНАЧЕН")
+                       + f") {t[:52]}")
         if len(rows) > 6:
             out.append(f"   … и ещё {len(rows) - 6}")
     section("ты сдал", ты_сдал, out)
