@@ -166,6 +166,17 @@ def _cli() -> int:
                     help="на сколько минут (по умолчанию 60; объявление гаснет САМО)")
     ap.add_argument("--id", type=int, help="какое объявление снять")
     ap.add_argument("--note", help="что изменилось — читает тот, кто ждал")
+    # ═══ Карточка #409: один довод — два имени. Здесь роль зовётся --role,
+    # у карточек (backlog.py) исполнитель — --actor; рука копирует форму из
+    # соседнего инструмента и теряет вызов. Отказ С ПОДСКАЗКОЙ вместо голого
+    # «unrecognized arguments».
+    if "--actor" in sys.argv:
+        print("⛔ здесь роль зовётся --role, не --actor.", file=sys.stderr)
+        print("   --actor живёт у backlog.py (карточки: claim/status/comment/…).",
+              file=sys.stderr)
+        print("   Повтори вызов, заменив --actor на --role (карточка #409).",
+              file=sys.stderr)
+        return 2
     a = ap.parse_args()
 
     db = resolve_db(a.db, __file__)

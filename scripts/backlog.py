@@ -1170,6 +1170,26 @@ def main():
                     help="час прошлого запроса (скопируй из шапки прошлого вывода) — "
                          "сданное позже помечается 🆕")
 
+    # ═══ Карточка #409: один довод — два имени. Здесь исполнитель зовётся --actor,
+    # у объявлений о правке (lease.py) — --role; рука копирует форму из соседнего
+    # инструмента и теряет вызов (замер TAXO, записка #4212). Путь ③: отказ
+    # С ПОДСКАЗКОЙ вместо голого «unrecognized arguments». Алиас отклонён
+    # КОНФЛИКТОМ СМЫСЛА (--role в add уже занято ВЛАДЕЛЬЦЕМ карточки, а не
+    # исполнителем), переименование — ценой переучивания живых вызовов контура.
+    _КОМАНДЫ_ACTOR = {"claim", "status", "comment", "criterion", "edit"}
+    _подкоманда = next((x for x in sys.argv[1:]
+                        if not x.startswith("-") and x in
+                        {"add", "list", "show", "status", "claim", "comment",
+                         "criterion", "edit", "queue"}), None)
+    if _подкоманда in _КОМАНДЫ_ACTOR and "--role" in sys.argv:
+        print(f"⛔ у подкоманды «{_подкоманда}» исполнитель зовётся --actor, не --role.",
+              file=sys.stderr)
+        print("   --role живёт у lease.py (объявления о правке) и у add (владелец "
+              "карточки).", file=sys.stderr)
+        print("   Повтори вызов, заменив --role на --actor (карточка #409).",
+              file=sys.stderr)
+        sys.exit(2)
+
     a = p.parse_args()
     # R15a: от расположения скрипта, не от CWD · #391: характер вызова назван списком выше
     a.db = str(resolve_db(a.db, __file__, readonly=(a.cmd in READ_CMDS)))
