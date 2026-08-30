@@ -13,7 +13,8 @@ bite-pool-brief.py — приёмка захода 2.1 + П⑥: собираем
   ⑥ ИСТОЧНИКИ ЛОМАЮТСЯ ПОРОЗНЬ (DROP TABLE) → наказ НАЗЫВАЕТ, чего не хватает,
      и НЕ молчит; остальные секции живут (по одному прогону на источник)
   ⑦ базы нет вовсе → отказ «НЕ СОБРАН», не пустой наказ
-  ⑧ контроль: живая база прогоном не изменилась
+  ⑧ контроль: СВОИХ следов приёмки в живой базе нет — судим свои следы, а не время
+     правки общей базы (карточка #444: чужие записи красили цвет по занятости соседей)
 """
 import os
 import shutil
@@ -52,7 +53,6 @@ def brief(db, role):
 
 stand = mezo_stand.new("pool-brief-")
 db = stand / "mezosync.db"
-live_before = (LIVE_DB.stat().st_size, LIVE_DB.stat().st_mtime_ns)
 shutil.copy(LIVE_DB, db)
 con = sqlite3.connect(str(db))
 con.execute("UPDATE tracks SET status='paused' WHERE status='active'")
@@ -128,8 +128,28 @@ for tbl, метка in [("role_rights", "права"), ("role_skill", "умен�
 rc7, out7 = brief(stand / "нет-такой.db", "ZZB")
 case("⑦ базы нет → «НАКАЗ НЕ СОБРАН», не пустой наказ", rc7 != 0 and "НЕ СОБРАН" in out7)
 
-live_after = (LIVE_DB.stat().st_size, LIVE_DB.stat().st_mtime_ns)
-case("⑧ живая база прогоном не изменилась", live_before == live_after)
+# ═══ Карточка #444 (STUD, доказано четырьмя прогонами): прежний случай сравнивал
+# размер и время правки ОБЩЕЙ базы — в неё пишут все роли (запись ~раз в 9 секунд),
+# и цвет зависел от занятости соседей, а не от инструмента. Приёмщик, дважды
+# получивший красное без вины, на третий раз пролистает его не глядя. Путь ①:
+# судим СВОИ СЛЕДЫ — подсадных сущностей ЭТОЙ приёмки в живой базе быть не должно.
+# Настоящая запись в живую оставит ровно их и покраснеет ПОИМЁННО; чужие записи
+# не красят ничего.
+con = sqlite3.connect(f"file:{LIVE_DB.as_posix()}?mode=ro", uri=True)
+следы = []
+for sql, имя in [
+        ("SELECT COUNT(*) FROM roles WHERE role='ZZB'", "роль ZZB"),
+        ("SELECT COUNT(*) FROM tracks WHERE track_id='TRACK-ZZBR'", "пул TRACK-ZZBR"),
+        ("SELECT COUNT(*) FROM backlog WHERE title='часть сводки'", "карточка пробы"),
+        ("SELECT COUNT(*) FROM role_skill WHERE skill LIKE '%умение пробы%'", "умения пробы")]:
+    n = con.execute(sql).fetchone()[0]
+    if n:
+        следы.append(f"{имя}: {n}")
+con.close()
+case("⑧ СВОИХ следов приёмки в живой базе нет (чужие записи не судятся)",
+     not следы,
+     f"НАЙДЕНО В ЖИВОЙ: {' · '.join(следы)}" if следы else
+     "проверены роль/пул/карточка/умения подсадки — живая база чиста ОТ НАШЕГО")
 
 print(f"\nИТОГ: {OK}/{OK + FAIL}")
 raise SystemExit(mezo_stand.finish(0 if FAIL == 0 else 1))
