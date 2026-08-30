@@ -33,11 +33,16 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
+import mezo_target  # noqa: E402
 
 import mezo_stand
 
-SCRIPTS = mezo_paths.live_scripts()
-BACKLOG = SCRIPTS / "backlog.py"
+# ═══ Класс карточки #454 (TAXO): испытуемый механизм через ВЫБОР КОПИИ, не жёстко
+# из живого. MEZO_SCRIPTS_ROOT действует; MEZO_FORBID_LIVE=1 без подмены — отказ
+# «НЕ ЗАПУСТИЛАСЬ» до стенда.
+# ⚖️ ГРАНИЦА: испытуемый — backlog.py; стенд и схема живой базы (mode=ro) — опыт.
+BACKLOG = mezo_target.script("backlog.py")
+print(f"⚖️ испытуется: {mezo_target.label()}")
 
 ТАБЛИЦЫ = ("backlog", "backlog_events", "tracks", "roles", "role_rights",
            "role_skill", "rules", "role_status")
@@ -153,7 +158,7 @@ def main() -> int:
     # ── Р1 обратный ход: проверка JSON ослеплена — порча возвращается ──────────
     к_р1 = ослабить(BACKLOG, d, 'if raw[0] in "[{":', "if False:")
     rc, out = добавить('["a", "b"]', инструмент=к_р1,
-                       окружение={"PYTHONPATH": str(SCRIPTS)})
+                       окружение={"PYTHONPATH": str(BACKLOG.parent)})
     метки_р1 = последние_метки()
     суд("Р1 проверка ослеплена: JSON снова принят и обёрнут — беда карточки #447 вернулась",
         rc == 0 and метки_р1 and метки_р1[0].startswith("["),

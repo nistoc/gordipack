@@ -31,11 +31,16 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
+import mezo_target  # noqa: E402
 
 import mezo_stand
 
-SCRIPTS = mezo_paths.live_scripts()
-BACKLOG = SCRIPTS / "backlog.py"
+# ═══ Класс карточки #454 (TAXO, второй случай — записка #4367 §③ про ЭТОТ файл):
+# испытуемый механизм через ВЫБОР КОПИИ, не жёстко из живого. MEZO_SCRIPTS_ROOT
+# действует; MEZO_FORBID_LIVE=1 без подмены — отказ «НЕ ЗАПУСТИЛАСЬ» до стенда.
+# ⚖️ ГРАНИЦА: испытуемый — backlog.py; стенд и схема живой базы (mode=ro) — опыт.
+BACKLOG = mezo_target.script("backlog.py")
+print(f"⚖️ испытуется: {mezo_target.label()}")
 
 ТАБЛИЦЫ = ("backlog", "backlog_events", "tracks", "roles", "role_rights",
            "role_skill", "rules", "role_status")
@@ -163,7 +168,7 @@ def main() -> int:
                     'f"имя обновлено"')
     rc, out = зов(к_р1, "--db", str(db), "edit", str(к1), "--actor", "STUB1",
                   "--title", "имя после ослепления",
-                  окружение={"PYTHONPATH": str(SCRIPTS)})
+                  окружение={"PYTHONPATH": str(BACKLOG.parent)})
     следы_р1 = события(к1, "retitle")
     # Событий retitle к этому суду ТРИ: случай ①, случай ③-бис и ход слепой копии.
     # Судится ПОСЛЕДНИЙ: слепая копия обязана оставить след без прежнего имени.
