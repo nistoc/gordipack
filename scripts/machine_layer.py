@@ -95,14 +95,26 @@ def machine_block(db_path, role: str) -> list:
         oldest = conn.execute("SELECT MIN(saved_at) FROM phoenix WHERE role=?",
                               (role,)).fetchone()[0]
         if oldest:
+            # ⚰️ Карточка #517: СНЯТОЕ ПРАВИЛО ПОМЕЧАЕТСЯ ЗДЕСЬ ЖЕ. Найдено TAXO
+            # (записка #4619) замером памятей девяти ролей: у ВСЕХ девяти в этой строке
+            # стояли три снятых правила вперемешку с живыми, без единого признака.
+            # Формально строка была права — снятие тоже правка, — но роль читает её как
+            # «вот что изменилось, сходи посмотри», и три имени из восьми вели к надгробиям.
+            # ⚡ Класс: УКАЗАТЕЛЬ, НЕ РАЗЛИЧАЮЩИЙ ЖИВОЕ И МЁРТВОЕ, ПОСЫЛАЕТ УЧИТЬСЯ
+            # У ОТМЕНЁННОГО — и делает это голосом механизма, то есть убедительно.
             fresh = conn.execute(
-                "SELECT rule_key, version FROM rules WHERE updated_at > ? "
-                "ORDER BY updated_at DESC", (oldest,)).fetchall()
+                "SELECT rule_key, version, COALESCE(status,'active') FROM rules "
+                "WHERE updated_at > ? ORDER BY updated_at DESC", (oldest,)).fetchall()
             if fresh:
-                names = " · ".join(f"{k} v{v}" for k, v in fresh[:8])
+                мёртвых = sum(1 for _, _, st in fresh if st != "active")
+                names = " · ".join(
+                    (f"⚰️{k} v{v} ({st})" if st != "active" else f"{k} v{v}")
+                    for k, v, st in fresh[:8])
                 more = f" · …ещё {len(fresh) - 8}" if len(fresh) > 8 else ""
+                хвост = (f"\n   ⚰️ из них СНЯТЫХ: {мёртвых} — идти по ним незачем, там "
+                         f"надгробие, а не действующее требование" if мёртвых else "")
                 out.append(f"📜 ПРАВИЛА, ПРАВЛЕННЫЕ ПОСЛЕ САМОГО СТАРОГО РАЗДЕЛА ПАМЯТИ: "
-                           f"{len(fresh)}\n   {names}{more}")
+                           f"{len(fresh)}\n   {names}{more}{хвост}")
             else:
                 out.append("📜 свод не менялся с момента сохранения памяти")
     except sqlite3.Error as e:                                        # noqa: BLE001
