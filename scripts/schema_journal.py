@@ -199,3 +199,139 @@ def verify(conn):
     return False, (f"СХЕМУ МЕНЯЛИ МИМО ЖУРНАЛА: сейчас {now}, а последний записанный шаг "
                    f"«{row[0]}» оставил {row[1]}. Шаг, применённый без записи, делает ответ "
                    f"о версии уверенным и неверным")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# СВЕРКА НАБОРА ШАГОВ ПОД РУБЕЖОМ (карточка #509)
+#
+# 🔴 ПОВОД. Защита вехи-рубежа смотрела на ЧИСЛО шагов сверх отметки
+# (`schema_version.steps_after_milestone == 0`). Число ловит пустой ХВОСТ и слепо
+# к дырке В СЕРЕДИНЕ: «7 из 7» и «7 из 9» для него одно и то же. Найдено вторым
+# потребителем нашего набора шагов (соседний контур AIA, письмо 30.08 21:40 UTC),
+# воспроизведено на копии живой базы 30.08 23:27 UTC: удалили рубеж и ДВА шага
+# из середины — веха объявила версию без единого возражения.
+# ⚡ И самое едкое: докстрока самой вехи ПЕРЕЧИСЛЯЕТ, что рубеж накрывает, и в этом
+# перечне стоят ровно пропавшие шаги. Знание было в прозе и отсутствовало в коде.
+#
+# ⚖️ ПОЧЕМУ СВЕРКА ИДЁТ ПО ХВОСТУ ИМЕНИ, А НЕ ПО ИМЕНИ ЦЕЛИКОМ. Наивное сравнение
+# «имя файла ↔ version в журнале» дало бы на живой базе ТРИ ложных пропажи:
+#     008-schema-journal-fingerprint ← 20260808-schema-journal-fingerprint.py
+#     008-phoenix-confirmed-at       ← 20260808-phoenix-confirmed-at.py
+#     009-role-rights                ← 20260808-role-rights.py
+# Шаги записаны под ПОРЯДКОВЫМИ именами, а файлы позже переименованы на именование
+# с датой. Проверка, кричащая три ложных из одиннадцати, учит пролистывать своё же
+# красное — поэтому голова имени (цифры до первого дефиса) отбрасывается у обеих
+# сторон, а сверяется ХВОСТ.
+#
+# ⚖️ ГРАНИЦЫ, НАЗВАННЫЕ ВСЛУХ:
+#  · ожидаемое строится ИЗ КАТАЛОГА, а не из описи. Шага, которого нет на диске,
+#    проверка не потребует — семь шагов 001…007 (их файлов у нас нет вовсе)
+#    поэтому и не краснеют. Это осознанный предел: опись протухла бы первой;
+#  · запись в журнале БЕЗ файла на диске — не пропажа, а замечание: файл могли
+#    убрать после применения. Отказ по такому поводу был бы ложным;
+#  · окно рубежа считается по ДАТЕ В ИМЕНИ файла, а не по `applied_at`: час
+#    применения бывает проставлен задним числом, имя — нет.
+# ─────────────────────────────────────────────────────────────────────────────
+
+import os as _os
+import re as _re
+
+# 🩸 Голова — ЛЮБОЕ число цифр, не только 6–8. Первая редакция требовала 6–8 знаков,
+# и порядковые имена журнала («008-phoenix-confirmed-at») под неё не подпадали:
+# сверка по хвосту не срабатывала ровно на тех ТРЁХ шагах, ради которых заводилась,
+# и рубеж v4 краснел тремя ложными пропажами из одиннадцати. Поймано тем же
+# контролем «полный набор обязан пройти», вторым его прогоном.
+_DATED = _re.compile(r'^(\d+)-(.+)$')
+
+
+def step_slug(name):
+    """Хвост имени шага: голова из цифр до первого дефиса отброшена.
+
+    `20260808-role-rights` → `role-rights`, `009-role-rights` → `role-rights`.
+    Имя без цифровой головы возвращается как есть.
+    """
+    name = name[:-3] if name.endswith('.py') else name
+    m = _DATED.match(name)
+    return m.group(2) if m else name
+
+
+def _file_date(name):
+    m = _DATED.match(name[:-3] if name.endswith('.py') else name)
+    d = m.group(1) if m else ''
+    return d if len(d) == 8 else ''
+
+
+def milestone_step_set(conn, milestone_file, version):
+    """Что рубеж ОБЯЗАН накрывать и чего в журнале не хватает.
+
+    milestone_file — путь к файлу самой вехи (`__file__` вызывающего);
+    version        — объявляемая версия ('v4', 'v5', …).
+
+    Возвращает словарь:
+      window     ('20260810', '20260828') — нижняя граница исключающая, верхняя включающая
+      prev       версия предыдущего рубежа или None
+      expected   {хвост: имя файла} — шаги каталога, попавшие в окно
+      missing    [имена файлов] — ожидаемые, но в журнале НЕ записанные (отсортированы)
+      orphan     [version из журнала] — записаны в окне, но файла на диске нет (замечание)
+      ambiguous  [хвост] — два файла с одним хвостом; такие из сверки исключены
+    """
+    directory = _os.path.dirname(_os.path.abspath(milestone_file))
+    own_date = _file_date(_os.path.basename(milestone_file))
+
+    # ① предыдущий рубеж — последняя запись-версия ДО СВОЕЙ ПО ПОРЯДКУ, и дата ЕГО файла.
+    # 🩸 Первая редакция брала «последнюю версию, отличную от своей», и для v4 объявляла
+    # предыдущим... v5 — рубеж, стоящий ПОЗЖЕ. Окно выходило вывернутым ('20260828',
+    # '20260810'), ожидаемых шагов НОЛЬ, и проверка молчала бы о любом пропуске.
+    # Поймано контролем «полный набор обязан пройти» ДО сдачи: он назвал не 11 шагов, а 0.
+    # ⚡ Верное число проверять дешевле, чем красное: зелёное «пропусков нет» здесь пришло
+    # бы от ПУСТОГО множества ожидаемых — то есть от проверки, которой нечего искать.
+    own_rowid = conn.execute("SELECT rowid FROM schema_migrations WHERE version=?",
+                             (version,)).fetchone()
+    prev = None
+    q = ("SELECT version FROM schema_migrations WHERE version GLOB 'v[0-9]*'"
+         + (" AND rowid < ?" if own_rowid else "") + " ORDER BY rowid")
+    for (v,) in conn.execute(q, (own_rowid[0],) if own_rowid else ()):
+        if v != version:
+            prev = v
+    prev_date = ''
+    if prev:
+        for f in sorted(_os.listdir(directory)):
+            if f.endswith('.py') and f.endswith(f'-milestone-{prev}.py'):
+                prev_date = _file_date(f)
+
+    # ② ожидаемое — файлы-шаги каталога, попавшие в окно (prev_date, own_date]
+    expected, ambiguous = {}, []
+    for f in sorted(_os.listdir(directory)):
+        if not f.endswith('.py') or f.startswith('__') or '-milestone-' in f:
+            continue
+        d = _file_date(f)
+        if not d or (own_date and d > own_date) or (prev_date and d <= prev_date):
+            continue
+        s = step_slug(f)
+        if s in expected:
+            ambiguous.append(s)
+            continue
+        expected[s] = f
+
+    for s in ambiguous:
+        expected.pop(s, None)
+
+    # ③ записанное — версии-шаги журнала (рубежи не в счёт)
+    recorded = {}
+    for (v,) in conn.execute("SELECT version FROM schema_migrations "
+                            "WHERE version NOT GLOB 'v[0-9]*'"):
+        recorded[step_slug(v)] = v
+
+    missing = sorted(expected[s] for s in expected if s not in recorded)
+
+    # ④ записи журнала в окне БЕЗ файла — только замечание, не отказ
+    orphan = []
+    for s, v in recorded.items():
+        d = _file_date(v)
+        if not d or (own_date and d > own_date) or (prev_date and d <= prev_date):
+            continue
+        if s not in expected:
+            orphan.append(v)
+
+    return {'window': (prev_date, own_date), 'prev': prev, 'expected': expected,
+            'missing': missing, 'orphan': sorted(orphan), 'ambiguous': sorted(set(ambiguous))}
