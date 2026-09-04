@@ -387,7 +387,16 @@ def run(db, role=None, skip_messages=False, since_hours=None):
         if m is not None:
             m_red, m_yellow, m_n = m
     red, yellow = p_red + m_red, p_yellow + m_yellow
-    scope = f"ноты за последние {since_hours} ч" if since_hours else "ноты ЦЕЛИКОМ, включая историю"
+    # 🩸 04.09 (находка @RCC, записка #4730 §⑤): при --skip-messages строка ниже печатала
+    # «ноты ЦЕЛИКОМ, включая историю» рядом с «messages пропущено» — две соседние строки
+    # противоречили друг другу, и сводку читают чаще подробностей. Охват обязан ЗАВИСЕТЬ
+    # от того, что измерено, а не описывать вызов по умолчанию.
+    if skip_messages:
+        scope = "ноты ПРОПУЩЕНЫ (--skip-messages) — о записках этот прогон не говорит ничего"
+    elif since_hours:
+        scope = f"ноты за последние {since_hours} ч"
+    else:
+        scope = "ноты ЦЕЛИКОМ, включая историю"
     print(f"\n{'🔴' if red else '✅'} метка-под-UTC ИТОГО: 🔴 {red} · 🟡 {yellow} "
           f"· записей проверено {p_n + m_n} (phoenix {p_n} + messages {m_n if not skip_messages else 'пропущено'})")
     # Охват называется ВСЕГДА, а не только при красном: «🔴 0» без границы читается как

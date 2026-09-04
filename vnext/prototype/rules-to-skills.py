@@ -65,7 +65,10 @@ import mezo_paths  # noqa: E402 — пути машины выводятся, н
                     #    одну ветку · имя предмета не доказывает · службу для проверки
                     #    роль поднимает сама
                     "finding-covers-only-your-branch", "name-is-a-claim-not-a-property",
-                    "services-self-raise"],
+                    "services-self-raise",
+                    # ── 04.09 (записки #4715 @OPSSRE, #4723 @CORE): встречный случай, сделанный
+                    #    из той же приметы, что опыт, его не проверяет — повторяет. Внёс COORD
+                    "counter-case-own-definition"],
     },
     "atlas-sync": {
         "описание": "Зови при сверке с коллегами: читать ленту целиком, не обрезать "
