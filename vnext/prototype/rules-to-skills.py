@@ -133,7 +133,10 @@ import mezo_paths  # noqa: E402 — пути машины выводятся, н
         "когда": "Сохраняешься · просыпаешься · заводишь новую роль · передаёшь дела.",
         "правила": ["phoenix-save-on-stop", "role-migration-standard",
                     "rhythm-survives-rebirth", "dowry-facts-carry-source",
-                    "role-keeps-own-error-list"],
+                    "role-keeps-own-error-list",
+                    # карточка #523: что в памяти горячее, а что уходит в архив —
+                    # правило зовётся ровно в момент сохранения, то есть здесь
+                    "memory-hot-and-archive"],
     },
     "atlas-task-card": {
         "описание": "Зови, когда заводишь, ведёшь или закрываешь карточку задачи: критерий "
