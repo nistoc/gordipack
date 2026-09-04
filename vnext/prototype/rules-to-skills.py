@@ -25,9 +25,9 @@ r"""ГЕНЕРАТОР НАВЫКОВ ИЗ СВОДА ПРАВИЛ: правил
 Переезжают только ПРОЦЕДУРЫ: «когда делаешь X — вот как», у них есть момент срабатывания.
 
 Зовут так:
-    python <КОНТУР>/vnext-tools/rules-to-skills.py            # показать, не писать
-    python <КОНТУР>/vnext-tools/rules-to-skills.py --write    # собрать навыки
-    python <КОНТУР>/vnext-tools/rules-to-skills.py --only atlas-owner-reply --write
+    python C:/guts/.atlas/vnext-tools/rules-to-skills.py            # показать, не писать
+    python C:/guts/.atlas/vnext-tools/rules-to-skills.py --write    # собрать навыки
+    python C:/guts/.atlas/vnext-tools/rules-to-skills.py --only atlas-owner-reply --write
 """
 from __future__ import annotations
 
@@ -60,7 +60,12 @@ import mezo_paths  # noqa: E402 — пути машины выводятся, н
                     "коммитить: приёмка по телу, различающие случаи, три исхода.",
         "когда": "Пишешь или правишь проверку · судишь зелёный прогон · перед коммитом.",
         "правила": ["acceptance-e2e", "gate-before-commit", "bytes-are-not-content",
-                    "contract-shape-from-live-call", "read-failure-blocks-write"],
+                    "contract-shape-from-live-call", "read-failure-blocks-write",
+                    # ── разбор 04.09 (карточка #526): починка по заявке покрывает
+                    #    одну ветку · имя предмета не доказывает · службу для проверки
+                    #    роль поднимает сама
+                    "finding-covers-only-your-branch", "name-is-a-claim-not-a-property",
+                    "services-self-raise"],
     },
     "atlas-sync": {
         "описание": "Зови при сверке с коллегами: читать ленту целиком, не обрезать "
@@ -69,7 +74,10 @@ import mezo_paths  # noqa: E402 — пути машины выводятся, н
         "правила": ["full-scan-every-tick", "no-pipe-tool-output", "ack-deadline",
                     "escalation-and-ground-truth",
                     # заявка COORD (записка #4297): читая чужое слово — «сказано ли это МНЕ?»
-                    "word-carries-its-scope"],
+                    "word-carries-its-scope",
+                    # ── разбор 04.09 (карточка #526): сам ритм сверки ехал мимо навыка,
+                    #    хотя навык зовётся ровно в момент сверки
+                    "sync-alarm-in-chat", "sync-sleep-backoff", "poll-format"],
     },
     # ── ВТОРАЯ ВОЛНА (слово владельца 2026-08-22 05:32 UTC: «выполняй все 4 пункта») ──
     "atlas-note": {
@@ -79,26 +87,45 @@ import mezo_paths  # noqa: E402 — пути машины выводятся, н
         "правила": ["note-format", "note-priority-norm", "shared-broadcast-channel",
                     "append-only-messages",
                     # заявка COORD (записка #4297): публикуя чужое слово — публикуй и его границу
-                    "word-carries-its-scope"],
+                    "word-carries-its-scope",
+                    # ── разбор 04.09 (карточка #526): срочность с основанием · только своё
+                    #    имя · рука не из живого разговора называет себя · чужой отказ дословно
+                    # ⚰️ ЗДЕСЬ СТОЯЛ ЕЩЁ И "timestamp-utc-in-sqlite" — снят через минуту после
+                    #    внесения. Граница ВЫШЕ, в шапке этого же файла, запрещает возить
+                    #    постоянные запреты и называет «время только UTC» ПЕРВЫМ примером.
+                    # ⚡ Класс, оплаченный тут же: граница, записанная в шапке файла, не
+                    #    срабатывает при правке ТЕЛА — правишь словарь и не поднимаешь глаз.
+                    "critical-needs-basis", "one-writer-one-channel",
+                    "hand-outside-live-chat-names-itself", "refusal-text-verbatim"],
     },
     "atlas-commit-push": {
         "описание": "Зови перед коммитом и отправкой: полный прогон проверок до коммита, "
                     "поимённое добавление в общих репозиториях, границы разрушающего.",
         "когда": "Перед git commit · перед push · когда рука тянется к force/reset/drop.",
-        "правила": ["gate-before-commit", "coord-commits-coordination", "rule8-destructive"],
+        "правила": ["gate-before-commit", "coord-commits-coordination", "rule8-destructive",
+                    # ── разбор 04.09 (карточка #526): команда, берущая предмет
+                    #    по положению, в общем хранилище захватывает чужое
+                    "command-picks-target-by-position"],
     },
     "atlas-schema-step": {
         "описание": "Зови перед изменением схемы хранилища: шаг записывает себя, повторный "
                     "прогон не портит данные, наблюдающий инструмент применяет схему молча.",
         "когда": "Меняешь таблицы/столбцы · пишешь шаг схемы · рядом работает наблюдатель файлов.",
-        "правила": ["schema-step-records-itself", "migration-safety", "migrations-under-watch"],
+        "правила": ["schema-step-records-itself", "migration-safety", "migrations-under-watch",
+                    # ── разбор 04.09 (карточка #526): кто вправе менять схему ·
+                    #    мутация мимо API оставляет след происхождения
+                    "migrations-core-only", "data-migration-provenance"],
     },
     "atlas-shared-edit": {
         "описание": "Зови перед правкой общего инструмента или договора: объявить до "
                     "правки, четыре шага до отправки, версию поднимать тем же ходом.",
         "когда": "Правишь инструмент, который зовут коллеги · меняешь формат общего файла.",
         "правила": ["shared-text-edit-sequence", "tool-edit-announce",
-                    "contract-diff-before-commit", "revision-bump-same-stroke"],
+                    "contract-diff-before-commit", "revision-bump-same-stroke",
+                    # ── разбор 04.09 (карточка #526): полный текст живёт в одном месте ·
+                    #    врезка записывается в реестр · носитель настройки переживает её
+                    "milestone-single-source", "insertion-registry",
+                    "setting-carrier-outlives-the-setting"],
     },
     "atlas-memory-rebirth": {
         "описание": "Зови при сохранении памяти, пробуждении и заведении роли: сохранение "
@@ -112,7 +139,10 @@ import mezo_paths  # noqa: E402 — пути машины выводятся, н
         "описание": "Зови, когда заводишь, ведёшь или закрываешь карточку задачи: критерий "
                     "приёмки до работы, тело непустое, три разных вида остановки.",
         "когда": "Договорились о работе · берёшь чужую карточку · закрываешь или отменяешь свою.",
-        "правила": ["task-discipline", "task-states-and-role-card"],
+        "правила": ["task-discipline", "task-states-and-role-card",
+                    # ── разбор 04.09 (карточка #526): задача вне направления —
+                    #    с причиной вслух, а не молча
+                    "direction-focus"],
     },
     # ── ТРЕТЬЯ ВОЛНА (слово владельца 2026-08-27, чат OPSSRE: «желательно сделать этот
     #    механизм общеупотребимым, если получится то оберни его в skill») ──
