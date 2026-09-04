@@ -75,6 +75,41 @@ def отпечаток_записей(путь):
     return n, s, h.hexdigest()[:16]
 
 
+def снять_счётчик(путь) -> None:
+    """Изготовить состояние «ДО шага» на копии: пересобрать таблицу БЕЗ AUTOINCREMENT,
+    убрать счётчик и запись шага из журнала.
+
+    🩸 ПОЙМАНО 04.09 20:43 UTC, через шесть минут после применения шага к живой: приёмка
+    покраснела 4 из 8 — контроль ① «без счётчика номер повторяется» перестал воспроизводиться,
+    потому что живая база УЖЕ со счётчиком, и копия с неё — тоже. Приёмка судила состояние,
+    которого больше нет.
+    ⚡ КЛАСС: ПРИЁМКА ШАГА СХЕМЫ ЖИВЁТ ОДИН ПРОГОН — после применения к живой её контроль
+    исчезает, и она либо краснеет навсегда (эту красноту перестанут читать), либо, что хуже,
+    судит «уже сведено» как успех. Лечится тем, что приёмка ИЗГОТАВЛИВАЕТ «до» сама и
+    проверяет, что изготовила (случай ⓪), а не надеется застать его в живой базе.
+    """
+    c = sqlite3.connect(путь)
+    ddl = c.execute("SELECT sql FROM sqlite_master WHERE name='phoenix_records'").fetchone()[0]
+    if "AUTOINCREMENT" not in ddl.upper():
+        c.close(); return
+    поля = ("id, role, section, subject, body, body_chars, happened_at, source, expiry_cond, "
+            "alive, revoked_at, revoked_note, ord, origin_chars, created_at, created_by")
+    c.execute("BEGIN")
+    c.execute(ddl.replace("AUTOINCREMENT", "").replace("phoenix_records", "phoenix_records_old", 1))
+    c.execute(f"INSERT INTO phoenix_records_old ({поля}) SELECT {поля} FROM phoenix_records")
+    c.execute("DROP TABLE phoenix_records")
+    c.execute("ALTER TABLE phoenix_records_old RENAME TO phoenix_records")
+    for з in ("CREATE INDEX idx_phoenix_records_role    ON phoenix_records(role, section, ord)",
+              "CREATE INDEX idx_phoenix_records_subject ON phoenix_records(role, subject)",
+              "CREATE INDEX idx_phoenix_records_alive   ON phoenix_records(role, alive)",
+              "CREATE INDEX idx_phoenix_records_when    ON phoenix_records(role, happened_at)"):
+        c.execute(з)
+    c.execute("DELETE FROM sqlite_sequence WHERE name='phoenix_records'")
+    c.execute("DELETE FROM schema_migrations WHERE version='20260904-phoenix-records-autoincrement'")
+    c.execute("COMMIT")
+    c.close()
+
+
 def опыт_повтора_номера(путь) -> tuple[int, int]:
     """Удалить запись с наибольшим номером, вставить новую. Вернуть (удалённый, новый)."""
     c = sqlite3.connect(путь)
@@ -105,6 +140,19 @@ def main() -> int:
         к_шаг = песок / "step.db"
         shutil.copy2(ЖИВАЯ, к_контроль)
         shutil.copy2(ЖИВАЯ, к_шаг)
+
+        print()
+        print("── ⓪ ИЗГОТОВЛЕНИЕ «ДО»: копии приводятся к состоянию без счётчика ────")
+        зап_живой = отпечаток_записей(к_шаг)
+        for к in (к_контроль, к_шаг):
+            снять_счётчик(к)
+        c = sqlite3.connect(к_шаг)
+        ddl0 = c.execute("SELECT sql FROM sqlite_master WHERE name='phoenix_records'").fetchone()[0]
+        ж0 = c.execute("SELECT 1 FROM schema_migrations WHERE version='20260904-phoenix-records-autoincrement'").fetchone()
+        c.close()
+        случай("⓪ копия приведена к «до»: AUTOINCREMENT снят, записи целы, шага в журнале нет",
+               "AUTOINCREMENT" not in ddl0.upper() and отпечаток_записей(к_шаг) == зап_живой and not ж0,
+               f"AUTOINCREMENT={'AUTOINCREMENT' in ddl0.upper()} записи={отпечаток_записей(к_шаг)==зап_живой} журнал={bool(ж0)}")
 
         print()
         print("── ① КОНТРОЛЬ: беда воспроизводится на НЕмигрированной копии ─────────")
@@ -172,6 +220,7 @@ def main() -> int:
         print("── ⑧ ПОРЧА копии шага: сверка «до сноса» солгала → обязан откатить ─────")
         к_порча = песок / "porcha.db"
         shutil.copy2(ЖИВАЯ, к_порча)
+        снять_счётчик(к_порча)
         исходный = ШАГ.read_text(encoding="utf-8")
         порченый = исходный.replace("        if после != до:", "        if после == до:")
         if порченый == исходный:
@@ -192,6 +241,22 @@ def main() -> int:
                 if коп.exists():
                     коп.unlink()
 
+        print()
+        print("── ⑨⑩ ПРЕДУСЛОВИЯ СЛОВАМИ (приёмка @STUD карточки #380 — тот же класс) ─")
+        к_ноль = песок / "nojournal.db"
+        shutil.copy2(ЖИВАЯ, к_ноль)
+        c = sqlite3.connect(к_ноль); c.execute("DROP TABLE schema_migrations"); c.commit(); c.close()
+        до9 = отпечаток_базы(к_ноль)
+        код, вывод = зов(ШАГ, "--db", к_ноль)
+        случай("⑨ база БЕЗ журнала схемы → отказ СЛОВАМИ (назван журнал и что сделать), код 1, без стека, база не тронута",
+               код == 1 and "НЕТ ЖУРНАЛА СХЕМЫ" in вывод and "migrate-live.py" in вывод
+               and "Traceback" not in вывод and отпечаток_базы(к_ноль) == до9, f"код {код}" + chr(10) + вывод)
+        к_текст = песок / "notadb.db"
+        к_текст.write_text("просто текст, не база", encoding="utf-8")
+        код, вывод = зов(ШАГ, "--db", к_текст)
+        случай("⑩ файл-не-база → отказ СЛОВАМИ («не база SQLite»), код 1, без стека",
+               код == 1 and "не база SQLite" in вывод and "Traceback" not in вывод, f"код {код}" + chr(10) + вывод)
+
     print()
     print("=" * 88)
     print(f"ИТОГ: прошло {len(прошло)} · пало {len(пало)}")
@@ -201,6 +266,9 @@ def main() -> int:
     print("⚖️ ЧЕГО ЭТА ПРИЁМКА НЕ ПРОВЕРЯЕТ: поведение ЖИВОЙ базы под живой нагрузкой —")
     print("   всё здесь на копии. Что копия и живая равносильны, доказывает не совпадение")
     print("   файлов, а прогон инструментов памяти ПОСЛЕ применения к живой (сделать рукой).")
+    print("   И состояние «до» здесь ИЗГОТОВЛЕНО (случай ⓪), а не застигнуто: после 04.09")
+    print("   20:37 UTC живой базы без счётчика нет. Обратная пересборка — мой же код, и")
+    print("   если она врёт так же, как шаг, оба зелёные разом. Отдельного судьи у этого нет.")
     return 1 if пало else 0
 
 
