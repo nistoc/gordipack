@@ -85,11 +85,13 @@ def main():
     print("=" * 96)
 
     # ── 1. ЛЕНТА: размер и темп
-    notes = con.execute("SELECT id, writer_role, timestamp, body_md FROM messages").fetchall()
+    # ⚡ Вид: замер стоимости чтения ленты обязан видеть ВСЮ ленту, иначе перенос
+    # покажет мнимое удешевление (карточка #538 шаг ③).
+    notes = con.execute("SELECT id, writer_role, timestamp, body_md FROM messages_all").fetchall()
     sizes = sorted(len(b or "") for _, _, _, b in notes)
     total = sum(sizes)
     days = con.execute(
-        "SELECT COUNT(DISTINCT substr(timestamp,1,10)) FROM messages").fetchone()[0]
+        "SELECT COUNT(DISTINCT substr(timestamp,1,10)) FROM messages_all").fetchone()[0]
     last24 = con.execute(
         "SELECT COUNT(*), SUM(LENGTH(body_md)) FROM messages "
         "WHERE timestamp > datetime('now','-1 day')").fetchone()

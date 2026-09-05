@@ -57,7 +57,8 @@ def measure(con, role=None):
     out = []
     for (r,) in con.execute(q, args):
         note = con.execute(
-            "SELECT MAX(timestamp) FROM messages WHERE UPPER(writer_role) = UPPER(?)",
+            # ⚡ Вид: роль, писавшая давно, не должна выглядеть «никогда не писавшей» после переноса.
+            "SELECT MAX(timestamp) FROM messages_all WHERE UPPER(writer_role) = UPPER(?)",
             (r,)).fetchone()[0]
         if not note:
             continue

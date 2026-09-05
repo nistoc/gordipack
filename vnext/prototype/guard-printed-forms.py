@@ -873,7 +873,10 @@ def main():
                 thits.append((f"{_tw}: ссылки на правило ответов НЕТ",
                               "🔴 наказ не ведёт к owner-reply-format — роль в сверке "
                               "ответит владельцу без формы (карточка #375)",
-                              "строка-ссылка: set-rule.py --key owner-reply-format --show "
+                              # ⚠️ путь и имя — В ОДНОМ литерале намеренно: разорви их
+                              # переносом строки, и всякий разбор исходника (в том числе
+                              # наш собственный) увидит голое имя без каталога
+                              "строка-ссылка: python <КОНТУР>/.mezosync/scripts/set-rule.py --key owner-reply-format --show "
                               "или имя навыка atlas-owner-reply"))
         tred = [(w, k, f) for w, k, f in thits if k.startswith("🔴")]
         tyel = [(w, k, f) for w, k, f in thits if k.startswith("🟡")]

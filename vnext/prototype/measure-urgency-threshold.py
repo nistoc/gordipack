@@ -40,7 +40,8 @@ def load(db: str):
     con = sqlite3.connect(f"file:{db.replace(chr(92), '/')}?mode=ro", uri=True)
     con.execute("PRAGMA query_only=ON")
     msgs = con.execute(
-        "SELECT id, writer_role, timestamp, priority, body_md FROM messages ORDER BY id"
+        # ⚡ Вид: порог выводится из ВСЕЙ истории приоритетов, не из последней недели.
+        "SELECT id, writer_role, timestamp, priority, body_md FROM messages_all ORDER BY id"
     ).fetchall()
     links = con.execute(
         "SELECT message_id, reply_to FROM message_thread WHERE reply_to IS NOT NULL"
