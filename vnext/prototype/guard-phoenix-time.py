@@ -231,7 +231,8 @@ def corrected_ids(con):
     """
     fixed = {}
     for mid, tags, body in con.execute(
-            "SELECT id, COALESCE(tags,''), COALESCE(body_md,'') FROM messages ORDER BY id"):
+            # ⚡ Вид: час, записанный неверно, остаётся неверным и в архиве (карточка #538 шаг ③).
+            "SELECT id, COALESCE(tags,''), COALESCE(body_md,'') FROM messages_all ORDER BY id"):
         tagged = "correction" in tags
         for line in body.splitlines():
             refs = REFS.findall(line)

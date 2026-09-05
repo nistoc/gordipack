@@ -64,9 +64,11 @@ def find_answered(con, days: int):
         "       COUNT(t.message_id) AS answers,"
         "       MAX(a.timestamp) AS last_answer,"
         "       substr(m.body_md, 1, 120) AS head "
-        "FROM messages m "
+        # ⚡ Вид, а не живая таблица: срочная записка без ответа не перестаёт быть
+        # долгом оттого, что ей исполнилось семь суток (карточка #538 шаг ③).
+        "FROM messages_all m "
         "JOIN message_thread t ON t.reply_to = m.id "
-        "JOIN messages a ON a.id = t.message_id "
+        "JOIN messages_all a ON a.id = t.message_id "
         "WHERE m.priority IN (?, ?) AND (m.resolved IS NULL OR m.resolved = 0) "
         "  AND m.timestamp < datetime('now', ?) "
         "GROUP BY m.id ORDER BY answers DESC, m.id",
@@ -92,9 +94,9 @@ def main() -> int:
         return 2
     con = connect(db)
 
-    total = con.execute("SELECT COUNT(*) c FROM messages WHERE priority IN (?,?)",
+    total = con.execute("SELECT COUNT(*) c FROM messages_all WHERE priority IN (?,?)",
                         URGENT).fetchone()["c"]
-    burning = con.execute("SELECT COUNT(*) c FROM messages WHERE priority IN (?,?)"
+    burning = con.execute("SELECT COUNT(*) c FROM messages_all WHERE priority IN (?,?)"
                           " AND (resolved IS NULL OR resolved=0)", URGENT).fetchone()["c"]
     week = con.execute("SELECT COUNT(*) c FROM messages WHERE priority IN (?,?)"
                        " AND (resolved IS NULL OR resolved=0)"
