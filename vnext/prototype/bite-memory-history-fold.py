@@ -88,7 +88,7 @@ def main() -> int:
         копия = HERE / f"memory-history-fold.__break_{a.слом}__.py"
         копия.write_text(текст.replace(было, стало, 1), encoding="utf-8")
         tool = копия
-        print(f"⚠️ ПОРЧА «{a.слом}» ВЗВЕДЕНА — ждём красного РОВНО в случае ③\n")
+        print(f"⚠️ ПОРЧА «{a.слом}» ВЗВЕДЕНА — ждём красного в случаях ③ · ③-в · ③-г (одно свойство с двух сторон)\n")
     try:
         # шаг схемы на копии
         r = subprocess.run([sys.executable, "-B", str(MIGR), "--db", str(db)], capture_output=True,
