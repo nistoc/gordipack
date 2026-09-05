@@ -185,7 +185,7 @@ try:
     items = {t["trackId"]: t for t in tracks.get("items", [])} if code == 200 else {}
     declared_ok = all(name in items and items[name]["declared"] for name in DECLARED)
     counts_ok = all(items[name]["taskCount"] == BY_TRACK.get(name, 0) for name in DECLARED if name in items)
-    case("(1) витрина наборов: все заявленные на месте, число задач сошлось с прямым запросом",
+    case("(1) сводка по наборам: все заявленные на месте, число задач сошлось с прямым запросом",
          code == 200 and declared_ok and counts_ok,
          f"наборов в ответе {len(items)} · заявленных в базе {len(DECLARED)} · без набора {tracks.get('untracked')}")
 
