@@ -93,9 +93,15 @@ def main() -> int:
         # шаг схемы на копии
         r = subprocess.run([sys.executable, "-B", str(MIGR), "--db", str(db)], capture_output=True,
                            text=True, encoding="utf-8", errors="replace")
-        case("⓪ шаг схемы сводится на копии и пишет себя в журнал", r.returncode == 0 and "ВРЕЗАНО" in r.stdout,
-             r.stdout.strip().splitlines()[-1] if r.stdout.strip() else r.stderr[-300:])
         conn = sqlite3.connect(str(db))
+        таблицы = {x[0] for x in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        в_журнале = conn.execute("SELECT count(*) FROM schema_migrations WHERE version='20260905-phoenix-history-archive'").fetchone()[0]
+        # ⚖️ шаг идемпотентен: на копии живой базы, где он уже сведён (07:08 UTC), он отвечает
+        #    «уже сведено» — это тоже зелёное; красное — если таблиц нет или журнал молчит
+        case("⓪ шаг схемы сведён на копии (врезан сейчас или уже был) и записан в журнал",
+             r.returncode == 0 and ("ВРЕЗАНО" in r.stdout or "уже сведено" in r.stdout)
+             and {"role_rebirths", "phoenix_history_archive"} <= таблицы and в_журнале == 1,
+             r.stdout.strip().splitlines()[-1] if r.stdout.strip() else r.stderr[-300:])
         n_reb = conn.execute("SELECT count(*) FROM role_rebirths").fetchone()[0]
         case("⓪-бис отметки пересоздания засеяны (18, у 9 ролей, у каждой источник)",
              n_reb == 18 and conn.execute("SELECT count(DISTINCT role) FROM role_rebirths").fetchone()[0] == 9
@@ -170,6 +176,38 @@ def main() -> int:
         conn.execute("DELETE FROM role_rebirths WHERE role=?", (роль,)); conn.commit()
         код, вывод = run(["--role", роль, "--dry-run"], db=db, tool=tool)
         case("⑥ у роли без отметок пересоздания инструмент говорит это вслух", "ОТМЕТОК ПЕРЕСОЗДАНИЯ У РОЛИ НЕТ" in вывод)
+        # ⑧ ЧИСТКА ПРИ СОХРАНЕНИИ — ПЕРЕНОС, НЕ УДАЛЕНИЕ (save-phoenix.py держит 10 + самую длинную
+        #    на раздел; до 05.09 лишнее УДАЛЯЛОСЬ: из 2270 сохранений в истории оставалась 441 версия)
+        save = mezo_paths.live_scripts() / "save-phoenix.py"
+        conn = sqlite3.connect(str(db))
+        всего0 = conn.execute("SELECT (SELECT count(*) FROM phoenix_history)+(SELECT count(*) FROM phoenix_history_archive)").fetchone()[0]
+        арх_save0 = conn.execute("SELECT count(*) FROM phoenix_history_archive WHERE role=? AND rule LIKE 'save-phoenix%'", (роль,)).fetchone()[0]
+        тело = conn.execute("SELECT body FROM phoenix WHERE role=? AND section='plan'", (роль,)).fetchone()[0]
+        f = tmp / "body.md"; коды = []
+        env = dict(os.environ); env["MEZO_ROLE"] = роль
+        for i in range(13):
+            f.write_text(тело + f"\n\n<!-- проба приёмки {i}, копия базы -->", encoding="utf-8")
+            r = subprocess.run([sys.executable, "-B", str(save), "--role", роль, "--section", "plan", "--file", str(f),
+                                "--db", str(db)], capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
+            коды.append(r.returncode)
+        conn = sqlite3.connect(str(db))
+        всего1 = conn.execute("SELECT (SELECT count(*) FROM phoenix_history)+(SELECT count(*) FROM phoenix_history_archive)").fetchone()[0]
+        в_ист = {r[0] for r in conn.execute("SELECT id FROM phoenix_history WHERE role=? AND section='plan'", (роль,))}
+        из_save = conn.execute("SELECT count(*) FROM phoenix_history_archive WHERE role=? AND rule LIKE 'save-phoenix%'", (роль,)).fetchone()[0] - арх_save0
+        # правило сохранения: 10 ПОСЛЕДНИХ по номеру + САМАЯ ДЛИННАЯ из всех (история ∪ архив) —
+        # их и только их ждём в истории; 11 это или 10 — зависит от того, попала ли длинная в последние
+        # ⚖️ считаем только то, что видело САМО сохранение: строки истории и то, что ОНО унесло;
+        #    унесённое свёрткой (rule regl-538) сохранению не видно и в «самой длинной» не участвует
+        объед = conn.execute(
+            "SELECT id, body_chars FROM phoenix_history WHERE role=? AND section='plan' UNION ALL "
+            "SELECT id, body_chars FROM phoenix_history_archive WHERE role=? AND section='plan' "
+            "AND rule LIKE 'save-phoenix%'", (роль, роль)).fetchall()
+        последние10 = {i for i, _ in sorted(объед, key=lambda x: -x[0])[:10]}
+        длинная = max(объед, key=lambda x: (x[1], x[0]))[0]
+        ждём = последние10 | {длинная}
+        case("⑧ 13 сохранений раздела: в истории ровно 10 последних + самая длинная, лишнее ПЕРЕНЕСЕНО, потерь ноль",
+             all(k == 0 for k in коды) and в_ист == ждём and всего1 == всего0 + 13 and из_save > 0,
+             f"коды {set(коды)} · в истории {len(в_ист)} (ждали {len(ждём)}) · всего было {всего0} стало {всего1} · перенесено save-phoenix {из_save}")
         case("⑦ живая база не тронута приёмкой (отпечаток файла совпал)", файл_отпечаток(src) == live_fp)
     finally:
         if копия and копия.exists(): копия.unlink()
