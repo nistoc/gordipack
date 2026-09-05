@@ -80,7 +80,10 @@ import mezo_paths  # noqa: E402 — пути машины выводятся, н
                     "word-carries-its-scope",
                     # ── разбор 04.09 (карточка #526): сам ритм сверки ехал мимо навыка,
                     #    хотя навык зовётся ровно в момент сверки
-                    "sync-alarm-in-chat", "sync-sleep-backoff", "poll-format"],
+                    "sync-alarm-in-chat", "sync-sleep-backoff", "poll-format",
+                    # ── 05.09 (карточка #543, слово владельца 05:00:53 UTC): право, услышанное
+                    #    от владельца, — в реестр тем же ходом, в память — номер записи. Внёс COORD
+                    "right-to-registry-same-move"],
     },
     # ── ВТОРАЯ ВОЛНА (слово владельца 2026-08-22 05:32 UTC: «выполняй все 4 пункта») ──
     "atlas-note": {
