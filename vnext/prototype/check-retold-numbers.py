@@ -123,7 +123,7 @@ def main() -> int:
     rows = conn.execute(
         "SELECT role, section, saved_at, body FROM phoenix ORDER BY role, section").fetchall()
     if not rows:
-        print("⛔ слепков нет — сверять нечего (это НЕ «чисто»)")
+        print("⛔ сохранённой памяти ролей нет — сверять нечего (это НЕ «чисто»)")
         return 2
 
     # живые ответы базы — ОДИН раз, честными запросами
@@ -152,20 +152,20 @@ def main() -> int:
                 want, have = num(m), cards_open.get(role, 0)
                 if want != have:
                     red.append((role, section, i, line.strip(),
-                                f"в слепке открытых карточек {want} · база СЕЙЧАС: {have}"))
+                                f"в сохранённой памяти: открытых карточек {want} · база СЕЙЧАС: {have}"))
                 continue
             m = RULES_N.search(line)
             if m and RULES_ALIEN.search(line):
                 continue                     # число не про свод — см. замер у RULES_ALIEN
             if m and num(m) not in (rules_all, rules_live):
                 red.append((role, section, i, line.strip(),
-                            f"в слепке правил {num(m)} · база СЕЙЧАС: живых {rules_live}, "
+                            f"в сохранённой памяти: правил {num(m)} · база СЕЙЧАС: живых {rules_live}, "
                             f"всего {rules_all}"))
                 continue
             m = STEPS_N.search(line)
             if m and "схем" in line.lower() and num(m) != steps:
                 red.append((role, section, i, line.strip(),
-                            f"в слепке шагов схемы {num(m)} · журнал СЕЙЧАС: {steps}"))
+                            f"в сохранённой памяти: шагов схемы {num(m)} · журнал СЕЙЧАС: {steps}"))
 
     for role, section, i, line, why in red:
         print(f"🔴 ПЕРЕСКАЗ ИЗМЕРИМОГО [{role}·{section}:{i}] (сохранено {section and ''}"

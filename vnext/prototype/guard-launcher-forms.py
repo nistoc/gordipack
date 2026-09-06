@@ -366,7 +366,7 @@ def main() -> int:
                                 f"{(bad.group(0) if bad else '')[:90]}", where))
         elif "expected one argument" in out and unknown:
             skip += 1
-            skips.append((shown, f"нечего подставить в {' '.join(unknown)} — прибор, а не механизм",
+            skips.append((shown, f"нечего подставить в {' '.join(unknown)} — инструмент, а не механизм",
                           where))
         elif r.returncode != 0 and not out.strip():
             # 🪤 НАЙДЕНО НА СЕБЕ 20.08: механизм, от которого осталась одна строка
