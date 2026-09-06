@@ -119,7 +119,7 @@ def run(role=None, db_path=DB):
     rows = collect(con, role)
     con.close()          # Windows держит файл открытым — самопроверка на временной базе иначе падает
     if not rows:
-        print(f"⛔ ОТКАЗ: слепков не найдено ({'роль ' + role if role else 'все роли'}). "
+        print(f"⛔ ОТКАЗ: сохранённой памяти не найдено ({'роль ' + role if role else 'все роли'}). "
               f"Отсутствие данных — это отказ, а не зелёное.")
         return 2
 

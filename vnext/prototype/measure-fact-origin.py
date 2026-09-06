@@ -45,7 +45,7 @@ def main() -> int:
     conn = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
     rows = conn.execute("SELECT role, section, body FROM phoenix ORDER BY role, section").fetchall()
     if not rows:
-        print("⛔ слепков нет — мерить нечего (это не «чисто»)")
+        print("⛔ сохранённой памяти ролей нет — мерить нечего (это не «чисто»)")
         return 2
 
     total = marked = unmarked = excluded = 0
@@ -67,7 +67,8 @@ def main() -> int:
                         samples_unmarked.append((role, section, i, line.strip()[:110]))
                 break   # одна строка — один факт в счёте, иначе плотная строка удвоит счёт
 
-    print("📏 ЗАМЕР «замер или пересказ» по телам слепков (phoenix, все роли и секции)")
+    print("📏 ЗАМЕР «замер или пересказ» по телам сохранённой памяти ролей "
+          "(phoenix, все роли и секции)")
     print(f"   количественных строк всего .... {total}")
     print(f"   исключено (история/ссылки) .... {excluded}")
     print(f"   с приметой замера рядом ....... {marked}")

@@ -84,7 +84,7 @@ def run(role=None, db_path=DB):
     con.close()
 
     if not rows:
-        print(f"⛔ ОТКАЗ: слепков не найдено ({'роль ' + role if role else 'все роли'}). "
+        print(f"⛔ ОТКАЗ: сохранённой памяти не найдено ({'роль ' + role if role else 'все роли'}). "
               f"Отсутствие данных — отказ, а не зелёное.")
         return 2
 

@@ -116,7 +116,7 @@ def main() -> int:
     con.commit(); con.close()
     r = subprocess.run([sys.executable, CHECK, "--db", db9],
                        capture_output=True, text=True, encoding="utf-8")
-    ok &= case("⑨ слепков нет — отказ мерить, отдельный код",
+    ok &= case("⑨ сохранённой памяти ролей нет — отказ мерить, отдельный код",
                r.returncode == 2 and "нечего" in r.stdout,
                f"код {r.returncode}", differ=True)
 
