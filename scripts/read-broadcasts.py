@@ -143,7 +143,9 @@ def _inbox(conn, role, show_all):
 
 def _ack(conn, role, ids):
     for mid in ids:
-        row = conn.execute("SELECT tags FROM messages WHERE id = ?", (mid,)).fetchone()
+        # ⚡ Через ВИД: объявление всем живёт месяцами, и после переноса старых записок
+        # в архив запрос к живой таблице переставал находить их МОЛЧА (карточка #538 шаг ③).
+        row = conn.execute("SELECT tags FROM messages_all WHERE id = ?", (mid,)).fetchone()
         if not row or not is_broadcast(row[0]):
             print(f"  ⚠️ #{mid} не broadcast — пропуск")
             continue

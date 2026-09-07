@@ -62,12 +62,18 @@ def main() -> int:
     # ⚠️ ПУТЬ К БАЗЕ — ДОВОДОМ. Прежняя редакция звала live_db() и молча игнорировала
     # переданный --db: прогон «на копии» уходил в ЖИВУЮ базу и отвечал УСПЕХОМ о ней.
     # Это хуже отсутствия довода: зелёный ответ про базу, которую вызывающий не называл.
-    ap = argparse.ArgumentParser(description="шаг схемы: объявленная аренда инструмента")
+    ap = argparse.ArgumentParser(description="шаг схемы: объявление о правке инструмента")
     ap.add_argument("--db", default=None, help="путь к базе; без него — живая база контура")
     ap.add_argument("--dry-run", action="store_true", help="ХОЛОСТОЙ прогон: ничего не менять")
     a = ap.parse_args()
     db = mezo_paths.resolve_db(a.db, __file__)
     print(f"📂 БАЗА: {db}")
+    # ⛔ ПРЕДУСЛОВИЯ — СЛОВАМИ, ДО ПЕРВОГО ЗАПРОСА (приёмка @STUD карточки #380, 04.09 20:11 UTC):
+    # база без журнала схемы падала трассировкой из чужого модуля; файл-не-база — тоже.
+    отказ = schema_journal.precheck(db)
+    if отказ:
+        print(отказ)
+        return 1
     con = sqlite3.connect(str(db))
     before = {r[0] for r in con.execute(
         "SELECT name FROM sqlite_master WHERE type='table'")}

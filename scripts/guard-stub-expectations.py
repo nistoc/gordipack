@@ -113,7 +113,7 @@ def _состояние_задачи(номер: str):
     except (sqlite3.Error, ValueError, OSError) as e:
         return "unknown", f"спросить базу задач не вышло: {str(e)[:60]}"
     if строка is None:
-        return "ghost", f"задачи #{номер} в бэклоге НЕТ ВОВСЕ"
+        return "ghost", f"задачи #{номер} в списке задач НЕТ ВОВСЕ"
     статус = (строка[0] or "").strip().lower()
     # 📏 СПИСКИ ВЗЯТЫ ЗАМЕРОМ ПО БАЗЕ, А НЕ ПРИДУМАНЫ (PROTO 2026-08-24 17:01 UTC):
     #    done 162 · open 62 · awaiting_word 6 · blocked 6 · in_progress 4 · in_review 4 · dropped 4

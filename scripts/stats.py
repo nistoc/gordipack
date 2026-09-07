@@ -78,7 +78,9 @@ def collect(conn, since_min):
     win = f"-{int(since_min)} minutes"
 
     group = _q1(conn, "SELECT value FROM meta WHERE key='group_name'") or "?"
-    total_msg = _q1(conn, "SELECT COUNT(*) FROM messages") or 0
+    # ⚡ Вид: статистика меряет контур ЗА ВСЁ ВРЕМЯ, и перенос старых записок в архив
+    # не должен показывать «лента усохла» (карточка #538 шаг ③).
+    total_msg = _q1(conn, "SELECT COUNT(*) FROM messages_all") or 0
     roles = _q1(conn, "SELECT COUNT(DISTINCT writer_role) FROM messages") or 0
     rules = _q1(conn, "SELECT COUNT(*) FROM rules") or 0
 
@@ -89,15 +91,16 @@ def collect(conn, since_min):
     per_role = {}
     try:
         for role, cnt, last in conn.execute(
-            "SELECT writer_role, COUNT(*), MAX(timestamp) FROM messages GROUP BY writer_role ORDER BY writer_role"):
+            "SELECT writer_role, COUNT(*), MAX(timestamp) FROM messages_all GROUP BY writer_role ORDER BY writer_role"):
             per_role[role] = {"messages": cnt, "last": last}
     except sqlite3.OperationalError:
         pass
 
     # ошибки двойной записи
     dwerr_open = _q1(conn,
-        "SELECT COUNT(*) FROM messages WHERE tags LIKE '%\"DWERR\"%' AND (resolved IS NULL OR resolved=0)") or 0
-    dwerr_total = _q1(conn, "SELECT COUNT(*) FROM messages WHERE tags LIKE '%\"DWERR\"%'") or 0
+        # ⚡ Вид: незакрытая ошибка двойной записи не гаснет от возраста (карточка #538 шаг ③).
+        "SELECT COUNT(*) FROM messages_all WHERE tags LIKE '%\"DWERR\"%' AND (resolved IS NULL OR resolved=0)") or 0
+    dwerr_total = _q1(conn, "SELECT COUNT(*) FROM messages_all WHERE tags LIKE '%\"DWERR\"%'") or 0
 
     # phoenix-слепки
     phoenix_cnt = _q1(conn, "SELECT COUNT(*) FROM phoenix") or 0

@@ -106,6 +106,9 @@ def main():
                     help="вид условия отмены: " + " · ".join(sorted(EXPIRY_KINDS)))
     ap.add_argument("--expiry-cond", dest="expiry_cond",
                     help="деталь вида: дата · наблюдаемое событие · число и чем мерено")
+    ap.add_argument("--skill-delivery", dest="skill_delivery", choices=["yes", "no", "unset"],
+                    help="доставлять ли правило до подсказок ролей: yes · no · "
+                         "unset (вернуть в «не решено»). Тела правила НЕ трогает")
     ap.add_argument("--show", action="store_true")
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--apply", action="store_true", help="без него — dry-run диффа")
@@ -161,6 +164,40 @@ def main():
     if not args.key:
         print("ERR: нужен --key", file=sys.stderr)
         sys.exit(1)
+
+    if args.skill_delivery:
+        # ── РЕШЕНИЕ О ДОСТАВКЕ (карточка #526, шаг 20260904-rule-skill-delivery) ──
+        # ⚖️ ПОЧЕМУ ЭТО ОТДЕЛЬНАЯ ВЕТКА, А НЕ ЕЩЁ ОДНО ПОЛЕ ОБЩЕГО ПУТИ. Общий путь
+        # поднимает редакцию и час правки — то есть говорит «норма изменилась». Здесь
+        # норма НЕ менялась: изменилось решение, везти ли её в подсказки. Пойди это
+        # общим путём — все навыки, несущие правило, разом покраснели бы как отставшие,
+        # и роль пересобирала бы их, ничего не изменив ни в одной букве нормы.
+        # ⇒ Час правки и редакция остаются нетронутыми НАМЕРЕННО.
+        поля = {r[1] for r in conn.execute("PRAGMA table_info(rules)")}
+        if "skill_delivery" not in поля:
+            sys.exit("⛔ В этой базе нет поля решения о доставке. Накати шаг:\n"
+                     "   python <КОНТУР>/.mezosync/scripts/migrations/"
+                     "20260904-rule-skill-delivery.py")
+        было = conn.execute("SELECT skill_delivery FROM rules WHERE rule_key=?",
+                            (args.key,)).fetchone()
+        if было is None:
+            sys.exit(f"⛔ Правила «{args.key}» в своде нет — решать нечего о чём.")
+        стало = None if args.skill_delivery == "unset" else args.skill_delivery
+        print(f"  правило   : {args.key}")
+        print(f"  доставка  : {было[0] or 'не решено'} → {стало or 'не решено'}")
+        print("  ⚖️ тело правила, редакция и час правки НЕ трогаются — навыки не устареют")
+        if not args.apply:
+            print("\n[DRY-RUN] Не записано. Для записи — флаг --apply")
+            return
+        conn.execute("UPDATE rules SET skill_delivery=? WHERE rule_key=?", (стало, args.key))
+        conn.commit()
+        print("✅ ЗАПИСАНО.")
+        if стало == "yes":
+            print("👉 Дальше ДВА хода, и первый рукой: внеси ключ в нужный пакет "
+                  "в vnext-tools/rules-to-skills.py, затем пересобери навыки (--write).\n"
+                  "   ⚠️ Одно «да» правило до роли НЕ довозит — проверка будет краснеть "
+                  "«обещано и не доехало», пока пакет не назовёт ключ.")
+        return
 
     old = conn.execute(
         "SELECT body, locked_by, version, basis, authorized, source_ref, expiry_kind, "

@@ -30,6 +30,7 @@ from pathlib import Path
 
 from mezo_paths import resolve_db   # R15a: путь к БД — от расположения скрипта, не от CWD
 import mezo_paths                   # #157: и путь сборщика диска тоже выводится
+import mezo_hints                   # #586: общая подсказка печатается роли один раз, дальше — строка-ссылка
 
 # ⚠️ Обёрнут по норме @TAXO (07.08 13:18 UTC): правка общего инструмента не атомарна.
 # Сохранённая память — ПЕРВЫЙ экран воскресшей роли; сломать её дороже, чем не показать карточки.
@@ -139,6 +140,10 @@ def main():
     ap.add_argument("--role")
     ap.add_argument("--section", choices=ORDER)
     ap.add_argument("--list", action="store_true", help="какие роли и секции есть")
+    ap.add_argument("--full", action="store_true",
+                     help="печатать общие подсказки полностью, даже если уже показывались")
+    ap.add_argument("--actor", help="кто читает (роль руки); без него показ подсказки "
+                     "засчитывается роли из --role")
     args = ap.parse_args()
     args.db = str(resolve_db(args.db, __file__))
 
@@ -184,7 +189,9 @@ def main():
 
     print(f"🔥 PHOENIX — сохранённая память роли {role} (источник: mezosync.db, таблица phoenix)")
     if not args.section:
-        print(CANON.replace("{role}", role).replace("{s}", str(SCRIPTS_DIR)))
+        mezo_hints.подсказка(conn, mezo_hints.кто_читает(args.actor, role), "read-phoenix-canon",
+                              CANON.replace("{role}", role).replace("{s}", str(SCRIPTS_DIR)),
+                              ttl_hours=24, full=args.full)
 
     for s in wanted:
         if s not in rows:
@@ -243,7 +250,7 @@ def main():
             print(f"\n{'─' * 79}\n## §4½ ОТКРЫТЫЕ КАРТОЧКИ   [живой запрос к базе, НЕ из сохранённого текста]\n")
             if lines:
                 print("\n".join(lines))
-                print(f"\n   полностью: python {SCRIPTS_DIR}/backlog.py list --role {role}")
+                print(f"\n   полностью: python {SCRIPTS_DIR}/backlog.py list --role {role} --full")
             else:
                 print(f"   у роли {role} открытых карточек нет "
                       f"(проверено запросом, а не молчанием сохранённой памяти)")
@@ -252,7 +259,7 @@ def main():
             # Продолжение той же мысли, что §4½, на остальные производные факты:
             # положение в ленте, обращения ЛИЧНО, свежесть свода. Хранить их =
             # дать им врать; не хранить = им НЕЧЕМ врать.
-            # ⛔ Блок НАМЕРЕННО не повторяет карточки: две витрины одного предмета
+            # ⛔ Блок НАМЕРЕННО не повторяет карточки: две сводки одного предмета
             # расходятся молча, и роль верит той, что мягче.
             print(f"\n{'─' * 79}\n## §4¾ МАШИННЫЙ СЛОЙ   "
                   f"[собран этим вызовом, нигде не хранится]\n")

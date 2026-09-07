@@ -12,6 +12,10 @@
 ⚡ РАЗОВОЕ ПРАВО ТРАТИТСЯ И ЭТО ВИДНО: `spend`. Разовое разрешение без следа расхода —
 это стоячее разрешение, которым пользуются, пока не постесняются.
 
+⚡ ОШИБКА В ЗАПИСИ ЧИНИТСЯ `amend`, А НЕ «ОТОЗВАТЬ И ВЫДАТЬ ЗАНОВО» (с 2026-08-30):
+правятся только поля-СВИДЕТЕЛЬСТВА (когда · где сказано · примечание), действие права
+не трогается. Отзыв ради опрятности записал бы в историю прерывание, которого не было.
+
 📌 Читать так:
     role-rights.py list                      всё живое, по ролям
     role-rights.py list --role PROTO         только своё
@@ -27,8 +31,14 @@ DEFAULT_DB = str(Path(__file__).resolve().parent.parent / "mezosync.db")
 
 MISSING = {
     "authorized_by": "КТО разрешил (owner · coord · имя роли)",
-    "granted_at": "КОГДА сказано (2026-08-08 или 2026-08-08 15:56 UTC)",
-    "source_ref": "ГДЕ сказано («чат PROTO 2026-08-08 15:56 UTC» · «#3428»)",
+    # ⚰️ ЗДЕСЬ СТОЯЛ ЧАС «2026-08-08 15:56 UTC» — ОБРАЗЦОМ, ДВАЖДЫ. Такого часа НЕ БЫЛО:
+    # перемерен пятью независимыми руками 2026-08-30 по записям разговоров (PROTO, RCC,
+    # CORE, CHROME, COORD) — разрешений на отправку четыре, первое 11:22:40, последнее
+    # и самое полное 15:58:46. 🎯 Образец с НАСТОЯЩИМ часом опаснее выдуманного вдвойне:
+    # роль копирует то, что читает, и час расползается дальше. Поэтому здесь его нет вовсе.
+    "granted_at": "КОГДА сказано (ГГГГ-ММ-ДД или ГГГГ-ММ-ДД ЧЧ:ММ UTC) — час бери "
+                  "ИЗ ЗАПИСИ РАЗГОВОРА, не из памяти о нём",
+    "source_ref": "ГДЕ сказано («чат <РОЛЬ> ГГГГ-ММ-ДД ЧЧ:ММ UTC» · «записка #N»)",
 }
 
 
@@ -109,6 +119,84 @@ def cmd_revoke(a):
     conn.close()
     print(f"✅ право #{a.id} отозвано" if n else f"⚠️ право #{a.id} не найдено или уже отозвано")
     return 0 if n else 1
+
+
+
+def cmd_amend(a):
+    """Исправить ФАКТИЧЕСКУЮ ОШИБКУ в записи права — не трогая его действия.
+
+    ⚡ ЗАЧЕМ ЭТО ЗАВЕДЕНО (слово владельца 2026-08-30 23:25 UTC). До сегодня инструмент умел
+    выдать · потратить · отозвать · показать — и НЕ УМЕЛ исправить ошибку в собственной
+    записи. Замер 30.08: живая запись права на отправку несла час «08.08 15:56 UTC»,
+    которого не существует, и печатала его КАЖДОЙ роли, спросившей «что мне разрешено».
+    Обходной путь «отозвать и выдать заново» ЛОЖЕН: в истории появилось бы «право отозвано
+    30.08», а оно не прерывалось — то есть ложное ОГРАНИЧЕНИЕ, которое исполнят не проверяя.
+    ⇒ ошибка в реестре либо жила вечно, либо чинилась ценой искажения истории. Третьего пути
+    инструмент не давал.
+
+    ⛔ ГРАНИЦА, РАДИ КОТОРОЙ ЭТО ОТДЕЛЬНАЯ ПОДКОМАНДА, А НЕ ОБЩИЙ UPDATE: правятся ТОЛЬКО
+    поля-СВИДЕТЕЛЬСТВА (когда сказано · где сказано · примечание). Поля ДЕЙСТВИЯ — кому,
+    что, стоячее/разовое, кто разрешил, потрачено, отозвано — не трогаются ничем: их правка
+    была бы не исправлением записи, а ПОДМЕНОЙ ПРАВА, и выглядела бы одинаково.
+    """
+    if not a.why:
+        sys.exit("⛔ правка без причины — это подмена. Нужен --why: читающий обязан узнать, "
+                 "ЧЕМ старое значение опровергнуто, иначе новое ничем не лучше старого.")
+    if not a.by:
+        sys.exit("⛔ нужен --by: кто правит. Правка без руки неотличима от того, что запись "
+                 "всегда была такой.")
+    if a.granted_at is None and a.source_ref is None and a.note_append is None:
+        sys.exit("⛔ нечего исправлять: назови --granted-at и/или --source-ref "
+                 "и/или --note-append.")
+    conn = connect(a.db)
+    row = conn.execute("SELECT id, role, right_key, granted_at, source_ref, note, "
+                       "revoked_at, spent_at FROM role_rights WHERE id=?", (a.id,)).fetchone()
+    if not row:
+        conn.close()
+        # ⛔ отсутствие записи — ОТКАЗ, а не тихий успех: «поправил» при нулевой правке
+        # читается как сделанная работа (класс «одно ничего на две разные беды»).
+        sys.exit(f"⛔ права #{a.id} нет. Ничего не изменено.")
+    _, role, key, old_when, old_src, old_note, revoked, spent = row
+    changes = []
+    if a.granted_at is not None and a.granted_at != old_when:
+        changes.append(("granted_at", old_when, a.granted_at))
+    if a.source_ref is not None and a.source_ref != old_src:
+        changes.append(("source_ref", old_src, a.source_ref))
+    if not changes and a.note_append is None:
+        conn.close()
+        # ⚖️ ВСТРЕЧНЫЙ СЛУЧАЙ: новое значение равно старому. Молчать нельзя — роль решит,
+        # что правка прошла; писать след нельзя — следа о несделанном не бывает.
+        print(f"⚠️ запись #{a.id} ({role} · {key}) уже несёт эти значения — НИЧЕГО НЕ ИЗМЕНЕНО.")
+        print("   Следа не пишу: запись о правке, которой не было, лжёт громче отсутствия правки.")
+        return 1
+    stamp = conn.execute("SELECT strftime('%Y-%m-%d %H:%M', 'now')").fetchone()[0]
+    trail = "; ".join(f"{f}: «{o}» → «{n}»" for f, o, n in changes) or "примечание дополнено"
+    mark = f"⚰️ ИСПРАВЛЕНО {stamp} UTC ({a.by.upper()}): {trail}. Почему: {a.why}"
+    if a.note_append:
+        mark += f" | {a.note_append}"
+    sets, par = [], []
+    for f, _, n in changes:
+        sets.append(f"{f} = ?")
+        par.append(n)
+    sets.append("note = COALESCE(note || ' | ', '') || ?")
+    par.append(mark)
+    par.append(a.id)
+    conn.execute(f"UPDATE role_rights SET {', '.join(sets)} WHERE id=?", par)
+    conn.commit()
+    after = conn.execute("SELECT granted_at, source_ref, revoked_at, spent_at "
+                         "FROM role_rights WHERE id=?", (a.id,)).fetchone()
+    conn.close()
+    print(f"✅ запись #{a.id} ({role} · {key}) ИСПРАВЛЕНА — правка СВИДЕТЕЛЬСТВА, "
+          "не действия права.")
+    for f, o, n in changes:
+        print(f"   {f}: «{o}» → «{n}»")
+    print(f"   след записан в примечание: {mark[:96]}…" if len(mark) > 96
+          else f"   след записан в примечание: {mark}")
+    # ⚖️ доказательство ГРАНИЦЫ печатается САМО, а не обещается словами: читающий видит,
+    # что действие права не сдвинулось ни в одну сторону.
+    print(f"   ⚖️ действие НЕ тронуто: отозвано={after[2] or '—'} · потрачено={after[3] or '—'} "
+          f"(было: отозвано={revoked or '—'} · потрачено={spent or '—'})")
+    return 0
 
 
 def cmd_list(a):
@@ -200,6 +288,16 @@ def main() -> int:
     r.add_argument("--id", type=int, required=True)
     r.add_argument("--why")
     r.set_defaults(fn=cmd_revoke)
+
+    am = sub.add_parser("amend", help="исправить ФАКТИЧЕСКУЮ ошибку в записи "
+                                      "(час · источник · примечание) — не трогая действие права")
+    am.add_argument("--id", type=int, required=True)
+    am.add_argument("--by", help="КТО правит: роль. Правка без руки неотличима от «так и было»")
+    am.add_argument("--why", help="ЧЕМ старое значение опровергнуто (замер, запись разговора)")
+    am.add_argument("--granted-at", dest="granted_at", help="верный час — из записи разговора")
+    am.add_argument("--source-ref", dest="source_ref", help="верный источник")
+    am.add_argument("--note-append", dest="note_append", help="дописать в примечание")
+    am.set_defaults(fn=cmd_amend)
 
     l = sub.add_parser("list", help="показать права")
     l.add_argument("--role")

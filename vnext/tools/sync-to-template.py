@@ -46,7 +46,8 @@ TEMPLATE = Path(__file__).resolve().parents[2] / "scripts"
 # который зовут вычисленным именем, он не увидит — такой случай обязан быть назван руками,
 # и лучше пусть это будет исключение с подписью, чем список без подписи.
 ENTRY = ["guard-all.py", "read-messages.py", "write-message.py", "read-phoenix.py",
-         "save-phoenix.py", "backlog.py", "set-rule.py"]
+         "save-phoenix.py", "backlog.py", "set-rule.py",
+         "find-phoenix.py"]
 CALLS = re.compile(r"[\"']([a-z0-9_.-]+\.py)[\"']", re.I)
 
 

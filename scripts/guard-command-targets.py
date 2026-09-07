@@ -88,7 +88,7 @@ def run(db_path, prompts_dir, verbose=False, only_role=None):
         known = {r[0] for r in conn.execute("SELECT DISTINCT role FROM phoenix")}
         if only_role not in known:
             conn.close()
-            print(f"⛔ НЕ ЗАПУСТИЛСЯ: роли «{only_role}» нет среди слепков.")
+            print(f"⛔ НЕ ЗАПУСТИЛСЯ: роли «{only_role}» нет среди сохранённых памятей.")
             print(f"   есть: {' · '.join(sorted(known))}")
             print("   Это НЕ «чисто» и НЕ «сломано» — проверять было нечего.")
             return 2
@@ -98,7 +98,7 @@ def run(db_path, prompts_dir, verbose=False, only_role=None):
     skipped = []
     if only_role:
         skipped.append("общие источники (CLAUDE.md · read-phoenix.py · каталог промптов)")
-        skipped.append(f"слепки остальных ролей")
+        skipped.append("сохранённая память остальных ролей")
     else:
         sources = [
             ("CLAUDE.md", mezo_paths.container_root(__file__) / "CLAUDE.md"),

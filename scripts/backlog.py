@@ -42,11 +42,14 @@ import datetime
 import json
 import re
 import sqlite3
+import subprocess      # прокинуть роль в проверку ссылок (карточка #586) — тем же ходом, что и раньше
 import sys
+import tempfile
 import time
 from pathlib import Path
 
 from mezo_paths import resolve_db   # R15a: путь к БД — от расположения скрипта, не от CWD
+import mezo_hints       # подсказка печатается роли один раз, дальше — строка-ссылка (карточка #586)
 import dryrun          # холостой прогон (13.08)
 # ⚠️ Импорт ОБЁРНУТ намеренно — правка @TAXO (её замер живой эксплуатации 13:18:06 UTC):
 # она поймала этот файл в 15-секундном окне между записью вызова и записью модуля и получила
@@ -56,10 +59,63 @@ import dryrun          # холостой прогон (13.08)
 # между записью двух файлов есть окно, в котором инструмент синтаксически цел и функционально
 # мёртв. Объявить его нельзя: оно короче объявления. Лечится формой, а не дисциплиной.
 try:
-    from refs_check import warn_dangling   # предупреждение о «#N» вне чата (правило v3)
+    import refs_check
+    from refs_check import warn_dangling as _warn_dangling_base   # предупреждение о «#N» (правило v3)
 except Exception:                          # noqa: BLE001 — любая поломка модуля дешевле потерянной ноты
-    def warn_dangling(*_a, **_k):
+    refs_check = None
+    def _warn_dangling_base(*_a, **_k):
         print("⚠️ проверка ссылок НЕ ВЫПОЛНЕНА: модуль refs_check недоступен", file=__import__("sys").stderr)
+
+
+def warn_dangling(text, label="", *, role=None, full=False, db=None):
+    """Обёртка над refs_check.warn_dangling — карточка #586: та же проверка ссылок теперь
+    умеет получить РОЛЬ и НЕ ПОВТОРЯТЬ ей лекцию о «#N» при каждом вызове (общий помощник
+    mezo_hints работает ВНУТРИ самой проверки — check-dangling-refs.py: первый показ этой
+    паре «роль, вид пояснения» целиком, дальше строкой-ссылкой, --full — снова целиком).
+
+    ⚖️ refs_check.py — чужая зона (@PROTO, живёт вызовом ПО ПУТИ, не импортом): его
+    warn_dangling не умеет роль, а править чужой модуль здесь нельзя (объявление о правке
+    покрывает только backlog.py/write-message.py, не его). Поэтому роль идёт СВОИМ, отдельным
+    вызовом того же check-dangling-refs.py (путь берём готовый — refs_check.CHECKER, чтобы
+    не заводить вторую копию поиска этого пути), а не через refs_check.warn_dangling.
+
+    `db` — база, которой уже пользуется ЭТОТ вызов backlog.py (a.db): отметка показа обязана
+    осесть ТАМ ЖЕ, иначе прогон на песочнице тихо толкнул бы запись в живую базу по умолчанию.
+    role не назван (пусто) — поведение КАК РАНЬШЕ, без изменений (refs_check.warn_dangling
+    как есть): в этом файле такого вызова нет, но раздевать функцию догола не повод.
+    """
+    if not role or refs_check is None or not refs_check.CHECKER.exists():
+        return _warn_dangling_base(text, label=label)
+    if not (text or "").strip():
+        return
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile("w", suffix=".md", encoding="utf-8",
+                                         delete=False) as f:
+            f.write(text)
+            tmp = Path(f.name)
+        cmd = [sys.executable, str(refs_check.CHECKER), "--file", str(tmp), "--quiet",
+               "--role", role]
+        if db:
+            cmd += ["--db", str(db)]
+        if full:
+            cmd.append("--full")
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", timeout=20)
+        out = ((r.stdout or "") + (r.stderr or "")).strip()
+        if out:
+            # Вывод печатается КАК ЕСТЬ — просьба @PROTO у refs_check.warn_dangling, тот же
+            # довод и здесь: он уже называет строку, позицию и окрестность.
+            if label:
+                out = out.replace(tmp.name, label).replace(Path(tmp).name, label)
+            print(out, file=sys.stderr)
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"⚠️ проверка ссылок НЕ ВЫПОЛНЕНА ({type(e).__name__}: {e})", file=sys.stderr)
+    finally:
+        if tmp is not None:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
 
 # ⚖️ ДВА СОСТОЯНИЯ ВЗЯТЫ ИЗ ЧУЖОГО СЛОВАРЯ (протокол A2A, слово владельца 18.08 13:56 UTC:
 # «возьми терминологию, на сам протокол пока не переходим»). Оба закрывают потерю правды,
@@ -313,13 +369,21 @@ def cmd_claim(conn, a):
     чужая = "" if owner.upper() == a.actor.upper() else f" (карточка роли {owner})"
     print(f"🔧 ВЗЯТО В РАБОТУ #{a.id}{чужая} «{title[:50]}» до {until[:16]} UTC")
     print(f"   что делаешь: {a.note}")
-    print("   Видно коллегам при пробуждении и в общем прогоне проверок. Гаснет само —")
-    print("   снимать не обязательно; досрочно: backlog.py claim {} --actor {} --release"
-          .format(a.id, a.actor))
+    # ═══ Карточка #586: хвост пояснений — через общий помощник mezo_hints (первый показ
+    # роли-исполнителю — целиком, дальше строкой-ссылкой; --full — снова целиком). Строки
+    # ВЫШЕ («ВЗЯТО В РАБОТУ», «что делаешь») ОСТАЮТСЯ КАК ЕСТЬ, ДОСЛОВНО: на подстроку
+    # «ВЗЯТО В РАБОТУ» завязана приёмка bite-direction-focus.py:127. Текст хвоста
+    # ПОСТОЯННЫЙ: команда досрочного снятия — в ОБЩЕМ виде, без номера ЭТОЙ карточки
+    # (иначе отпечаток менялся бы при каждом claim и подсказка печаталась бы целиком всегда).
     # Карточка #441, третий встречный (случай TAXO/лента): граница названа ЧЕСТНО —
     # тишина выше не значит «свободна», машина видит только взятия инструментом.
-    print("   ⚖️ проверено ТОЛЬКО против взятий ИНСТРУМЕНТОМ: объявление комментарием "
-          "или запиской в ленте машина не читает")
+    ТЕКСТ_ХВОСТА = (
+        "   Видно коллегам при пробуждении и в общем прогоне проверок. Гаснет само —\n"
+        "   снимать не обязательно; досрочно: backlog.py claim <id> --actor <роль> --release\n"
+        "   ⚖️ проверено ТОЛЬКО против взятий ИНСТРУМЕНТОМ: объявление комментарием "
+        "или запиской в ленте машина не читает")
+    mezo_hints.подсказка(conn, (a.actor or "").upper(), "backlog-claim-как-снять",
+                         ТЕКСТ_ХВОСТА, full=a.full)
     # 2.2 (28.08): claim и есть «чем занята роль» — статус тем же вызовом, кнопки нет.
     try:
         conn.execute(
@@ -502,8 +566,8 @@ def cmd_add(conn, a):
     # ⚠️ Предупреждение о неразрешимых ссылках — ПОСЛЕ проверок отказа и ДО записи. Порядок важен:
     # проверка отказа говорит «карточка НЕ заведена», предупреждение — «заведена, но читателю
     # со стороны будет трудно». Смешать их значило бы утопить отказ в шуме.
-    warn_dangling(body, label="тело карточки")
-    warn_dangling(done_when, label="критерий")
+    warn_dangling(body, label="тело карточки", role=mezo_hints.кто_читает(a.actor, a.role), full=a.full, db=a.db)
+    warn_dangling(done_when, label="критерий", role=mezo_hints.кто_читает(a.actor, a.role), full=a.full, db=a.db)
     if слово_меток:
         print(слово_меток)
 
@@ -554,10 +618,17 @@ def cmd_add(conn, a):
 
     # ═══ Карточка #430 ступень ②: три вопроса разбора — ПОДСКАЗКОЙ, ПОСЛЕ записи.
     # Пустой ответ ничего не блокирует (встречный③ критерия): карточка уже заведена.
+    # ═══ Карточка #586: печать — через общий помощник mezo_hints (первый показ этой
+    # паре «владелец карточки, вид разбора» — целиком, дальше строкой-ссылкой; --full —
+    # снова целиком). Текст зависит ТОЛЬКО от вида разбора (устойчивая категория из
+    # ВИДЫ_ВОПРОСОВ/«прочее») — номера карточки, заголовка и прочих переменных частей
+    # здесь нет, поэтому отпечаток текста не меняется при каждом добавлении.
     имя_вида, вопросы = вид_и_вопросы(tags)
-    print(f"   💬 разбор замысла — три вопроса к себе (вид: {имя_вида}; подсказка, не ворота):")
-    for в in вопросы:
-        print(f"      · {в}")
+    ТЕКСТ_ВОПРОСОВ = (
+        f"   💬 разбор замысла — три вопроса к себе (вид: {имя_вида}; подсказка, а не запрет):\n"
+        + "\n".join(f"      · {в}" for в in вопросы))
+    mezo_hints.подсказка(conn, mezo_hints.кто_читает(a.actor, a.role), "backlog-add-три-вопроса",
+                         ТЕКСТ_ВОПРОСОВ, full=a.full)
 
 
 def cmd_criterion(conn, a):
@@ -686,6 +757,7 @@ def cmd_list(conn, a):
     icon = {"open": "○", "in_progress": "◐", "blocked": "⛔", "awaiting_word": "🙋",
             "in_review": "👀", "done": "✅", "failed": "💥", "dropped": "✗", "frozen": "🧊"}
     no_criterion = 0
+    digest_hidden = False
     for bid, role, title, status, prio, tags, done_when, track in rows:
         pr = {"critical": "‼️", "high": "⬆️", "normal": "·", "low": "⬇️"}.get(prio, "·")
         tg = " ".join(f"#{t}" for t in json.loads(tags or "[]"))
@@ -700,7 +772,12 @@ def cmd_list(conn, a):
         print(f"  {pool_mark}#{bid} {icon.get(status,'?')} {pr}{mark} {title}{shared}  {tg}")
         digest = _criterion_digest(done_when)
         if digest:
-            print(f"        🎯 {digest}")
+            # Карточка #593: срез — ВТОРАЯ строка карточки, а не первая — под --full;
+            # без флага только отмечаем, что было что скрыть (для подсказки в хвосте).
+            if a.full:
+                print(f"        🎯 {digest}")
+            else:
+                digest_hidden = True
         # Причина устаревания — В СПИСКЕ, не только в истории (карточка #86 ⑥). Старые
         # dropped без причины говорят это ЧЕСТНО, а не молчат как «нечего показать».
         if status == "dropped":
@@ -714,7 +791,7 @@ def cmd_list(conn, a):
         # умирает как всякое поле «пишется-не-читается» (П① пула, 27.08).
         if status == "frozen":
             cond = conn.execute("SELECT blocked_reason FROM backlog WHERE id=?", (bid,)).fetchone()
-            print(f"        🧊 {cond[0][:140] if cond and cond[0] else 'условие разморозки НЕ ЗАПИСАНО — так быть не должно, ворота его требуют'}")
+            print(f"        🧊 {cond[0][:140] if cond and cond[0] else 'условие разморозки НЕ ЗАПИСАНО — так быть не должно, полный прогон проверок его требует'}")
     if no_criterion:
         print(f"\n✎ без критерия готовности: {no_criterion} из {len(rows)} "
               f"— чем докажешь, что сделано?")
@@ -723,6 +800,18 @@ def cmd_list(conn, a):
         # («обязателен» или «подсветка») значило бы соврать про одну из половин.
         print("   пока открыта — подсветка. Закрыть как done без критерия НЕЛЬЗЯ (07.08).")
         print("   записать: backlog.py criterion <id> --actor <РОЛЬ> --text \"...\"")
+
+    # ═══ Карточка #593: срез критерия скрыт по умолчанию (виден только под --full) —
+    # хвост про это печатается через общий помощник mezo_hints (первый показ этой роли
+    # целиком, дальше строкой-ссылкой; --full — снова целиком; карточка #586). Печатаем
+    # ТОЛЬКО если хоть у одной карточки список был скрыт — иначе подсказка была бы шумом
+    # там, где скрывать было нечего. Текст ПОСТОЯННЫЙ — без номеров и чисел карточек,
+    # иначе отпечаток менялся бы при каждом вызове и подсказка печаталась бы целиком всегда.
+    if digest_hidden:
+        ТЕКСТ_СРЕЗА_СКРЫТ = ("ℹ️ срез критерия у карточек скрыт — полный вид: "
+                             "backlog.py list … --full")
+        mezo_hints.подсказка(conn, mezo_hints.кто_читает(a.actor, a.role), "backlog-list-full",
+                             ТЕКСТ_СРЕЗА_СКРЫТ, full=a.full)
 
 
 def cmd_show(conn, a):
@@ -952,15 +1041,20 @@ def cmd_status(conn, a):
                                  (a.id,)).fetchone()[0]
             print(f"⚠️ ПРИЁМЩИК НЕ НАЗНАЧЕН. Правило требует чужую руку, но КТО именно — "
                   f"не назначает никто, и такая работа ждёт втрое дольше.")
+            # 📌 На ЧУЖОЙ карточке подсказка обязана нести и --foreign: без него роль, скопировавшая
+            # строку дословно, получает отказ «принадлежит роли …». Нашла @OPSSRE (записка #4752 §⑦)
+            # на карточке #530: прошла проверку владельца с --foreign, скопировала подсказку — и
+            # упала на ней же. Подсказка, ведущая в отказ, хуже отсутствия подсказки.
+            чужая = f" --foreign {owner}" if actor != owner_u else ""
             if завёл and завёл.upper() != actor:
                 print(f"   👉 карточку завела роль {завёл} — по обыкновению контура "
                       f"принимает она:")
-                print(f"      backlog.py status {a.id} in_review --actor {a.actor} "
+                print(f"      backlog.py status {a.id} in_review --actor {a.actor}{чужая} "
                       f"--reviewer {завёл}")
             else:
                 print(f"   👉 карточку ты завела себе — рук ей не назначено ничем. Назови "
                       f"роль ИЛИ правило словами:")
-                print(f'      backlog.py status {a.id} in_review --actor {a.actor} '
+                print(f'      backlog.py status {a.id} in_review --actor {a.actor}{чужая} '
                       f'--reviewer "любая, не писавшая правку"')
     elif a.new_status == "in_review":
         print(f"   🫱 приёмщик: {приёмщик}")
@@ -1037,7 +1131,7 @@ def cmd_comment(conn, a):
     if not body.strip():
         print("ERR: пустой комментарий", file=sys.stderr)
         sys.exit(1)
-    warn_dangling(body, label="комментарий")
+    warn_dangling(body, label="комментарий", role=(a.actor or "").upper(), full=a.full, db=a.db)
     _event(conn, a.id, a.actor, "comment", body)
     conn.execute("UPDATE backlog SET updated_at = datetime('now') WHERE id = ?", (a.id,))
     conn.commit()
@@ -1126,6 +1220,8 @@ def main():
     #    а короткий критерий легче сделать неопровержимым. «Работает» помещается в строку,
     #    «укус краснеет, если убрать запись» — уже с трудом. Проверяемость обычно длиннее фразы.
     pa.add_argument("--done-when-file", dest="done_when_file")
+    pa.add_argument("--full", action="store_true",
+                    help="печатать общие подсказки полностью, даже если уже показывались")
 
     pk = sub.add_parser("criterion", help="записать/изменить критерий приёмки существующей карточки")
     dryrun.add_argument(pk)
@@ -1141,6 +1237,10 @@ def main():
     pl.add_argument("--older-than-days", type=int, default=None, dest="older_than_days",
                     help="только карточки СТАРШЕ N суток — напоминание о залежавшемся "
                          "(карточка #86 ⑧): свежие не показываются")
+    pl.add_argument("--full", action="store_true",
+                    help="печатать срез критерия у каждой карточки и общие подсказки полностью")
+    pl.add_argument("--actor", help="кто читает (роль руки); без него показ подсказки "
+                    "засчитывается роли из --role")
 
     ps = sub.add_parser("show")
     ps.add_argument("id", type=int)
@@ -1183,6 +1283,8 @@ def main():
                     help="причина взятия карточки ВНЕ направления контура (карточка #399): "
                          "непустая, ложится событием в журнал карточки. Слово владельца "
                          "и срочная починка инструмента — законные причины")
+    pw.add_argument("--full", action="store_true",
+                    help="печатать общие подсказки полностью, даже если уже показывались")
 
     pc = sub.add_parser("comment")
     dryrun.add_argument(pc)
@@ -1190,6 +1292,8 @@ def main():
     pc.add_argument("--actor", required=True)
     pc.add_argument("--body", default="")
     pc.add_argument("--body-file", dest="body_file")
+    pc.add_argument("--full", action="store_true",
+                    help="печатать общие подсказки полностью, даже если уже показывались")
 
     pe = sub.add_parser("edit", help="править ЗАГОЛОВОК/НАБОР заведённой карточки — "
                                      "со следом-событием (карточка #452)")
