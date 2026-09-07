@@ -38,49 +38,49 @@ import sys
 import tempfile
 from pathlib import Path
 
-РОЛЬ = "STUD"
+ROLE = "STUD"
 # 🩸 ЧЕЙ СЛЕД. Все прогоны набора подписываются ОСОБЫМ актором: живую базу пишут девять
 # рук, и «база изменилась» без имени руки ничего не значит — @TAXO поймала это на первом
 # же чужом прогоне (записка #4811), причём писал в тот миг автор набора.
-АКТОР_НАБОРА = "BITE519"
+SUITE_ACTOR = "BITE519"
 
 # Знаки, которые проверка ЗНАЕТ. Случай ⑫ сверяет их с тем, что печатают живые файлы:
 # закрытый список в одном файле и рождение заголовков в другом — это и есть беда,
 # которую нашёл @COORD. Появился новый — впиши сюда И в save-phoenix.py.
-СЛУЖЕБНЫЕ_ЗНАКИ_ОЖИДАЕМЫЕ = ("§4½", "§4¾", "§4⅞")
+EXPECTED_SERVICE_MARKS = ("§4½", "§4¾", "§4⅞")
 
-РАЗДЕЛ = "state"
+SECTION = "state"
 
 # Заголовки, которые печатают читалка памяти и сборщик слоя диска — дословно из их кода.
-БЛОК_КАРТОЧКИ = "## §4½ ОТКРЫТЫЕ КАРТОЧКИ   [живой запрос к базе, НЕ из сохранённого текста]"
-БЛОК_МАШИННЫЙ = "## §4¾ МАШИННЫЙ СЛОЙ   [собран этим вызовом, нигде не хранится]"
-БЛОК_ДИСКА = "## §4⅞ СЛОЙ ДИСКА   [собран этим вызовом, нигде не хранится · замер 2026-09-05T06:00:00Z]"
+BLOCK_CARDS = "## §4½ ОТКРЫТЫЕ КАРТОЧКИ   [живой запрос к базе, НЕ из сохранённого текста]"
+BLOCK_MACHINE = "## §4¾ МАШИННЫЙ СЛОЙ   [собран этим вызовом, нигде не хранится]"
+BLOCK_DISK = "## §4⅞ СЛОЙ ДИСКА   [собран этим вызовом, нигде не хранится · замер 2026-09-05T06:00:00Z]"
 
 
-def отпечаток(путь):
-    return hashlib.md5(Path(путь).read_bytes()).hexdigest()
+def fingerprint(path):
+    return hashlib.md5(Path(path).read_bytes()).hexdigest()
 
 
-def тело_из_базы(db, роль=РОЛЬ, раздел=РАЗДЕЛ):
+def body_from_db(db, role=ROLE, section=SECTION):
     con = sqlite3.connect(db)
-    row = con.execute("SELECT body FROM phoenix WHERE role=? AND section=?", (роль, раздел)).fetchone()
+    row = con.execute("SELECT body FROM phoenix WHERE role=? AND section=?", (role, section)).fetchone()
     con.close()
     if not row:
-        sys.exit(f"⛔ ОПЫТ НЕ ПОСТАВЛЕН: в базе нет {роль}/{раздел} — судить нечего.\n"
+        sys.exit(f"⛔ ОПЫТ НЕ ПОСТАВЛЕН: в базе нет {role}/{section} — судить нечего.\n"
                  f"   Это отказ ОПЫТА, а не находка: без исходного тела любой вердикт был бы выдуман.")
     return row[0]
 
 
-def тело_записки(db, номер):
+def note_body(db, number):
     """Живой образец из ленты — тело настоящей записки контура."""
     con = sqlite3.connect(db)
-    row = con.execute("SELECT body_md FROM messages_all WHERE id=?", (номер,)).fetchone()
+    row = con.execute("SELECT body_md FROM messages_all WHERE id=?", (number,)).fetchone()
     con.close()
     return row[0] if row else None
 
 
 
-def следы_набора(db, с_часа):
+def suite_traces(db, since_hour):
     """Сколько записей в историю версий памяти оставил САМ НАБОР за время прогона.
 
     ⚖️ Спрашиваем не «изменился ли файл», а «есть ли ТАМ МОЯ РУКА». Разница несущая:
@@ -88,14 +88,14 @@ def следы_набора(db, с_часа):
     Возвращает (число, строки для показа).
     """
     con = sqlite3.connect(db)
-    строки = con.execute(
+    rows = con.execute(
         "SELECT id, role, section, saved_at FROM phoenix_history "
-        "WHERE actor=? AND saved_at>=? ORDER BY id", (АКТОР_НАБОРА, с_часа)).fetchall()
+        "WHERE actor=? AND saved_at>=? ORDER BY id", (SUITE_ACTOR, since_hour)).fetchall()
     con.close()
-    return len(строки), строки
+    return len(rows), rows
 
 
-def знаки_у_печатающих():
+def signs_at_printers():
     """Какие служебные знаки печатают ЖИВЫЕ файлы читалки памяти и сборщика слоя диска.
 
     ⚖️ Смысл случая ⑫ (находка @COORD, записка #4810): список примет закрыт прямо здесь,
@@ -103,222 +103,223 @@ def знаки_у_печатающих():
     поэтому спрашиваем сами: появится четвёртый блок, и набор покраснеет, а не промолчит.
     Возвращает (найденные знаки, файлы, которых нет).
     """
-    печатают = [
-        Path("C:/guts/.atlas/.mezosync/scripts/read-phoenix.py"),
-        Path("C:/guts/.atlas/atlas.archs/step04_opssre/tools/disk_layer.py"),
+    container_root = Path(__file__).resolve().parent.parent
+    printers = [
+        container_root / ".mezosync" / "scripts" / "read-phoenix.py",
+        container_root / "atlas.archs" / "step04_opssre" / "tools" / "disk_layer.py",
     ]
-    нашли, нет_файла = set(), []
-    for p in печатают:
+    found, missing_files = set(), []
+    for p in printers:
         if not p.exists():
-            нет_файла.append(p.name)
+            missing_files.append(p.name)
             continue
-        for m in re.finditer(r"#+\s*(\u00a7\d[\u00bd\u00be\u215e\u2153\u2154\u00bc\u215b])", p.read_text(encoding="utf-8")):
-            нашли.add(m.group(1))
-    return нашли, нет_файла
+        for m in re.finditer(r"#+\s*(§\d[½¾⅞⅓⅔¼⅛])", p.read_text(encoding="utf-8")):
+            found.add(m.group(1))
+    return found, missing_files
 
 
-def _час_сейчас(db):
+def _hour_now(db):
     """Час по мерке САМОЙ базы: сравнивать её saved_at с часом чужой машины нельзя."""
     con = sqlite3.connect(db)
-    ч = con.execute("SELECT strftime('%Y-%m-%d %H:%M:%S','now')").fetchone()[0]
+    hour = con.execute("SELECT strftime('%Y-%m-%d %H:%M:%S','now')").fetchone()[0]
     con.close()
-    return ч
+    return hour
 
 
-def прогон(инструмент, db, текст, каталог):
+def run_case(tool, db, text, workdir):
     """Холостой прогон сохранения. Возвращает (код, весь вывод одной строкой)."""
-    f = Path(каталог) / "тело.md"
-    f.write_text(текст, encoding="utf-8")
+    f = Path(workdir) / "тело.md"
+    f.write_text(text, encoding="utf-8")
     p = subprocess.run(
-        [sys.executable, str(инструмент), "--db", str(db), "--role", РОЛЬ,
-         "--section", РАЗДЕЛ, "--file", str(f), "--dry-run", "--allow-shrink",
-         "--actor", АКТОР_НАБОРА],
+        [sys.executable, str(tool), "--db", str(db), "--role", ROLE,
+         "--section", SECTION, "--file", str(f), "--dry-run", "--allow-shrink",
+         "--actor", SUITE_ACTOR],
         capture_output=True, text=True, encoding="utf-8", errors="replace")
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 
-def случаи(db):
+def cases(db):
     """Каждый случай: (номер, что проверяем, текст, ожидание).
 
     Ожидание — словарь: код · есть ли слова отказа · номер строки, который обязан быть назван.
     """
-    основа = тело_из_базы(db)
-    строк_в_основе = len(основа.splitlines())
-    н = []
+    base = body_from_db(db)
+    base_line_count = len(base.splitlines())
+    result = []
 
     # ⓪ КОНТРОЛЬ ПЕРВЫМ — неиспорченный текст роли
-    н.append(("⓪", "контроль: обычный текст роли сохраняется и о проверке НЕ говорит",
-              основа + "\n\nСтрока смены: перемерил стенд, все шесть служб отвечают.\n",
-              {"код": 0, "отказ": False}))
+    result.append(("⓪", "контроль: обычный текст роли сохраняется и о проверке НЕ говорит",
+              base + "\n\nСтрока смены: перемерил стенд, все шесть служб отвечают.\n",
+              {"code": 0, "reject": False}))
 
     # ①②③ ПРЕДМЕТ — три служебных блока, каждый своей строкой
-    for знак, блок, имя in (("①", БЛОК_КАРТОЧКИ, "§4½ открытые карточки"),
-                            ("②", БЛОК_МАШИННЫЙ, "§4¾ машинный слой"),
-                            ("③", БЛОК_ДИСКА, "§4⅞ слой диска")):
-        текст = основа + "\n\n" + "─" * 79 + "\n" + блок + "\n\n   строка снимка: 24 карточки\n"
-        н.append((знак, f"служебный блок читалки ({имя}) ⇒ ОТКАЗ с номером строки", текст,
-                  {"код": 1, "отказ": True, "строка": строк_в_основе + 4}))
+    for mark, block, name in (("①", BLOCK_CARDS, "§4½ открытые карточки"),
+                            ("②", BLOCK_MACHINE, "§4¾ машинный слой"),
+                            ("③", BLOCK_DISK, "§4⅞ слой диска")):
+        text = base + "\n\n" + "─" * 79 + "\n" + block + "\n\n   строка снимка: 24 карточки\n"
+        result.append((mark, f"служебный блок читалки ({name}) ⇒ ОТКАЗ с номером строки", text,
+                  {"code": 1, "reject": True, "line": base_line_count + 4}))
 
     # ④⑤ ВСТРЕЧНЫЕ ИЗ КРИТЕРИЯ — слова блока, употреблённые РОЛЬЮ по делу
-    н.append(("④", "встречный: роль ЦИТИРУЕТ «нигде не хранится» по делу ⇒ ПРОПУСК",
-              основа + "\n\n⚠️ Машинный слой нигде не хранится — не переписывай его в память.\n",
-              {"код": 0, "отказ": False}))
-    н.append(("⑤", "встречный: роль ЦИТИРУЕТ «собран этим вызовом» по делу ⇒ ПРОПУСК",
-              основа + "\n\n📌 Список карточек собран этим вызовом, а не взят из памяти.\n",
-              {"код": 0, "отказ": False}))
+    result.append(("④", "встречный: роль ЦИТИРУЕТ «нигде не хранится» по делу ⇒ ПРОПУСК",
+              base + "\n\n⚠️ Машинный слой нигде не хранится — не переписывай его в память.\n",
+              {"code": 0, "reject": False}))
+    result.append(("⑤", "встречный: роль ЦИТИРУЕТ «собран этим вызовом» по делу ⇒ ПРОПУСК",
+              base + "\n\n📌 Список карточек собран этим вызовом, а не взят из памяти.\n",
+              {"code": 0, "reject": False}))
 
     # ⑥ ВСТРЕЧНЫЙ С ДРУГИМ ОПРЕДЕЛЕНИЕМ ПРЕДМЕТА (пожелание PROTO, записка #4793)
-    н.append(("⑥", "встречный: знак §4½ ВНУТРИ строки роли ⇒ ПРОПУСК (пишем о блоке, не блоком)",
-              основа + "\n\n⛔ Не копируй §4½ и §4¾ из вывода читалки — это не твой текст.\n",
-              {"код": 0, "отказ": False}))
+    result.append(("⑥", "встречный: знак §4½ ВНУТРИ строки роли ⇒ ПРОПУСК (пишем о блоке, не блоком)",
+              base + "\n\n⛔ Не копируй §4½ и §4¾ из вывода читалки — это не твой текст.\n",
+              {"code": 0, "reject": False}))
 
     # ⑦ ВСТРЕЧНЫЙ: заголовок РАЗДЕЛА, который критерий не называет
-    н.append(("⑦", "встречный: заголовок раздела «## §4 …» (без дроби) ⇒ ПРОПУСК, он вне критерия",
-              основа + "\n\n## §4 ТЕКУЩЕЕ СОСТОЯНИЕ — где ты сейчас\n",
-              {"код": 0, "отказ": False}))
+    result.append(("⑦", "встречный: заголовок раздела «## §4 …» (без дроби) ⇒ ПРОПУСК, он вне критерия",
+              base + "\n\n## §4 ТЕКУЩЕЕ СОСТОЯНИЕ — где ты сейчас\n",
+              {"code": 0, "reject": False}))
 
     # ⑧ ОТКАЗ НАЗЫВАЕТ СТРОКУ ВЕРНО — блок в СЕРЕДИНЕ, а не в конце
-    голова = "\n".join(основа.splitlines()[:5])
-    хвост = "\n".join(основа.splitlines()[5:])
-    н.append(("⑧", "номер строки в отказе ВЕРЕН: блок в СЕРЕДИНЕ текста, не в конце",
-              голова + "\n" + БЛОК_МАШИННЫЙ + "\n" + хвост,
-              {"код": 1, "отказ": True, "строка": 6}))
+    head = "\n".join(base.splitlines()[:5])
+    tail = "\n".join(base.splitlines()[5:])
+    result.append(("⑧", "номер строки в отказе ВЕРЕН: блок в СЕРЕДИНЕ текста, не в конце",
+              head + "\n" + BLOCK_MACHINE + "\n" + tail,
+              {"code": 1, "reject": True, "line": 6}))
 
     # ⑨ ЖИВОЙ ОБРАЗЕЦ ИЗ КРИТЕРИЯ — тело настоящей записки контура
-    образец = тело_записки(db, 4619)
-    if образец:
-        н.append(("⑨", "встречный ЖИВОЙ: тело записки #4619 (автор TAXO) ⇒ ПРОПУСК",
-                  образец, {"код": 0, "отказ": False}))
+    sample = note_body(db, 4619)
+    if sample:
+        result.append(("⑨", "встречный ЖИВОЙ: тело записки #4619 (автор TAXO) ⇒ ПРОПУСК",
+                  sample, {"code": 0, "reject": False}))
     else:
-        н.append(("⑨", "встречный ЖИВОЙ: записки #4619 в этой базе НЕТ", None,
-                  {"пропущен": "записки #4619 нет в базе — случай не поставлен, и это сказано, "
+        result.append(("⑨", "встречный ЖИВОЙ: записки #4619 в этой базе НЕТ", None,
+                  {"skipped": "записки #4619 нет в базе — случай не поставлен, и это сказано, "
                                "а не скрыто зелёным"}))
 
     # ⑩ БЛОК ПЕРВОЙ СТРОКОЙ — крайний случай отбора
-    н.append(("⑩", "служебный блок ПЕРВОЙ строкой ⇒ ОТКАЗ, строка 1",
-              БЛОК_КАРТОЧКИ + "\n\n" + основа,
-              {"код": 1, "отказ": True, "строка": 1}))
+    result.append(("⑩", "служебный блок ПЕРВОЙ строкой ⇒ ОТКАЗ, строка 1",
+              BLOCK_CARDS + "\n\n" + base,
+              {"code": 1, "reject": True, "line": 1}))
 
-    return н
+    return result
 
 
 def main():
     ap = argparse.ArgumentParser(description="Приёмка карточки #519: служебные блоки читалки в памяти")
-    ap.add_argument("--инструмент", help="путь к save-phoenix.py (по умолчанию — живой)")
+    ap.add_argument("--tool", "--инструмент", dest="tool", help="путь к save-phoenix.py (по умолчанию — живой)")
     ap.add_argument("--db", help="путь к базе (по умолчанию — живая)")
-    ap.add_argument("--break", dest="порча", choices=["none"],
+    ap.add_argument("--break", dest="corruption", choices=["none"],
                     help="нарочная поломка: none — снять проверку служебных блоков")
     a = ap.parse_args()
 
-    здесь = Path(__file__).resolve()
-    инструмент = Path(a.инструмент) if a.инструмент else \
-        здесь.parent.parent / ".mezosync" / "scripts" / "save-phoenix.py"
-    if not инструмент.exists():
-        sys.exit(f"⛔ ОПЫТ НЕ ПОСТАВЛЕН: инструмента нет — {инструмент}")
-    db = Path(a.db) if a.db else инструмент.parent.parent / "mezosync.db"
+    here = Path(__file__).resolve()
+    tool = Path(a.tool) if a.tool else \
+        here.parent.parent / ".mezosync" / "scripts" / "save-phoenix.py"
+    if not tool.exists():
+        sys.exit(f"⛔ ОПЫТ НЕ ПОСТАВЛЕН: инструмента нет — {tool}")
+    db = Path(a.db) if a.db else tool.parent.parent / "mezosync.db"
     if not db.exists():
         sys.exit(f"⛔ ОПЫТ НЕ ПОСТАВЛЕН: базы нет — {db}")
 
-    каталог = tempfile.mkdtemp(prefix="bite519-")
-    рабочий = Path(каталог) / "save-phoenix.py"
-    shutil.copy(инструмент, рабочий)
+    workdir = tempfile.mkdtemp(prefix="bite519-")
+    runner = Path(workdir) / "save-phoenix.py"
+    shutil.copy(tool, runner)
     # модули лежат рядом с инструментом — зовём копию ОТТУДА же, а не из временного места
-    рабочий = инструмент
+    runner = tool
 
-    if a.порча == "none":
+    if a.corruption == "none":
         # ⚠️ Порча ставится на КОПИИ инструмента в его же каталоге: модули рядом.
-        порченый = инструмент.with_name("_порча_519_save-phoenix.py")
-        t = инструмент.read_text(encoding="utf-8")
-        было = t
-        t = t.replace("    ном_строки, строка_блока = служебный_блок(body)",
-                      "    ном_строки, строка_блока = (None, None)  # ПОРЧА")
-        if t == было:
+        corrupted = tool.with_name("_порча_519_save-phoenix.py")
+        t = tool.read_text(encoding="utf-8")
+        original = t
+        t = t.replace("    line_num, block_line = service_block(body)",
+                      "    line_num, block_line = (None, None)  # ПОРЧА")
+        if t == original:
             sys.exit("⛔ ПОРЧА НЕ ВСТАЛА: строки вызова проверки в инструменте нет.\n"
                      "   Это отказ ОПЫТА: без поставленной поломки зелёное ничего не доказывает.")
-        порченый.write_text(t, encoding="utf-8")
-        рабочий = порченый
+        corrupted.write_text(t, encoding="utf-8")
+        runner = corrupted
 
-    отп_до = отпечаток(db)
-    час_начала = _час_сейчас(db)
-    набор = случаи(db)
-    прошло = пало = пропущено = 0
+    before_fingerprint = fingerprint(db)
+    start_hour = _hour_now(db)
+    suite = cases(db)
+    passed = failed = skipped = 0
     print("═" * 92)
-    print(f"ПРИЁМКА карточки #519 · инструмент: {рабочий.name} · база: {db.name}"
-          + (" · ПОРЧА: проверка снята" if a.порча else ""))
+    print(f"ПРИЁМКА карточки #519 · инструмент: {runner.name} · база: {db.name}"
+          + (" · ПОРЧА: проверка снята" if a.corruption else ""))
     print("═" * 92)
 
-    for знак, что, текст, ждём in набор:
-        if "пропущен" in ждём:
-            print(f"  ⚪ {знак} {что}\n       {ждём['пропущен']}")
-            пропущено += 1
+    for mark, what, text, expect in suite:
+        if "skipped" in expect:
+            print(f"  ⚪ {mark} {what}\n       {expect['skipped']}")
+            skipped += 1
             continue
-        код, вывод = прогон(рабочий, db, текст, каталог)
-        сказал_отказ = "СЛУЖЕБНЫЙ БЛОК ЧИТАЛКИ" in вывод
-        беды = []
-        if код != ждём["код"]:
-            беды.append(f"код {код}, ждали {ждём['код']}")
-        if сказал_отказ != ждём["отказ"]:
-            беды.append("отказ сказан" if сказал_отказ else "отказа НЕ сказано")
-        if ждём.get("строка") is not None and сказал_отказ:
-            m = re.search(r"строка (\d+):", вывод)
-            назван = int(m.group(1)) if m else None
-            if назван != ждём["строка"]:
-                беды.append(f"названа строка {назван}, верна {ждём['строка']}")
-        if беды:
-            пало += 1
-            print(f"  🔴 {знак} {что}\n       {' · '.join(беды)}")
-            хвост = [l for l in вывод.splitlines() if l.strip()][:3]
-            for l in хвост:
+        code, output = run_case(runner, db, text, workdir)
+        said_reject = "СЛУЖЕБНЫЙ БЛОК ЧИТАЛКИ" in output
+        problems = []
+        if code != expect["code"]:
+            problems.append(f"код {code}, ждали {expect['code']}")
+        if said_reject != expect["reject"]:
+            problems.append("отказ сказан" if said_reject else "отказа НЕ сказано")
+        if expect.get("line") is not None and said_reject:
+            m = re.search(r"строка (\d+):", output)
+            named = int(m.group(1)) if m else None
+            if named != expect["line"]:
+                problems.append(f"названа строка {named}, верна {expect['line']}")
+        if problems:
+            failed += 1
+            print(f"  🔴 {mark} {what}\n       {' · '.join(problems)}")
+            tail = [l for l in output.splitlines() if l.strip()][:3]
+            for l in tail:
                 print(f"       │ {l[:100]}")
         else:
-            прошло += 1
-            print(f"  ✅ {знак} {что}")
+            passed += 1
+            print(f"  ✅ {mark} {what}")
 
     # ⑪ НАБОР НЕ ПИСАЛ — судим СВОЙ след поимённо, а не отпечаток общего файла
-    сколько, строки = следы_набора(db, час_начала)
-    if сколько == 0:
-        прошло += 1
-        print(f"  ✅ ⑪ набор НЕ ПИСАЛ в память: записей с актором {АКТОР_НАБОРА} за прогон — ноль")
+    count, rows = suite_traces(db, start_hour)
+    if count == 0:
+        passed += 1
+        print(f"  ✅ ⑪ набор НЕ ПИСАЛ в память: записей с актором {SUITE_ACTOR} за прогон — ноль")
     else:
-        пало += 1
-        print(f"  🔴 ⑪ набор ЗАПИСАЛ в память {сколько} раз — холостой прогон писать не должен")
-        for id_, роль, раздел, час in строки[:5]:
-            print(f"       │ #{id_} {роль}/{раздел} {час}")
-    if отп_до != отпечаток(db):
+        failed += 1
+        print(f"  🔴 ⑪ набор ЗАПИСАЛ в память {count} раз — холостой прогон писать не должен")
+        for id_, role, section, hour in rows[:5]:
+            print(f"       │ #{id_} {role}/{section} {hour}")
+    if before_fingerprint != fingerprint(db):
         print("       ⚪ файл базы за это время менялся — ЧУЖОЙ рукой; на вердикт не влияет")
 
     # ⑫ СПИСОК ПРИМЕТ НЕ ОТСТАЁТ ОТ ТЕХ, КТО ЭТИ БЛОКИ ПЕЧАТАЕТ (находка @COORD, #4810)
-    живые, нет_файла = знаки_у_печатающих()
-    if нет_файла:
-        пропущено += 1
+    live, missing_files = signs_at_printers()
+    if missing_files:
+        skipped += 1
         print("  ⚪ ⑫ сверка списка примет с печатающими файлами ПРОПУЩЕНА: нет "
-              + ", ".join(нет_файла) + " — молчать об этом нельзя, судить нечем")
+              + ", ".join(missing_files) + " — молчать об этом нельзя, судить нечем")
     else:
-        лишние = живые - set(СЛУЖЕБНЫЕ_ЗНАКИ_ОЖИДАЕМЫЕ)
-        if not лишние:
-            прошло += 1
-            print(f"  ✅ ⑫ список примет полон: печатающие файлы дают {len(живые)} знака, "
+        extra = live - set(EXPECTED_SERVICE_MARKS)
+        if not extra:
+            passed += 1
+            print(f"  ✅ ⑫ список примет полон: печатающие файлы дают {len(live)} знака, "
                   "новых нет")
         else:
-            пало += 1
+            failed += 1
             print("  🔴 ⑫ У ЧИТАЛКИ ПОЯВИЛСЯ БЛОК, КОТОРОГО ПРОВЕРКА НЕ ЗНАЕТ: "
-                  + " ".join(sorted(лишние)))
+                  + " ".join(sorted(extra)))
             print("       │ допиши знак в СЛУЖЕБНЫЕ_ЗНАКИ инструмента save-phoenix.py")
-            print("       │ и в СЛУЖЕБНЫЕ_ЗНАКИ_ОЖИДАЕМЫЕ здесь — иначе блок поедет в память молча")
+            print("       │ и в EXPECTED_SERVICE_MARKS здесь — иначе блок поедет в память молча")
 
-    if a.порча == "none":
+    if a.corruption == "none":
         try:
-            (инструмент.with_name("_порча_519_save-phoenix.py")).unlink()
+            (tool.with_name("_порча_519_save-phoenix.py")).unlink()
         except OSError:
             pass
-    shutil.rmtree(каталог, ignore_errors=True)
+    shutil.rmtree(workdir, ignore_errors=True)
 
     print("─" * 92)
-    итог = f"прошло {прошло} · пало {пало}"
-    if пропущено:
-        итог += f" · не поставлено {пропущено} (причина названа выше)"
-    print(итог)
-    return 1 if пало else 0
+    summary = f"прошло {passed} · пало {failed}"
+    if skipped:
+        summary += f" · не поставлено {skipped} (причина названа выше)"
+    print(summary)
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
