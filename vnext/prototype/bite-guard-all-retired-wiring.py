@@ -34,7 +34,7 @@ def check(name, ok, detail=""):
 
 
 def run_on(db):
-    r = subprocess.run([sys.executable, GUARD, "--db", str(db)],
+    r = subprocess.run([sys.executable, GUARD, "--full", "--db", str(db)],
                        capture_output=True, text=True, encoding="utf-8", errors="replace")
     return (r.stdout or "") + (r.stderr or ""), r.returncode
 

@@ -130,6 +130,15 @@ CALLS: list[dict] = [
     dict(id="guard_all", where="live", tool="guard-all.py",
          label="guard-all.py — полный прогон проверок (только чтение)",
          args=[]),
+    dict(id="backlog_list_open", where="live", tool="backlog.py",
+         label="backlog.py list --role PROTO (открытые, по умолчанию)",
+         args=["list", "--role", ROLE]),
+    dict(id="role_brief_1", where="live", tool="role-brief.py",
+         label="role-brief.py повтор #1",
+         args=["--role", ROLE]),
+    dict(id="role_brief_2", where="live", tool="role-brief.py",
+         label="role-brief.py повтор #2",
+         args=["--role", ROLE]),
 ]
 
 

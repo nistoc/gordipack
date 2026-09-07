@@ -82,7 +82,7 @@ def мост(out: str) -> str:
 
 
 def run(guard) -> str:
-    r = subprocess.run([sys.executable, str(guard), "--skip", "drift,память,ленты"],
+    r = subprocess.run([sys.executable, str(guard), "--full", "--skip", "drift,память,ленты"],
                        capture_output=True, text=True, encoding="utf-8", timeout=300)
     return (r.stdout or "") + (r.stderr or "")
 

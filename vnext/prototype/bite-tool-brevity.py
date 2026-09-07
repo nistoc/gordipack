@@ -12,7 +12,7 @@ r"""bite-tool-brevity.py — приёмка карточки #586: «подск�
 check-dangling-refs.py, write-message.py, read-messages.py как встречный) на КОПИИ
 живой базы координации — живая база не открывается на запись НИ РАЗУ.
 
-═══ СЛУЧАИ (13: ⓪ предпосылка + ①…⑫) ═══
+═══ СЛУЧАИ (22: ⓪ предпосылка + ①…⑯, ⑱ + поломка ⑱-бис, ⑲, ⑳, ㉑) ═══
   ⓪ предпосылка: таблица hint_seen в копии базы ЕСТЬ — иначе ②③ не проверяют ничего
      (помощник без таблицы печатает ВСЕГДА целиком — сказано вслух, не скрыто)
   ① backlog.py add — первый показ роли паре (роль, ключ) → ПОЛНЫЙ текст блока
@@ -39,6 +39,31 @@ check-dangling-refs.py, write-message.py, read-messages.py как встречн
      снова зелёный
   ⑫ ДВЕ РОЛИ с ОДНИМ ключом подсказки — обе видят ПОЛНЫЙ текст при СВОЁМ первом
      показе (чужая история роли не касается)
+  ⑬ параметр db_path помощника mezo_hints.подсказка(): соединение mode=ro БЕЗ db_path
+     → первый и второй показ ОБА полные (откат, не молчание), таблица hint_seen
+     копии не тронута — как было ДО добавления db_path (карточка #586, продолжение)
+  ⑭ mode=ro С db_path → первый показ полный, второй — строка-ссылка: запись отметки
+     через отдельное короткое соединение по db_path состоялась, conn (ro) не тронут
+  ⑮ conn=None, db_path задан → то же поведение, что ⑭ (своё соединение обслуживает
+     и чтение, и запись само, без conn вызывающего вовсе)
+  ⑯ mode=ro + db_path на несуществующий/непригодный путь → ПОЛНЫЙ текст оба раза,
+     БЕЗ падения (запасной путь тоже не удался — откат остаётся в сторону полноты)
+
+  ═══ карточка #593, находка COORD (записка #4930): «читатель ≠ хозяин предмета» ═══
+  ⑱ backlog.py add — показ засчитывается РУКЕ (--actor), а не владельцу карточки
+     (--role): --actor COORD дважды (полный, потом ссылка), затем --actor PROTO —
+     снова полный (свой первый показ, чужая история не мешает)
+  ⑱-бис НАРОЧНАЯ ПОЛОМКА: в копии backlog.py возвращена старая строка
+     role=(a.role or "").upper() (без mezo_hints.кто_читает) — сценарий ⑱ на этой
+     копии ОБЯЗАН покраснеть (приёмка умеет ловить именно эту беду); на настоящем
+     инструменте тем же сценарием — снова зелёный (проверено случаем ⑱ выше)
+  ⑲ то же для backlog.py list (ключ «backlog-list-full»): --actor COORD дважды,
+     затем --role PROTO БЕЗ --actor и БЕЗ MEZO_ROLE в окружении подпроцесса —
+     показ засчитан себе (PROTO), не унаследован от чужого --actor
+  ⑳ то же для read-phoenix.py (ключ «read-phoenix-canon»): --actor COORD дважды,
+     затем --role PROTO без --actor — канон целиком, засчитан себе
+  ㉑ переменная среды MEZO_ROLE: list --role PROTO БЕЗ --actor, в окружении
+     подпроцесса MEZO_ROLE=COORD → показ в hint_seen копии засчитан COORD
 
 ═══ ГРАНИЦЫ — чего эта приёмка НЕ проверяет (сказано вслух, а не скрыто) ═══
   · конкурентную запись в hint_seen (два процесса, одна пара роль+ключ одновременно);
@@ -56,7 +81,7 @@ check-dangling-refs.py, write-message.py, read-messages.py как встречн
 Флаг --keep — не убирать временные рабочие каталоги (для разбора вручную).
 Без аргументов — полный прогон.
 
-Дата: 2026-09-06 UTC. Карточка #586.
+Дата: 2026-09-07 07:57 UTC. Карточка #586, #593.
 """
 from __future__ import annotations
 
@@ -83,6 +108,7 @@ LIVE_DB = mezo_paths.live_db(__file__)
 BACKLOG = str(SCRIPTS / "backlog.py")
 READ_MESSAGES = str(SCRIPTS / "read-messages.py")
 WRITE_MESSAGE = str(SCRIPTS / "write-message.py")
+READ_PHOENIX = str(SCRIPTS / "read-phoenix.py")                    # случай ⑳
 REFS = str(CONTAINER / "vnext-tools" / "check-dangling-refs.py")   # зона @PROTO, вызов ПО ПУТИ
 
 sys.path.insert(0, str(SCRIPTS))
@@ -113,6 +139,16 @@ def run_слитно(tool: str, db: Path, *args: str) -> tuple[int, str]:
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                        text=True, encoding="utf-8", errors="replace")
     return p.returncode, p.stdout or ""
+
+
+def run_env(tool: str, db: Path, env: dict, *args: str) -> tuple[int, str]:
+    """Как run(), но с ЯВНЫМ окружением подпроцесса — нужен случаям ⑲/㉑, где важно,
+    видит ли подпроцесс переменную среды MEZO_ROLE (карточка #593, находка COORD #4930:
+    показ подсказки обязан читаться по руке — --actor → MEZO_ROLE → --role, см. mezo_hints.кто_читает)."""
+    p = subprocess.run([sys.executable, tool, "--db", str(db), *args],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       env=env)
+    return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 
 def id_карточки(вывод: str) -> str | None:
@@ -154,7 +190,7 @@ def main() -> int:
     conn0.close()
     случай("⓪ предпосылка: таблица hint_seen в копии базы ЕСТЬ",
            есть_таблица,
-           "таблица на месте — есть на чём различать ①…⑫" if есть_таблица else
+           "таблица на месте — есть на чём различать ①…⑯" if есть_таблица else
            "🔴 ТАБЛИЦЫ НЕТ: без неё помощник печатает ВСЕГДА целиком (откат в сторону "
            "полноты), и случаи ②③ дальше не проверяют НИЧЕГО — сказано здесь вслух, "
            "не скрыто зелёным")
@@ -363,12 +399,226 @@ def main() -> int:
            f"PROTO полный={полный_хвост_refs(out12a)}, CORE полный={полный_хвост_refs(out12b)} "
            "— чужая история роли не заслоняет собственный первый показ")
 
+    # ═══ ⑬⑭⑮⑯ mezo_hints.подсказка(..., db_path=...) — отметка через mode=ro ═══════════
+    # Отдельные короткие mode=ro-соединения к ТОЙ ЖЕ копии базы — как открывает её
+    # role-brief.py (resolve_db(..., readonly=True) + sqlite3.connect("file:...?mode=ro",
+    # uri=True), см. .mezosync/scripts/role-brief.py:355-362). mezo_hints зовём напрямую,
+    # как в случаях ⑧⑨⑩ — здесь проверяется сам помощник, а не инструмент вокруг него.
+    def ro_conn():
+        return sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
+
+    забыть_ключи(db, "PROTO", ["bite-586-ro-без-db-path", "bite-586-ro-с-db-path",
+                               "bite-586-conn-none-db-path", "bite-586-ro-db-path-негодный"])
+
+    ключ13 = "bite-586-ro-без-db-path"
+    conn13a = ro_conn()
+    п13_1 = mezo_hints.подсказка(conn13a, "PROTO", ключ13, "текст случая тринадцать",
+                                 ttl_hours=24)
+    conn13a.close()
+    conn13b = ro_conn()
+    п13_2 = mezo_hints.подсказка(conn13b, "PROTO", ключ13, "текст случая тринадцать",
+                                 ttl_hours=24)
+    conn13b.close()
+    conn13_check = sqlite3.connect(str(db))
+    строк13 = conn13_check.execute(
+        "SELECT COUNT(*) FROM hint_seen WHERE role=? AND hint_key=?",
+        ("PROTO", ключ13)).fetchone()[0]
+    conn13_check.close()
+    случай("⑬ mode=ro БЕЗ db_path → первый и второй показ ОБА полные (откат, не молчание), "
+           "таблица не тронута",
+           п13_1 is True and п13_2 is True and строк13 == 0,
+           f"первый показ полный={п13_1}, второй показ полный={п13_2}, "
+           f"строк в hint_seen для ключа={строк13} (ожидание: 0)")
+
+    ключ14 = "bite-586-ro-с-db-path"
+    conn14a = ro_conn()
+    п14_1 = mezo_hints.подсказка(conn14a, "PROTO", ключ14, "текст случая четырнадцать",
+                                 ttl_hours=24, db_path=str(db))
+    conn14a.close()
+    conn14b = ro_conn()
+    п14_2 = mezo_hints.подсказка(conn14b, "PROTO", ключ14, "текст случая четырнадцать",
+                                 ttl_hours=24, db_path=str(db))
+    conn14b.close()
+    случай("⑭ mode=ro С db_path → первый показ ПОЛНЫЙ, второй — строка-ссылка, "
+           "отметка записана через отдельное соединение",
+           п14_1 is True and п14_2 is False,
+           f"первый показ полный={п14_1}, второй показ полный={п14_2} (False — строка-ссылка, "
+           "значит отметка от первого показа прижилась в hint_seen копии через db_path)")
+
+    ключ15 = "bite-586-conn-none-db-path"
+    п15_1 = mezo_hints.подсказка(None, "PROTO", ключ15, "текст случая пятнадцать",
+                                 ttl_hours=24, db_path=str(db))
+    п15_2 = mezo_hints.подсказка(None, "PROTO", ключ15, "текст случая пятнадцать",
+                                 ttl_hours=24, db_path=str(db))
+    случай("⑮ conn=None, db_path задан → то же, что ⑭ (своё соединение читает и пишет само)",
+           п15_1 is True and п15_2 is False,
+           f"первый показ полный={п15_1}, второй показ полный={п15_2} (False — строка-ссылка)")
+
+    ключ16 = "bite-586-ro-db-path-негодный"
+    негодный_путь = str(стенд / "нет-такого-каталога" / "bad.db")
+    conn16a = ro_conn()
+    п16_1 = mezo_hints.подсказка(conn16a, "PROTO", ключ16, "текст случая шестнадцать",
+                                 ttl_hours=24, db_path=негодный_путь)
+    conn16a.close()
+    conn16b = ro_conn()
+    п16_2 = mezo_hints.подсказка(conn16b, "PROTO", ключ16, "текст случая шестнадцать",
+                                 ttl_hours=24, db_path=негодный_путь)
+    conn16b.close()
+    случай("⑯ mode=ro + db_path на несуществующий/непригодный путь → ПОЛНЫЙ текст оба раза, "
+           "БЕЗ падения",
+           п16_1 is True and п16_2 is True,
+           f"первый показ полный={п16_1}, второй показ полный={п16_2} — запасной путь тоже "
+           "не удался, но помощник не упал и подсказка не промолчала")
+
+    # ═══ ⑱ + ⑱-бис — «читатель ≠ хозяин карточки» (карточка #593, находка COORD #4930) ═══
+    # backlog.py add ЗАПИСЫВАЛ показ подсказки на ВЛАДЕЛЬЦА карточки (--role), а не на
+    # РУКУ, что её завела (--actor): чужая роль в зоне PROTO списывала показ на PROTO,
+    # и настоящий читатель подсказку своей рукой уже не видел. Функция ниже гоняет один
+    # и тот же сценарий на НАСТОЯЩЕМ инструменте (случай ⑱, обязан быть зелёным) и на ЕГО
+    # СЛОМАННОЙ копии (случай ⑱-бис, обязан быть красным — иначе эта приёмка не умеет
+    # ловить именно тот класс беды, ради которого заведена).
+    def сценарий_18(add_tool: str, env: dict | None = None) -> tuple[bool, str]:
+        """env=None — настоящий инструмент, зовём через run() как везде. env задан —
+        КОПИЯ на временном стенде ВНЕ каталога-контейнера (mezo_stand кладёт её во
+        %TEMP%): её собственный mezo_paths.py (уехавший туда же СОСЕДОМ, см.
+        mezo_stand.copy_tool) не находит .mezosync/mezosync.db подъёмом по дереву —
+        это ДРУГАЯ, известная беда («второй замок», mezo_paths.py:309-319), не та,
+        что проверяет этот случай. MEZO_CONTAINER в окружении подпроцесса снимает
+        её явно, и красное ⑱-бис остаётся ЗА СЧЁТ вырезанного mezo_hints.кто_читает,
+        а не за счёт побочного падения на чужом замке (тот же принцип, что у измерения
+        «check-fires-for-the-wrong-reason» — красное обязано красить по СВОЕЙ причине)."""
+        вызов = (lambda *args: run_env(add_tool, db, env, *args)) if env is not None \
+            else (lambda *args: run(add_tool, db, *args))
+        забыть_ключи(db, "COORD", ["backlog-add-три-вопроса"])
+        забыть_ключи(db, "PROTO", ["backlog-add-три-вопроса"])
+        rc18a, out18a = вызов("add", "--role", "PROTO", "--actor", "COORD",
+                         "--title", "приёмка 593 случай восемнадцать: читатель COORD, показ первый",
+                         "--body", "тело стендовой заявки приёмки случая восемнадцать, показ первый",
+                         "--done-when", "стендовый критерий приёмки: не судится")
+        rc18b, out18b = вызов("add", "--role", "PROTO", "--actor", "COORD",
+                             "--title", "приёмка 593 случай восемнадцать: читатель COORD, показ второй",
+                             "--body", "тело стендовой заявки приёмки случая восемнадцать, показ второй",
+                             "--done-when", "стендовый критерий приёмки: не судится")
+        ссылка18 = "ℹ️ подсказка «backlog-add-три-вопроса» показана" in out18b
+        rc18c, out18c = вызов("add", "--role", "PROTO", "--actor", "PROTO",
+                             "--title", "приёмка 593 случай восемнадцать: читатель PROTO, показ третий",
+                             "--body", "тело стендовой заявки приёмки случая восемнадцать, показ третий",
+                             "--done-when", "стендовый критерий приёмки: не судится")
+        полный18 = ("💬 разбор замысла" in out18c
+                    and "чьи руки нужны кроме твоих (зона рук)?" in out18c)
+        conn18 = sqlite3.connect(str(db))
+        coord18 = conn18.execute("SELECT COUNT(*) FROM hint_seen WHERE role=? AND hint_key=?",
+                                 ("COORD", "backlog-add-три-вопроса")).fetchone()[0]
+        proto18 = conn18.execute("SELECT COUNT(*) FROM hint_seen WHERE role=? AND hint_key=?",
+                                 ("PROTO", "backlog-add-три-вопроса")).fetchone()[0]
+        conn18.close()
+        ок = (rc18a == 0 and rc18b == 0 and rc18c == 0 and ссылка18 and полный18
+              and coord18 == 1 and proto18 == 1)
+        return ок, (f"коды возврата {rc18a}/{rc18b}/{rc18c}, второй показ (--actor COORD) дал "
+                    f"строку-ссылку={ссылка18}, третий показ (--actor PROTO) дал ПОЛНЫЙ "
+                    f"текст={полный18}, hint_seen копии: COORD={coord18} PROTO={proto18}")
+
+    ок18, слово18 = сценарий_18(BACKLOG)
+    случай("⑱ читатель ≠ хозяин карточки — backlog add: показ засчитывается --actor, "
+           "не --role", ок18, слово18)
+
+    сломанный_стенд18 = mezo_stand.new("bite-tool-brevity-broken-actor-")
+    сломанный18 = mezo_stand.copy_tool(Path(BACKLOG), сломанный_стенд18)
+    текст18 = сломанный18.read_text(encoding="utf-8")
+    СТАРАЯ_СТРОКА18 = (
+        'mezo_hints.подсказка(conn, mezo_hints.кто_читает(a.actor, a.role), '
+        '"backlog-add-три-вопроса",\n'
+        '                         ТЕКСТ_ВОПРОСОВ, full=a.full)'
+    )
+    if СТАРАЯ_СТРОКА18 not in текст18:
+        raise SystemExit("ПРИЁМКА НЕ СОСТОЯЛАСЬ: якорь вызова кто_читает() не найден "
+                         "в backlog.py — обратный ход ⑱-бис ставить не на чем")
+    испорченный18 = текст18.replace(
+        СТАРАЯ_СТРОКА18,
+        'mezo_hints.подсказка(conn, (a.role or "").upper(), "backlog-add-три-вопроса",\n'
+        '                         ТЕКСТ_ВОПРОСОВ, full=a.full)', 1)
+    if испорченный18 == текст18:
+        raise SystemExit("ПРИЁМКА НЕ СОСТОЯЛАСЬ: замена ⑱-бис не сработала — обратный ход "
+                         "не поставлен, зелёное было бы ложным")
+    сломанный18.write_text(испорченный18, encoding="utf-8")
+
+    env18бис = os.environ.copy()
+    env18бис["MEZO_CONTAINER"] = str(CONTAINER)   # см. докстринг сценарий_18: снимаем «второй
+    # замок» (mezo_paths.py:309-319) явно, чтобы краснело ИМЕННО от вырезанного кто_читает
+    ок18бис, слово18бис = сценарий_18(str(сломанный18), env=env18бис)
+    случай("⑱-бис НАРОЧНАЯ ПОЛОМКА (вернули role=(a.role or \"\").upper()) → случай ⑱ "
+           "на СЛОМАННОЙ копии ОБЯЗАН покраснеть",
+           (not ок18бис),
+           ("ждём красное — получено красное: " + слово18бис) if not ок18бис
+           else "🔴 поломка НЕ поймана — эта приёмка не умеет ловить класс беды #4930: " + слово18бис)
+    mezo_stand.release(сломанный_стенд18)
+
+    # ═══ ⑲ то же для backlog.py list — ключ «backlog-list-full» ═══════════════════
+    # digest_hidden (хвост про срез критерия) печатается, только когда в списке есть
+    # хоть одна открытая карточка с критерием и БЕЗ --full — заводим её явно, чтобы
+    # случай не зависел от того, что уже накопилось в копии живой базы до него.
+    run(BACKLOG, db, "add", "--role", "PROTO", "--actor", "PROTO",
+        "--title", "приёмка 593 случай девятнадцать: карточка с критерием для digest_hidden",
+        "--body", "тело стендовой заявки приёмки случая девятнадцать",
+        "--done-when", "стендовый критерий приёмки: не судится")
+    забыть_ключи(db, "COORD", ["backlog-list-full"])
+    забыть_ключи(db, "PROTO", ["backlog-list-full"])
+    ПОЛНЫЙ_ХВОСТ_LIST = "ℹ️ срез критерия у карточек скрыт"
+    rc19a, out19a = run(BACKLOG, db, "list", "--role", "PROTO", "--actor", "COORD")
+    rc19b, out19b = run(BACKLOG, db, "list", "--role", "PROTO", "--actor", "COORD")
+    ссылка19 = "ℹ️ подсказка «backlog-list-full» показана" in out19b
+    полный19a = ПОЛНЫЙ_ХВОСТ_LIST in out19a
+    env19 = os.environ.copy()
+    env19.pop("MEZO_ROLE", None)   # окружение подпроцесса БЕЗ MEZO_ROLE — падать некуда, кроме --role
+    rc19c, out19c = run_env(BACKLOG, db, env19, "list", "--role", "PROTO")
+    полный19c = ПОЛНЫЙ_ХВОСТ_LIST in out19c   # PROTO своей рукой видит это ВПЕРВЫЕ — не COORD'ом
+    случай("⑲ backlog list — читатель ≠ хозяин, второй показ ссылкой, PROTO без --actor "
+           "видит целиком (засчитан себе, не COORD)",
+           rc19a == 0 and rc19b == 0 and rc19c == 0 and полный19a and ссылка19 and полный19c,
+           f"первый показ (--actor COORD) полный={полный19a}, второй — ссылка={ссылка19}, "
+           f"третий (--role PROTO, без --actor, без MEZO_ROLE в среде) полный={полный19c}")
+
+    # ═══ ⑳ то же для read-phoenix.py — ключ «read-phoenix-canon» ══════════════════
+    забыть_ключи(db, "COORD", ["read-phoenix-canon"])
+    забыть_ключи(db, "PROTO", ["read-phoenix-canon"])
+    МАРКЕР_КАНОНА = "📌 КАНОН — ИСТОЧНИК ПРАВДЫ БД"
+    rc20a, out20a = run(READ_PHOENIX, db, "--role", "PROTO", "--actor", "COORD")
+    rc20b, out20b = run(READ_PHOENIX, db, "--role", "PROTO", "--actor", "COORD")
+    ссылка20 = "ℹ️ подсказка «read-phoenix-canon» показана" in out20b
+    полный20a = МАРКЕР_КАНОНА in out20a
+    rc20c, out20c = run(READ_PHOENIX, db, "--role", "PROTO")
+    полный20c = МАРКЕР_КАНОНА in out20c
+    случай("⑳ read-phoenix.py — читатель ≠ хозяин памяти: --actor COORD дважды (полный, "
+           "потом ссылка), --role PROTO без --actor видит канон целиком (засчитан себе)",
+           rc20a == 0 and rc20b == 0 and rc20c == 0 and полный20a and ссылка20 and полный20c,
+           f"первый показ (--actor COORD) полный={полный20a}, второй — ссылка={ссылка20}, "
+           f"третий (--role PROTO без --actor) полный={полный20c}")
+
+    # ═══ ㉑ окружение MEZO_ROLE — засчитывается, когда --actor не передан ══════════
+    забыть_ключи(db, "COORD", ["backlog-list-full"])
+    забыть_ключи(db, "PROTO", ["backlog-list-full"])
+    env21 = os.environ.copy()
+    env21["MEZO_ROLE"] = "COORD"
+    rc21, out21 = run_env(BACKLOG, db, env21, "list", "--role", "PROTO")
+    conn21 = sqlite3.connect(str(db))
+    coord21 = conn21.execute("SELECT COUNT(*) FROM hint_seen WHERE role=? AND hint_key=?",
+                             ("COORD", "backlog-list-full")).fetchone()[0]
+    proto21 = conn21.execute("SELECT COUNT(*) FROM hint_seen WHERE role=? AND hint_key=?",
+                             ("PROTO", "backlog-list-full")).fetchone()[0]
+    conn21.close()
+    полный21 = ПОЛНЫЙ_ХВОСТ_LIST in out21
+    случай("㉑ переменная среды MEZO_ROLE=COORD, list --role PROTO БЕЗ --actor → показ "
+           "в hint_seen копии засчитан COORD, а не PROTO",
+           rc21 == 0 and полный21 and coord21 == 1 and proto21 == 0,
+           f"полный текст={полный21}, hint_seen копии: COORD={coord21}, PROTO={proto21} "
+           "(ожидание: PROTO=0 — среда победила владельца предмета)")
+
     mezo_stand.release(стенд)
 
     print("")
     print("=" * 78)
     красных = [и for и, ок in итог if not ок]
-    print(f"РАЗЛИЧАЮЩИХ СЛУЧАЕВ {len(итог)} (⓪ предпосылка + ①…⑫)")
+    print(f"РАЗЛИЧАЮЩИХ СЛУЧАЕВ {len(итог)} (⓪ предпосылка + ①…⑯, ⑱+⑱-бис, ⑲, ⑳, ㉑)")
     print("⚖️ ГРАНИЦА: конкурентная запись в hint_seen, заблокированная база и экономия")
     print("   в символах этой приёмкой НЕ проверяются (последнее — measure-tool-brevity.py).")
     if красных:
