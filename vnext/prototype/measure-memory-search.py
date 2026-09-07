@@ -40,6 +40,12 @@ find-phoenix.py означает «слово есть в сыром текст�
 одно число значило бы врать про то, чего не хватает: не самого факта, а его
 разбора на записи.
 
+ИСХОД «в архиве» — ТОЖЕ ОТДЕЛЬНАЯ ГРАФА, НЕ «нет» (находка приёмщицы COORD,
+записка #5005). Код 4 find-phoenix.py означает «в живой памяти нет нигде, но
+в АРХИВЕ есть» — до этой правки такой запрос считался тем же «не нашёл», что
+и код 2 («нет вообще, даже в архиве»), и итог врал про то, чего не хватает:
+не самого факта, а его присутствия в ГОРЯЧЕЙ памяти.
+
 ЧЕГО ЭТО НЕ СУДИТ (замер, не приёмка — границы названы вслух):
   · не проверяет корректность самого find-phoenix.py (уровни записи/тело/архив,
     префиксный поиск, подсказку кто-читает) — это дело его собственной приёмки;
@@ -87,6 +93,7 @@ RECORD_HEADER = re.compile(r"^#(\d+)\s*·", re.MULTILINE)
 STATUS_FIRST = "первой"
 STATUS_TOP3 = "в трёх"
 STATUS_SECTION_TEXT = "в тексте"   # код 3: слово в сыром тексте раздела, записей нет вовсе
+STATUS_ARCHIVE = "в архиве"        # код 4: в живой памяти нет, есть в архиве — не «нет нигде»
 STATUS_NONE = "нет"
 
 
@@ -208,6 +215,12 @@ def measure_one(q: dict, db_arg: str, before_cache: dict[str, int],
         # у нас нет id, значит и раздела ИМЕННО НАЙДЕННОЙ ЗАПИСИ нет: честная пустота,
         # не подмена (см. шапку файла). Исход — своя графа, не «нет» (слово COORD).
         status, rank = STATUS_SECTION_TEXT, None
+    elif code == 4:
+        # В живой памяти нигде нет, но в АРХИВЕ есть — это ДРУГОЙ факт, чем «нет нигде»
+        # (находка приёмщицы COORD, записка #5005): «не нашёл» до этой правки сливал
+        # код 2 (нет нигде) и код 4 (есть в архиве) в одно число, и число врало про то,
+        # чего не хватает — не факта вообще, а его присутствия в ГОРЯЧЕЙ памяти.
+        status, rank = STATUS_ARCHIVE, None
     else:
         status, rank = STATUS_NONE, None
 
@@ -259,6 +272,7 @@ def print_summary(rows: list[dict]) -> dict:
     n_first = sum(1 for r in rows if r["match_status"] == STATUS_FIRST)
     n_top3 = sum(1 for r in rows if r["match_status"] == STATUS_TOP3)
     n_section_text = sum(1 for r in rows if r["match_status"] == STATUS_SECTION_TEXT)
+    n_archive = sum(1 for r in rows if r["match_status"] == STATUS_ARCHIVE)
     n_none = sum(1 for r in rows if r["match_status"] == STATUS_NONE)
     n_mismatch = sum(1 for r in rows if r["section_mismatch"])
     avg_before = sum(r["chars_before"] for r in rows) / total if total else 0
@@ -266,8 +280,8 @@ def print_summary(rows: list[dict]) -> dict:
     savings_pct = ((avg_before - avg_after) / avg_before * 100) if avg_before else 0.0
 
     print(f"ИТОГ: первым {n_first} из {total} · в первых трёх {n_top3} · "
-          f"в тексте раздела {n_section_text} · не нашёл {n_none} · "
-          f"знаков ДО (полное чтение) {fmt_num(round(avg_before))} · "
+          f"в тексте раздела {n_section_text} · в архиве {n_archive} · "
+          f"не нашёл {n_none} · знаков ДО (полное чтение) {fmt_num(round(avg_before))} · "
           f"среднее ПОСЛЕ {fmt_num(round(avg_after))} · экономия {savings_pct:.1f} %")
     print(f"раздел найденной записи разошёлся с ожиданием набора: {n_mismatch} из {total}")
 
@@ -279,7 +293,8 @@ def print_summary(rows: list[dict]) -> dict:
 
     return dict(
         total_queries=total, found_first=n_first, found_top3=n_top3,
-        found_section_text=n_section_text, not_found=n_none, section_mismatch=n_mismatch,
+        found_section_text=n_section_text, found_archive=n_archive,
+        not_found=n_none, section_mismatch=n_mismatch,
         chars_before_avg=round(avg_before, 1), chars_after_avg=round(avg_after, 1),
         savings_pct=round(savings_pct, 1),
         counter3_total=total3, counter3_found=found3,
