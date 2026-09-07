@@ -23,6 +23,15 @@ r"""bite-common-helpers.py — приёмка карточки #578: общие 
 ═══ ОЖИДАНИЯ ПОЛОМКИ — НАЗВАНЫ ДО ПРОГОНА
     П1 вызов третьей пары убран из инструмента
        ждём: ① перестаёт краснеть, ② остаётся зелёным (он и так про совпадение)
+
+═══ ДОБАВЛЕНО 2026-09-07 (карточка #586)
+Случаи ①-⑤ проверяют МЕХАНИЗМ на подставном "helper.py" внутри стенда — они никогда
+не читают настоящие рабочие каталоги и потому не могут поймать регресс в КОНКРЕТНОМ
+общем помощнике. Случай ⑥ — единственный здесь, что смотрит на настоящую пару
+`.mezosync/scripts/mezo_hints.py` ↔ `vnext-tools/mezo_hints.py` (заведена той же
+карточкой #586: механизм «подсказка один раз, дальше строка-ссылка»). Зеркало и шаблон
+у него по-прежнему подставные — реальный бэкап-репозиторий не должен решать зелёное/
+красное ЭТОГО случая, тот же довод, что у случаев ①-⑤.
 """
 import shutil
 import subprocess
@@ -48,6 +57,21 @@ def прогон(стенд: Path, инструмент: Path | None = None):
         [sys.executable, str(инструмент or ИНСТРУМЕНТ),
          "--runtime", str(стенд / "contour"), "--repo", str(стенд / "mirror"),
          "--vnext-runtime", str(стенд / "vnext"), "--vnext-template", str(стенд / "template")],
+        capture_output=True, text=True, encoding="utf-8", timeout=300)
+    return r.returncode, (r.stdout or "") + (r.stderr or "")
+
+
+def прогон_настоящих(стенд: Path):
+    """Как прогон(), но --runtime/--vnext-runtime указывают на НАСТОЯЩИЕ рабочие каталоги
+    контура (.mezosync/scripts и vnext-tools), а не на подставные. Зеркало и шаблон
+    остаются подставным пустым каталогом стенда — реальный бэкап-репозиторий не должен
+    решать зелёное/красное случая ⑥ (карточка #586)."""
+    r = subprocess.run(
+        [sys.executable, str(ИНСТРУМЕНТ),
+         "--runtime", str(mezo_paths.live_scripts(__file__)),
+         "--repo", str(стенд / "repo"),
+         "--vnext-runtime", str(mezo_paths.container_root(__file__) / "vnext-tools"),
+         "--vnext-template", str(стенд / "template")],
         capture_output=True, text=True, encoding="utf-8", timeout=300)
     return r.returncode, (r.stdout or "") + (r.stderr or "")
 
@@ -109,6 +133,23 @@ def main() -> int:
            else "красит и без вызова — красит что-то другое")
     mezo_stand.release(копия_стенд)
     mezo_stand.release(стенд)
+
+    # ⑥ РЕАЛЬНАЯ ПАРА (карточка #586): .mezosync/scripts/mezo_hints.py ↔
+    # vnext-tools/mezo_hints.py — сверка НАСТОЯЩИХ рабочих каталогов, не стенда.
+    # ⚖️ Этот случай не про фиксированный ожидаемый исход, как ①-⑤ на подставных данных:
+    # он честно отражает состояние ДВУХ РЕАЛЬНЫХ файлов на диске в момент прогона.
+    # Так и задумана его роль в приёмке: три прогона подряд (сведены → нарочно испорчено
+    # → возвращено) обязаны дать зелёный → красный с именем файла → зелёный.
+    стенд6 = Path(mezo_stand.new("bite-common-helpers-real-"))
+    (стенд6 / "repo").mkdir(parents=True, exist_ok=True)
+    (стенд6 / "template").mkdir(parents=True, exist_ok=True)
+    _, вывод6 = прогон_настоящих(стенд6)
+    разошлось6 = "ОБЩИЕ ПОМОЩНИКИ РАСХОДЯТСЯ" in вывод6 and "mezo_hints.py" in вывод6
+    случай("⑥ РЕАЛЬНАЯ ПАРА: .mezosync/scripts/mezo_hints.py ↔ vnext-tools/mezo_hints.py",
+           not разошлось6,
+           "сведены байт в байт" if not разошлось6
+           else "🔴 РАСХОДЯТСЯ прямо сейчас — копии не совпадают")
+    mezo_stand.release(стенд6)
 
     красных = [и for и, ок, _ in итог if not ок]
     print("")
