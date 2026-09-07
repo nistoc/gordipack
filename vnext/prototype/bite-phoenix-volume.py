@@ -82,7 +82,7 @@ def main() -> int:
     case("⑥ базы нет → «НЕ ПРОВЕРЕНО» кодом 2, а не «чисто»", code == 2)
 
     print()
-    print(f"{'✅ СТОРОЖ ОБЪЁМА ПРИНЯТ' if OK else '🔴 НЕ ПРИНЯТ'} — случаев {CASES}")
+    print(f"{'✅ ПРОВЕРКА ОБЪЁМА ПРИНЯТА' if OK else '🔴 НЕ ПРИНЯТА'} — случаев {CASES}")
     if OK:
         import shutil
         shutil.rmtree(tmp, ignore_errors=True)
