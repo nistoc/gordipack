@@ -78,10 +78,10 @@ def sandbox():
     # раскладке КАЖДЫЙ механизм падал ещё до разбора доводов, и поломка флага переставала
     # что-либо менять — проверка честно не видела разницы между целым и сломанным.
     # 🎯 Так «слепых» стало пятеро, и ни один из них не был дефектом самой проверки.
-    контур = d / ".mezosync"
-    scripts = контур / "scripts"
+    mezo_dir = d / ".mezosync"
+    scripts = mezo_dir / "scripts"
     shutil.copytree(LIVE_SCRIPTS, scripts)
-    db = контур / "mezosync.db"
+    db = mezo_dir / "mezosync.db"
     shutil.copy(LIVE_DB, db)
     return d, scripts, db
 
@@ -93,7 +93,7 @@ def run(scripts, db, *extra):
     return (r.stdout or "") + (r.stderr or ""), r.returncode
 
 
-def формы(вывод, имя):
+def forms(output, name):
     """Строки прибора, относящиеся ИМЕННО к этому механизму — по ТОЧНОМУ имени файла.
 
     🩸 ОПЛАЧЕНО ЗАМЕРОМ 2026-08-29 (карточка #356). Прежняя редакция судила ⑨ по ОБЩЕМУ
@@ -108,15 +108,15 @@ def формы(вывод, имя):
 
     → {"ok": [...], "red": [...], "skip": [...]} — показанные формы этого механизма.
     """
-    итог = {"ok": [], "red": [], "skip": []}
-    for line in вывод.splitlines():
-        for знак, ключ in (("✅", "ok"), ("\U0001f534", "red"), ("⚠️", "skip")):
-            if not line.startswith(знак):
+    result = {"ok": [], "red": [], "skip": []}
+    for line in output.splitlines():
+        for symbol, key in (("✅", "ok"), ("\U0001f534", "red"), ("⚠️", "skip")):
+            if not line.startswith(symbol):
                 continue
-            показ = line[len(знак):].strip()
-            if показ.split(" ", 1)[0] == имя:
-                итог[ключ].append(показ)
-    return итог
+            shown = line[len(symbol):].strip()
+            if shown.split(" ", 1)[0] == name:
+                result[key].append(shown)
+    return result
 
 
 # ═══ Карточка #358: «СЛЕП» ставится только ДОКАЗАННО ═════════════════════════════════
@@ -141,40 +141,40 @@ def _glf():
     return _GLF
 
 
-def прямые_ответы(имя, scripts_dir, db_path):
+def direct_answers(name, scripts_dir, db_path):
     """Ответы механизма на ЕГО формы из памяти, позванные напрямую. → {форма: примета}"""
-    формы_памяти, _, _ = _glf().collect(str(db_path))
-    стенд = Path(scripts_dir).parent
-    ctx = {"file": str(стенд / "probe.md"), "dir": str(стенд)}
+    memory_forms, _, _ = _glf().collect(str(db_path))
+    stand_dir = Path(scripts_dir).parent
+    ctx = {"file": str(stand_dir / "probe.md"), "dir": str(stand_dir)}
     Path(ctx["file"]).write_text("проба прямого прогона\n", encoding="utf-8")
-    ответы = {}
-    for (script, sub, flags), info in sorted(формы_памяти.items()):
-        if script != имя or info["short"]:
+    answers = {}
+    for (script, sub, flags), info in sorted(memory_forms.items()):
+        if script != name or info["short"]:
             continue
         if any(f in _glf().FORBIDDEN for f in flags):
             continue
-        argv = _glf().build_argv(Path(scripts_dir) / имя, sub, flags, ctx, Path(db_path))
+        argv = _glf().build_argv(Path(scripts_dir) / name, sub, flags, ctx, Path(db_path))
         try:
             r = subprocess.run(argv, capture_output=True, text=True,
                                encoding="utf-8", errors="replace", timeout=120)
-            тело = (r.stdout or "") + (r.stderr or "")
-            ответы[(sub, tuple(flags))] = (r.returncode, "Traceback" in тело,
-                                           "unrecognized" in тело)
+            body = (r.stdout or "") + (r.stderr or "")
+            answers[(sub, tuple(flags))] = (r.returncode, "Traceback" in body,
+                                           "unrecognized" in body)
         except subprocess.TimeoutExpired:
-            ответы[(sub, tuple(flags))] = ("висит", False, False)
-    return ответы
+            answers[(sub, tuple(flags))] = ("висит", False, False)
+    return answers
 
 
-def ответ_изменился(имя, scripts_ok, db_ok, scripts_i, db_i):
+def answer_changed(name, scripts_ok, db_ok, scripts_i, db_i):
     """→ False: поломка ответ форм НЕ изменила · True: изменила · None: доказать нечем."""
-    целый = прямые_ответы(имя, scripts_ok, db_ok)
-    сломанный = прямые_ответы(имя, scripts_i, db_i)
-    if not целый:
+    intact_answers = direct_answers(name, scripts_ok, db_ok)
+    broken_answers = direct_answers(name, scripts_i, db_i)
+    if not intact_answers:
         return None
-    return целый != сломанный
+    return intact_answers != broken_answers
 
 
-def команды_в_памяти(db, имя):
+def commands_in_memory(db, name):
     """Независимый ГРУБЫЙ счёт командных строк с именем механизма в памяти ролей.
 
     ═══ Карточка #415 половина ②: канал НАРОЧНО другой, чем сборщик форм прибора, —
@@ -184,7 +184,7 @@ def команды_в_памяти(db, имя):
     Признак груб намеренно: «python …/имя» — команда, упоминания без python (случай ⑤)
     он не трогает. Замер живой базы 29.08 19:32 UTC: у всех пяти механизмов ведра
     «форм нет» совпадений 0 — красное подозрение сегодня не красит никого."""
-    rx = re.compile(r"python[^\n]*[/\\]" + re.escape(имя) + r"(?=[\s'\"`)\]]|$)")
+    rx = re.compile(r"python[^\n]*[/\\]" + re.escape(name) + r"(?=[\s'\"`)\]]|$)")
     con = sqlite3.connect(f"file:{Path(db).as_posix()}?mode=ro", uri=True)
     n = sum(len(rx.findall(body or ""))
             for (body,) in con.execute("SELECT body FROM phoenix"))
@@ -192,7 +192,7 @@ def команды_в_памяти(db, имя):
     return n
 
 
-def разряд_механизма(имя, свои_ok, свои_i, scripts_ok, db_ok, scripts_i, db_i):
+def rank_mechanism(name, own_ok, own_i, scripts_ok, db_ok, scripts_i, db_i):
     """Судьба ОДНОГО механизма сплошной поломки → (ключ ведра, строка-пометка).
 
     ═══ Карточка #415 половина ①: это ЕДИНСТВЕННОЕ место, где перемер
@@ -202,17 +202,17 @@ def разряд_механизма(имя, свои_ok, свои_i, scripts_ok,
     ЛЮБОЙ из двух констант не роняла ни одного случая из 16 — прямые ⑨-тер/⑨-кватер
     доказывали функцию перемера, но не то, что она ВЫЗЫВАЕТСЯ там, где решается
     судьба вердикта."""
-    if not (свои_ok["ok"] or свои_ok["red"] or свои_ok["skip"]):
-        подозрение = команды_в_памяти(db_ok, имя)
-        if подозрение:
-            return "ослеп", (f"🔴 СБОРЩИК ОСЛЕП? форм не дал, а в памяти {подозрение} "
+    if not (own_ok["ok"] or own_ok["red"] or own_ok["skip"]):
+        suspicion = commands_in_memory(db_ok, name)
+        if suspicion:
+            return "collector_blind", (f"🔴 СБОРЩИК ОСЛЕП? форм не дал, а в памяти {suspicion} "
                              f"командн. строк с этим именем")
         return "nothing", "⚪ форм этого механизма в памяти нет — ломать нечего"
-    if свои_ok["red"]:
+    if own_ok["red"]:
         return "unjudged", "⛔ НЕ СУДИМ: красный и на целой копии"
-    if not свои_ok["ok"]:
+    if not own_ok["ok"]:
         return "unrunnable", "⚪ формы есть, но НИ ОДНА не запускается — поломке негде проявиться"
-    if свои_i["red"]:
+    if own_i["red"]:
         # краснеть обязан ИМЕННО этот механизм: код возврата общий на весь прогон
         return "seen", "✅ увидел"
     # ═══ Карточка #358: молчание проверки — ещё не слепота. Прежде здесь стояло
@@ -220,14 +220,14 @@ def разряд_механизма(имя, свои_ok, свои_i, scripts_ok,
     # когда сокращения разборщика делают переименование флага невидимым для формы
     # (значение уезжает в новое поле, а механизм его в этой подкоманде не читает).
     # Сперва доказываем, что поломка вообще изменила ответ ИМЕННО этой формы.
-    перемер = ответ_изменился(имя, scripts_ok, db_ok, scripts_i, db_i)
-    if перемер is False:
+    remeasure = answer_changed(name, scripts_ok, db_ok, scripts_i, db_i)
+    if remeasure is False:
         return "unaffected", ("⚪ поломка ответ форм НЕ меняет (прямой прогон совпал) — "
                               "различающего случая нет")
     # True: ответ изменился, а проверка смолчала — настоящая слепота.
     # None: прямых форм не собралось — оправдать нечем, обвинение остаётся.
     return "blind", ("🔴 СЛЕП: прямой прогон показал, что ответ ИЗМЕНИЛСЯ"
-                     if перемер else "🔴 СЛЕП (прямых форм нет — оправдать нечем)")
+                     if remeasure else "🔴 СЛЕП (прямых форм нет — оправдать нечем)")
 
 
 def main() -> int:
@@ -254,7 +254,7 @@ def main() -> int:
     # 29.08: живые памяти сжались и унесли последнюю ЗАПУСКАЕМУЮ форму этого механизма —
     # случай покраснел от чужого движения данных, не от прибора. Приёмка не судит живую
     # память: запускаемую форму подсаживаем сами, как делает встречный к девятому случаю.
-    путь2 = str(scripts2).replace("\\", "/")
+    path2 = str(scripts2).replace("\\", "/")
     con2 = sqlite3.connect(db2)
     # Сигнатуру (list, --role) несут СОКРАЩЁННЫМИ несколько живых памятей (CHROME, COORD,
     # …), прибор сливает одинаковые сигнатуры в группу и наследует «сокращено» — подсадка
@@ -262,7 +262,7 @@ def main() -> int:
     # память и оставляем ЕДИНСТВЕННУЮ подсаженную форму — судится ровно она.
     con2.execute("UPDATE phoenix SET body=''")
     con2.execute("UPDATE phoenix SET body = body || ? WHERE role='PROTO' AND section='sources'",
-                 (chr(10) + "```" + chr(10) + f"python {путь2}/role-rights.py list --role PROTO"
+                 (chr(10) + "```" + chr(10) + f"python {path2}/role-rights.py list --role PROTO"
                   + chr(10) + "```" + chr(10),))
     con2.commit()
     con2.close()
@@ -307,36 +307,40 @@ def main() -> int:
     # ДРУГИХ ролей, и краснота приходила от них, а не от подсаженной строки. Случай
     # не различал ничего. ⇒ судим по ТОЙ САМОЙ форме: подсаживаем уникальный ключ
     # и смотрим, попал ли он в разбор. Ломать механизм для этого не нужно вовсе.
-    ПРОБА = "--zzprobe"
+    PROBE = "--zzprobe"
 
-    def распознана(текст):
+    def recognized(text):
         """→ True, если подсаженная строка попала в разбор КАК КОМАНДА (по своему ключу)."""
         d, scripts_, db_ = sandbox()
-        путь = str(scripts_).replace("\\", "/")
+        path = str(scripts_).replace("\\", "/")
         con = sqlite3.connect(db_)
         con.execute("UPDATE phoenix SET body = body || ? WHERE role='PROTO' AND section='sources'",
-                    (chr(10) + текст.format(путь=путь, проба=ПРОБА) + chr(10),))
+                    # ⚠️ Ключи .format() ПО-РУССКИ нарочно: шаблоны text ниже (case ⑤-бис..⑤-квинт)
+                    # несут {путь}/{проба} КАК ТЕКСТ ПРИМЕРА для роли — эти строки печатаемые,
+                    # не идентификаторы кода, и правило само их не переводит; ключи здесь
+                    # обязаны совпасть с плейсхолдерами дословно.
+                    (chr(10) + text.format(путь=path, проба=PROBE) + chr(10),))
         con.commit()
         con.close()
         out, _ = run(scripts_, db_, "--only", "role-rights")
-        return ПРОБА in out
+        return PROBE in out
 
     # ⑤-бис: КАНОНИЧЕСКАЯ ФОРМА В ПРОЗЕ — команда.
     ok &= case("⑤-бис форма «python <путь>» ВНЕ блока кода — КОМАНДА, и она разбирается",
-               распознана("Зови так: python {путь}/role-rights.py list {проба}"),
+               recognized("Зови так: python {путь}/role-rights.py list {проба}"),
                "именно так записан вызов в прозе у девяти ролей: 109 живых строк, "
                "и до 27.08 не разбиралась ни одна", differ=True)
 
     # ⑤-трис ВСТРЕЧНЫЙ: то же имя в прозе БЕЗ слова python — упоминание, обвинять нельзя.
     ok &= case("⑤-трис ВСТРЕЧНЫЙ: имя в прозе БЕЗ «python» — упоминание, в разбор не идёт",
-               not распознана("относительный префикс перед именем — "
+               not recognized("относительный префикс перед именем — "
                               "scripts/role-rights.py list {проба} — так НЕ зови"),
                "пояснение об опасности говорит обратное тому, что услышала бы проверка",
                differ=True)
 
     # ⑤-кватер: ОПИСЬ внутри блока кода — перечень предметов, а не то, что роль скопирует.
     ok &= case("⑤-кватер ОПИСЬ в блоке кода (имя + русское описание) — НЕ команда",
-               not распознана("```" + chr(10)
+               not recognized("```" + chr(10)
                               + "{путь}/role-rights.py  расхождение прав {проба}" + chr(10)
                               + "```"),
                "проверка запускала перечень и краснела на исправном: обвиняла память "
@@ -345,7 +349,7 @@ def main() -> int:
     # ⑤-квинт ВСТРЕЧНЫЙ к ⑤-кватер: русское ЗНАЧЕНИЕ за латинским ключом — всё ещё команда.
     # Без него ⑤-кватер зеленел бы оттого, что кириллица где угодно гасит разбор.
     ok &= case("⑤-квинт ВСТРЕЧНЫЙ: русское значение за латинским ключом — КОМАНДА",
-               распознана("```" + chr(10)
+               recognized("```" + chr(10)
                           + "python {путь}/role-rights.py list {проба} ВЛАДЕЛЕЦ" + chr(10)
                           + "```"),
                "иначе починка описи ослепила бы проверку на всякую команду с русским словом",
@@ -383,9 +387,9 @@ def main() -> int:
     # Проверки контура законно отвечают кодом 1, когда нашли расхождения. Суди прибор
     # по одному коду — и он обвинил бы каждую такую находку как поломку формы.
     d8, scripts8, db8 = sandbox()
-    строки = ["print('нашёл 3 расхождения — это находка, а не поломка')",
+    lines = ["print('нашёл 3 расхождения — это находка, а не поломка')",
               "raise SystemExit(1)"]
-    (scripts8 / "role-rights.py").write_text(chr(10).join(строки), encoding="utf-8")
+    (scripts8 / "role-rights.py").write_text(chr(10).join(lines), encoding="utf-8")
     out, code = run(scripts8, db8, "--only", "role-rights")
     ok &= case("⑧ отказ кодом при ВНЯТНОМ отчёте — обвинения нет (встречный к ⑦)",
                code == 0 and "МОЛЧА ОТКАЗЫВАЕТ" not in out,
@@ -433,42 +437,42 @@ def main() -> int:
     # ═══ Карточка #415: разбор одного механизма вынесен в разряд_механизма() — цикл
     # только раскладывает ключи. Вердикт (и применение перемера в нём) живёт в ОДНОМ
     # месте, общем с ⑨-пент/⑨-секст/⑨-септ, и охраняется ими.
-    blind, seen, unjudged, nothing, unrunnable, unaffected, ослеп = [], 0, [], [], [], [], []
+    blind, seen, unjudged, nothing, unrunnable, unaffected, collector_blind = [], 0, [], [], [], [], []
     for name in targets:
-        только = name.replace(".py", "")
-        out_ok, code_ok = run(scripts_ok, db_ok, "--only", только)
-        свои_ok = формы(out_ok, name)
+        base_name = name.replace(".py", "")
+        out_ok, code_ok = run(scripts_ok, db_ok, "--only", base_name)
+        own_ok = forms(out_ok, name)
         d_i, scripts_i, db_i = sandbox()
         f = scripts_i / name
         src = f.read_text(encoding="utf-8")
         f.write_text(src.replace('"--role"', '"--rolezz"'), encoding="utf-8")
-        out_i, code_i = run(scripts_i, db_i, "--only", только)
-        свои_i = формы(out_i, name)
-        ключ, mark = разряд_механизма(name, свои_ok, свои_i,
+        out_i, code_i = run(scripts_i, db_i, "--only", base_name)
+        own_i = forms(out_i, name)
+        key, mark = rank_mechanism(name, own_ok, own_i,
                                      scripts_ok, db_ok, scripts_i, db_i)
-        if ключ == "nothing":
+        if key == "nothing":
             nothing.append(name)
-        elif ключ == "ослеп":
-            ослеп.append(name)
-        elif ключ == "unjudged":
+        elif key == "collector_blind":
+            collector_blind.append(name)
+        elif key == "unjudged":
             unjudged.append(name)
-        elif ключ == "unrunnable":
+        elif key == "unrunnable":
             unrunnable.append(name)
-        elif ключ == "unaffected":
+        elif key == "unaffected":
             unaffected.append(name)
-        elif ключ == "seen":
+        elif key == "seen":
             seen += 1
         else:
             seen += 1
             blind.append(name)
         print(f"   {mark:52} {name}")
-    хвост_ослеп = (" (" + ", ".join(ослеп) + ") — формы в памяти есть, сборщик их не дал"
-                   if ослеп else "")
+    tail_collector_blind = (" (" + ", ".join(collector_blind) + ") — формы в памяти есть, сборщик их не дал"
+                   if collector_blind else "")
     ok &= case(f"⑨ сплошная поломка: слепых {len(blind)} из {seen} судимых механизмов",
-               not blind and not ослеп and seen > 0,
+               not blind and not collector_blind and seen > 0,
                f"судимых {seen} из {len(targets)} · "
                f"слепых {len(blind)}{': ' + ', '.join(blind) if blind else ''} · "
-               f"сборщик ослеп {len(ослеп)}{хвост_ослеп} · "
+               f"сборщик ослеп {len(collector_blind)}{tail_collector_blind} · "
                f"не судимы {len(unjudged)}"
                f"{' (' + ', '.join(unjudged) + ') — красны и без поломки' if unjudged else ''} · "
                f"форм нет {len(nothing)} · формы есть, но не запускаются {len(unrunnable)}"
@@ -480,46 +484,46 @@ def main() -> int:
     # ── ⑨-тер / ⑨-кватер: сам ПЕРЕМЕР карточки #358, обе половины ──────────────
     # Ведро «поломка не влияет» СНИМАЕТ обвинение с проверки — и ровно поэтому обязано
     # быть испытано с обеих сторон: гасит ложное обвинение И не глушит настоящее.
-    def стенд_с_формой(механизм, хвост, тело=None):
+    def stand_with_form(mechanism, tail, body=None):
         d_, scripts_, db_ = sandbox()
-        if тело is not None:
+        if body is not None:
             # подсадной механизм: файла в живом каталоге нет, кладём своё тело (#415)
-            (scripts_ / механизм).write_text(тело, encoding="utf-8")
-        путь = str(scripts_).replace("\\", "/")
+            (scripts_ / mechanism).write_text(body, encoding="utf-8")
+        path = str(scripts_).replace("\\", "/")
         con = sqlite3.connect(db_)
         con.execute("UPDATE phoenix SET body=''")
         con.execute("UPDATE phoenix SET body = body || ? "
                     "WHERE role='PROTO' AND section='sources'",
-                    (chr(10) + "```" + chr(10) + f"python {путь}/{механизм} {хвост}"
+                    (chr(10) + "```" + chr(10) + f"python {path}/{mechanism} {tail}"
                      + chr(10) + "```" + chr(10),))
         con.commit()
         con.close()
         return scripts_, db_
 
-    def пара_стендов(механизм, хвост, тело=None):
+    def stand_pair(mechanism, tail, body=None):
         """Целый и сломанный стенды с ЕДИНСТВЕННОЙ подсаженной формой механизма."""
-        цел = стенд_с_формой(механизм, хвост, тело)
-        слом = стенд_с_формой(механизм, хвост, тело)
-        f_ = слом[0] / механизм
+        intact = stand_with_form(mechanism, tail, body)
+        broken = stand_with_form(mechanism, tail, body)
+        f_ = broken[0] / mechanism
         f_.write_text(f_.read_text(encoding="utf-8").replace('"--role"', '"--rolezz"'),
                       encoding="utf-8")
-        return цел, слом
+        return intact, broken
 
-    def разряд_на_паре(механизм, цел, слом):
+    def rank_on_pair(mechanism, intact, broken):
         """Ведро механизма на паре стендов — ТЕМ ЖЕ ходом, что судит цикл ⑨ (#415)."""
-        только_ = механизм.replace(".py", "")
-        out_ok_, _ = run(цел[0], цел[1], "--only", только_)
-        out_i_, _ = run(слом[0], слом[1], "--only", только_)
-        return разряд_механизма(механизм, формы(out_ok_, механизм), формы(out_i_, механизм),
-                               цел[0], цел[1], слом[0], слом[1])
+        base_name_ = mechanism.replace(".py", "")
+        out_ok_, _ = run(intact[0], intact[1], "--only", base_name_)
+        out_i_, _ = run(broken[0], broken[1], "--only", base_name_)
+        return rank_mechanism(mechanism, forms(out_ok_, mechanism), forms(out_i_, mechanism),
+                               intact[0], intact[1], broken[0], broken[1])
 
     # ⑨-тер: lease.py в подкоманде status поле не читает — ровно живой случай из
     # карточки #358, где «СЛЕП» был бы обвинением исправной проверки.
-    цел, слом = пара_стендов("lease.py", "status --role PROTO")
-    верд_тер = ответ_изменился("lease.py", цел[0], цел[1], слом[0], слом[1])
+    intact, broken = stand_pair("lease.py", "status --role PROTO")
+    verdict_ter = answer_changed("lease.py", intact[0], intact[1], broken[0], broken[1])
     ok &= case("⑨-тер перемер: поломка НЕВИДИМА для формы (поле не читается) → «не влияет»",
-               верд_тер is False,
-               f"вердикт {верд_тер!r}: сокращение разборщика съело переименование, ответ "
+               verdict_ter is False,
+               f"вердикт {verdict_ter!r}: сокращение разборщика съело переименование, ответ "
                "совпал — молчание проверки было бы ПРАВДОЙ, а не слепотой", differ=True)
 
     # ── ⑨-пент КАРТОЧКА #415: ПРИМЕНЕНИЕ перемера, а не его функция ────────────
@@ -528,20 +532,20 @@ def main() -> int:
     # применения в цикле не дотягивались. Теперь вердикт выносит разряд_механизма(),
     # общая для цикла ⑨ и этого случая: вбитая константа True (прежнее «всегда СЛЕП»)
     # переводит эту пару из «не влияет» в «СЛЕП» — и роняет ровно этот случай.
-    ключ_пент, метка_пент = разряд_на_паре("lease.py", цел, слом)
+    key_pent, mark_pent = rank_on_pair("lease.py", intact, broken)
     ok &= case("⑨-пент применение перемера: разряд (той же рукой, что цикл ⑨) → «не влияет»",
-               ключ_пент == "unaffected",
-               f"разряд {ключ_пент!r} — {метка_пент[:80]}; константа True вместо перемера "
+               key_pent == "unaffected",
+               f"разряд {key_pent!r} — {mark_pent[:80]}; константа True вместо перемера "
                "в разряд_механизма() роняет этот случай (прежде — 0 из 16)", differ=True)
 
     # ⑨-кватер ВСТРЕЧНЫЙ: role-rights.py в list поле ЧИТАЕТ — та же поломка ответ меняет.
     # Без него ⑨-тер зеленел бы и у перемера, который отвечает «не изменился» всегда.
-    цел, слом = пара_стендов("role-rights.py", "list --role PROTO")
-    верд_кв = ответ_изменился("role-rights.py", цел[0], цел[1], слом[0], слом[1])
+    intact, broken = stand_pair("role-rights.py", "list --role PROTO")
+    verdict_quater = answer_changed("role-rights.py", intact[0], intact[1], broken[0], broken[1])
     ok &= case("⑨-кватер ВСТРЕЧНЫЙ: механизм поле ЧИТАЕТ → та же поломка ответ МЕНЯЕТ",
-               верд_кв is True,
-               f"вердикт {верд_кв!r}: перемер не глушит настоящие изменения — ведро "
-               "не стало тихой амнистией", differ=True)
+               verdict_quater is True,
+               f"вердикт {verdict_quater!r}: перемер не глушит настоящие изменения — разряд "
+               "не стал тихой амнистией", differ=True)
 
     # ── ⑨-секст ВСТРЕЧНЫЙ к ⑨-пент (карточка #415): ведро обязано уметь «СЛЕП» ──
     # Механизм ПОДСАДНОЙ, потому что в живом каталоге такого нет — и это хорошо:
@@ -550,7 +554,7 @@ def main() -> int:
     # кодом 0; сломанная теряет поле и отвечает кодом 1 с внятным текстом — прибор
     # молчит ЗАКОННО, а прямой перемер видит изменение ⇒ ведро «СЛЕП».
     # Вбитая константа False (все молчания — в «не влияет») роняет ровно этот случай.
-    ТЕЛО_ПОДСАДНОГО = (
+    SEEDED_BODY = (
         "import argparse, sys\n"
         "ap = argparse.ArgumentParser()\n"
         'ap.add_argument("--db")\n'  # прибор зовёт каждую форму с --db — подсадной обязан его знать
@@ -561,12 +565,12 @@ def main() -> int:
         "    print('роль не названа — считаю всех: 3 строки')\n"
         "    sys.exit(1)\n"
         "print('строки роли', роль)\n")
-    цел6, слом6 = пара_стендов("zzprobe-blind.py", "--role PROTO", ТЕЛО_ПОДСАДНОГО)
-    ключ_секст, метка_секст = разряд_на_паре("zzprobe-blind.py", цел6, слом6)
+    intact6, broken6 = stand_pair("zzprobe-blind.py", "--role PROTO", SEEDED_BODY)
+    key_sext, mark_sext = rank_on_pair("zzprobe-blind.py", intact6, broken6)
     ok &= case("⑨-секст ВСТРЕЧНЫЙ: ответ изменился при молчащей проверке → разряд «СЛЕП»",
-               ключ_секст == "blind",
-               f"разряд {ключ_секст!r} — {метка_секст[:80]}; константа False вместо "
-               "перемера роняет этот случай: ведро не глушит настоящую слепоту", differ=True)
+               key_sext == "blind",
+               f"разряд {key_sext!r} — {mark_sext[:80]}; константа False вместо "
+               "перемера роняет этот случай: разряд не глушит настоящую слепоту", differ=True)
 
     # ── ⑨-септ КАРТОЧКА #415, половина ②: «форм нет» отличимо от слепоты сборщика ──
     # Опыт TAXO 29.08: ослепив сборщик форм на один механизм, она получила «судимых 7,
@@ -577,17 +581,17 @@ def main() -> int:
     # память формы несёт, а сборщик их не дал. Ослепший сборщик валит ОБА хода: здесь
     # подсаженная форма остаётся невидимой (ведро «нет»/«ослеп»), в цикле ⑨ — красное.
     if nothing:
-        пустой = nothing[0]
-        цел7, слом7 = пара_стендов(пустой, "--role PROTO")
-        ключ_септ, метка_септ = разряд_на_паре(пустой, цел7, слом7)
+        empty_example = nothing[0]
+        intact7, broken7 = stand_pair(empty_example, "--role PROTO")
+        key_sept, mark_sept = rank_on_pair(empty_example, intact7, broken7)
         ok &= case("⑨-септ ВСТРЕЧНЫЙ к «форм нет»: подсаженная форма ВЫВОДИТ из разряда",
-                   ключ_септ not in ("nothing", "ослеп"),
-                   f"{пустой}: разряд {ключ_септ!r} — {метка_септ[:70]}; разряд «форм нет» "
+                   key_sept not in ("nothing", "collector_blind"),
+                   f"{empty_example}: разряд {key_sept!r} — {mark_sept[:70]}; разряд «форм нет» "
                    "отражает ДАННЫЕ — сборщик, переставший видеть, оставил бы механизм "
                    "в разряде и покраснел бы здесь", differ=True)
     else:
         # предмета нет — третий исход, и он не зелёный: печатаем вслух
-        print("⚪ ⑨-септ не на чем прогнать: ведро «форм нет» пусто")
+        print("⚪ ⑨-септ не на чем прогнать: разряд «форм нет» пуст")
 
     # ── ⑨-бис ВСТРЕЧНЫЙ к ведру «формы есть, но не запускаются» ────────────────
     # 🪤 Ведро, заведённое выше, СНИМАЕТ обвинение с прибора — и ровно поэтому обязано быть
@@ -602,52 +606,52 @@ def main() -> int:
     # ИСПЫТЫВАЛИ НЕ ТО, ЧТО ЧИНИМ. ⇒ поломка здесь ДЕТЕРМИНИРОВАННАЯ и не зависит
     # от того, какое поле механизм читает.
     if unrunnable:
-        подопытный = unrunnable[0]
-        имя_без = подопытный.replace(".py", "")
+        subject = unrunnable[0]
+        name_without_ext = subject.replace(".py", "")
 
-        def с_формой(хвост, убить):
+        def with_form(tail, kill):
             d_, scripts_, db_ = sandbox()
-            путь = str(scripts_).replace("\\", "/")
+            path = str(scripts_).replace("\\", "/")
             con = sqlite3.connect(db_)
             con.execute("UPDATE phoenix SET body = body || ? WHERE role='PROTO' AND section='sources'",
                         (chr(10) + "```" + chr(10)
-                         + f"python {путь}/{подопытный} {хвост}" + chr(10)
+                         + f"python {path}/{subject} {tail}" + chr(10)
                          + "```" + chr(10),))
             con.commit()
             con.close()
-            if убить:
+            if kill:
                 # молчаливый отказ — та поломка, которую роль читает как сработавший запуск
-                (scripts_ / подопытный).write_text("raise SystemExit(9)", encoding="utf-8")
-            out_, _ = run(scripts_, db_, "--only", имя_без)
-            return формы(out_, подопытный)
+                (scripts_ / subject).write_text("raise SystemExit(9)", encoding="utf-8")
+            out_, _ = run(scripts_, db_, "--only", name_without_ext)
+            return forms(out_, subject)
 
         # ⚖️ Форму подбираем, а не угадываем: у одних механизмов подкоманда обязательна,
         # у других её нет вовсе. Негодная форма дала бы КРАСНОЕ на целой копии — и встречный
         # случай покраснел бы по своей же вине, тем самым классом, который сегодня чинится.
-        целая = {"ok": []}
-        хвост = None
-        for кандидат in ("status --role PROTO", "--role PROTO", "list --role PROTO"):
-            проба = с_формой(кандидат, False)
-            if проба["ok"]:
-                целая, хвост = проба, кандидат
+        intact_result = {"ok": []}
+        tail = None
+        for candidate in ("status --role PROTO", "--role PROTO", "list --role PROTO"):
+            probe = with_form(candidate, False)
+            if probe["ok"]:
+                intact_result, tail = probe, candidate
                 break
-        if хвост is None:
+        if tail is None:
             ok &= case("⑨-бис ВСТРЕЧНЫЙ: положили ЗАПУСКАЕМУЮ форму — поломка стала видна",
                        False,
-                       f"⛔ НЕ ЗАПУСТИЛАСЬ: у {подопытный} не подобралась ни одна запускаемая "
-                       "форма из трёх проб ⇒ ведро «формы есть, но не запускаются» остаётся "
+                       f"⛔ НЕ ЗАПУСТИЛАСЬ: у {subject} не подобралась ни одна запускаемая "
+                       "форма из трёх проб ⇒ разряд «формы есть, но не запускаются» остаётся "
                        "НЕДОКАЗАННЫМ. Недоказанный встречный случай — не зелёный", differ=True)
         else:
-            сломанная = с_формой(хвост, True)
+            broken_result = with_form(tail, True)
             ok &= case("⑨-бис ВСТРЕЧНЫЙ: положили ЗАПУСКАЕМУЮ форму — поломка стала видна",
-                       bool(сломанная["red"]),
-                       f"{подопытный} «{хвост}»: на целой копии форма отвечает "
-                       f"({len(целая['ok'])}), у убитого насмерть механизма краснеет "
-                       f"({len(сломанная['red'])}) ⇒ разряд «не запускается» говорит об "
+                       bool(broken_result["red"]),
+                       f"{subject} «{tail}»: на целой копии форма отвечает "
+                       f"({len(intact_result['ok'])}), у убитого насмерть механизма краснеет "
+                       f"({len(broken_result['red'])}) ⇒ разряд «не запускается» говорит об "
                        "ОТСУТСТВИИ запускаемой формы, а не о слепоте проверки", differ=True)
     else:
         # предмета нет — это ТРЕТИЙ исход, и он не зелёный: печатаем вслух
-        print("⚪ ⑨-бис не на чем прогнать: ведро «формы есть, но не запускаются» пусто")
+        print("⚪ ⑨-бис не на чем прогнать: разряд «формы есть, но не запускаются» пуст")
 
     print()
     print(f"{'✅ ПРОВЕРКА ПРИНЯТА' if ok else '🔴 НЕ ПРИНЯТ'} — случаев {CASES}, различающих {DIFFER}")

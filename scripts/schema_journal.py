@@ -55,23 +55,23 @@ def split_statements(sql):
     ⚖️ `sqlite3.complete_statement` разбирает сам SQLite: он видит и комментарии,
     и строковые значения (проверено замером, случаи ①② приёмки).
     """
-    куски, буфер = [], ""
-    for строка in sql.splitlines(keepends=True):
-        буфер += строка
-        if sqlite3.complete_statement(буфер):
-            куски.append(буфер)
-            буфер = ""
-    if буфер.strip():
-        куски.append(буфер)
+    chunks, buf = [], ""
+    for line in sql.splitlines(keepends=True):
+        buf += line
+        if sqlite3.complete_statement(buf):
+            chunks.append(buf)
+            buf = ""
+    if buf.strip():
+        chunks.append(buf)
     # Кусок из одних комментариев и пробелов оператором не является: SQLite на нём
     # промолчит, но «выполнено 5 операторов» станет неправдой, а число тут — замер.
-    живые = []
-    for к in куски:
-        тело = "\n".join(s for s in к.splitlines()
+    alive = []
+    for k in chunks:
+        body = "\n".join(s for s in k.splitlines()
                          if s.strip() and not s.strip().startswith("--"))
-        if тело.strip():
-            живые.append(к)
-    return живые
+        if body.strip():
+            alive.append(k)
+    return alive
 
 
 def precheck(db_path) -> str | None:
@@ -92,26 +92,26 @@ def precheck(db_path) -> str | None:
     это законное состояние старой базы, а не отказ.
     """
     import os
-    путь = os.path.abspath(str(db_path))
-    if not os.path.isfile(путь):
-        return (f"⛔ НЕ ЗАПУСТИЛСЯ: файла базы нет — {путь}\n"
+    file_path = os.path.abspath(str(db_path))
+    if not os.path.isfile(file_path):
+        return (f"⛔ НЕ ЗАПУСТИЛСЯ: файла базы нет — {file_path}\n"
                 f"   Проверь --db. Шаг ничего не менял.")
     try:
-        with open(путь, "rb") as fh:
-            голова = fh.read(16)
+        with open(file_path, "rb") as fh:
+            head = fh.read(16)
     except OSError as e:
-        return f"⛔ НЕ ЗАПУСТИЛСЯ: файл базы не читается — {путь} ({e}). Шаг ничего не менял."
-    if голова != b"SQLite format 3\x00":
-        return (f"⛔ НЕ ЗАПУСТИЛСЯ: это не база SQLite — {путь}\n"
+        return f"⛔ НЕ ЗАПУСТИЛСЯ: файл базы не читается — {file_path} ({e}). Шаг ничего не менял."
+    if head != b"SQLite format 3\x00":
+        return (f"⛔ НЕ ЗАПУСТИЛСЯ: это не база SQLite — {file_path}\n"
                 f"   (заголовок файла не «SQLite format 3»). Проверь --db. Шаг ничего не менял.")
     try:
-        conn = sqlite3.connect(путь)
-        есть = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+        conn = sqlite3.connect(file_path)
+        present = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
                             "AND name='schema_migrations'").fetchone()
         conn.close()
     except sqlite3.Error as e:
-        return f"⛔ НЕ ЗАПУСТИЛСЯ: база не открывается — {путь} ({e}). Шаг ничего не менял."
-    if not есть:
+        return f"⛔ НЕ ЗАПУСТИЛСЯ: база не открывается — {file_path} ({e}). Шаг ничего не менял."
+    if not present:
         return ("⛔ НЕ ЗАПУСТИЛСЯ: в этой базе НЕТ ЖУРНАЛА СХЕМЫ (таблицы schema_migrations).\n"
                 "   Шаги схемы записывают себя в журнал той же транзакцией, без него не работают.\n"
                 "   Сначала заведи журнал: python <scripts>/migrate-live.py --db <эта база>\n"
@@ -171,9 +171,9 @@ def _who(by):
         return str(by)
     import inspect
     import os
-    из_среды = (os.environ.get("MEZO_ROLE") or "").strip()
-    if из_среды:
-        return из_среды.upper()
+    from_env = (os.environ.get("MEZO_ROLE") or "").strip()
+    if from_env:
+        return from_env.upper()
     for frame in inspect.stack()[1:]:
         name = os.path.basename(frame.filename)
         if name != os.path.basename(__file__):
@@ -333,19 +333,30 @@ def milestone_step_set(conn, milestone_file, version):
     # Поймано контролем «полный набор обязан пройти» ДО сдачи: он назвал не 11 шагов, а 0.
     # ⚡ Верное число проверять дешевле, чем красное: зелёное «пропусков нет» здесь пришло
     # бы от ПУСТОГО множества ожидаемых — то есть от проверки, которой нечего искать.
-    own_rowid = conn.execute("SELECT rowid FROM schema_migrations WHERE version=?",
-                             (version,)).fetchone()
-    prev = None
-    q = ("SELECT version FROM schema_migrations WHERE version GLOB 'v[0-9]*'"
-         + (" AND rowid < ?" if own_rowid else "") + " ORDER BY rowid")
-    for (v,) in conn.execute(q, (own_rowid[0],) if own_rowid else ()):
-        if v != version:
-            prev = v
-    prev_date = ''
-    if prev:
-        for f in sorted(_os.listdir(directory)):
-            if f.endswith('.py') and f.endswith(f'-milestone-{prev}.py'):
-                prev_date = _file_date(f)
+    # 🩸 ВТОРАЯ ПРАВКА 07.09 (объявление v6, слово владельца 17:42 UTC): «последняя запись-версия
+    # ДО СВОЕЙ» работала, пока своя запись была ПОСЛЕДНЕЙ. Когда своей записи нет (веха ещё
+    # не объявлена — или снята на стенде приёмки карточки #509), «до своей» значило «последняя
+    # вообще»: для v5 при уже объявленной v6 предыдущей выходила v6, окно выворачивалось
+    # ('20260907', '20260828'), ожидаемых НОЛЬ — тот же класс, что и в первой редакции.
+    # ⇒ Предыдущая отметка берётся по ДАТЕ ФАЙЛА вехи: из записанных в журнале отметок —
+    # та, чей файл датирован позже всех, но РАНЬШЕ своего. Отметки без файла (v3) — запасной
+    # путь по порядку записи, как прежде, чтобы окно v4 по-прежнему шло «с начала».
+    milestone_dates = {}
+    for f in sorted(_os.listdir(directory)):
+        m = _re.match(r'^(\d{8})-milestone-(v\d+)\.py$', f)
+        if m:
+            milestone_dates[m.group(2)] = m.group(1)
+    journal_versions = [v for (v,) in conn.execute(
+        "SELECT version FROM schema_migrations WHERE version GLOB 'v[0-9]*' ORDER BY rowid")]
+    prev, prev_date = None, ''
+    for v in journal_versions:
+        d = milestone_dates.get(v, '')
+        if v != version and d and (not own_date or d < own_date) and d > prev_date:
+            prev, prev_date = v, d
+    if prev is None:                      # запасной путь: отметки без файла вехи (v3)
+        for v in journal_versions:
+            if v != version and not milestone_dates.get(v):
+                prev = v
 
     # ② ожидаемое — файлы-шаги каталога, попавшие в окно (prev_date, own_date]
     # ⚰️ ЗДЕСЬ СТОЯЛО (до 04.09 22:15 UTC): хвост, встреченный у ДВУХ файлов, ВЫБРАСЫВАЛСЯ
@@ -361,17 +372,17 @@ def milestone_step_set(conn, milestone_file, version):
     # имени (журнал хранит полное имя, и там, где хвост неоднозначен, оно однозначно).
     # Свёртка по хвосту остаётся только для одиночных хвостов — ради переименованных
     # 008-/009- шагов, для которых она и заведена. Карточка #536.
-    по_хвосту = {}
+    by_slug = {}
     for f in sorted(_os.listdir(directory)):
         if not f.endswith('.py') or f.startswith('__') or '-milestone-' in f:
             continue
         d = _file_date(f)
         if not d or (own_date and d > own_date) or (prev_date and d <= prev_date):
             continue
-        по_хвосту.setdefault(step_slug(f), []).append(f)
+        by_slug.setdefault(step_slug(f), []).append(f)
 
     expected, ambiguous = {}, []
-    for s, files in по_хвосту.items():
+    for s, files in by_slug.items():
         if len(files) == 1:
             expected[s] = files[0]
         else:
@@ -402,7 +413,7 @@ def milestone_step_set(conn, milestone_file, version):
             continue
         s = step_slug(v)
         if s in ambiguous:
-            if v not in {f[:-3] for f in по_хвосту[s]}:
+            if v not in {f[:-3] for f in by_slug[s]}:
                 orphan.append(v)             # хвост есть у двойников, а ЭТОГО имени на диске нет
         elif s not in expected:
             orphan.append(v)

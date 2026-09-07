@@ -93,7 +93,7 @@ import mezo_stand  # noqa: E402 — временный каталог убира
 # «сторож» из первой части: ослепление части волны 29.08 роняло 0 случаев из 15, и приёмка
 # объявляла себя принятой (опыт TAXO). Часть БЕЗ пробы — отказ «ПРИЁМКА НЕ СОСТОЯЛАСЬ»:
 # пополняешь словарь — пополни пробы, молча раздеть охрану не выйдет.
-ОБРАЗЕЦ_И_ПРОБЫ = [
+PATTERN_AND_PROBES = [
     # ═══ Карточка #574 (находка @COORD 2026-09-05): ДВЕ части получили границу слова,
     # потому что попадали ВНУТРЬ обычных русских слов. Это не косметика: проверку,
     # которая краснеет на верном тексте, нельзя сделать зелёной, не испортив текст, —
@@ -127,14 +127,37 @@ import mezo_stand  # noqa: E402 — временный каталог убира
     # «ослепительный · слепить · слепой · слепень · ослепление · вслепую · слепота ·
     # ослеп · слепящий · слепнуть · налепка» молчат: ни в одном нет «слепк»+падеж
     # (проверено случаем ⑱ этой же приёмки, а не обещанием).
-    (r"\bсторож|градусник|решет[аоуы]|решето|витрин|мутант|врезк|аренд[аеуоы]\b|"
+    # ═══ Карточка #580 ③ (замер 07.09): формы с «ё» — «решёта · решёт · решёте» и «вёдра · вёдер ·
+    # вёдрам · вёдрами · вёдрах» образец не ловил: недосмотр, а не сужение (у «ведро» сужение —
+    # по смыслу, соседями, а не по букве). Буква «ё» допущена там, где у слова она есть.
+    (r"\bсторож|градусник|реш[её]т[аоуые]|решето|витрин|мутант|врезк|аренд[аеуоы]\b|"
      r"слеп(?:ок|к(?:а|и|е|у|ом|ов|ам|ах|ами))|курсор|прибор|укус[ауео]?|дверь|двери",
-     ["сторож", "курсор", "прибор", "слепков"]),
+     ["сторож", "курсор", "прибор", "слепков", "решёта"]),
     # «ведро» о ГРУППЕ, куда что-то относят (слово владельца 2026-08-20 05:34 UTC).
     # Норма: группа · разряд · набор. ⚖️ Сужено намеренно: ведро как настоящая ёмкость —
     # обычное русское слово, и запрет на него заставлял бы калечить верный текст.
-    (r"(?:в|из)\s+\w*\s*ведр[оеау]|ведр[оеау]\w*(?=[^\n]{0,40}(?:групп|разряд|набор|относ))",
-     ["в ведро"]),
+    # ═══ Карточка #580 (замер PROTO 2026-09-06): третья альтернатива — оборот
+    # «ведро «слово»» (кавычка ВПЛОТНУЮ к слову, без соседей групп/разряд/набор/относ
+    # в пределах 40 знаков). Живые места bite-launcher-forms.py: 590 · 638 · 650.
+    # Ещё два места (543, 569) — ГОЛОЕ слово без кавычки и без соседей группы: их
+    # признаком не различить от настоящей ёмкости («ведро не пусто»), не испортив
+    # встречный случай, — исправлены переписыванием текста, признак их не ловит
+    # (названо честно, не подогнано под зелёный прогон).
+    (r"(?:в|из)\s+\w*\s*в[её]др[оеау]|в[её]др[оеау]\w*(?=[^\n]{0,40}(?:групп|разряд|набор|относ))"
+     r"|в[её]др[оеау]\w*\s*«",
+     ["в ведро", "ведро «долг»", "вёдра «долг»"]),
+    # ═══ Карточка #591 (находка @COORD 2026-09-07): слово стои́т в словаре свода
+    # («рубеж (схемы) → отметка версии») и в замере measure-old-words.py (16 слов),
+    # но не входило НИ В ОДНУ из прежних четырёх частей — показываемый текст с ним
+    # проходил зелёным. Узкое окно, а не голое слово: у «рубеж» ДВА хозяина — «база
+    # сравнения» (запрещённый смысл) и «отметка версии»; вне контекста версии/схемы/
+    # миграции слово — обычная русская речь («за рубежом», «рубеж 2020 года»), и её
+    # красить нельзя. Окно 40 знаков в ОБЕ стороны собрано ДВУМЯ проходами одного
+    # набора триггеров, а не lookbehind: Python требует у lookbehind фиксированную
+    # ширину, а окно переменной длины 0…40 этому не отвечает.
+    (r"(?:v\d|верси|схем|миграц|вех)[^\n]{0,40}рубеж\w*"
+     r"|рубеж\w*[^\n]{0,40}(?:v\d|верси|схем|миграц|вех)",
+     ["рубеж v5", "веха-рубеж"]),
     # «гейт» и «ворота» — о полном прогоне проверок (слово владельца 2026-08-20 06:38 UTC).
     # Второе придумал соседний контур, переводя первое на ходу: внесено, чтобы следующая
     # роль увидела этот путь уже закрытым, а не прошла им заново.
@@ -153,7 +176,7 @@ import mezo_stand  # noqa: E402 — временный каталог убира
     (r"па[её]к\w*|пайк\w*|заход\w*|(?<!мезо)синк\w*|хребет|хребт\w*",
      ["паёк", "заход", "синк", "хребет"]),
 ]
-INVENTED = re.compile("|".join(ч for ч, _ in ОБРАЗЕЦ_И_ПРОБЫ), re.I)
+INVENTED = re.compile("|".join(pat for pat, _ in PATTERN_AND_PROBES), re.I)
 
 # 🪤 НЕ ТОЛЬКО print. Найдено @RCC 18.08 (записка #3605): machine_layer.py ничего не
 # печатает сам — он СОБИРАЕТ строки в список и отдаёт наружу, поэтому пять показываемых
@@ -195,7 +218,7 @@ def printing_helpers(tree: ast.AST) -> set[str]:
     return names
 
 
-def доезжают_до_человека(tree: ast.AST, helpers: set[str]) -> set[str]:
+def reach_human_output(tree: ast.AST, helpers: set[str]) -> set[str]:
     """Имена, чьё СОДЕРЖИМОЕ человек в итоге прочтёт — выведено из кода, не из списка имён.
 
     🪤 ПЯТЫЙ ПУТЬ ДОСТАВКИ, найден @COORD 2026-09-06 (карточка #577) на живом инструменте:
@@ -216,31 +239,98 @@ def доезжают_до_человека(tree: ast.AST, helpers: set[str]) -> 
        Возврат наружу не прослеживается вовсе: пришлось бы идти за вызывающим, а он в другом
        файле. Значит слепота у признака ОСТАЁТСЯ, и она здесь названа, а не умолчана.
     """
-    def печатающий(n: ast.AST) -> bool:
+    def is_printing(n: ast.AST) -> bool:
         if not isinstance(n, ast.Call):
             return False
         nm = getattr(n.func, "id", None) or getattr(n.func, "attr", None)
         return nm in SHOWN_CALLS or nm in helpers
 
-    имена: set[str] = set()
+    names: set[str] = set()
     for n in ast.walk(tree):
-        if печатающий(n):
+        if is_printing(n):
             for arg in list(n.args) + [kw.value for kw in n.keywords]:
-                имена.update(s.id for s in ast.walk(arg) if isinstance(s, ast.Name))
+                names.update(s.id for s in ast.walk(arg) if isinstance(s, ast.Name))
         if isinstance(n, (ast.For, ast.AsyncFor)):
-            распакованные = {t.id for t in ast.walk(n.target) if isinstance(t, ast.Name)}
-            источники = {s.id for s in ast.walk(n.iter) if isinstance(s, ast.Name)}
-            if not (распакованные and источники):
+            unpacked = {t.id for t in ast.walk(n.target) if isinstance(t, ast.Name)}
+            sources = {s.id for s in ast.walk(n.iter) if isinstance(s, ast.Name)}
+            if not (unpacked and sources):
                 continue
-            for узел in ast.walk(n):
-                if not печатающий(узел):
+            for node in ast.walk(n):
+                if not is_printing(node):
                     continue
-                видимые = list(узел.args) + [kw.value for kw in узел.keywords]
-                if any(isinstance(s, ast.Name) and s.id in распакованные
-                       for a in видимые for s in ast.walk(a)):
-                    имена.update(источники)
+                visible = list(node.args) + [kw.value for kw in node.keywords]
+                if any(isinstance(s, ast.Name) and s.id in unpacked
+                       for a in visible for s in ast.walk(a)):
+                    names.update(sources)
                     break
-    return имена
+    return names
+
+
+def _alias_target(value: ast.AST) -> tuple[str, str] | None:
+    """Псевдоним, на который ссылается правая часть присвоения (карточка #594):
+    вид 'attr' — X.append/extend (приёмник = имя X), 'call' — сам print (приёмник ''),
+    'write' — sys.stdout.write (приёмник ''). Любое другое присвоение возвращает None и
+    ЭТИМ снимает прежний псевдоним с имени — переприсвоенное имя псевдонимом больше
+    не считается (случай ㉓-квинт)."""
+    if isinstance(value, ast.Attribute) and value.attr in ("append", "extend") \
+            and isinstance(value.value, ast.Name):
+        return ("attr", value.value.id)
+    if isinstance(value, ast.Name) and value.id == "print":
+        return ("call", "")
+    if (isinstance(value, ast.Attribute) and value.attr == "write"
+            and isinstance(value.value, ast.Attribute) and value.value.attr == "stdout"
+            and isinstance(value.value.value, ast.Name) and value.value.value.id == "sys"):
+        return ("write", "")
+    return None
+
+
+def _walk_own_scope(node: ast.AST):
+    """Обход узла БЕЗ спуска во вложенные функции/лямбды: своя область — своя карта
+    псевдонимов (см. _alias_calls)."""
+    yield node
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            continue
+        yield from _walk_own_scope(child)
+
+
+def _alias_calls(tree: ast.AST) -> dict[int, tuple[str, str]]:
+    """Вызовы через ПСЕВДОНИМ накопителя/печати — id узла вызова → (вид, приёмник).
+
+    🪤 КАРТОЧКА #594 (найдено @COORD при приёмке #592): `a = out.append; a("…")`
+    печатается человеку так же, как `out.append("…")`, но признак знал только прямое
+    обращение к методу (`X.append(...)`) — вызов через присвоенное имя выглядел
+    обращением к обычной функции, и текст был невидим. Тот же слепой путь у
+    `p = print` и `w = sys.stdout.write`.
+    ⚖️ Карта строится НА КАЖДУЮ функцию модуля ОТДЕЛЬНО (в т.ч. вложенную): одно и то же
+    имя в разных функциях путать нельзя — живой пример из карточки: в phoenix-vnext.py
+    имя `a` псевдоним внутри derive() (:120), а в main() (:215) это отдельные
+    аргументы. Общемодульная карта спутала бы их.
+    ⚖️ «Последнее присвоение ВЫШЕ вызова» взято ПОРЯДКОМ ОБХОДА (тело функции в порядке
+    исходника, без спуска во вложенные функции) — не полным разбором потока
+    управления: для прямых последовательных присвоений (единственный живой вид
+    в контуре) порядок обхода и есть порядок исполнения.
+    ⛔ ГРАНИЦА, НАЗВАННАЯ ПРЯМО: вызов через псевдоним СВОДИТСЯ к уже существующей
+    проверке приёмника (`X.append` → приёмник в COLLECTORS/доезжают_до_человека) —
+    отдельного списка приёмников для псевдонимов здесь нет, поэтому граница ⑯-бис
+    (накопитель, уезжающий в базу, — не показываемый текст) наследуется сама собой.
+    """
+    calls: dict[int, tuple[str, str]] = {}
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        current: dict[str, tuple[str, str] | None] = {}
+        for n in _walk_own_scope(fn):
+            if n is fn:
+                continue
+            if (isinstance(n, ast.Assign) and len(n.targets) == 1
+                    and isinstance(n.targets[0], ast.Name)):
+                current[n.targets[0].id] = _alias_target(n.value)
+            elif isinstance(n, ast.Call) and isinstance(n.func, ast.Name):
+                alias = current.get(n.func.id)
+                if alias:
+                    calls[id(n)] = alias
+    return calls
 
 
 def case(title, ok, detail, differ=False):
@@ -252,7 +342,7 @@ def case(title, ok, detail, differ=False):
     return ok
 
 
-def _литералы_подстановок(tree: ast.AST) -> dict[int, list[str]]:
+def _substitution_literals(tree: ast.AST) -> dict[int, list[str]]:
     """Строковые литералы внутри {…} f-строки, по номеру строки, где они стоят.
 
     🪤 КАРТОЧКА #592: `_без_подстановок` вырезает содержимое {…} ЦЕЛИКОМ текстом, чтобы
@@ -273,22 +363,22 @@ def _литералы_подстановок(tree: ast.AST) -> dict[int, list[st
     сама узел ast.JoinedStr в дереве, и внешний `ast.walk(tree)` находит её наравне с любым
     другим JoinedStr — её собственные литералы судятся тем же ходом, без отдельной рекурсии.
     """
-    по_строкам: dict[int, list[str]] = {}
-    for узел in ast.walk(tree):
-        if not isinstance(узел, ast.JoinedStr):
+    by_line: dict[int, list[str]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.JoinedStr):
             continue
-        for часть in узел.values:
-            if not isinstance(часть, ast.FormattedValue):
+        for part in node.values:
+            if not isinstance(part, ast.FormattedValue):
                 continue
-            for c in ast.walk(часть.value):
+            for c in ast.walk(part.value):
                 if isinstance(c, ast.Constant) and isinstance(c.value, str):
-                    конец = getattr(c, "end_lineno", None) or c.lineno
-                    for строка in range(c.lineno, конец + 1):
-                        по_строкам.setdefault(строка, []).append(c.value)
-    return по_строкам
+                    end = getattr(c, "end_lineno", None) or c.lineno
+                    for line in range(c.lineno, end + 1):
+                        by_line.setdefault(line, []).append(c.value)
+    return by_line
 
 
-def _литералы_format(tree: ast.AST) -> dict[int, list[str]]:
+def _format_call_literals(tree: ast.AST) -> dict[int, list[str]]:
     """Строковые литералы среди аргументов вызова `.format(...)`, по номеру строки.
 
     🪤 КАРТОЧКА #592, пункт ⑤ возврата приёмки COORD: `"итог: {}".format("сторож")` не
@@ -301,18 +391,18 @@ def _литералы_format(tree: ast.AST) -> dict[int, list[str]]:
     Приёмник вызова ограничен `_текстовый_приёмник`: аргументы чужого `.format`-метода
     (не на строковом выражении) сюда не попадают — см. её docstring.
     """
-    по_строкам: dict[int, list[str]] = {}
-    for узел in ast.walk(tree):
-        if not (isinstance(узел, ast.Call) and isinstance(узел.func, ast.Attribute)
-                and узел.func.attr == "format" and _текстовый_приёмник(узел.func.value)):
+    by_line: dict[int, list[str]] = {}
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "format" and _text_receiver(node.func.value)):
             continue
-        for arg in list(узел.args) + [kw.value for kw in узел.keywords]:
+        for arg in list(node.args) + [kw.value for kw in node.keywords]:
             for c in ast.walk(arg):
                 if isinstance(c, ast.Constant) and isinstance(c.value, str):
-                    конец = getattr(c, "end_lineno", None) or c.lineno
-                    for строка in range(c.lineno, конец + 1):
-                        по_строкам.setdefault(строка, []).append(c.value)
-    return по_строкам
+                    end = getattr(c, "end_lineno", None) or c.lineno
+                    for line in range(c.lineno, end + 1):
+                        by_line.setdefault(line, []).append(c.value)
+    return by_line
 
 
 def shown_lines(src: str) -> tuple[set[int], dict[int, list[str]]]:
@@ -329,40 +419,49 @@ def shown_lines(src: str) -> tuple[set[int], dict[int, list[str]]]:
     # Приёмники: восемь имён списком (как было) ПЛЮС выведенные из кода этого файла.
     # Список оставлен намеренно: он ловит имя, чей путь к человеку идёт через возврат
     # наружу, — а туда разбор не заходит (граница названа в доезжают_до_человека).
-    приёмники = COLLECTORS | доезжают_до_человека(tree, helpers)
-    показанные_имена: set[str] = set()
+    receivers = COLLECTORS | reach_human_output(tree, helpers)
+    alias_calls = _alias_calls(tree)
+    shown_names: set[str] = set()
     for n in ast.walk(tree):
         if isinstance(n, ast.Call):
             nm = getattr(n.func, "id", None) or getattr(n.func, "attr", None)
             shown = nm in SHOWN_CALLS or nm in helpers
             if nm in ("append", "extend") and isinstance(n.func, ast.Attribute):
                 recv = getattr(n.func.value, "id", None)
-                shown = shown or (recv in приёмники)
+                shown = shown or (recv in receivers)
+            # ㉓ КАРТОЧКА #594: вызов через ПСЕВДОНИМ накопителя/печати
+            # (a = out.append; a("…")) сводится к тому же приёмнику, каким уже
+            # судится прямой вызов, — так наследуется граница ⑯-бис без нового списка.
+            if not shown and isinstance(n.func, ast.Name):
+                alias = alias_calls.get(id(n))
+                if alias:
+                    kind, receiver = alias
+                    shown = kind in ("call", "write") or (kind == "attr" and receiver in receivers)
             if shown:
                 for arg in list(n.args) + [kw.value for kw in n.keywords]:
                     out.update(_own_text(arg))
-                    показанные_имена.update(_own_names(arg))
+                    shown_names.update(_own_names(arg))
     # ═══ Карточка #416: ЧЕТВЁРТЫЙ путь доставки текста человеку — через переменную.
     # `дела = "…(пайка)"` затем `print(f"…{дела}…")`: человек видит обе формы одинаково,
     # признак видел только явную. Опыт TAXO: то же слово в явном print — 1 находка,
     # присвоенное переменной — 0 на тех же файлах. Судим ЛИТЕРАЛ ПРИСВОЕНИЯ имени,
     # которое попадает в показываемый узел; само имя (граница ⑩) как не красилось,
     # так и не красится — судится значение, которое человек прочтёт.
-    if показанные_имена:
+    if shown_names:
         for n in ast.walk(tree):
             if isinstance(n, ast.Assign):
-                цели, значение = n.targets, n.value
+                targets, value = n.targets, n.value
             elif isinstance(n, (ast.AnnAssign, ast.AugAssign)) and n.value is not None:
-                цели, значение = [n.target], n.value
+                targets, value = [n.target], n.value
             else:
                 continue
-            if any(isinstance(t, ast.Name) and t.id in показанные_имена for t in цели):
-                out.update(_own_text(значение))
-    литералы: dict[int, list[str]] = {}
-    for источник in (_литералы_подстановок(tree), _литералы_format(tree)):
-        for строка, слова in источник.items():
-            литералы.setdefault(строка, []).extend(слова)
-    return out, литералы
+            if any(isinstance(t, ast.Name) and t.id in shown_names for t in targets):
+                out.update(_own_text(value))
+    literals: dict[int, list[str]] = {}
+    for source in (_substitution_literals(tree), _format_call_literals(tree)):
+        for line, words in source.items():
+            literals.setdefault(line, []).extend(words)
+    return out, literals
 
 
 def _own_names(node: ast.AST) -> set[str]:
@@ -372,17 +471,17 @@ def _own_names(node: ast.AST) -> set[str]:
     читает испытуемый механизм, а не человек (случай ⑨), и присвоения таких имён
     судить нельзя — это подопытные данные, а не показываемый текст.
     """
-    имена: set[str] = set()
+    names: set[str] = set()
     if isinstance(node, ast.Call):
-        return имена
+        return names
     if isinstance(node, ast.Name):
-        имена.add(node.id)
+        names.add(node.id)
     for child in ast.iter_child_nodes(node):
-        имена.update(_own_names(child))
-    return имена
+        names.update(_own_names(child))
+    return names
 
 
-def _текстовый_приёмник(node: ast.AST) -> bool:
+def _text_receiver(node: ast.AST) -> bool:
     """Приёмник вызова `.format(...)` — строковое выражение, а не переменная/число.
 
     🪤 КАРТОЧКА #592, пункт ⑤ возврата приёмки COORD: `.format(...)` не судился ВООБЩЕ —
@@ -400,10 +499,10 @@ def _текстовый_приёмник(node: ast.AST) -> bool:
     if isinstance(node, ast.JoinedStr):
         return True
     if isinstance(node, ast.BinOp):
-        return _текстовый_приёмник(node.left) or _текстовый_приёмник(node.right)
+        return _text_receiver(node.left) or _text_receiver(node.right)
     if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
             and node.func.attr == "format"):
-        return _текстовый_приёмник(node.func.value)          # цепочка .format(...).format(...)
+        return _text_receiver(node.func.value)          # цепочка .format(...).format(...)
     return False
 
 
@@ -425,12 +524,12 @@ def _own_text(node: ast.AST) -> set[int]:
     вырезка `.format(...)` в scan()/_без_format_аргументов, с явным возвратом литералов
     через _литералы_format — тем же приёмом, каким {…}-подстановка отделена от ⑲.
     """
-    строки: set[int] = set()
+    lines: set[int] = set()
     if isinstance(node, ast.Call):
         if isinstance(node.func, ast.Attribute) and node.func.attr == "format" \
-                and _текстовый_приёмник(node.func.value):
-            строки.update(range(node.lineno, (node.end_lineno or node.lineno) + 1))
-        return строки
+                and _text_receiver(node.func.value):
+            lines.update(range(node.lineno, (node.end_lineno or node.lineno) + 1))
+        return lines
     # Только ТЕКСТ. Число или True, стоящие рядом, текстом не являются — а помечали строку
     # показываемой наравне со словами: из-за этого строка с подопытными данными и числом
     # сравнения объявлялась читаемой человеком (поймано случаем ⑨ этой же приёмки).
@@ -445,10 +544,10 @@ def _own_text(node: ast.AST) -> set[int]:
         # ⚡ Класс: ЕДИНИЦА СУЖДЕНИЯ МЕНЬШЕ ЕДИНИЦЫ ЧТЕНИЯ. Человек читает абзац, признак
         # читал его первую строку и говорил «чисто» — и был по построению зелёным ровно там,
         # где текста больше всего. Лечится границей узла, а не списком мест.
-        строки.update(range(node.lineno, (node.end_lineno or node.lineno) + 1))
+        lines.update(range(node.lineno, (node.end_lineno or node.lineno) + 1))
     for child in ast.iter_child_nodes(node):
-        строки.update(_own_text(child))
-    return строки
+        lines.update(_own_text(child))
+    return lines
 
 
 # ── ФАЙЛ, КОТОРЫЙ ОБСУЖДАЕТ САМИ СЛОВА ────────────────────────────────────────────
@@ -460,50 +559,50 @@ def _own_text(node: ast.AST) -> set[int]:
 # кто файл правит, и её приходится ставить осознанно.
 # ⛔ Пропуск НЕ молчаливый: имена пропущенных печатаются. Молчаливое исключение
 # неотличимо от «признак ослеп на этот файл».
-МАРКЕР_ОБСУЖДАЕТ_СЛОВА = "plain-words: файл ОБСУЖДАЕТ прежние слова"
+DISCUSSES_WORDS_MARKER = "plain-words: файл ОБСУЖДАЕТ прежние слова"
 
 
 def scan(root: Path) -> tuple[list[str], int, int]:
     """Находки, сколько файлов и сколько показываемых строк посмотрено."""
     hits, files, lines = [], 0, 0
-    отпущены = []
+    exempted = []
     for p in sorted(root.rglob("*.py")):
         src = p.read_text(encoding="utf-8", errors="replace")
         # 🩸 ПЕРВАЯ РЕДАКЦИЯ ИСКАЛА ПОМЕТКУ ВО ВСЁМ ФАЙЛЕ — и приёмка отпустила САМУ СЕБЯ:
         # текст пометки лежит в её же коде. Прогон стал зелёным, а её собственные строки
         # перестали проверяться. Классический вид дыры: послабление, задевшее того,
         # кто его ввёл. ⇒ пометка считается только в ШАПКЕ и только КОММЕНТАРИЕМ.
-        шапка = [l.strip() for l in src.splitlines()[:15]]
-        if any(l.startswith("#") and МАРКЕР_ОБСУЖДАЕТ_СЛОВА in l for l in шапка):
-            отпущены.append(p.name)
+        header = [l.strip() for l in src.splitlines()[:15]]
+        if any(l.startswith("#") and DISCUSSES_WORDS_MARKER in l for l in header):
+            exempted.append(p.name)
             continue
-        shown, литералы = shown_lines(src)
+        shown, literals = shown_lines(src)
         if not shown:
             continue
         files += 1
-        комменты = _начала_комментариев(src)
+        comments = _comment_starts(src)
         for i, line in enumerate(src.splitlines(), 1):
             if i not in shown:
                 continue
             lines += 1
-            судимое = line[:комменты[i]] if i in комменты else line
-            судимое = _без_имени_цели(_без_format_аргументов(_без_подстановок(судимое)))
+            judged_text = line[:comments[i]] if i in comments else line
+            judged_text = _without_target_name(_without_format_args(_without_substitutions(judged_text)))
             # ═══ Карточка #592: _без_подстановок вырезала {…} ЦЕЛИКОМ, _без_format_аргументов
             # так же вырезает аргументы `.format(...)` ЦЕЛИКОМ — вместе с именем (которое
             # судить нельзя, граница ⑩) вырезался и строковый литерал внутри (который судить
             # нужно). Литералы, отдельно найденные ast-ом (обе подстановки), возвращаются
             # в судимый текст здесь — имена в них уже не попадают ни разу.
-            if i in литералы:
-                судимое += " " + " ".join(литералы[i])
-            if INVENTED.search(судимое):
+            if i in literals:
+                judged_text += " " + " ".join(literals[i])
+            if INVENTED.search(judged_text):
                 hits.append(f"{p.name}:{i} {line.strip()[:90]}")
-    if отпущены:
-        print(f"📝 отпущены как ОБСУЖДАЮЩИЕ слова ({len(отпущены)}): {', '.join(отпущены)}"
+    if exempted:
+        print(f"📝 отпущены как ОБСУЖДАЮЩИЕ слова ({len(exempted)}): {', '.join(exempted)}"
               f" — в них слово стои́т предметом разговора. Пометка живёт в самом файле")
     return hits, files, lines
 
 
-def _начала_комментариев(src: str) -> dict[int, int]:
+def _comment_starts(src: str) -> dict[int, int]:
     """Для каждой строки — столбец, где начинается комментарий (если он там есть).
 
     🪤 НАЙДЕНО МНОЮ 2026-09-06 первым же прогоном после починки пятого пути (карточка #577).
@@ -517,18 +616,18 @@ def _начала_комментариев(src: str) -> dict[int, int]:
     ⛔ Граница ⑨ этим НЕ снята: подопытные ДАННЫЕ на одной строке с показываемым текстом
     по-прежнему неотличимы — они настоящий код, а не комментарий.
     """
-    начала: dict[int, int] = {}
+    starts: dict[int, int] = {}
     try:
-        for т in tokenize.generate_tokens(StringIO(src).readline):
-            if т.type == tokenize.COMMENT:
-                строка, столбец = т.start
-                начала.setdefault(строка, столбец)
+        for tok in tokenize.generate_tokens(StringIO(src).readline):
+            if tok.type == tokenize.COMMENT:
+                line, column = tok.start
+                starts.setdefault(line, column)
     except (tokenize.TokenError, IndentationError, SyntaxError):
         return {}          # разобрать не вышло — судим строку целиком, как раньше
-    return начала
+    return starts
 
 
-def _без_подстановок(line: str) -> str:
+def _without_substitutions(line: str) -> str:
     """Строка без содержимого фигурных скобок: человек видит ЗНАЧЕНИЕ, а не имя переменной.
 
     🪤 НАЙДЕНО НА СЕБЕ 2026-08-20: признак покрасил `f"отметка {курсор_до} → ..."`, где
@@ -538,7 +637,7 @@ def _без_подстановок(line: str) -> str:
     return re.sub(r"\{[^{}]*\}", "{}", line)
 
 
-def _без_format_аргументов(line: str) -> str:
+def _without_format_args(line: str) -> str:
     """Строка без аргументов вызова `.format(...)`: человек видит ЗНАЧЕНИЕ литерала
     (возвращённого явно из _литералы_format), а не имя переменной — та же граница ⑩,
     каким приёмом решена и у {…}-подстановки в _без_подстановок (карточка #592, пункт ⑤
@@ -552,7 +651,7 @@ def _без_format_аргументов(line: str) -> str:
     return re.sub(r"\.format\([^()]*\)", ".format()", line)
 
 
-def _без_имени_цели(line: str) -> str:
+def _without_target_name(line: str) -> str:
     """Строка присвоения без ИМЕНИ ЦЕЛИ слева от «=» — зеркало границы ⑩ (карточка #416).
 
     Признак стал судить строки присвоений, а на них слово может стоять в имени
@@ -664,8 +763,8 @@ def main() -> int:
     # Приёмка подкладывает испытуемому текст, и он стои́т в том же выражении, что заголовок
     # случая. Этот текст читает ИСПЫТУЕМЫЙ, а не человек: требовать его переписать значит
     # ломать саму приёмку и подгонять текст под проверку.
-    подопытный = sand / "probe_nested.py"
-    подопытный.write_text(
+    subject = sand / "probe_nested.py"
+    subject.write_text(
         '# -*- coding: utf-8 -*-\n'
         'def case(title, ok, detail):\n'
         '    print(title)\n'
@@ -688,7 +787,7 @@ def main() -> int:
     # ── ⑩ ГРАНИЦА: ИМЯ ПЕРЕМЕННОЙ В ПОДСТАНОВКЕ ─────────────────────────────
     # Правило прямо запрещает менять по нему имена переменных и полей. Признак, красящий
     # имя внутри {…}, требовал бы ровно того, что правило запрещает.
-    подопытный.write_text(
+    subject.write_text(
         '# -*- coding: utf-8 -*-\n'
         'def main():\n'
         '    курсор_до = 1\n'
@@ -701,7 +800,7 @@ def main() -> int:
                "по нему — значит требовать этого признаком нельзя", differ=True)
 
     # ── ⑪ ВСТРЕЧНЫЙ к ⑨⑩: обычный текст в том же файле красится по-прежнему ──
-    подопытный.write_text(
+    subject.write_text(
         '# -*- coding: utf-8 -*-\n'
         'def main():\n'
         '    курсор_до = 1\n'
@@ -712,7 +811,7 @@ def main() -> int:
                any("probe_nested.py" in h for h in still_hits),
                "без этого случая ⑨ и ⑩ могли бы зеленеть просто потому, что признак ослеп "
                "на файл целиком", differ=True)
-    подопытный.unlink()
+    subject.unlink()
 
     # ── ⑫ МНОГОСТРОЧНЫЙ показываемый текст судится ЦЕЛИКОМ, а не первой строкой ──
     # 🩸 Заявка @COORD, карточка #304: признак брал номер строки, где текст НАЧИНАЕТСЯ.
@@ -720,8 +819,8 @@ def main() -> int:
     # и справки было невидимо. Замер на живом хранителе памяти: 341 видел, 342-343 нет.
     # Прежнее слово стои́т ВО ВТОРОЙ строке — на первой его нет вовсе, поэтому случай
     # различает «судит абзац» и «судит его начало», а не просто «что-то нашёл».
-    многострочный = sand / "probe_multiline.py"
-    многострочный.write_text(
+    multiline = sand / "probe_multiline.py"
+    multiline.write_text(
         '# -*- coding: utf-8 -*-\n'
         'import sys\n'
         'def main():\n'
@@ -738,32 +837,32 @@ def main() -> int:
     # ── ⑫-бис ОБРАТНЫЙ ХОД: вернуть суждение по ОДНОЙ строке → ⑫ снова слеп ──
     # Ослабляем РОВНО ту границу, которую стережёт ⑫. Без него ⑫ доказывал бы лишь,
     # что слово нашлось, а не что его нашла ИМЕННО починка границы.
-    целый_own_text = globals()["_own_text"]
+    whole_own_text = globals()["_own_text"]
 
-    def _слепой(node, _цел=целый_own_text):
+    def _blind(node, _whole=whole_own_text):
         """Прежнее поведение: у текста засчитывается только строка НАЧАЛА."""
-        строки: set[int] = set()
+        lines: set[int] = set()
         if isinstance(node, ast.Call):
-            return строки
+            return lines
         if isinstance(node, ast.JoinedStr) or (isinstance(node, ast.Constant)
                                                and isinstance(node.value, str)):
-            строки.add(node.lineno)
+            lines.add(node.lineno)
         for child in ast.iter_child_nodes(node):
-            строки.update(_слепой(child))
-        return строки
+            lines.update(_blind(child))
+        return lines
 
-    globals()["_own_text"] = _слепой
+    globals()["_own_text"] = _blind
     try:
         blind_hits, _, _ = scan(sand)
     finally:
-        globals()["_own_text"] = целый_own_text
+        globals()["_own_text"] = whole_own_text
     ok &= case("⑫-бис ОБРАТНЫЙ ХОД: суждение по ОДНОЙ строке → тот же текст снова невидим",
                not any("probe_multiline.py" in h for h in blind_hits)
                and any("probe_multiline.py" in h for h in multi_hits),
                "разница между двумя прогонами и есть починка; сойдись они — случай ⑫ "
                "красил бы файл по какой-то другой причине, а не по границе узла",
                differ=True)
-    многострочный.unlink()
+    multiline.unlink()
     helper_shown.unlink()
 
     mezo_stand.release(d)  # уборка отложена до исхода прогона
@@ -806,12 +905,12 @@ def main() -> int:
     # присвоение — 0. Четвёртый путь доставки после print (①), списка наружу (⑥)
     # и своего печатающего помощника (⑦).
     d14 = mezo_stand.new("bite-words-var-")
-    подсадка_вар = (
+    var_seed = (
         '# -*- coding: utf-8 -*-\n'
         'def main():\n'
         '    дела = "карточек нет — первое дело возьми из пайка"\n'
         '    print(f"наказ роли:\\n{дела}")\n')
-    (d14 / "probe_var.py").write_text(подсадка_вар, encoding="utf-8")
+    (d14 / "probe_var.py").write_text(var_seed, encoding="utf-8")
     var_hits, _, _ = scan(d14)
     ok &= case("⑭ литерал, присвоенный переменной и подставленный в печать, судится",
                any("probe_var.py:3" in h for h in var_hits),
@@ -837,13 +936,13 @@ def main() -> int:
                "ЛЮБОЕ присвоение, и красил бы подопытные данные приёмок", differ=True)
 
     # ⑭-тер ОБРАТНЫЙ ХОД: сбор имён отключён → тот же файл снова невидим.
-    (d14 / "probe_var.py").write_text(подсадка_вар, encoding="utf-8")
-    целые_имена = globals()["_own_names"]
+    (d14 / "probe_var.py").write_text(var_seed, encoding="utf-8")
+    whole_own_names = globals()["_own_names"]
     globals()["_own_names"] = lambda node: set()
     try:
         var_blind, _, _ = scan(d14)
     finally:
-        globals()["_own_names"] = целые_имена
+        globals()["_own_names"] = whole_own_names
     ok &= case("⑭-тер ОБРАТНЫЙ ХОД: сбор показанных имён отключён → текст снова невидим",
                not any("probe_var.py" in h for h in var_blind)
                and any("probe_var.py:3" in h for h in var_hits),
@@ -885,7 +984,7 @@ def main() -> int:
     #    из 281 (2% от 9716). Прежние слова нашлись в девяти из них — они переведены тем же
     #    ходом. Мусорный каталог исключён из замера явно.
     d16 = mezo_stand.new("bite-words-tuple-")
-    подсадка_кортеж = (
+    tuple_seed = (
         '# -*- coding: utf-8 -*-\n'
         'def main(rows):\n'
         '    красные = []\n'
@@ -893,7 +992,7 @@ def main() -> int:
         '        красные.append((r, 1, f"курсор стоит на {r}"))\n'
         '    for имя, н, почему in красные:\n'
         '        print(f"   {почему}")\n')
-    (d16 / "probe_tuple.py").write_text(подсадка_кортеж, encoding="utf-8")
+    (d16 / "probe_tuple.py").write_text(tuple_seed, encoding="utf-8")
     tup_hits, _, _ = scan(d16)
     ok &= case("⑯ текст в приёмнике с ЛЮБЫМ именем, распакованный и напечатанный, судится",
                any("probe_tuple.py:5" in h for h in tup_hits),
@@ -904,14 +1003,14 @@ def main() -> int:
     # ⑯-бис ВСТРЕЧНЫЙ, БЕЗ КОТОРОГО ⑯ НИЧЕГО НЕ ЗНАЧИТ: тот же кортеж, но содержимое
     # уезжает В БАЗУ, а не человеку. Без этого случая ⑯ зелен и у признака, объявившего
     # показываемым ЛЮБОЙ текст в любом списке, — а такой признак красит подопытные данные.
-    подсадка_в_базу = (
+    db_seed = (
         '# -*- coding: utf-8 -*-\n'
         'def main(rows, cur):\n'
         '    красные = []\n'
         '    for r in rows:\n'
         '        красные.append((r, 1, f"курсор стоит на {r}"))\n'
         '    cur.executemany("INSERT INTO t VALUES (?,?,?)", красные)\n')
-    (d16 / "probe_tuple.py").write_text(подсадка_в_базу, encoding="utf-8")
+    (d16 / "probe_tuple.py").write_text(db_seed, encoding="utf-8")
     tup_quiet, _, _ = scan(d16)
     ok &= case("⑯-бис ВСТРЕЧНЫЙ: тот же кортеж уезжает в базу — приёмка молчит",
                not tup_quiet,
@@ -922,13 +1021,13 @@ def main() -> int:
     # ⑯-тер ОБРАТНЫЙ ХОД: вывод приёмников из кода отключён → тот же файл снова невидим.
     # Разница двух прогонов и есть починка: сойдись они — ⑯ красил бы файл по посторонней
     # причине, а мы бы считали, что чиним путь доставки.
-    (d16 / "probe_tuple.py").write_text(подсадка_кортеж, encoding="utf-8")
-    целые_приёмники = globals()["доезжают_до_человека"]
-    globals()["доезжают_до_человека"] = lambda tree, helpers: set()
+    (d16 / "probe_tuple.py").write_text(tuple_seed, encoding="utf-8")
+    whole_receivers = globals()["reach_human_output"]
+    globals()["reach_human_output"] = lambda tree, helpers: set()
     try:
         tup_blind, _, _ = scan(d16)
     finally:
-        globals()["доезжают_до_человека"] = целые_приёмники
+        globals()["reach_human_output"] = whole_receivers
     ok &= case("⑯-тер ОБРАТНЫЙ ХОД: вывод приёмников отключён → текст снова невидим",
                not any("probe_tuple.py" in h for h in tup_blind)
                and any("probe_tuple.py:5" in h for h in tup_hits),
@@ -941,14 +1040,14 @@ def main() -> int:
     # комментарии НЕ судит.
     # ⚖️ Погасить такое красное правкой текста НЕЛЬЗЯ: правило прямо запрещает стирать эти
     # слова из комментариев. А красное, которое некому погасить, учит пролистывать красное.
-    подсадка_с_комментарием = (
+    commented_seed = (
         '# -*- coding: utf-8 -*-\n'
         'def main(roles):\n'
         '    итоги = []\n'
         '    for r in roles:\n'
         '        итоги.append(f"{r} без ответа")   # решето не запустилось — видно, а не ноль\n'
         '    print(chr(10).join(итоги))\n')
-    (d16 / "probe_tuple.py").write_text(подсадка_с_комментарием, encoding="utf-8")
+    (d16 / "probe_tuple.py").write_text(commented_seed, encoding="utf-8")
     com_quiet, _, _ = scan(d16)
     ok &= case("⑰ комментарий В КОНЦЕ строки показываемого текста приёмку НЕ красит",
                not com_quiet,
@@ -957,14 +1056,14 @@ def main() -> int:
 
     # ⑰-бис ВСТРЕЧНЫЙ: прежнее слово в САМОМ тексте той же строки — по-прежнему красит.
     # Без него ⑰ зелен и у признака, который просто ослеп на строки с комментарием.
-    подсадка_слово_в_тексте = (
+    word_in_text_seed = (
         '# -*- coding: utf-8 -*-\n'
         'def main(roles):\n'
         '    итоги = []\n'
         '    for r in roles:\n'
         '        итоги.append(f"{r}: решето не запустилось")   # обычный комментарий\n'
         '    print(chr(10).join(итоги))\n')
-    (d16 / "probe_tuple.py").write_text(подсадка_слово_в_тексте, encoding="utf-8")
+    (d16 / "probe_tuple.py").write_text(word_in_text_seed, encoding="utf-8")
     com_hits, _, _ = scan(d16)
     ok &= case("⑰-бис ВСТРЕЧНЫЙ: то же слово в САМОМ тексте строки с комментарием — красит",
                any("probe_tuple.py:5" in h for h in com_hits),
@@ -978,16 +1077,16 @@ def main() -> int:
     # верный текст либо жить с вечным красным, которое следующий примет за долг.
     # Слова взяты ОДНОКОРЕННЫЕ-ЛОВУШКИ, а не посторонние: посторонние молчали бы
     # у любого образца и не проверяли бы ровно ничего.
-    ЛОВУШКИ_РЕЧИ = ["ослепительный", "слепить", "слепой", "слепень", "ослепление",
+    SPEECH_TRAPS = ["ослепительный", "слепить", "слепой", "слепень", "ослепление",
                     "вслепую", "слепота", "ослеп", "слепящий", "слепнуть", "налепка"]
     (d16 / "probe_tuple.py").write_text(
         "# -*- coding: utf-8 -*-\ndef main():\n"
-        + "".join('    print("обычная речь: %s")\n' % с for с in ЛОВУШКИ_РЕЧИ),
+        + "".join('    print("обычная речь: %s")\n' % trap for trap in SPEECH_TRAPS),
         encoding="utf-8")
-    речь_quiet, _, _ = scan(d16)
+    speech_quiet, _, _ = scan(d16)
     ok &= case("⑱ ВСТРЕЧНЫЙ: однокоренные слова обычной речи образец НЕ красит",
-               not речь_quiet,
-               f"слов проверено {len(ЛОВУШКИ_РЕЧИ)}, находок {len(речь_quiet)} — все они "
+               not speech_quiet,
+               f"слов проверено {len(SPEECH_TRAPS)}, находок {len(speech_quiet)} — все они "
                "однокоренные ловушки, а не посторонние слова; на посторонних молчал бы "
                "любой образец, и случай не проверял бы ничего", differ=True)
 
@@ -998,29 +1097,29 @@ def main() -> int:
         "def main():\n"
         '    print("ослепительный вид, а рядом слепков нет")\n',
         encoding="utf-8")
-    речь_hits, _, _ = scan(d16)
+    speech_hits, _, _ = scan(d16)
     ok &= case("⑱-бис ВСТРЕЧНЫЙ к ⑱: падежная форма рядом с ловушкой — приёмка краснеет",
-               any("probe_tuple.py:3" in h for h in речь_hits),
-               f"находок {len(речь_hits)} — иначе ⑱ значил бы «этого корня не видим "
+               any("probe_tuple.py:3" in h for h in speech_hits),
+               f"находок {len(speech_hits)} — иначе ⑱ значил бы «этого корня не видим "
                "вовсе», а это ослепление, а не точность", differ=True)
 
     # ⑱-тер ОБРАТНЫЙ ХОД: вернуть ПРЕЖНИЙ перечень окончаний → та же строка снова
     # невидима. Разница двух прогонов и есть починка; сойдись они — ⑱-бис краснел бы
     # по посторонней причине, а мы бы считали, что закрыли падежи.
-    прежний_перечень = "слеп(?:ок|ка|ки|ке|ком)"          # как было до карточки #579
-    целый_текст = "|".join(ч for ч, _ in ОБРАЗЕЦ_И_ПРОБЫ)
-    сужённый_текст = целый_текст.replace(
-        "слеп(?:ок|к(?:а|и|е|у|ом|ов|ам|ах|ами))", прежний_перечень)
-    цел_образец2 = globals()["INVENTED"]
-    globals()["INVENTED"] = re.compile(сужённый_текст, re.I)
+    previous_list = "слеп(?:ок|ка|ки|ке|ком)"          # как было до карточки #579
+    whole_pattern_text = "|".join(pat for pat, _ in PATTERN_AND_PROBES)
+    narrowed_pattern_text = whole_pattern_text.replace(
+        "слеп(?:ок|к(?:а|и|е|у|ом|ов|ам|ах|ами))", previous_list)
+    whole_pattern2 = globals()["INVENTED"]
+    globals()["INVENTED"] = re.compile(narrowed_pattern_text, re.I)
     try:
-        речь_blind, _, _ = scan(d16)
+        speech_blind, _, _ = scan(d16)
     finally:
-        globals()["INVENTED"] = цел_образец2
+        globals()["INVENTED"] = whole_pattern2
     ok &= case("⑱-тер ОБРАТНЫЙ ХОД: прежний перечень окончаний → та же строка невидима",
-               сужённый_текст != целый_текст
-               and not any("probe_tuple.py" in h for h in речь_blind)
-               and any("probe_tuple.py:3" in h for h in речь_hits),
+               narrowed_pattern_text != whole_pattern_text
+               and not any("probe_tuple.py" in h for h in speech_blind)
+               and any("probe_tuple.py:3" in h for h in speech_hits),
                "сужение образца обязано вернуть прежнюю слепоту; если оно ничего "
                "не сузило, случай краснеет — молчаливая подмена хуже отказа", differ=True)
     mezo_stand.release(d16)
@@ -1038,13 +1137,13 @@ def main() -> int:
     # Constant-ом не бывают никогда — граница ⑩ остаётся свойством разбора, а не списком
     # исключений, который пришлось бы держать отдельно.
     d19 = mezo_stand.new("bite-words-fmt-")
-    подсадка_литерал_в_условии = (
+    literal_in_condition_seed = (
         '# -*- coding: utf-8 -*-\n'
         'def main():\n'
         '    ok = True\n'
         '    n = 3\n'
         '    print(f"{\'сторож принят\' if ok else \'нет\'} — случаев {n}")\n')
-    (d19 / "probe_fmt.py").write_text(подсадка_литерал_в_условии, encoding="utf-8")
+    (d19 / "probe_fmt.py").write_text(literal_in_condition_seed, encoding="utf-8")
     fmt_hits, _, _ = scan(d19)
     ok &= case("⑲ литерал прежнего слова ВНУТРИ {… if … else …} судится",
                any("probe_fmt.py:5" in h for h in fmt_hits),
@@ -1058,14 +1157,14 @@ def main() -> int:
     # а не имя. ⑩ проверяет это на голом имени в подстановке; здесь — то же самое имя,
     # но вложенное в тернарник, чтобы граница была проверена НА НОВОМ пути (через
     # FormattedValue.value), а не только предположена по аналогии со старым.
-    подсадка_имя_в_условии = (
+    name_in_condition_seed = (
         '# -*- coding: utf-8 -*-\n'
         'def main():\n'
         '    сторож_текст = "порядок"\n'
         '    другое = "иначе"\n'
         '    ok = True\n'
         '    print(f"{сторож_текст if ok else другое} — случаев 3")\n')
-    (d19 / "probe_fmt.py").write_text(подсадка_имя_в_условии, encoding="utf-8")
+    (d19 / "probe_fmt.py").write_text(name_in_condition_seed, encoding="utf-8")
     fmt_name_hits, _, _ = scan(d19)
     ok &= case("⑲-бис ВСТРЕЧНЫЙ: то же слово в ИМЕНИ внутри {… if … else …} не красится",
                not any("probe_fmt.py" in h for h in fmt_name_hits),
@@ -1077,13 +1176,13 @@ def main() -> int:
     # ⑲-тер ОБРАТНЫЙ ХОД: разбор литералов внутри подстановок отключён → та же проба
     # снова невидима. Разница двух прогонов и есть починка; сойдись они — ⑲ красил бы
     # файл по посторонней причине, а не по литералам подстановки.
-    (d19 / "probe_fmt.py").write_text(подсадка_литерал_в_условии, encoding="utf-8")
-    целые_литералы = globals()["_литералы_подстановок"]
-    globals()["_литералы_подстановок"] = lambda tree: {}
+    (d19 / "probe_fmt.py").write_text(literal_in_condition_seed, encoding="utf-8")
+    whole_substitution_literals = globals()["_substitution_literals"]
+    globals()["_substitution_literals"] = lambda tree: {}
     try:
         fmt_blind, _, _ = scan(d19)
     finally:
-        globals()["_литералы_подстановок"] = целые_литералы
+        globals()["_substitution_literals"] = whole_substitution_literals
     ok &= case("⑲-тер ОБРАТНЫЙ ХОД: разбор литералов в подстановках отключён → снова невидим",
                not any("probe_fmt.py" in h for h in fmt_blind)
                and any("probe_fmt.py:5" in h for h in fmt_hits),
@@ -1101,11 +1200,11 @@ def main() -> int:
     # склейка — не Call, а BinOp, и туда обход уже заходил, поэтому эти два вида и были
     # ✅ ещё до этой правки.
     d22 = mezo_stand.new("bite-words-fmtcall-")
-    подсадка_формат_литерал = (
+    format_literal_seed = (
         '# -*- coding: utf-8 -*-\n'
         'def main():\n'
         '    print("итог: {}".format("сторож"))\n')
-    (d22 / "probe_format.py").write_text(подсадка_формат_литерал, encoding="utf-8")
+    (d22 / "probe_format.py").write_text(format_literal_seed, encoding="utf-8")
     fmtcall_hits, _, _ = scan(d22)
     ok &= case("㉒ литерал-аргумент вызова .format(...) на строковом выражении судится",
                len(fmtcall_hits) == 1 and any("probe_format.py:3" in h for h in fmtcall_hits),
@@ -1115,12 +1214,12 @@ def main() -> int:
 
     # ㉒-бис ВСТРЕЧНЫЙ: то же слово только в ИМЕНИ переменной-аргумента — не красится.
     # Тот же класс, что граница ⑩ у {…}-подстановки (⑲-бис): судится значение, не имя.
-    подсадка_формат_имя = (
+    format_name_seed = (
         '# -*- coding: utf-8 -*-\n'
         'def main():\n'
         '    сторож = 1\n'
         '    print("итог: {}".format(сторож))\n')
-    (d22 / "probe_format.py").write_text(подсадка_формат_имя, encoding="utf-8")
+    (d22 / "probe_format.py").write_text(format_name_seed, encoding="utf-8")
     fmtcall_name_hits, _, _ = scan(d22)
     ok &= case("㉒-бис ВСТРЕЧНЫЙ: имя переменной в аргументе .format(...) не красится",
                not any("probe_format.py" in h for h in fmtcall_name_hits),
@@ -1131,13 +1230,13 @@ def main() -> int:
     # ㉒-тер ОБРАТНЫЙ ХОД: сбор литералов из аргументов .format(...) отключён → та же
     # проба снова невидима. Разница двух прогонов и есть починка; сойдись они — ㉒ красил
     # бы файл по посторонней причине, а не по литералу-аргументу .format(...).
-    (d22 / "probe_format.py").write_text(подсадка_формат_литерал, encoding="utf-8")
-    целые_литералы_format = globals()["_литералы_format"]
-    globals()["_литералы_format"] = lambda tree: {}
+    (d22 / "probe_format.py").write_text(format_literal_seed, encoding="utf-8")
+    whole_format_literals = globals()["_format_call_literals"]
+    globals()["_format_call_literals"] = lambda tree: {}
     try:
         fmtcall_blind, _, _ = scan(d22)
     finally:
-        globals()["_литералы_format"] = целые_литералы_format
+        globals()["_format_call_literals"] = whole_format_literals
     ok &= case("㉒-тер ОБРАТНЫЙ ХОД: сбор литералов из .format(...) отключён → снова невидим",
                not any("probe_format.py" in h for h in fmtcall_blind)
                and any("probe_format.py:3" in h for h in fmtcall_hits),
@@ -1164,51 +1263,216 @@ def main() -> int:
                ".format(...); здесь все три вида названы числом в одном прогоне")
     mezo_stand.release(d22)
 
+    # ── ⑳ КАРТОЧКА #591: НОВАЯ ЧАСТЬ 5 — «рубеж» рядом с отметкой версии/схемы ──
+    # 🩸 Найдено @COORD 2026-09-07: слово стои́т в словаре свода и в замере
+    # measure-old-words.py (16 слов), а в признаке этой приёмки не входило ни в одну
+    # из четырёх частей — показываемый текст с ним проходил зелёным.
+    d20 = mezo_stand.new("bite-words-milestone-")
+    (d20 / "probe_milestone.py").write_text(
+        '# -*- coding: utf-8 -*-\n'
+        'def main():\n'
+        '    print("итог: рубеж v5 прогона")\n',
+        encoding="utf-8")
+    milestone_hits, _, _ = scan(d20)
+    ok &= case("⑳ часть 5 (новая): слово словаря свода рядом с отметкой версии — судится",
+               any("probe_milestone.py:3" in h for h in milestone_hits),
+               f"находок {len(milestone_hits)} — до правки слово словаря свода не входило "
+               "ни в одну часть признака (карточка #591)", differ=True)
+
+    (d20 / "probe_milestone.py").write_text(
+        '# -*- coding: utf-8 -*-\n'
+        'def main():\n'
+        '    print("итог: веха-рубеж прогона")\n',
+        encoding="utf-8")
+    milestone_hits2, _, _ = scan(d20)
+    ok &= case("⑳-бис часть 5: тот же случай, триггер ПЕРЕД словом, — судится",
+               any("probe_milestone.py:3" in h for h in milestone_hits2),
+               f"находок {len(milestone_hits2)} — окно действует в ОБЕ стороны, "
+               "а не только «триггер → слово»", differ=True)
+
+    ORDINARY_SPEECH_MILESTONE = ["за рубежом", "рубеж 2020 года"]
+    (d20 / "probe_milestone.py").write_text(
+        "# -*- coding: utf-8 -*-\ndef main():\n"
+        + "".join('    print("обычная речь: %s")\n' % phrase for phrase in ORDINARY_SPEECH_MILESTONE),
+        encoding="utf-8")
+    milestone_quiet, _, _ = scan(d20)
+    ok &= case("⑳-тер ВСТРЕЧНЫЙ: то же слово вне контекста версии/схемы — обычная речь "
+               "не красится",
+               not milestone_quiet,
+               f"фраз проверено {len(ORDINARY_SPEECH_MILESTONE)}, находок {len(milestone_quiet)} — "
+               "узкое окно не разрешает красить любое упоминание слова", differ=True)
+    mezo_stand.release(d20)
+
+    # ── ㉑ КАРТОЧКА #580: ЧАСТЬ 2 РАСШИРЕНА — «ведро «слово»» (кавычка вплотную) ──
+    # 🩸 Замер PROTO 2026-09-06: живые места bite-launcher-forms.py (590 · 638 · 650)
+    # говорят «ведро «форм нет»» / «ведро «формы есть…»» — соседей группы/разряда/
+    # набора/относа рядом нет (сама кавычка и есть знак оборота), и прежние две
+    # альтернативы части этот оборот не ловили.
+    d21 = mezo_stand.new("bite-words-bucket-")
+    (d21 / "probe_bucket.py").write_text(
+        '# -*- coding: utf-8 -*-\n'
+        'def main():\n'
+        '    print("итог: ведро «долг» пусто")\n',
+        encoding="utf-8")
+    bucket_hits, _, _ = scan(d21)
+    ok &= case("㉑ часть 2: новая альтернатива с кавычкой ВПЛОТНУЮ к слову — судится",
+               any("probe_bucket.py:3" in h for h in bucket_hits),
+               f"находок {len(bucket_hits)} — до правки этот оборот, живущий в трёх местах "
+               "bite-launcher-forms.py, часть 2 не ловила (карточка #580)", differ=True)
+
+    ORDINARY_SPEECH_BUCKET = ["ведро воды", "ведро с краской"]
+    (d21 / "probe_bucket.py").write_text(
+        "# -*- coding: utf-8 -*-\ndef main():\n"
+        + "".join('    print("обычная речь: %s")\n' % phrase for phrase in ORDINARY_SPEECH_BUCKET),
+        encoding="utf-8")
+    bucket_quiet, _, _ = scan(d21)
+    ok &= case("㉑-бис ВСТРЕЧНЫЙ: то же слово как настоящая ёмкость по-прежнему не красится",
+               not bucket_quiet,
+               f"фраз проверено {len(ORDINARY_SPEECH_BUCKET)}, находок {len(bucket_quiet)} — "
+               "новая альтернатива требует кавычку ВПЛОТНУЮ к слову, обычная речь "
+               "её не несёт", differ=True)
+    mezo_stand.release(d21)
+
+    # ── ㉓ КАРТОЧКА #594: ВЫЗОВ ЧЕРЕЗ ПСЕВДОНИМ НАКОПИТЕЛЯ/ПЕЧАТИ ────────────────
+    # 🩸 Найдено @COORD 2026-09-07 при приёмке #592: `a = out.append; a("…")` человек
+    # читает так же, как `out.append("…")`, но признак знал только прямое обращение
+    # к методу — вызов через присвоенное имя выглядел обращением к обычной функции,
+    # и текст был невидим. Живые места: phoenix-vnext.py:138, :150 (слово «курсор»).
+    d23 = mezo_stand.new("bite-words-alias-")
+    alias_append_seed = (
+        '# -*- coding: utf-8 -*-\n'
+        'def main():\n'
+        '    out = []\n'
+        '    a = out.append\n'
+        '    a("итог: сторож принят")\n'
+        '    print("\\n".join(out))\n')
+    (d23 / "probe_alias.py").write_text(alias_append_seed, encoding="utf-8")
+    alias_append_hits, _, _ = scan(d23)
+    ok &= case("㉓ псевдоним накопителя (a = out.append; a(...)) судится",
+               any("probe_alias.py:5" in h for h in alias_append_hits),
+               f"находок {len(alias_append_hits)}, ждём строку вызова через псевдоним "
+               "(probe_alias.py:5) — до починки a(...) выглядел обращением к обычной "
+               "функции, и текст в накопителе через псевдоним метода был невидим",
+               differ=True)
+
+    alias_print_seed = (
+        '# -*- coding: utf-8 -*-\n'
+        'def main():\n'
+        '    p = print\n'
+        '    p("итог: сторож принят")\n')
+    (d23 / "probe_alias.py").write_text(alias_print_seed, encoding="utf-8")
+    alias_print_hits, _, _ = scan(d23)
+    ok &= case("㉓-бис псевдоним print (p = print; p(...)) судится",
+               any("probe_alias.py:4" in h for h in alias_print_hits),
+               f"находок {len(alias_print_hits)}, ждём строку вызова через псевдоним "
+               "(probe_alias.py:4)", differ=True)
+
+    alias_write_seed = (
+        '# -*- coding: utf-8 -*-\n'
+        'import sys\n'
+        'def main():\n'
+        '    w = sys.stdout.write\n'
+        '    w("итог: сторож принят")\n')
+    (d23 / "probe_alias.py").write_text(alias_write_seed, encoding="utf-8")
+    alias_write_hits, _, _ = scan(d23)
+    ok &= case("㉓-тер псевдоним sys.stdout.write (w = sys.stdout.write; w(...)) судится",
+               any("probe_alias.py:5" in h for h in alias_write_hits),
+               f"находок {len(alias_write_hits)}, ждём строку вызова через псевдоним "
+               "(probe_alias.py:5)", differ=True)
+
+    # ㉓-кватер ВСТРЕЧНЫЙ: тот же псевдоним накопителя, но содержимое уезжает В БАЗУ,
+    # а не человеку — граница ⑯-бис наследуется, а не заводится заново.
+    alias_db_seed = (
+        '# -*- coding: utf-8 -*-\n'
+        'def main(cur):\n'
+        '    red = []\n'
+        '    a = red.append\n'
+        '    a("итог: сторож принят")\n'
+        '    cur.executemany("INSERT INTO t VALUES (?)", red)\n')
+    (d23 / "probe_alias.py").write_text(alias_db_seed, encoding="utf-8")
+    alias_db_hits, _, _ = scan(d23)
+    ok &= case("㉓-кватер ВСТРЕЧНЫЙ: псевдоним накопителя, уезжающего в базу, НЕ судится",
+               not alias_db_hits,
+               f"находок {len(alias_db_hits)} — приёмник наследует границу ⑯-бис: "
+               "содержимое уезжает не человеку, а в базу", differ=True)
+
+    # ㉓-квинт ВСТРЕЧНЫЙ: присвоенное имя ссылается НЕ на печать/накопитель — не судится.
+    not_alias_seed = (
+        '# -*- coding: utf-8 -*-\n'
+        'def judge(x):\n'
+        '    return len(x)\n'
+        'def main():\n'
+        '    a = judge\n'
+        '    a("итог: сторож принят")\n')
+    (d23 / "probe_alias.py").write_text(not_alias_seed, encoding="utf-8")
+    alias_not_hits, _, _ = scan(d23)
+    ok &= case("㉓-квинт ВСТРЕЧНЫЙ: имя, не являющееся псевдонимом накопителя/печати, "
+               "не судится",
+               not alias_not_hits,
+               f"находок {len(alias_not_hits)} — иначе признак объявил бы псевдонимом "
+               "ЛЮБОЕ присвоенное имя, вызываемое как функция", differ=True)
+
+    # ㉓-секст ОБРАТНЫЙ ХОД: прослеживание псевдонимов отключено → та же проба
+    # снова невидима. Разница двух прогонов и есть починка.
+    (d23 / "probe_alias.py").write_text(alias_append_seed, encoding="utf-8")
+    whole_alias_calls = globals()["_alias_calls"]
+    globals()["_alias_calls"] = lambda tree: {}
+    try:
+        alias_blind, _, _ = scan(d23)
+    finally:
+        globals()["_alias_calls"] = whole_alias_calls
+    ok &= case("㉓-секст ОБРАТНЫЙ ХОД: прослеживание псевдонимов отключено → снова невидим",
+               not any("probe_alias.py" in h for h in alias_blind)
+               and any("probe_alias.py:5" in h for h in alias_append_hits),
+               "разница двух прогонов и есть починка; сойдись они — ㉓ красил бы файл "
+               "по другой причине, а не по прослеживанию псевдонима", differ=True)
+    mezo_stand.release(d23)
+
     # ── ⑮ КАРТОЧКА #417: КАЖДАЯ часть образца стережётся СВОИМИ пробами ──────
     # 🩸 Опыт TAXO: приёмка стерегла себя одним словом из ПЕРВОЙ части — ослепление
     # части волны 29.08 роняло 0 случаев из 15 при зелёном вердикте. Правило само
     # называет путь опасным («переименовать образец — ослепить проверку»), но запрет
     # исполняли, а не проверяли. Теперь пробы идут ИЗ СПИСКА рядом с образцом:
     # пополнил словарь без пробы — отказ, а не молчание.
-    провалы_проб, всего_проб = [], 0
-    for номер, (_, пробы) in enumerate(ОБРАЗЕЦ_И_ПРОБЫ, 1):
-        if not пробы:
-            sys.exit(f"⛔ ПРИЁМКА НЕ СОСТОЯЛАСЬ: у части {номер} образца нет ни одной "
+    probe_failures, total_probes = [], 0
+    for number, (_, probes) in enumerate(PATTERN_AND_PROBES, 1):
+        if not probes:
+            sys.exit(f"⛔ ПРИЁМКА НЕ СОСТОЯЛАСЬ: у части {number} образца нет ни одной "
                      f"пробы — часть без пробы не стережёт никто (карточка #417)")
-        for слово in пробы:
-            всего_проб += 1
+        for word in probes:
+            total_probes += 1
             (d14 / "probe_pat.py").write_text(
                 '# -*- coding: utf-8 -*-\n'
                 'def main():\n'
-                f'    print("итог: {слово} прогона")\n',
+                f'    print("итог: {word} прогона")\n',
                 encoding="utf-8")
-            найдено, _, _ = scan(d14)
-            if not any("probe_pat.py" in h for h in найдено):
-                провалы_проб.append(f"часть {номер}: проба не ловится")
+            found, _, _ = scan(d14)
+            if not any("probe_pat.py" in h for h in found):
+                probe_failures.append(f"часть {number}: проба не ловится")
     (d14 / "probe_pat.py").unlink()
-    ok &= case(f"⑮ каждая часть образца ловит свои пробы: частей {len(ОБРАЗЕЦ_И_ПРОБЫ)}, "
-               f"проб {всего_проб}",
-               not провалы_проб,
+    ok &= case(f"⑮ каждая часть образца ловит свои пробы: частей {len(PATTERN_AND_PROBES)}, "
+               f"проб {total_probes}",
+               not probe_failures,
                ("все части живы — ослепление любой уронит её пробы здесь"
-                if not провалы_проб else "🔴 " + "; ".join(провалы_проб)), differ=True)
+                if not probe_failures else "🔴 " + "; ".join(probe_failures)), differ=True)
 
     # ⑮-бис ОБРАТНЫЙ ХОД: часть волны ослеплена → её пробы перестают ловиться.
     # Прежде это давало «принято, 0 из 15»; теперь обязано ронять ровно пробы части.
-    цел_образец = globals()["INVENTED"]
+    whole_pattern = globals()["INVENTED"]
     globals()["INVENTED"] = re.compile(
-        "|".join(ч for ч, _ in ОБРАЗЕЦ_И_ПРОБЫ[:-1]), re.I)
+        "|".join(pat for pat, _ in PATTERN_AND_PROBES[:-1]), re.I)
     try:
         (d14 / "probe_pat.py").write_text(
             '# -*- coding: utf-8 -*-\n'
             'def main():\n'
             '    print("итог: паёк прогона")\n',
             encoding="utf-8")
-        слепой_скан, _, _ = scan(d14)
+        blind_scan, _, _ = scan(d14)
     finally:
-        globals()["INVENTED"] = цел_образец
+        globals()["INVENTED"] = whole_pattern
         (d14 / "probe_pat.py").unlink()
     ok &= case("⑮-бис ОБРАТНЫЙ ХОД: часть волны ослеплена → её проба не ловится",
-               not any("probe_pat.py" in h for h in слепой_скан),
+               not any("probe_pat.py" in h for h in blind_scan),
                "у ослеплённого образца проба части волны молчит — значит на целом её "
                "ловит ИМЕННО эта часть, и ослепление уронит случай ⑮ (прежде — 0 из 15)",
                differ=True)

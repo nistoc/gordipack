@@ -71,10 +71,11 @@ bite-milestone-step-set.py — приёмка карточки #509: веха-р
                    иначе отрицание той же фразы красит исправное
 
 Запуск:
-    python C:/guts/.atlas/vnext-tools/bite-milestone-step-set.py
+    python <КОНТУР>/vnext-tools/bite-milestone-step-set.py
 """
 import argparse
 import hashlib
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -89,88 +90,103 @@ LIVE_DB = mezo_paths.live_db()
 sys.path.insert(0, str(SCRIPTS))
 import mezo_stand  # noqa: E402
 
-ВЕХА_V4 = "20260810-milestone-v4.py"
-ВЕХА_V5 = "20260828-milestone-v5.py"
+MILESTONE_V4 = "20260810-milestone-v4.py"
+MILESTONE_V5 = "20260828-milestone-v5.py"
 
-СВЁРТКА_ЦЕЛАЯ = "_DATED = _re.compile(r'^(\\d+)-(.+)$')"
-СВЁРТКА_БОЛЬНАЯ = "_DATED = _re.compile(r'^(\\d{6,8})-(.+)$')"
-ВЫЗОВ_СВЕРКИ = "набор = milestone_step_set(conn, __file__, VERSION)"
-ВЫЗОВ_ПУСТОЙ = ("набор = {'window': ('', ''), 'prev': None, 'expected': {},\n"
+SLUG_INTACT = "_DATED = _re.compile(r'^(\\d+)-(.+)$')"
+SLUG_BROKEN = "_DATED = _re.compile(r'^(\\d{6,8})-(.+)$')"
+CHECK_CALL_INTACT = "step_set = milestone_step_set(conn, __file__, VERSION)"
+CHECK_CALL_EMPTY = ("step_set = {'window': ('', ''), 'prev': None, 'expected': {},\n"
                 "             'missing': [], 'orphan': [], 'ambiguous': []}")
 # двойник хвоста ожидается под полным именем — эта строка и есть починка карточки #536
-ДВОЙНИК_ЦЕЛЫЙ = "expected[f[:-3]] = f"
-ДВОЙНИК_БОЛЬНОЙ = "pass  # ⟨порча twin: двойник не ожидается⟩"
-ШАГ_НАСТОЯЩИЙ = "20260816-tool-leases.py"
-ШАГ_ДВОЙНИК = "20260821-tool-leases.py"
+TWIN_INTACT = "expected[f[:-3]] = f"
+TWIN_BROKEN = "pass  # ⟨порча twin: двойник не ожидается⟩"
+STEP_REAL = "20260816-tool-leases.py"
+STEP_TWIN = "20260821-tool-leases.py"
 
 OK = FAIL = 0
 
 
-def случай(имя, условие, подробность=""):
+def case(name, ok, detail=""):
     global OK, FAIL
-    print(("[ok]  " if условие else "[FAIL]"), имя)
-    if подробность:
-        print("       " + подробность)
-    OK, FAIL = OK + (1 if условие else 0), FAIL + (0 if условие else 1)
+    print(("[ok]  " if ok else "[FAIL]"), name)
+    if detail:
+        print("       " + detail)
+    OK, FAIL = OK + (1 if ok else 0), FAIL + (0 if ok else 1)
 
 
-def отпечаток(путь):
-    return hashlib.sha256(Path(путь).read_bytes()).hexdigest()[:16]
+def fingerprint(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()[:16]
 
 
-def строка_с(вывод, слово, иначе="строки нет"):
-    return next((s.strip() for s in вывод.splitlines() if слово in s), иначе)
+def line_with(output, word, otherwise="строки нет"):
+    return next((s.strip() for s in output.splitlines() if word in s), otherwise)
 
 
-def стенд(метка, убрать_версии=(), убрать_шаги=(), убрать_файлы=(), подсадить=(),
-          удвоить=(), порча=None):
+def sandbox(label, remove_versions=(), remove_steps=(), remove_files=(), seed=(),
+          duplicate=(), break_kind=None):
     """Копия базы + копия скриптов. Возвращает (корень, путь_к_базе, каталог_вех).
 
     удвоить — пары (файл, имя_копии): двойник хвоста в каталоге стенда (карточка #536).
     """
-    корень = mezo_stand.new(метка)
-    скрипты = корень / "scripts"
-    (скрипты / "migrations").mkdir(parents=True)
-    shutil.copy2(SCRIPTS / "schema_journal.py", скрипты / "schema_journal.py")
+    root = mezo_stand.new(label)
+    scripts_dir = root / "scripts"
+    (scripts_dir / "migrations").mkdir(parents=True)
+    shutil.copy2(SCRIPTS / "schema_journal.py", scripts_dir / "schema_journal.py")
     for f in sorted((SCRIPTS / "migrations").glob("*.py")):
-        shutil.copy2(f, скрипты / "migrations" / f.name)
-    for имя in убрать_файлы:
-        (скрипты / "migrations" / имя).unlink()
-    for имя, копия in удвоить:
-        shutil.copy2(скрипты / "migrations" / имя, скрипты / "migrations" / копия)
+        shutil.copy2(f, scripts_dir / "migrations" / f.name)
+    for name in remove_files:
+        (scripts_dir / "migrations" / name).unlink()
+    for name, copy_name in duplicate:
+        shutil.copy2(scripts_dir / "migrations" / name, scripts_dir / "migrations" / copy_name)
 
-    if порча == "twin":
-        p = скрипты / "schema_journal.py"
+    if break_kind == "twin":
+        p = scripts_dir / "schema_journal.py"
         t = p.read_text(encoding="utf-8")
-        assert ДВОЙНИК_ЦЕЛЫЙ in t, "нечего портить: строка ожидания двойника не найдена"
-        p.write_text(t.replace(ДВОЙНИК_ЦЕЛЫЙ, ДВОЙНИК_БОЛЬНОЙ, 1), encoding="utf-8", newline="")
-    if порча == "slug":
-        p = скрипты / "schema_journal.py"
+        assert TWIN_INTACT in t, "нечего портить: строка ожидания двойника не найдена"
+        p.write_text(t.replace(TWIN_INTACT, TWIN_BROKEN, 1), encoding="utf-8", newline="")
+    if break_kind == "slug":
+        p = scripts_dir / "schema_journal.py"
         t = p.read_text(encoding="utf-8")
-        assert СВЁРТКА_ЦЕЛАЯ in t, "нечего портить: строка свёртки не найдена"
-        p.write_text(t.replace(СВЁРТКА_ЦЕЛАЯ, СВЁРТКА_БОЛЬНАЯ, 1), encoding="utf-8", newline="")
-    if порча == "guard":
-        for имя in (ВЕХА_V4, ВЕХА_V5):
-            p = скрипты / "migrations" / имя
+        assert SLUG_INTACT in t, "нечего портить: строка свёртки не найдена"
+        p.write_text(t.replace(SLUG_INTACT, SLUG_BROKEN, 1), encoding="utf-8", newline="")
+    if break_kind == "guard":
+        for name in (MILESTONE_V4, MILESTONE_V5):
+            p = scripts_dir / "migrations" / name
             t = p.read_text(encoding="utf-8")
-            assert ВЫЗОВ_СВЕРКИ in t, "нечего портить: вызов сверки не найден"
-            p.write_text(t.replace(ВЫЗОВ_СВЕРКИ, ВЫЗОВ_ПУСТОЙ, 1), encoding="utf-8", newline="")
+            assert CHECK_CALL_INTACT in t, "нечего портить: вызов сверки не найден"
+            p.write_text(t.replace(CHECK_CALL_INTACT, CHECK_CALL_EMPTY, 1), encoding="utf-8", newline="")
 
-    база = корень / "mezosync.db"
-    shutil.copy2(LIVE_DB, база)
-    c = sqlite3.connect(база)
-    for v in list(убрать_версии) + list(убрать_шаги):
+    db_path = root / "mezosync.db"
+    shutil.copy2(LIVE_DB, db_path)
+    c = sqlite3.connect(db_path)
+    # 🩸 07.09 (объявлена v6): снимая на копии отметку, снимаем и все ПОЗДНЕЙШИЕ — иначе
+    # выборка версии считает «сверх отметки» от оставшейся поздней (v6) и отвечает 0,
+    # веха v5 отказывает первой же защитой («объявлять нечего»), и все стенды красны
+    # не по своей причине. Поздние — по ДАТЕ ФАЙЛА вехи в живом каталоге шагов.
+    for v in list(remove_versions) + list(remove_steps) + later_milestones(remove_versions):
         c.execute("DELETE FROM schema_migrations WHERE version=?", (v,))
-    for v in подсадить:
+    for v in seed:
         c.execute("INSERT INTO schema_migrations(version, applied_at, note) VALUES(?,?,?)",
                   (v, "2026-08-26 00:00:00", "подсадка приёмки #509"))
     c.commit()
     c.close()
-    return корень, база, скрипты / "migrations"
+    return root, db_path, scripts_dir / "migrations"
 
 
-def прогон(каталог_вех, веха, доводы=("--dry-run",)):
-    r = subprocess.run([sys.executable, str(каталог_вех / веха), *доводы],
+def later_milestones(versions):
+    """Отметки версий, чей файл вехи датирован ПОЗЖЕ самой поздней из снимаемых (только чтение)."""
+    dates = {}
+    for f in (SCRIPTS / "migrations").glob("*-milestone-v*.py"):
+        m = re.match(r"^(\d{8})-milestone-(v\d+)\.py$", f.name)
+        if m:
+            dates[m.group(2)] = m.group(1)
+    floor = max((dates.get(v, "") for v in versions), default="")
+    return sorted(v for v, d in dates.items() if v not in versions and floor and d > floor)
+
+
+def run(migrations_dir, milestone_file, flags=("--dry-run",)):
+    r = subprocess.run([sys.executable, str(migrations_dir / milestone_file), *flags],
                        capture_output=True, text=True, encoding="utf-8", errors="replace")
     return r.returncode, (r.stdout or "") + (r.stderr or "")
 
@@ -186,148 +202,148 @@ def прогон(каталог_вех, веха, доводы=("--dry-run",)):
 # краснел не по своей причине (нашёл @COORD приёмкой карточки #509 — записка #4722).
 # Снимок лечили снимком побольше. Теперь список берётся ИЗ ЖИВОГО ЖУРНАЛА, только чтение:
 # всё, что записано ПОСЛЕ рубежа-предшественника (по порядку записи, рубежи не в счёт).
-def шаги_после(рубеж):
+def steps_after(after_version):
     c = sqlite3.connect("file:" + str(LIVE_DB) + "?mode=ro", uri=True)
-    r = c.execute("SELECT rowid FROM schema_migrations WHERE version=?", (рубеж,)).fetchone()
-    assert r, "в живом журнале нет рубежа " + рубеж + " — стенд ③ строить не от чего"
-    шаги = [v for (v,) in c.execute(
+    r = c.execute("SELECT rowid FROM schema_migrations WHERE version=?", (after_version,)).fetchone()
+    assert r, "в живом журнале нет рубежа " + after_version + " — стенд ③ строить не от чего"
+    steps = [v for (v,) in c.execute(
         "SELECT version FROM schema_migrations WHERE rowid > ? AND version NOT GLOB 'v[0-9]*' "
         "ORDER BY rowid", (r[0],))]
     c.close()
-    return шаги
+    return steps
 
 
 def main():
     ap = argparse.ArgumentParser(description="приёмка #509: веха сверяет НАБОР шагов")
-    ap.add_argument("--break", dest="порча", choices=["slug", "guard", "twin"], default=None,
+    ap.add_argument("--break", "--порча", dest="break_kind", choices=["slug", "guard", "twin"], default=None,
                     help="контрольная пара: нарочно сломать и убедиться, что краснеет")
     a = ap.parse_args()
-    п = a.порча
+    break_kind = a.break_kind
 
-    живая_до = (LIVE_DB.stat().st_size, отпечаток(LIVE_DB))
-    вехи_до = {и: отпечаток(SCRIPTS / "migrations" / и) for и in (ВЕХА_V4, ВЕХА_V5)}
+    live_before = (LIVE_DB.stat().st_size, fingerprint(LIVE_DB))
+    milestones_before = {milestone_name: fingerprint(SCRIPTS / "migrations" / milestone_name) for milestone_name in (MILESTONE_V4, MILESTONE_V5)}
 
     print("=" * 78)
-    print("ПРИЁМКА #509 — веха-рубеж сверяет НАБОР шагов, а не их число")
+    print("ПРИЁМКА #509 — веха сверяет НАБОР шагов, а не их число")
     print("живая база (только чтение): " + str(LIVE_DB))
-    if п:
-        print("⚠️ КОНТРОЛЬНАЯ ПАРА: нарочная поломка «" + п + "» — приёмка ОБЯЗАНА покраснеть")
+    if break_kind:
+        print("⚠️ КОНТРОЛЬНАЯ ПАРА: нарочная поломка «" + break_kind + "» — приёмка ОБЯЗАНА покраснеть")
     print("=" * 78)
 
     # ① полный набор
-    _, _, вехи = стенд("m509-a", убрать_версии=["v5"], порча=п)
-    код1, вывод1 = прогон(вехи, ВЕХА_V5)
-    случай("① полный набор проходит без возражений (v5: 7 из 7)",
-           код1 == 0 and "набор полон" in вывод1 and "ожидается шагов 7" in вывод1,
-           "код " + str(код1) + " · " + строка_с(вывод1, "ожидается"))
+    _, _, migrations_dir = sandbox("m509-a", remove_versions=["v5"], break_kind=break_kind)
+    code1, output1 = run(migrations_dir, MILESTONE_V5)
+    case("① полный набор проходит без возражений (v5: 7 из 7)",
+           code1 == 0 and "набор полон" in output1 and "ожидается шагов 7" in output1,
+           "код " + str(code1) + " · " + line_with(output1, "ожидается"))
 
     # ② главный: две дырки в середине
-    _, база_б, вехи = стенд("m509-b", убрать_версии=["v5"],
-                            убрать_шаги=["20260816-tool-leases",
+    _, db_b, migrations_dir = sandbox("m509-b", remove_versions=["v5"],
+                            remove_steps=["20260816-tool-leases",
                                          "20260822-sync-backoff-bridge-mtime"],
-                            порча=п)
-    код2, вывод2 = прогон(вехи, ВЕХА_V5)
-    назван_1 = "20260816-tool-leases.py" in вывод2
-    назван_2 = "20260822-sync-backoff-bridge-mtime.py" in вывод2
-    случай("② дырка В СЕРЕДИНЕ: отказ, и названы ОБА пропавших шага",
-           код2 != 0 and назван_1 and назван_2 and "не хватает шагов" in вывод2,
-           "код " + str(код2) + " · назван первый: " + str(назван_1)
-           + " · назван второй: " + str(назван_2))
+                            break_kind=break_kind)
+    code2, output2 = run(migrations_dir, MILESTONE_V5)
+    named_1 = "20260816-tool-leases.py" in output2
+    named_2 = "20260822-sync-backoff-bridge-mtime.py" in output2
+    case("② дырка В СЕРЕДИНЕ: отказ, и названы ОБА пропавших шага",
+           code2 != 0 and named_1 and named_2 and "не хватает шагов" in output2,
+           "код " + str(code2) + " · назван первый: " + str(named_1)
+           + " · назван второй: " + str(named_2))
 
     # ③ встречный: пустой хвост ловится прежней защитой
-    _, _, вехи = стенд("m509-c", убрать_версии=["v5"], убрать_шаги=шаги_после("v4"), порча=п)
-    код3, вывод3 = прогон(вехи, ВЕХА_V5)
-    случай("③ ВСТРЕЧНЫЙ: пустой ХВОСТ по-прежнему ловит прежняя защита (счётчик)",
-           код3 != 0 and "сверх отметки ноль шагов" in вывод3,
-           "код " + str(код3) + " · причина: "
-           + ("счётчик" if "сверх отметки ноль шагов" in вывод3 else "НЕ счётчик"))
+    _, _, migrations_dir = sandbox("m509-c", remove_versions=["v5"], remove_steps=steps_after("v4"), break_kind=break_kind)
+    code3, output3 = run(migrations_dir, MILESTONE_V5)
+    case("③ ВСТРЕЧНЫЙ: пустой ХВОСТ по-прежнему ловит прежняя защита (счётчик)",
+           code3 != 0 and "сверх отметки ноль шагов" in output3,
+           "код " + str(code3) + " · причина: "
+           + ("счётчик" if "сверх отметки ноль шагов" in output3 else "НЕ счётчик"))
 
     # ④ окно «с начала»: порядковые имена не считаются пропажей
-    _, _, вехи = стенд("m509-d", убрать_версии=["v4", "v5"], порча=п)
-    код4, вывод4 = прогон(вехи, ВЕХА_V4)
-    случай("④ ВСТРЕЧНЫЙ ложным находкам: 008-/009- сведены по хвосту, 11 из 11",
-           код4 == 0 and "набор полон" in вывод4 and "ожидается шагов 11" in вывод4,
-           "код " + str(код4) + " · " + строка_с(вывод4, "ожидается"))
+    _, _, migrations_dir = sandbox("m509-d", remove_versions=["v4", "v5"], break_kind=break_kind)
+    code4, output4 = run(migrations_dir, MILESTONE_V4)
+    case("④ ВСТРЕЧНЫЙ ложным находкам: 008-/009- сведены по хвосту, 11 из 11",
+           code4 == 0 and "набор полон" in output4 and "ожидается шагов 11" in output4,
+           "код " + str(code4) + " · " + line_with(output4, "ожидается"))
 
     # ⑤ различение внутри ④
-    _, _, вехи = стенд("m509-e", убрать_версии=["v4", "v5"],
-                       убрать_шаги=["009-role-rights"], порча=п)
-    код5, вывод5 = прогон(вехи, ВЕХА_V4)
-    случай("⑤ различает: убрана запись 009-role-rights ⇒ отказ ПОИМЁННО",
-           код5 != 0 and "20260808-role-rights.py" in вывод5,
-           "код " + str(код5) + " · имя в тексте: " + str("20260808-role-rights.py" in вывод5))
+    _, _, migrations_dir = sandbox("m509-e", remove_versions=["v4", "v5"],
+                       remove_steps=["009-role-rights"], break_kind=break_kind)
+    code5, output5 = run(migrations_dir, MILESTONE_V4)
+    case("⑤ различает: убрана запись 009-role-rights ⇒ отказ ПОИМЁННО",
+           code5 != 0 and "20260808-role-rights.py" in output5,
+           "код " + str(code5) + " · имя в тексте: " + str("20260808-role-rights.py" in output5))
 
     # ⑥ запись без файла — замечание, не отказ
-    _, _, вехи = стенд("m509-f", убрать_версии=["v5"],
-                       подсадить=["20260826-nothing-on-disk"], порча=п)
-    код6, вывод6 = прогон(вехи, ВЕХА_V5)
-    случай("⑥ запись в журнале БЕЗ файла — ЗАМЕЧАНИЕ, не отказ",
-           код6 == 0 and "20260826-nothing-on-disk" in вывод6
-           and "файла в каталоге нет" in вывод6,
-           "код " + str(код6) + " · замечание напечатано: "
-           + str("файла в каталоге нет" in вывод6))
+    _, _, migrations_dir = sandbox("m509-f", remove_versions=["v5"],
+                       seed=["20260826-nothing-on-disk"], break_kind=break_kind)
+    code6, output6 = run(migrations_dir, MILESTONE_V5)
+    case("⑥ запись в журнале БЕЗ файла — ЗАМЕЧАНИЕ, не отказ",
+           code6 == 0 and "20260826-nothing-on-disk" in output6
+           and "файла в каталоге нет" in output6,
+           "код " + str(code6) + " · замечание напечатано: "
+           + str("файла в каталоге нет" in output6))
 
     # ⑦ файл убран, запись цела — проверка его не требует
-    _, _, вехи = стенд("m509-g", убрать_версии=["v5"],
-                       убрать_файлы=["20260816-tool-leases.py"], порча=п)
-    код7, вывод7 = прогон(вехи, ВЕХА_V5)
-    случай("⑦ предел вслух: файла нет в каталоге ⇒ шаг не требуется (6 из 6)",
-           код7 == 0 and "ожидается шагов 6" in вывод7,
-           "код " + str(код7) + " · " + строка_с(вывод7, "ожидается"))
+    _, _, migrations_dir = sandbox("m509-g", remove_versions=["v5"],
+                       remove_files=["20260816-tool-leases.py"], break_kind=break_kind)
+    code7, output7 = run(migrations_dir, MILESTONE_V5)
+    case("⑦ предел вслух: файла нет в каталоге ⇒ шаг не требуется (6 из 6)",
+           code7 == 0 and "ожидается шагов 6" in output7,
+           "код " + str(code7) + " · " + line_with(output7, "ожидается"))
 
     # ⑧ отказ ⑤ пришёл от СВОЕГО сторожа
-    случай("⑧ отказ ⑤ имеет СВОЮ причину: слов прежней защиты в нём нет",
-           код5 != 0 and "сверх отметки ноль шагов" not in вывод5,
+    case("⑧ отказ ⑤ имеет СВОЮ причину: слов прежней защиты в нём нет",
+           code5 != 0 and "сверх отметки ноль шагов" not in output5,
            "в тексте отказа ⑤ "
-           + ("нет" if "сверх отметки ноль шагов" not in вывод5 else "ЕСТЬ")
+           + ("нет" if "сверх отметки ноль шагов" not in output5 else "ЕСТЬ")
            + " слов счётчика")
 
     # ⑨ при отказе веха ничего не пишет
-    c = sqlite3.connect("file:" + str(база_б) + "?mode=ro", uri=True)
-    есть = c.execute("SELECT 1 FROM schema_migrations WHERE version='v5'").fetchone()
+    c = sqlite3.connect("file:" + str(db_b) + "?mode=ro", uri=True)
+    found = c.execute("SELECT 1 FROM schema_migrations WHERE version='v5'").fetchone()
     c.close()
-    случай("⑨ при отказе веха НИЧЕГО не записала: рубежа v5 в стенде ② нет",
-           есть is None, "запись v5 " + ("отсутствует" if есть is None else "ПОЯВИЛАСЬ"))
+    case("⑨ при отказе веха НИЧЕГО не записала: отметки версии v5 в стенде ② нет",
+           found is None, "запись v5 " + ("отсутствует" if found is None else "ПОЯВИЛАСЬ"))
 
     # ⑪ 🎯 двойник хвоста + убранная запись настоящего шага (карточка #536, стенд ⓑ)
-    _, _, вехи = стенд("m536-b", убрать_версии=["v5"],
-                       убрать_шаги=[ШАГ_НАСТОЯЩИЙ[:-3]],
-                       удвоить=[(ШАГ_НАСТОЯЩИЙ, ШАГ_ДВОЙНИК)], порча=п)
-    код11, вывод11 = прогон(вехи, ВЕХА_V5)
-    случай("⑪ ДВОЙНИК ХВОСТА не прячет дырку: отказ, названы ОБА файла, слова «исключены» нет",
-           код11 != 0 and "не хватает шагов" in вывод11
-           and ШАГ_НАСТОЯЩИЙ in вывод11 and ШАГ_ДВОЙНИК in вывод11
-           and "из сверки исключены" not in вывод11,
-           "код " + str(код11) + " · " + строка_с(вывод11, "ожидается")
-           + " · настоящий назван: " + str(ШАГ_НАСТОЯЩИЙ in вывод11)
-           + " · двойник назван: " + str(ШАГ_ДВОЙНИК in вывод11))
+    _, _, migrations_dir = sandbox("m536-b", remove_versions=["v5"],
+                       remove_steps=[STEP_REAL[:-3]],
+                       duplicate=[(STEP_REAL, STEP_TWIN)], break_kind=break_kind)
+    code11, output11 = run(migrations_dir, MILESTONE_V5)
+    case("⑪ ДВОЙНИК ХВОСТА не прячет дырку: отказ, названы ОБА файла, слова «исключены» нет",
+           code11 != 0 and "не хватает шагов" in output11
+           and STEP_REAL in output11 and STEP_TWIN in output11
+           and "из сверки исключены" not in output11,
+           "код " + str(code11) + " · " + line_with(output11, "ожидается")
+           + " · настоящий назван: " + str(STEP_REAL in output11)
+           + " · двойник назван: " + str(STEP_TWIN in output11))
 
     # ⑫ встречный: двойник при ЦЕЛОЙ записи (стенд ⓔ)
-    _, _, вехи = стенд("m536-e", убрать_версии=["v5"],
-                       удвоить=[(ШАГ_НАСТОЯЩИЙ, ШАГ_ДВОЙНИК)], порча=п)
-    код12, вывод12 = прогон(вехи, ВЕХА_V5)
-    красные12 = [s.strip() for s in вывод12.splitlines() if s.strip().startswith("🔴")]
-    случай("⑫ ВСТРЕЧНЫЙ: двойник при целой записи — «файла нет» НЕ печатается, ожидается 8, "
+    _, _, migrations_dir = sandbox("m536-e", remove_versions=["v5"],
+                       duplicate=[(STEP_REAL, STEP_TWIN)], break_kind=break_kind)
+    code12, output12 = run(migrations_dir, MILESTONE_V5)
+    red12 = [s.strip() for s in output12.splitlines() if s.strip().startswith("🔴")]
+    case("⑫ ВСТРЕЧНЫЙ: двойник при целой записи — «файла нет» НЕ печатается, ожидается 8, "
            "красен РОВНО двойник",
-           код12 != 0 and "файла в каталоге нет" not in вывод12
-           and "из сверки исключены" not in вывод12 and "ожидается шагов 8" in вывод12
-           and красные12 == ["🔴 " + ШАГ_ДВОЙНИК],
-           "код " + str(код12) + " · " + строка_с(вывод12, "ожидается")
-           + " · красные: " + (", ".join(красные12) or "нет")
-           + " · «файла нет»: " + str("файла в каталоге нет" in вывод12))
+           code12 != 0 and "файла в каталоге нет" not in output12
+           and "из сверки исключены" not in output12 and "ожидается шагов 8" in output12
+           and red12 == ["🔴 " + STEP_TWIN],
+           "код " + str(code12) + " · " + line_with(output12, "ожидается")
+           + " · красные: " + (", ".join(red12) or "нет")
+           + " · «файла нет»: " + str("файла в каталоге нет" in output12))
 
     # ⑩ контроль: живое не тронуто
-    живая_после = (LIVE_DB.stat().st_size, отпечаток(LIVE_DB))
-    вехи_после = {и: отпечаток(SCRIPTS / "migrations" / и) for и in (ВЕХА_V4, ВЕХА_V5)}
-    случай("⑩ контроль: живая база и живые вехи не изменились",
-           живая_до == живая_после and вехи_до == вехи_после,
-           "база " + ("цела" if живая_до == живая_после else "ИЗМЕНИЛАСЬ")
-           + " · вехи " + ("целы" if вехи_до == вехи_после else "ИЗМЕНИЛИСЬ"))
+    live_after = (LIVE_DB.stat().st_size, fingerprint(LIVE_DB))
+    milestones_after = {milestone_name: fingerprint(SCRIPTS / "migrations" / milestone_name) for milestone_name in (MILESTONE_V4, MILESTONE_V5)}
+    case("⑩ контроль: живая база и живые вехи не изменились",
+           live_before == live_after and milestones_before == milestones_after,
+           "база " + ("цела" if live_before == live_after else "ИЗМЕНИЛАСЬ")
+           + " · вехи " + ("целы" if milestones_before == milestones_after else "ИЗМЕНИЛИСЬ"))
 
     print("=" * 78)
     print("ИТОГ: " + str(OK) + " из " + str(OK + FAIL))
-    if п:
-        print("⚠️ это был прогон с нарочной поломкой «" + п + "» — красное здесь ОЖИДАЕТСЯ")
+    if break_kind:
+        print("⚠️ это был прогон с нарочной поломкой «" + break_kind + "» — красное здесь ОЖИДАЕТСЯ")
     return mezo_stand.finish(0 if FAIL == 0 else 1)
 
 

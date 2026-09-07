@@ -4,7 +4,7 @@
 Карточка #529: слово, у которого нет своего случая, можно вынуть из перечня молча — и зелёное
 этого не увидит (так было с 19 из 29, замер @CORE записка #4740; воспроизведено @PROTO 05.09).
 Для КАЖДОГО слова: убрать его на КОПИИ, прогнать приёмку bite-dangling-refs.py — обязана покраснеть.
-Запуск: python C:/guts/.atlas/vnext-tools/measure-refs-words.py [каталог с инструментом] [--show]
+Запуск: python <КОНТУР>/vnext-tools/measure-refs-words.py [каталог с инструментом] [--show]
 Выход: 0 — все слова защищены · 1 — есть слова без случая (названы) · 2 — контроль красен, мерить нечего.
 
 Копия в свежем каталоге + python -B: байткод не пишется и не читается (класс @CORE: кэш судил
@@ -14,10 +14,10 @@ from pathlib import Path
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 SRC = Path(sys.argv[1]) if len(sys.argv) > 1 and not sys.argv[1].startswith('--') else Path(__file__).resolve().parent
 tmp = Path(tempfile.mkdtemp(prefix='a529-'))
-for f in ('check-dangling-refs.py', 'bite-dangling-refs.py', 'mezo_paths.py'):
+for f in ('check-dangling-refs.py', 'bite-dangling-refs.py', 'mezo_paths.py', 'mezo_hints.py'):
     shutil.copy2(SRC / f, tmp / f)
 chk = (tmp / 'check-dangling-refs.py').read_text(encoding='utf-8')
-m = re.search(r'СЛОВА_ТИПЫ = \((.*?)\n\)', chk, re.S)
+m = re.search(r'WORD_TYPES = \((.*?)\n\)', chk, re.S)
 block = m.group(0)
 inner = ''.join(re.findall(r'r"(.*?)"', m.group(1)))
 words = inner.split('|')
@@ -42,7 +42,7 @@ if rc0 != 0:
 protected, exposed = [], []
 for w in words:
     rest = [x for x in words if x != w]
-    new_block = 'СЛОВА_ТИПЫ = (\n    r"' + '|'.join(rest) + '"\n)'
+    new_block = 'WORD_TYPES = (\n    r"' + '|'.join(rest) + '"\n)'
     code = chk.replace(block, new_block, 1)
     assert code != chk, w
     rc = run(code)
