@@ -49,12 +49,18 @@ SQLite backup API (файловая копия при живых писател�
 берётся из окружения `MEZO_ROLE`, впечатанное имя журнал отвергает приёмкой):
 
 ```
-python <КОНТУР>/.mezosync/scripts/migrations/20260816-tool-leases.py --dry-run
-python <КОНТУР>/.mezosync/scripts/migrations/20260816-tool-leases.py
-… тот же порядок для: 20260820-role-skills · 20260822-sync-backoff-bridge-mtime ·
+python <КОНТУР>/.mezosync/scripts/migrations/20260812-cursor-segments-truth.py --dry-run
+python <КОНТУР>/.mezosync/scripts/migrations/20260812-cursor-segments-truth.py
+… тот же порядок для: 20260816-tool-leases · 20260820-role-skills · 20260822-sync-backoff-bridge-mtime ·
   20260823-phoenix-history · 20260827-track-verdicts-and-skills ·
   20260828-role-skill-expiry · 20260828-milestone-v5 (рубеж — ПОСЛЕДНИМ)
 ```
+🩸 Дополнено 2026-09-13: первая редакция не называла шаг `20260812-cursor-segments-truth` —
+веха v5 на нём отказывала («не хватает 1 из 7»). Найдено прогоном цепочки на копии базы
+контура tapas (v4): с ним — 8 шагов, веха объявляется. Шаг, применённый когда-то без записи
+в журнал, отвечает «уже применялся» и засчитывается — повторять его безопасно.
+⚠️ Веху v5 объявлять ДО шагов v6 (`UPGRADE-v5-to-2026-09-07.md`): шаги, применённые раньше
+вехи v5, она засчитает себе, и веха v6 откажет «сверх отметки ноль шагов».
 
 Каждый шаг идемпотентен: обрыв посередине лечится повторным прогоном (проверено —
 повтор отвечает «уже объявлена, делать нечего», не вторым шагом в журнале).
