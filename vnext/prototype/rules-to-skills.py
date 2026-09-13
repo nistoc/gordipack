@@ -77,6 +77,7 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
+import re
 import sqlite3
 import sys
 
@@ -252,16 +253,29 @@ def packages_file_path(db: pathlib.Path) -> pathlib.Path:
     return pathlib.Path(db).resolve().parent / PACKAGES_FILE_NAME
 
 
+# карточка #607 ①: слово «Atlas» в текстах пакетов — ЦЕЛЫМ словом (не «Atlassian» и не
+# часть другого слова); \b по обе стороны этого и добивается.
+_ATLAS_WORD_RE = re.compile(r"\bAtlas\b")
+
+
 def packages_with_group_prefix(group: str | None) -> dict:
-    """Встроенный PACKAGES, где префикс "atlas-" заменён на "<group>-" — если группа
-    задана и не совпадает с "atlas". Для контура Atlas (group is None или "atlas")
-    возвращает PACKAGES как есть, тем же порядком ключей — вывод не меняется."""
+    """Встроенный PACKAGES, где префикс "atlas-" заменён на "<group>-", а слово "Atlas"
+    в текстах "описание"/"когда" — на имя группы (карточка #607 ①: у чужого контура
+    эти тексты навык показывает роли ВСЕГДА, и слово «Atlas» в них — чужое имя).
+    Срабатывает, только если группа задана и не совпадает с "atlas". Для контура Atlas
+    (group is None или "atlas") возвращает PACKAGES КАК ЕСТЬ, тем же порядком ключей —
+    вывод не меняется. Сам словарь PACKAGES не мутируется: каждый переименованный
+    пакет — своя копия."""
     if not group or group == "atlas":
         return PACKAGES
     renamed = {}
     for name, package in PACKAGES.items():
         new_name = f"{group}-{name[len('atlas-'):]}" if name.startswith("atlas-") else name
-        renamed[new_name] = package
+        new_package = dict(package)
+        for field in ("описание", "когда"):
+            if field in new_package:
+                new_package[field] = _ATLAS_WORD_RE.sub(group, new_package[field])
+        renamed[new_name] = new_package
     return renamed
 
 
@@ -403,9 +417,27 @@ def main() -> int:
     print("=" * 84)
     built = 0
     total_chars = 0
+    # ── карточка #607 ②: ДВА ПРОХОДА. Первый — собрать правила и текст для ВСЕХ
+    # запрошенных навыков; здесь же и все отказы (rules_from_db зовёт sys.exit на
+    # СНЯТОМ правиле всегда и на отсутствующем при --strict) — ни один path.write_text
+    # в этом проходе не зовётся. Второй проход пишет файлы, и до него код доходит,
+    # только когда первый прошёл ВЕСЬ список имён без отказа (иначе sys.exit внутри
+    # rules_from_db уже оборвал процесс раньше, до этой строки). Печать по навыкам —
+    # та же и в том же порядке: запись не печатает ничего, порядок строк не сдвигается.
+    collected: list[tuple[str, str]] = []
     for name in names:
         package = packages[name]
-        rules, missing = rules_from_db(db, package["правила"], strict=a.strict)
+        try:
+            rules, missing = rules_from_db(db, package["правила"], strict=a.strict)
+        except SystemExit as refusal:
+            # 🩸 решающий прогон PROTO: строки «✍️» выше печатаются при СБОРЕ, а записи ещё не было.
+            # Без этой строки вывод «✍️ навык… ⛔ НЕ ЗАПУСТИЛСЯ» читался бы как «часть навыков легла
+            # на диск» — прежняя редакция так и делала, и читатель не отличил бы новую от старой.
+            if a.write and collected:
+                raise SystemExit(f"{refusal.code}\n   ⛔ ни один навык не записан: отказ случился ДО "
+                                 f"записи — строки «✍️» выше ({len(collected)}) означают «собран», "
+                                 f"а не «записан»") from None
+            raise
         if missing:
             print(f"   ⚪ {name}: в своде контура нет: {', '.join(missing)}")
         if not rules:
@@ -413,17 +445,19 @@ def main() -> int:
             continue
         text = build_skill(name, package, rules)
         rule_chars = sum(len(r["body"]) for r in rules)
-        path = root / name / "SKILL.md"
         print(f"{'✍️ ' if a.write else '👀'} {name:22} правил {len(rules)} · "
               f"{rule_chars} знаков нормы · описание {len(package['описание'])} знаков")
         if len(package["описание"]) > 200:
             print("   ⚠️ ОПИСАНИЕ ДЛИННОЕ: оно лежит в контексте роли ВСЕГДА. "
                   "Абзац здесь возвращает ту же беду меньшего размера.")
-        if a.write:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(text, encoding="utf-8")
+        collected.append((name, text))
         built += 1
         total_chars += rule_chars
+    if a.write:
+        for name, text in collected:
+            path = root / name / "SKILL.md"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
     print("-" * 84)
     if built == len(names):
         print(f"навыков {built} · нормы в них {total_chars} знаков · "
