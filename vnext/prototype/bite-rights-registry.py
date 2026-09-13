@@ -27,25 +27,28 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 GUARD = HERE / "guard-rights-registry.py"
+sys.path.insert(0, str(HERE))
+import mezo_paths  # noqa: E402 — путь контейнера выводится, не впечатан (записка #5096 ④)
+CONTAINER = mezo_paths.container_root(__file__)
 
-ПОРЧИ = {
-    "target": ("    for нач in [i for i, l in enumerate(строки) if ЗАГОЛОВОК_ПРАВ.search(l)]:",
-               "    for нач in [i for i, l in enumerate(строки) if ЗАГОЛОВОК_ПРАВ.search(l)][:1]:"),
+BREAKS = {
+    "target": ("    for start in [i for i, l in enumerate(lines) if RIGHTS_HEADER.search(l)]:",
+               "    for start in [i for i, l in enumerate(lines) if RIGHTS_HEADER.search(l)][:1]:"),
     "refs": ('r"(?:запис[ьи]|прав[оа])\\s*(?:прав\\w*)?[\\s*_«»\\"]*#\\s*(\\d+)", re.I)',
              'r"(?:запис\\w*|прав\\w*)[\\s*_«»\\"]*#\\s*(\\d+)", re.I)'),
-    "duty": ("    if ОБЯЗАННОСТЬ.search(ячейка):\n"
+    "duty": ("    if DUTY_PATTERN.search(cell):\n"
              '        return False, "обязанность, а не право"\n',
              "    pass\n"),
     # 🩸 порча отбора: вернуть требование ГАЛОЧКИ — ровно первую редакцию, из-за которой
     #    восемь строк @COORD не судились вовсе (его находка, записка #4814)
-    "galochka": ("    ячейка = ячейка_разрешения(s)",
-                 '    ячейка = ячейка_разрешения(s) if "✅" in s else ""'),
-    "revoked": ("    if отозвана:", "    if False and отозвана:"),
+    "galochka": ("    cell = permission_cell(s)",
+                 '    cell = permission_cell(s) if "✅" in s else ""'),
+    "revoked": ("    if revoked:", "    if False and revoked:"),
     # 🩸 порча @PROTO, найденная ЕЮ и взятая в список (записка #4831 §③): обезвредить
     #    запретительную примету целиком. До случая ⑰-тер она давала 27 из 27 ЗЕЛЁНЫХ —
     #    то есть ни один случай не сторожил запреты, хотя один это обещал заголовком.
-    "no-deny": ('ЗАПРЕТИТЕЛЬНАЯ = re.compile(r"⛔|❌|⚰️|\\bНЕТ\\b|нельзя|запрещ\\w*", re.I)',
-                'ЗАПРЕТИТЕЛЬНАЯ = re.compile(r"(?!x)x")'),
+    "no-deny": ('DENY_PATTERN = re.compile(r"⛔|❌|⚰️|\\bНЕТ\\b|нельзя|запрещ\\w*", re.I)',
+                'DENY_PATTERN = re.compile(r"(?!x)x")'),
 }
 
 CASES, OK = 0, True
@@ -60,7 +63,7 @@ def case(title, verdict, detail=""):
         print(f"   {detail}")
 
 
-def стенд(tmp, name, память, права):
+def make_stand(tmp, name, memory, rights):
     """память: [(роль, раздел, тело)] · права: [(id, роль, отозвана_или_None)]"""
     db = Path(tmp) / f"{name}.db"
     con = sqlite3.connect(str(db))
@@ -74,170 +77,170 @@ def стенд(tmp, name, память, права):
     con.execute("CREATE TABLE rules (rule_key TEXT, status TEXT)")
     for k in ("core-service-start-and-migrations", "rule8-destructive"):
         con.execute("INSERT INTO rules VALUES (?, 'active')", (k,))
-    for роль, раздел, тело in память:
-        con.execute("INSERT INTO phoenix VALUES (?,?,?)", (роль, раздел, тело))
-    for i, роль, отз in права:
-        con.execute("INSERT INTO role_rights VALUES (?,?,?)", (i, роль, отз))
+    for role, section, body in memory:
+        con.execute("INSERT INTO phoenix VALUES (?,?,?)", (role, section, body))
+    for i, role, revoked in rights:
+        con.execute("INSERT INTO role_rights VALUES (?,?,?)", (i, role, revoked))
     con.commit()
     con.close()
     return db
 
 
-ПРАВА = [(11, "TAXO", None), (12, "ALL", None), (13, "OPSSRE", None),
+RIGHTS = [(11, "TAXO", None), (12, "ALL", None), (13, "OPSSRE", None),
          (18, "STUD", None), (3, "COORD", "2026-08-10 15:11:07")]
 
 
-def таблица(*строки):
+def table(*rows):
     """Раздел памяти с таблицей прав — в той же форме, что у живых ролей."""
-    шапка = ["[заведено COORD · §ПРАВА добавлены по признаку ⑦ стандарта]",
+    header = ["[заведено COORD · §ПРАВА добавлены по признаку ⑦ стандарта]",
              "",
              "## §ПРАВА — что разрешено, ОТКУДА разрешение",
              "",
              "| Действие | Разрешено? | Источник |",
              "|---|---|---|"]
-    return "\n".join(шапка + list(строки))
+    return "\n".join(header + list(rows))
 
 
-def run(db, guard=GUARD, роль=None):
+def run(db, guard=GUARD, role=None):
     cmd = [sys.executable, str(guard), "--db", str(db), "--verbose"]
-    if роль:
-        cmd += ["--role", роль]
+    if role:
+        cmd += ["--role", role]
     r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
-                       env=dict(os.environ, MEZO_CONTAINER=r"C:\guts\.atlas"))
+                       env=dict(os.environ, MEZO_CONTAINER=str(CONTAINER)))
     return (r.stdout or "") + (r.stderr or ""), r.returncode
 
 
-def порченая_копия(ключ):
+def broken_copy(key):
     """Копия проверки со ВЗВЕДЁННЫМ дефектом. Лежит РЯДОМ с оригиналом — иначе
     её импорты (mezo_paths) ищутся во временном каталоге и копия не запускается вовсе."""
-    было, стало = ПОРЧИ[ключ]
-    текст = GUARD.read_text(encoding="utf-8")
-    if было not in текст:
-        return None, f"порчу «{ключ}» НЕ УДАЛОСЬ навести: образец не найден в коде"
-    копия = HERE / f"~bite-rights-{ключ}.py"
-    копия.write_text(текст.replace(было, стало, 1), encoding="utf-8")
-    return копия, ""
+    old, new = BREAKS[key]
+    text = GUARD.read_text(encoding="utf-8")
+    if old not in text:
+        return None, f"порчу «{key}» НЕ УДАЛОСЬ навести: образец не найден в коде"
+    copy_path = HERE / f"~bite-rights-{key}.py"
+    copy_path.write_text(text.replace(old, new, 1), encoding="utf-8")
+    return copy_path, ""
 
 
-def порча(ключ, db, что_ждём, роль=None):
+def run_break(key, db, expected, role=None):
     """Три исхода, а не два: копия не запустилась — это НЕ «дефект пойман»."""
-    копия, беда = порченая_копия(ключ)
-    if копия is None:
-        case(f"⑨ порча «{ключ}»", False, беда)
+    copy_path, trouble = broken_copy(key)
+    if copy_path is None:
+        case(f"⑨ порча «{key}»", False, trouble)
         return
     try:
-        out, code = run(db, копия, роль)
+        out, code = run(db, copy_path, role)
         if not out.strip():
-            case(f"порча «{ключ}» → {что_ждём}", False,
+            case(f"порча «{key}» → {expected}", False,
                  "копия НЕ ЗАПУСТИЛАСЬ (пустой вывод) — это не «дефект пойман»")
             return
-        поймано = что_ждём in out
-        case(f"порча «{ключ}» краснит СВОЙ случай ({что_ждём})", поймано,
-             "" if поймано else f"копия отработала, но случай не покраснел:\n   {out[:400]}")
+        caught = expected in out
+        case(f"порча «{key}» краснит СВОЙ случай ({expected})", caught,
+             "" if caught else f"копия отработала, но случай не покраснел:\n   {out[:400]}")
     finally:
-        копия.unlink(missing_ok=True)
+        copy_path.unlink(missing_ok=True)
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--break", dest="слом", default=None, choices=sorted(ПОРЧИ),
+    ap.add_argument("--break", dest="break_key", default=None, choices=sorted(BREAKS),
                     help="прогнать ВСЕ случаи по порченой копии — доказать, что случаи различают")
     a = ap.parse_args()
     tmp = tempfile.mkdtemp(prefix="bite-rights-")
     guard = GUARD
-    копия = None
-    if a.слом:
-        копия, беда = порченая_копия(a.слом)
-        if копия is None:
-            print(f"⛔ {беда}")
+    copy_path = None
+    if a.break_key:
+        copy_path, trouble = broken_copy(a.break_key)
+        if copy_path is None:
+            print(f"⛔ {trouble}")
             return 2
-        guard = копия
-        print(f"⚠️ ПОРЧА «{a.слом}» ВЗВЕДЕНА — ждём КРАСНОГО, зелёное здесь = дефект не ловится\n")
+        guard = copy_path
+        print(f"⚠️ ПОРЧА «{a.break_key}» ВЗВЕДЕНА — ждём КРАСНОГО, зелёное здесь = дефект не ловится\n")
 
     try:
         # ① голая строка права — красная, поимённо
-        db = стенд(tmp, "bare", [("ZZA", "identity", таблица(
-            "| поднять службу :5555 | ✅ БЕЗ спроса (30.08 ~09:47 UTC) | стенд общий |"))], ПРАВА)
+        db = make_stand(tmp, "bare", [("ZZA", "identity", table(
+            "| поднять службу :5555 | ✅ БЕЗ спроса (30.08 ~09:47 UTC) | стенд общий |"))], RIGHTS)
         out, code = run(db, guard)
         case("① строка права без ссылки на реестр → красная С ИМЕНЕМ роли, раздела и строки",
              code == 1 and "ZZA" in out and "identity" in out and "строка 7" in out,
              "имя роли · раздел · номер строки — иначе долг не найти рукой")
 
         # ② ЖИВОЙ СЛУЧАЙ карточки #543 — обе половины
-        db = стенд(tmp, "stud-before", [("STUD", "identity", таблица(
+        db = make_stand(tmp, "stud-before", [("STUD", "identity", table(
             "| Подъём `:5291` | ✅ БЕЗ спроса (30.08 ~09:47 UTC) · ⛔ ГАШЕНИЕ — спрашивать "
-            "каждый раз | стенд ОБЩИЙ |"))], ПРАВА)
+            "каждый раз | стенд ОБЩИЙ |"))], RIGHTS)
         out_b, code_b = run(db, guard)
-        db = стенд(tmp, "stud-after", [("STUD", "identity", таблица(
-            "| Подъём `:5291` | ✅ БЕЗ спроса, запись #18 | стенд ОБЩИЙ |"))], ПРАВА)
+        db = make_stand(tmp, "stud-after", [("STUD", "identity", table(
+            "| Подъём `:5291` | ✅ БЕЗ спроса, запись #18 | стенд ОБЩИЙ |"))], RIGHTS)
         out_a, code_a = run(db, guard)
         case("② живой случай STUD: ДО записи реестра — красная, ПОСЛЕ «запись #18» — зелёная",
              code_b == 1 and code_a == 0 and "запись #18 (STUD)" in out_a,
              "тот самый случай, ради которого правило заведено (карточка #543)")
 
         # ③ ВСТРЕЧНЫЕ — каждый ПОИМЁННО, обе живые формы ссылки
-        db = стенд(tmp, "form-opssre", [("OPSSRE", "identity", таблица(
-            "| Правка `networks` | ✅ ДА | Слово владельца 21.08, право #13 в базе |"))], ПРАВА)
+        db = make_stand(tmp, "form-opssre", [("OPSSRE", "identity", table(
+            "| Правка `networks` | ✅ ДА | Слово владельца 21.08, право #13 в базе |"))], RIGHTS)
         out, code = run(db, guard)
         case("③ встречный: форма OPSSRE «право #13 в базе» — ЗЕЛЁНАЯ",
              code == 0 and "запись #13 (OPSSRE)" in out,
              "критерий называл только форму «запись #N»; живых форм ДВЕ")
 
-        db = стенд(tmp, "form-taxo", [("TAXO", "identity", таблица(
+        db = make_stand(tmp, "form-taxo", [("TAXO", "identity", table(
             "| **push СВОИХ изменений** | ✅ ДА, стоячее | запись прав **#11**, owner 11.08 |"))],
-            ПРАВА)
+            RIGHTS)
         out, code = run(db, guard)
         case("④ встречный: форма TAXO «запись прав **#11**» (номер за звёздочками) — ЗЕЛЁНАЯ",
              code == 0 and "запись #11 (TAXO)" in out)
 
-        db = стенд(tmp, "form-all", [("ING", "identity", таблица(
-            "| push | ✅ да, стоячее | общее право, запись #12 |"))], ПРАВА)
+        db = make_stand(tmp, "form-all", [("ING", "identity", table(
+            "| push | ✅ да, стоячее | общее право, запись #12 |"))], RIGHTS)
         out, code = run(db, guard)
         case("⑤ встречный: общая запись ALL закрывает строку ЛЮБОЙ роли — ЗЕЛЁНАЯ",
              code == 0 and "запись #12 (ALL)" in out)
 
         # ⑥ ЛОЖНОЕ ЗЕЛЁНОЕ: номер записки — не номер записи реестра
-        db = стенд(tmp, "note-ref", [("OPSSRE", "identity", таблица(
+        db = make_stand(tmp, "note-ref", [("OPSSRE", "identity", table(
             "| **`git push`** | ✅ **ДА** | Слово владельца 08.08 (записка #4602), стоячее |"))],
-            ПРАВА)
+            RIGHTS)
         out, code = run(db, guard)
         case("⑥ встречный: «(записка #4602)» ссылкой на реестр НЕ считается — строка КРАСНАЯ",
              code == 1 and "ни ссылки на запись реестра" in out,
              "живой текст OPSSRE: широкий образец дал бы ложное зелёное там, где ссылки нет")
 
         # ⑦ ссылка есть, но негодная — красная СВОИМ словом (критерий ⑤ карточки)
-        db = стенд(tmp, "no-such", [("ZZB", "identity", таблица(
-            "| что-то | ✅ стоячее право | запись #999 |"))], ПРАВА)
+        db = make_stand(tmp, "no-such", [("ZZB", "identity", table(
+            "| что-то | ✅ стоячее право | запись #999 |"))], RIGHTS)
         out, code = run(db, guard)
         case("⑦ ссылка на НЕСУЩЕСТВУЮЩУЮ запись #999 — красная СВОИМ словом",
              code == 1 and "такой записи в реестре НЕТ" in out)
 
-        db = стенд(tmp, "revoked", [("COORD", "identity", таблица(
-            "| правка живых инструментов | ✅ стоячее право | запись #3 |"))], ПРАВА)
+        db = make_stand(tmp, "revoked", [("COORD", "identity", table(
+            "| правка живых инструментов | ✅ стоячее право | запись #3 |"))], RIGHTS)
         out, code = run(db, guard)
         case("⑧ ссылка на ОТОЗВАННУЮ запись #3 — красная своим словом, не общим",
              code == 1 and "ОТОЗВАНА" in out,
              "отозванное право, прочитанное как живое, — самый дорогой класс реестра")
 
-        db = стенд(tmp, "alien", [("ZZC", "identity", таблица(
-            "| что-то | ✅ стоячее право | запись #13 |"))], ПРАВА)
+        db = make_stand(tmp, "alien", [("ZZC", "identity", table(
+            "| что-то | ✅ стоячее право | запись #13 |"))], RIGHTS)
         out, code = run(db, guard)
         case("⑨ ссылка на запись ЧУЖОЙ роли — красная своим словом",
              code == 1 and "принадлежит роли OPSSRE" in out)
 
         # ⑩ пометка «НЕ В РЕЕСТРЕ» — законный второй путь закрытия
-        db = стенд(tmp, "marked", [("ZZD", "identity", таблица(
+        db = make_stand(tmp, "marked", [("ZZD", "identity", table(
             "| разрешение роли роли | ✅ стоячее | ⛔ НЕ В РЕЕСТРЕ — след: записка #4199 |"))],
-            ПРАВА)
+            RIGHTS)
         out, code = run(db, guard)
         case("⑩ встречный: пометка «⛔ НЕ В РЕЕСТРЕ — след: …» закрывает строку — ЗЕЛЁНАЯ",
              code == 0 and "пометка" in out,
              "правило даёт ДВА законных пути, и проверка обязана знать оба")
 
         # ⑪ обязанность — не право (ложная находка первой редакции)
-        db = стенд(tmp, "duty", [("ZZE", "identity", таблица(
+        db = make_stand(tmp, "duty", [("ZZE", "identity", table(
             "| ⚠️ **СВЕРКА СОСТАВА перед каждым push** | ✅ ОСТАЁТСЯ, ОБЯЗАТЕЛЬНА | "
-            "стоячее слово отменяет ВОПРОС, а не СВЕРКУ |"))], ПРАВА)
+            "стоячее слово отменяет ВОПРОС, а не СВЕРКУ |"))], RIGHTS)
         out, code = run(db, guard)
         case("⑪ встречный: ОБЯЗАННОСТЬ («✅ ОСТАЁТСЯ, ОБЯЗАТЕЛЬНА») не судится вовсе",
              code == 0 and "ZZE" not in out,
@@ -245,23 +248,23 @@ def main() -> int:
              "требовать невыполнимого")
 
         # ⑫ источник — конструкция роли, не слово владельца (граница карточки)
-        db = стенд(tmp, "role-src", [("ZZF", "identity", таблица(
-            "| Читать графы | контракт роли, милстоун B0 (07-04) | ✅ стоячее |"))], ПРАВА)
+        db = make_stand(tmp, "role-src", [("ZZF", "identity", table(
+            "| Читать графы | контракт роли, милстоун B0 (07-04) | ✅ стоячее |"))], RIGHTS)
         out, code = run(db, guard)
         case("⑫ встречный: источник «контракт роли» — не судится (граница карточки #546)",
              code == 0 and "ZZF" not in out)
 
         # ⑬ раздел БЕЗ таблицы прав — «нет строк» ≠ красное
-        db = стенд(tmp, "no-table", [("ZZG", "plan", "## ПЛАН\n\n| 04.09 | ✅ разрешено этим "
-                                                    "разговором |")], ПРАВА)
+        db = make_stand(tmp, "no-table", [("ZZG", "plan", "## ПЛАН\n\n| 04.09 | ✅ разрешено этим "
+                                                    "разговором |")], RIGHTS)
         out, code = run(db, guard)
         case("⑬ встречный: раздел БЕЗ заголовка §ПРАВА не судится — таблица слов владельца "
              "в разделе «план» не красится",
              code == 0 and "ZZG" not in out)
 
         # ⑭ ЗАГОЛОВОК НЕ ПЕРВЫЙ — моя же поломка 06:23 UTC
-        db = стенд(tmp, "second-heading", [("OPSSRE", "identity", таблица(
-            "| **`git push`** | ✅ **ДА** | Слово владельца 08.08 |"))], ПРАВА)
+        db = make_stand(tmp, "second-heading", [("OPSSRE", "identity", table(
+            "| **`git push`** | ✅ **ДА** | Слово владельца 08.08 |"))], RIGHTS)
         out, code = run(db, guard)
         case("⑭ слово «§ПРАВА» упомянуто в ШАПКЕ раньше заголовка — таблица всё равно найдена",
              code == 1 and "OPSSRE" in out,
@@ -269,27 +272,27 @@ def main() -> int:
              "ни красных, ни зелёных, ни слова о пропуске")
 
         # ⑭-бис ПРАВО, НАЗВАННОЕ БЕЗ СЛОВА «ПРАВО» — судится по ИСТОЧНИКУ
-        db = стенд(tmp, "no-word", [("ZZI", "identity", таблица(
-            "| коммит в хранилище X | ✅ да | Слово владельца 07.08 10:23 UTC |"))], ПРАВА)
+        db = make_stand(tmp, "no-word", [("ZZI", "identity", table(
+            "| коммит в хранилище X | ✅ да | Слово владельца 07.08 10:23 UTC |"))], RIGHTS)
         out, code = run(db, guard)
         case("⑭-бис право БЕЗ слова «право» («✅ да | Слово владельца…») всё равно судится",
              code == 1 and "ZZI" in out,
              "признак ловил СЛОВО, а правило спрашивает про ИСТОЧНИК — вскрыто случаем ⑭")
 
         # ⑰ НАХОДКА @COORD: вид права записан СЛОВОМ, галочки нет ни в одной строке
-        db = стенд(tmp, "coord-form", [("COORD", "identity", таблица(
+        db = make_stand(tmp, "coord-form", [("COORD", "identity", table(
             "| отправка кода (push) | стоячее | владелец 08.08 15:58:46 UTC | сверять ветку |",
             "| запуск проверок | свободно | владелец 10.08 13:57 UTC | идут секунды |",
-            "| дежурно graphify | зона | владелец 16.07 19:23 UTC | по слову |"))], ПРАВА)
+            "| дежурно graphify | зона | владелец 16.07 19:23 UTC | по слову |"))], RIGHTS)
         out, code = run(db, guard)
         case("⑰ вид права СЛОВОМ («стоячее · свободно · зона»), галочки нет — все три судятся",
              code == 1 and out.count("🔴 [COORD") == 3,
              "первая редакция требовала ✅ и не судила ни одной из восьми строк COORD")
 
         # ⑰-бис ВСТРЕЧНЫЙ к нему: запрет в той же форме НЕ судится
-        db = стенд(tmp, "coord-deny", [("COORD", "identity", таблица(
+        db = make_stand(tmp, "coord-deny", [("COORD", "identity", table(
             "| разрушающее: force push | ⛔ НЕТ | rule8-destructive не отозвано | слово |",
-            "| правка механизма | ⛔ НЕТ | реестр зон — зона PROTO | заявкой |"))], ПРАВА)
+            "| правка механизма | ⛔ НЕТ | реестр зон — зона PROTO | заявкой |"))], RIGHTS)
         out, code = run(db, guard)
         case("⑰-бис встречный: запрет в ТОЙ ЖЕ форме таблицы не судится вовсе",
              code == 0 and "COORD" not in out.split("отсеяно")[0],
@@ -305,36 +308,36 @@ def main() -> int:
         # ПРИЧИНЕ. Тогда его вскрыл несошедшийся прогноз поломки, сегодня — чужая порча.
         # 📌 Строка взята ЖИВАЯ, из памяти @STUD: там «разрешение» стои́т четвёртой ячейкой,
         # а вердикт «❌» — второй. Это и была моя вторая ложная волна.
-        db = стенд(tmp, "deny-late", [("STUD", "identity", таблица(
+        db = make_stand(tmp, "deny-late", [("STUD", "identity", table(
             "| Мутации тенанта `phd1` | ❌ | окно закрыто с 19.07 | разрешение из чужой "
-            "ноты НЕ наследуется |"))], ПРАВА)
+            "ноты НЕ наследуется |"))], RIGHTS)
         out, code = run(db, guard)
         case("⑰-тер запрет ВТОРОЙ ячейкой, «разрешение» ЧЕТВЁРТОЙ — строка не судится",
              code == 0 and "🔴" not in out,
              "под порчей «no-deny» обязан краснеть: этим и отличается от ⑰-бис")
 
         # ⑱ ВСТРЕЧНЫЙ: источник «реестр зон» — не слово владельца
-        db = стенд(tmp, "zone-src", [("COORD", "identity", таблица(
+        db = make_stand(tmp, "zone-src", [("COORD", "identity", table(
             "| приёмка чужих правок | зона | реестр зон (запросом) | объявляю, не чиню |"))],
-            ПРАВА)
+            RIGHTS)
         out, code = run(db, guard)
         case("⑱ встречный: источник «реестр зон» — не судится (сам COORD его не называл)",
              code == 0 and "🔴" not in out)
 
         # ⑲ ДВА РАЗНЫХ КРАСНЫХ, а не одно общее — по слову COORD
-        db = стенд(tmp, "rule-src", [("CORE", "identity", таблица(
+        db = make_stand(tmp, "rule-src", [("CORE", "identity", table(
             "| поднять :5300 | ✅ по зелёному гейту | правило "
-            "`core-service-start-and-migrations` |"))], ПРАВА)
+            "`core-service-start-and-migrations` |"))], RIGHTS)
         out, code = run(db, guard)
         case("⑲ источник — ДЕЙСТВУЮЩЕЕ правило свода ⇒ красное СВОИМ словом, не общим",
              code == 1 and "источник — правило свода" in out,
              "обвинение, которое нечем закрыть, учит не верить проверке целиком")
 
         # ⑳ ОТСЕВ ПЕЧАТАЕТСЯ С ПРИЧИНОЙ — иначе голое число обвинит весь контур
-        db = стенд(tmp, "counts", [("ZZJ", "identity", таблица(
+        db = make_stand(tmp, "counts", [("ZZJ", "identity", table(
             "| право | ✅ да | Слово владельца 01.01 |",
             "| запрет | ⛔ НЕТ | правило |",
-            "| долг | ✅ ОБЯЗАТЕЛЬНА | стоячее слово |"))], ПРАВА)
+            "| долг | ✅ ОБЯЗАТЕЛЬНА | стоячее слово |"))], RIGHTS)
         out, code = run(db, guard)
         case("⑳ печатается НАЙДЕНО · рассмотрено · отсеяно С ПРИЧИНОЙ, а не одно число",
              "НАЙДЕНО: 4" in out and "рассмотрено: 1" in out
@@ -346,49 +349,49 @@ def main() -> int:
         out, code = run(Path(tmp) / "нет-такой.db", guard)
         case("⑮ базы нет → «НЕ ПРОВЕРЕНО» кодом 2, а не зелёное", code == 2)
 
-        db = стенд(tmp, "no-rights", [("ZZH", "identity", таблица(
+        db = make_stand(tmp, "no-rights", [("ZZH", "identity", table(
             "| что-то | ✅ стоячее право | без ссылки |"))], [])
         out, code = run(db, guard)
         case("⑯ реестр прав ПУСТ → код 2 «сверять не с чем», а не обвинение всех подряд",
              code == 2 and "ПУСТ" in out,
              "пустой реестр красит ВСЕ строки — это про реестр, а не про роли")
 
-        if not a.слом:
+        if not a.break_key:
             print("\n🎯 ПОРЧИ — каждая обязана покрасить СВОЙ случай:")
-            db = стенд(tmp, "p-target", [("OPSSRE", "identity", таблица(
-                "| **`git push`** | ✅ **ДА** | Слово владельца 08.08 |"))], ПРАВА)
-            порча("target", db, "рассмотрено: 0")
-            db = стенд(tmp, "p-refs", [("OPSSRE", "identity", таблица(
+            db = make_stand(tmp, "p-target", [("OPSSRE", "identity", table(
+                "| **`git push`** | ✅ **ДА** | Слово владельца 08.08 |"))], RIGHTS)
+            run_break("target", db, "рассмотрено: 0")
+            db = make_stand(tmp, "p-refs", [("OPSSRE", "identity", table(
                 "| **`git push`** | ✅ **ДА** | Слово владельца (записка #4602), стоячее |"))],
-                ПРАВА)
-            порча("refs", db, "такой записи в реестре НЕТ")
-            db = стенд(tmp, "p-duty", [("ZZE", "identity", таблица(
-                "| ⚠️ **СВЕРКА СОСТАВА** | ✅ ОСТАЁТСЯ, ОБЯЗАТЕЛЬНА | стоячее слово |"))], ПРАВА)
-            порча("duty", db, "ZZE")
-            db = стенд(tmp, "p-revoked", [("COORD", "identity", таблица(
-                "| правка живых инструментов | ✅ стоячее право | запись #3 |"))], ПРАВА)
-            порча("revoked", db, "запись #3 (COORD)")
-            db = стенд(tmp, "p-galochka", [("COORD", "identity", таблица(
-                "| отправка кода | стоячее | владелец 08.08 15:58:46 UTC |"))], ПРАВА)
-            порча("galochka", db, "рассмотрено: 0")
-            db = стенд(tmp, "p-nodeny", [("STUD", "identity", таблица(
+                RIGHTS)
+            run_break("refs", db, "такой записи в реестре НЕТ")
+            db = make_stand(tmp, "p-duty", [("ZZE", "identity", table(
+                "| ⚠️ **СВЕРКА СОСТАВА** | ✅ ОСТАЁТСЯ, ОБЯЗАТЕЛЬНА | стоячее слово |"))], RIGHTS)
+            run_break("duty", db, "ZZE")
+            db = make_stand(tmp, "p-revoked", [("COORD", "identity", table(
+                "| правка живых инструментов | ✅ стоячее право | запись #3 |"))], RIGHTS)
+            run_break("revoked", db, "запись #3 (COORD)")
+            db = make_stand(tmp, "p-galochka", [("COORD", "identity", table(
+                "| отправка кода | стоячее | владелец 08.08 15:58:46 UTC |"))], RIGHTS)
+            run_break("galochka", db, "рассмотрено: 0")
+            db = make_stand(tmp, "p-nodeny", [("STUD", "identity", table(
                 "| Мутации тенанта `phd1` | ❌ | окно закрыто с 19.07 | разрешение из чужой "
-                "ноты НЕ наследуется |"))], ПРАВА)
-            порча("no-deny", db, "🔴 [STUD")
+                "ноты НЕ наследуется |"))], RIGHTS)
+            run_break("no-deny", db, "🔴 [STUD")
 
         print()
         print(f"{'✅ ПРОВЕРКА ПРИНЯТА' if OK else '🔴 НЕ ПРИНЯТА'} — случаев {CASES}")
-        if a.слом and OK:
+        if a.break_key and OK:
             print("⚠️ ПОРЧА ВЗВЕДЕНА, А ВСЁ ЗЕЛЁНОЕ — случаи НЕ РАЗЛИЧАЮТ этот дефект")
             return 1
-        if a.слом:
+        if a.break_key:
             print("✅ так и надо: под порчей случаи краснеют — они судят предмет, а не форму")
             return 0
         return 0 if OK else 1
     finally:
-        if копия:
-            копия.unlink(missing_ok=True)
-        if OK and not a.слом:
+        if copy_path:
+            copy_path.unlink(missing_ok=True)
+        if OK and not a.break_key:
             shutil.rmtree(tmp, ignore_errors=True)
         else:
             print(f"📂 стенд сохранён: {tmp}")

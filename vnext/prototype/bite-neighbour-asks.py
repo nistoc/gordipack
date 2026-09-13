@@ -71,19 +71,20 @@ def build(tmp: pathlib.Path, with_ask: bool, with_answer: bool, with_box: bool):
     return ours / ".mezosync" / "scripts" / "guard-all.py"
 
 
-def мост(out: str) -> str:
+def bridge_part(out: str) -> str:
     """Только строки про вопросы соседей. 🪤 Первая редакция случаев ⑩–⑪ искала имя файла
     во ВСЁМ выводе и краснела на посторонней строке: то же имя законно называет соседняя
     проверка — «записки без разбора». Приёмка обязана спрашивать ровно о своём предмете,
     иначе она краснеет от чужой исправной работы и учит не верить красному."""
-    брать = ("мост соседей", "вопросы без ответа", "лежит ", "ждут ")
+    wanted = ("мост соседей", "вопросы без ответа", "лежит ", "ждут ")
     return "\n".join(line for line in out.splitlines()
-                     if any(s in line for s in брать))
+                     if any(s in line for s in wanted))
 
 
 def run(guard) -> str:
     r = subprocess.run([sys.executable, str(guard), "--full", "--skip", "drift,память,ленты"],
-                       capture_output=True, text=True, encoding="utf-8", timeout=300)
+                       capture_output=True, text=True, encoding="utf-8", timeout=300,
+                       env=mezo_stand.stand_env(guard.parents[2]))  # стенд — контур, где лежит его guard-all
     return (r.stdout or "") + (r.stderr or "")
 
 
@@ -191,7 +192,7 @@ def main() -> int:
         box10 = d10 / "atlas" / "atlas.archs" / ".mezosync" / "bridges" / "atlas-neigh"
         (box10 / "ask.neigh.our-own-letter.md").write_text("наш вопрос к соседу",
                                                           encoding="utf-8")
-        out = мост(run(guard10))
+        out = bridge_part(run(guard10))
         ok &= case("⑩ НАШ вопрос к соседу (новое имя) не вменяется нам как его вопрос",
                    "our-own-letter" not in out,
                    "иначе контур краснеет за то, что не ответил на собственное письмо, "
@@ -205,7 +206,7 @@ def main() -> int:
         box11 = d11 / "atlas" / "atlas.archs" / ".mezosync" / "bridges" / "atlas-neigh"
         (box11 / "ask.neigh.our-own-letter.md").write_text("наш вопрос", encoding="utf-8")
         (box11 / "ask.neigh-his-old-letter.md").write_text("его вопрос", encoding="utf-8")
-        out = мост(run(guard11))
+        out = bridge_part(run(guard11))
         ok &= case("⑪ ВСТРЕЧНЫЙ: в ТОЙ ЖЕ папке его вопрос старого вида — виден",
                    "his-old-letter" in out and "our-own-letter" not in out,
                    "без него ⑩ зеленел бы и от того, что проверка вовсе перестала смотреть "
@@ -218,9 +219,9 @@ def main() -> int:
         # сосед ждёт, а прогон зелен.
         d12 = tmp / "k"
         guard12 = build(d12, with_ask=True, with_answer=False, with_box=True)
-        чужая = (d12 / "atlas" / "atlas.archs" / ".mezosync" / "bridges" / "atlas-third")
-        чужая.mkdir(parents=True)
-        (чужая / "answer.third.thing.md").write_text("ответ ТРЕТЬЕМУ контуру",
+        foreign_box = (d12 / "atlas" / "atlas.archs" / ".mezosync" / "bridges" / "atlas-third")
+        foreign_box.mkdir(parents=True)
+        (foreign_box / "answer.third.thing.md").write_text("ответ ТРЕТЬЕМУ контуру",
                                                      encoding="utf-8")
         out = run(guard12)
         ok &= case("⑫ ответ ДРУГОМУ соседу не засчитывается ответом этому",
@@ -240,19 +241,19 @@ def main() -> int:
         # ищется своим признаком (`_папки_моста`). Случай стережёт, чтобы связь не вернули.
         d13 = tmp / "l"
         guard13 = build(d13, with_ask=True, with_answer=True, with_box=True)
-        нет_каталога = [p for p in (d13 / "atlas").rglob("coordination") if p.is_dir()]
-        for p in нет_каталога:
+        absent_dirs = [p for p in (d13 / "atlas").rglob("coordination") if p.is_dir()]
+        for p in absent_dirs:
             shutil.rmtree(p)
-        out13 = мост(run(guard13))
+        out13 = bridge_part(run(guard13))
         # ⚠️ Условие опыта ПРОВЕРЯЕТСЯ, а не предполагается: сегодня стенд каталога
         #    согласования не создаёт вовсе, и «снесено 0» — это правда. Но зелёное,
         #    держащееся на устройстве стенда, замолчит в день, когда стенд начнёт его
         #    создавать. Поэтому отсутствие каталога — ЧАСТЬ условия случая.
-        осталось = [p for p in (d13 / "atlas").rglob("coordination") if p.is_dir()]
+        left_dirs = [p for p in (d13 / "atlas").rglob("coordination") if p.is_dir()]
         ok &= case("⑬ БЕЗ каталога согласования мост видит и вопрос, И ОТВЕТ на него",
-                   not осталось and "отвечен" in out13 and "без ответа нет" in out13,
-                   f"каталогов согласования снесено {len(нет_каталога)}, осталось "
-                   f"{len(осталось)} (условие опыта проверено); строка: "
+                   not left_dirs and "отвечен" in out13 and "без ответа нет" in out13,
+                   f"каталогов согласования снесено {len(absent_dirs)}, осталось "
+                   f"{len(left_dirs)} (условие опыта проверено); строка: "
                    f"{(out13.splitlines() or ['(пусто)'])[0][:110]}", differ=True)
 
         out = run(build(tmp / "d", with_ask=True, with_answer=False, with_box=False))

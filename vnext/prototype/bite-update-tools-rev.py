@@ -36,6 +36,8 @@ r"""bite-update-tools-rev.py — приёмка карточки #604 ②③: up
   ③-1в источник — подкаталог ДРУГОГО git-репозитория (возврат OPSSRE №2) → «каталог внутри
     другого репозитория (<корень>)», а не «нет в истории» — `--git-dir` иначе находит ЧУЖОЙ
     .git выше по дереву и молча ищет не там
+  ③-1г источник — репозиторий без единого коммита (граница OPSSRE, записка #5116) → «нет ни
+    одного коммита», а не «нет в истории»
   ⑥ КОНТРОЛЬ нарочной поломкой: --rev молча игнорируется — красит РОВНО случаи --rev,
     не трогает случай ③ (он от --rev не зависит)
   ⑦ КОНТРОЛЬ нарочной поломкой: git-детект истории возвращён к `.is_dir()` — красит РОВНО
@@ -43,7 +45,9 @@ r"""bite-update-tools-rev.py — приёмка карточки #604 ②③: up
     честно отвечают одинаково)
   ⑧ КОНТРОЛЬ нарочной поломкой (возврат OPSSRE №2): снята ИМЕННО проверка `--show-prefix` —
     красит РОВНО ③-1в, не трогает ③-1а (git-dir отказывает раньше) и ③-1б (там prefix и
-    так был пуст)
+    так был пуст); красит СВОЕЙ причиной — возвращается ложное «нет в истории»
+  ⑨ КОНТРОЛЬ нарочной поломкой: снята проверка «нет ни одного коммита» — красит РОВНО ③-1г
+    (возвращается ложное «нет в истории»), не трогает ③-1б (там HEAD есть)
 
 ИСПЫТУЕТСЯ через mezo_target (живой контур или MEZO_SCRIPTS_ROOT — копия для укуса).
 ПАКЕТ — ЛОКАЛЬНАЯ КОПИЯ <ШАБЛОН>, ТОЛЬКО ЧТЕНИЕ: git log/show — команды на
@@ -70,9 +74,15 @@ import mezo_target  # noqa: E402
 TARGET = mezo_target.script("update-tools.py")
 print(f"⚖️ испытуется: {mezo_target.label()}")
 
-SCRIPTS = mezo_paths.live_scripts()
-sys.path.insert(0, str(SCRIPTS))
+# Помощник стенда — из СВОЕЙ папки приёмки (она уже в sys.path выше), а не из инструментов
+# испытуемого контура: от испытуемого приёмке нужен только испытуемый инструмент (mezo_target).
+# 🪤 Прежде mezo_stand брался из испытуемого контура — и приёмка падала на контуре, чьи
+# инструменты старше неё (найдено OPSSRE 13.09 пробой с MEZO_CONTAINER на копию контура от
+# 16:49 UTC; выбор PROTO — записка #5110).
 import mezo_stand  # noqa: E402
+if not hasattr(mezo_stand, "stand_env"):
+    sys.exit(f"⛔ НЕ ЗАПУСТИЛАСЬ: в {mezo_stand.__file__} нет stand_env (общий помощник среды стенда, "
+             "записка #5096) — помощник в папке приёмки старше неё; возьми оба файла из одной версии пакета")
 
 # Рабочая копия пакета — ТОЛЬКО ЧТЕНИЕ. Путь выводится, а не пишется: у потребителя пакет
 # лежит в другом месте, а в образце приёмка живёт внутри самого пакета (MEZO_TEMPLATE /
@@ -98,7 +108,7 @@ PACK_BEFORE = pack_state()
 
 
 def live_meta() -> dict:
-    """meta ЖИВОГО контура, только чтение: приёмка обязана его не менять (см. stand_env)."""
+    """meta ЖИВОГО контура, только чтение: приёмка обязана его не менять (см. mezo_stand.stand_env)."""
     c = sqlite3.connect(f"file:{mezo_paths.live_db().as_posix()}?mode=ro", uri=True)
     m = dict(c.execute("SELECT key, value FROM meta"))
     c.close()
@@ -170,19 +180,35 @@ def make_nested_repo_source(outer_repo: pathlib.Path, rel: str, content: bytes) 
     существующий только ради этого случая, к пакету отношения не имеющий. Возвращает путь
     к ВЛОЖЕННОМУ подкаталогу (то, что уходит в --source), а не к корню чужого репозитория.
 
-    ⚖️ ВЫБОР, НАЗВАН ЯВНО (OPSSRE допустил оба: «можно и закоммитить»): содержимое НЕ
-    коммитится. `git rev-parse --show-prefix`/`--show-toplevel` — структурный вопрос («где
-    корень рабочего дерева»), а не вопрос об истории коммитов; он отвечает одинаково что на
-    пустом только что заведённом репозитории, что на репозитории с историей (проверено
-    руками перед правкой: `git init` + вложенный подкаталог без единого коммита уже даёт
-    непустой `--show-prefix`). Коммит здесь ничего не добавил бы к предмету находки.
+    ⚖️ ВЫБОР ПЕРЕСМОТРЕН (PROTO, 13.09, граница OPSSRE «репозиторий без коммитов», записка
+    #5116): у чужого репозитория ЕСТЬ коммит — посторонний файл в его корне; вложенное
+    содержимое НЕ коммитится (его нет в чужой истории). Прежде коммита не было, и это было
+    безразлично: `--show-prefix` отвечает одинаково с историей и без. Но с проверкой «нет ни
+    одного коммита» поломка ⑧ (снят `--show-prefix`) на пустом чужом репозитории упёрлась бы
+    в неё и покраснела бы НЕ ПО СВОЕЙ причине — соседняя починка прикрыла бы её. С коммитом
+    поломка ⑧ снова даёт свою ложь: ищет в ЧУЖОЙ истории и печатает «нет в истории».
     """
     subprocess.run(["git", "init", "-q", str(outer_repo)], check=True)
+    (outer_repo / "README-outer.txt").write_text("чужой проект\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(outer_repo), "add", "README-outer.txt"], check=True)
+    subprocess.run(["git", "-C", str(outer_repo), "-c", "user.name=bite", "-c", "user.email=bite@local",
+                    "commit", "-q", "--no-verify", "-m", "outer"], check=True)
     nested = outer_repo / "nested" / "source"
     p = nested / rel
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_bytes(content)
     return nested
+
+
+def make_empty_repo_source(dest: pathlib.Path, rel: str, content: bytes) -> pathlib.Path:
+    """Граница OPSSRE (повтор ③-1, записка #5116): источник — КОРЕНЬ git-репозитория, в котором
+    нет ни одного коммита. `--git-dir` и `--show-prefix` отвечают как у настоящего, история пуста.
+    `git init` — в новом временном каталоге, к пакету отношения не имеющем."""
+    subprocess.run(["git", "init", "-q", str(dest)], check=True)
+    p = dest / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(content)
+    return dest
 
 
 def make_contour(root: pathlib.Path, under_test: pathlib.Path) -> pathlib.Path:
@@ -198,26 +224,23 @@ def make_contour(root: pathlib.Path, under_test: pathlib.Path) -> pathlib.Path:
     db_dir = root / ".mezosync"
     r = subprocess.run([sys.executable, str(INIT), "--name", "bite604", "--path", str(db_dir),
                        "--roles", "COORD"], capture_output=True, text=True, timeout=300,
-                      encoding="utf-8", errors="replace", env=stand_env(root))
+                      encoding="utf-8", errors="replace", env=mezo_stand.stand_env(root, PYTHONIOENCODING="utf-8"))
     if r.returncode != 0:
         sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: свежий контур не собрался:\n" + (r.stdout or "") + (r.stderr or ""))
     mezo_stand.copy_tool(under_test, db_dir / "scripts")   # испытуемый + соседи — ПОВЕРХ шаблонного
     return db_dir
 
 
-def stand_env(container: pathlib.Path) -> dict:
-    """Среда для всего, что запускается на стенде: контейнер — САМ стенд, а не среда вызывающего.
-
-    🩸 НАЙДЕНО PROTO 13.09 прогоном копии из образца с MEZO_CONTAINER живого контура: среда
-    наследовалась испытуемым, mezo_paths берёт контейнер ИЗ СРЕДЫ раньше, чем от расположения
-    файла, — и --apply стенда записал meta ЖИВОГО контура (источник и версию). Файлы
-    инструментов не тронуты только потому, что у живого контура нет отпечатков установки.
-    """
-    return dict(os.environ, PYTHONIOENCODING="utf-8", MEZO_CONTAINER=str(container))
+# Среда для всего, что запускается на стенде, — общий помощник mezo_stand.stand_env (записка #5096):
+# контейнер — САМ стенд, а не среда вызывающего. Своя функция приёмки заменена им 13.09 (OPSSRE).
+# 🩸 НАЙДЕНО PROTO 13.09 прогоном копии из образца с MEZO_CONTAINER живого контура: среда
+# наследовалась испытуемым, mezo_paths берёт контейнер ИЗ СРЕДЫ раньше, чем от расположения
+# файла, — и --apply стенда записал meta ЖИВОГО контура (источник и версию). Файлы
+# инструментов не тронуты только потому, что у живого контура нет отпечатков установки.
 
 
 def run(tool: pathlib.Path, *extra, timeout=180):
-    env = stand_env(tool.resolve().parents[2])   # …/<стенд>/.mezosync/scripts/<инструмент>
+    env = mezo_stand.stand_env(tool.resolve().parents[2], PYTHONIOENCODING="utf-8")   # …/<стенд>/.mezosync/scripts/<инструмент>
     p = subprocess.run([sys.executable, str(tool), *extra], capture_output=True, text=True,
                        encoding="utf-8", errors="replace", env=env, timeout=timeout)
     return p.returncode, (p.stdout or "") + (p.stderr or "")
@@ -398,6 +421,21 @@ case("③-1в источник — подкаталог чужого репоз�
      and "версия пакета от" not in out2c_nested,
      f"код {rc2c_nested} · назван корень чужого репозитория: {str(outer_repo) in out2c_nested}")
 
+# ═══ ③-1г (граница OPSSRE из повтора ③-1, записка #5116): источник — корень репозитория без
+# единого коммита. История пуста; «в истории пакета такого содержимого нет» лгало бы, что искали.
+t2d = stand / "t2d"
+db2d_dir = make_contour(t2d, TARGET)
+upd2d = db2d_dir / "scripts" / "update-tools.py"
+empty_repo_src = make_empty_repo_source(stand / "empty-repo-source", "scripts/backlog.py", HEAD_CONTENT)
+(db2d_dir / "scripts" / "backlog.py").write_bytes(OLD_CONTENT)
+drop_fingerprints(db2d_dir / "mezosync.db", "backlog.py")
+rc2d, out2d = run(upd2d, "--source", str(empty_repo_src))
+case("③-1г источник — репозиторий без единого коммита → «нет ни одного коммита», не «нет в истории»",
+     rc2d == 0 and "нет ни одного коммита" in out2d
+     and "в истории пакета такого содержимого нет" not in out2d
+     and "версия пакета от" not in out2d,
+     f"код {rc2d}")
+
 # ═══ ⑥ КОНТРОЛЬ нарочной поломкой: --rev молча игнорируется (rev=a.rev → rev=None)
 # 🩸 БЕЗ ЭТОГО СЛУЧАЯ приёмка могла бы зеленеть по СЛУЧАЙНОЙ причине (например, если бы
 # --rev тихо не долетал до fetch()). Ломаем РОВНО эту строку и смотрим, что покраснеет:
@@ -500,13 +538,12 @@ prefix_check_anchor = (
     "        top = subprocess.run([\"git\", \"-C\", str(path), \"rev-parse\", \"--show-toplevel\"],\n"
     "                             capture_output=True, text=True)\n"
     "        outer_root = (top.stdout or \"\").strip() or \"корень не определился\"\n"
-    "        return None, f\"каталог внутри другого репозитория ({outer_root})\"\n"
-    "    return path, \"\"")
+    "        return None, f\"каталог внутри другого репозитория ({outer_root})\"\n")
 if prefix_check_anchor not in prefix_check_src:
     sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: блок проверки --show-prefix не найден в испытуемом дословно "
              "— переписали git_history_root, поломка бьёт мимо")
-broken3_tool.write_text(prefix_check_src.replace(prefix_check_anchor, "    return path, \"\""),
-                        encoding="utf-8")
+# снимается ТОЛЬКО блок --show-prefix; проверка «нет ни одного коммита» ниже него остаётся
+broken3_tool.write_text(prefix_check_src.replace(prefix_check_anchor, ""), encoding="utf-8")
 
 t2c_broken = stand / "t2c-broken"
 db2c_broken_dir = make_contour(t2c_broken, broken3_tool)
@@ -516,10 +553,12 @@ nested_src2 = make_nested_repo_source(outer_repo2, "scripts/backlog.py", HEAD_CO
 (db2c_broken_dir / "scripts" / "backlog.py").write_bytes(OLD_CONTENT)
 drop_fingerprints(db2c_broken_dir / "mezosync.db", "backlog.py")
 rc8a, out8a = run(upd2c_broken, "--source", str(nested_src2))
-case_1v_turned_red = "каталог внутри другого репозитория" not in out8a
+# красит СВОЕЙ причиной: фраза пропала И вернулась прежняя ложь — поиск в ЧУЖОЙ истории
+case_1v_turned_red = ("каталог внутри другого репозитория" not in out8a
+                      and "в истории пакета такого содержимого нет" in out8a)
 case("⑧ поломка (сняли --show-prefix) КРАСИТ ровно ③-1в: подкаталог чужого репозитория",
      rc8a == 0 and case_1v_turned_red,
-     f"код {rc8a} · фраза «каталог внутри другого репозитория» пропала: {case_1v_turned_red}")
+     f"код {rc8a} · фраза пропала и вернулось ложное «нет в истории»: {case_1v_turned_red}")
 
 t2b_broken3 = stand / "t2b-broken3"
 db2b_broken3_dir = make_contour(t2b_broken3, broken3_tool)
@@ -545,6 +584,47 @@ rc8c, out8c = run(upd2a_broken3, "--source", str(dump_src3))
 case("⑧ та же поломка НЕ трогает ③-1а: `--git-dir` там отказывает раньше show-prefix",
      rc8c == 0 and "истории у источника нет" in out8c,
      f"код {rc8c}")
+
+# ═══ ⑨ КОНТРОЛЬ нарочной поломкой (граница OPSSRE, записка #5116): снята ИМЕННО проверка
+# «нет ни одного коммита». Красить ОБЯЗАНА ровно ③-1г — и своей причиной: вернулась ложь «нет в
+# истории»; НЕ обязана трогать ③-1б (там HEAD есть — проверка для него не срабатывала).
+broken4_dir = stand / "broken4"
+broken4_tool = mezo_stand.copy_tool(TARGET, broken4_dir)
+head_check_src = broken4_tool.read_text(encoding="utf-8")
+head_check_anchor = (
+    "    head = subprocess.run([\"git\", \"-C\", str(path), \"rev-parse\", \"--verify\", \"-q\", \"HEAD\"],\n"
+    "                          capture_output=True, text=True)\n"
+    "    if head.returncode != 0:\n"
+    "        return None, \"в репозитории-источнике нет ни одного коммита\"\n")
+if head_check_anchor not in head_check_src:
+    sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: блок проверки «нет ни одного коммита» не найден в испытуемом "
+             "дословно — переписали git_history_root, поломка бьёт мимо")
+broken4_tool.write_text(head_check_src.replace(head_check_anchor, ""), encoding="utf-8")
+
+t2d_broken = stand / "t2d-broken"
+db2d_broken_dir = make_contour(t2d_broken, broken4_tool)
+upd2d_broken = db2d_broken_dir / "scripts" / "update-tools.py"
+empty_repo_src2 = make_empty_repo_source(stand / "empty-repo-source-2", "scripts/backlog.py", HEAD_CONTENT)
+(db2d_broken_dir / "scripts" / "backlog.py").write_bytes(OLD_CONTENT)
+drop_fingerprints(db2d_broken_dir / "mezosync.db", "backlog.py")
+rc9a, out9a = run(upd2d_broken, "--source", str(empty_repo_src2))
+case_1g_turned_red = ("нет ни одного коммита" not in out9a
+                      and "в истории пакета такого содержимого нет" in out9a)
+case("⑨ поломка (сняли проверку HEAD) КРАСИТ ровно ③-1г: вернулось ложное «нет в истории»",
+     rc9a == 0 and case_1g_turned_red,
+     f"код {rc9a} · фраза пропала и вернулась прежняя ложь: {case_1g_turned_red}")
+
+t2b_broken4 = stand / "t2b-broken4"
+db2b_broken4_dir = make_contour(t2b_broken4, broken4_tool)
+upd2b_broken4 = db2b_broken4_dir / "scripts" / "update-tools.py"
+worktree_src4 = stand / "worktree-like-source-4"
+make_worktree_like_source(worktree_src4, "scripts/backlog.py", HEAD_CONTENT)
+(db2b_broken4_dir / "scripts" / "backlog.py").write_bytes(OLD_CONTENT)
+drop_fingerprints(db2b_broken4_dir / "mezosync.db", "backlog.py")
+rc9b, out9b = run(upd2b_broken4, "--source", str(worktree_src4))
+case("⑨ та же поломка НЕ трогает ③-1б: там HEAD есть",
+     rc9b == 0 and appearance_sig in out9b,
+     f"код {rc9b}")
 
 print("---- контроль: рабочая копия пакета не тронута ----")
 pack_after = pack_state()

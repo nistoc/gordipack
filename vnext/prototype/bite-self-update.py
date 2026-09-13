@@ -44,10 +44,11 @@ def case(title, ok, detail, differ=False):
 def main() -> int:
     ok = True
     tmp = mezo_stand.new("bite-selfupd-")
+    env = mezo_stand.stand_env(tmp)  # среда закреплена за стендом: MEZO_CONTAINER вызывающего сюда не доезжает (записка #5096)
     try:
         r = subprocess.run([sys.executable, str(INIT), "--name", "biteupd",
                             "--path", str(tmp / ".mezosync"), "--roles", "COORD"],
-                           capture_output=True, text=True, encoding="utf-8", timeout=300)
+                           capture_output=True, text=True, encoding="utf-8", timeout=300, env=env)
         db = tmp / ".mezosync" / "mezosync.db"
         # 🪤 СУДИТСЯ ИСХОД ЗАПУСКА, А НЕ НАЛИЧИЕ ФАЙЛА. Первая редакция смотрела только
         # на существование базы — и объявила собранным контур, сборка которого УПАЛА
@@ -83,63 +84,63 @@ def main() -> int:
         # отказывался затирать. Приёмка требовала от него ровно того, что мы запретили.
         # ⇒ Отставший = содержимое старое И отпечаток установки ЕМУ СООТВЕТСТВУЕТ
         # («мы это и клали, а источник с тех пор ушёл вперёд»).
-        def состарить(файл: pathlib.Path, текст: str):
-            файл.write_text(текст, encoding="utf-8")
+        def make_stale(path: pathlib.Path, text: str):
+            path.write_text(text, encoding="utf-8")
             c = sqlite3.connect(db)
-            печати = json.loads(dict(c.execute("SELECT key, value FROM meta"))
+            stamps = json.loads(dict(c.execute("SELECT key, value FROM meta"))
                                 .get("template_files_sha") or "{}")
-            печати[файл.name] = hashlib.sha256(
-                файл.read_bytes().replace(b"\r\n", b"\n").rstrip()).hexdigest()[:12]
+            stamps[path.name] = hashlib.sha256(
+                path.read_bytes().replace(b"\r\n", b"\n").rstrip()).hexdigest()[:12]
             c.execute("INSERT INTO meta (key, value) VALUES ('template_files_sha', ?) "
                       "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                      (json.dumps(печати, ensure_ascii=False),))
+                      (json.dumps(stamps, ensure_ascii=False),))
             c.commit()
             c.close()
 
         victim = tmp / ".mezosync" / "scripts" / "guard-utc.py"
-        состарить(victim, "# устаревшая копия" + NL)
+        make_stale(victim, "# устаревшая копия" + NL)
 
         p = subprocess.run([sys.executable, str(upd)], capture_output=True, text=True,
-                           encoding="utf-8", timeout=300)
-        план = (p.stdout or "") + (p.stderr or "")
+                           encoding="utf-8", timeout=300, env=env)
+        plan = (p.stdout or "") + (p.stderr or "")
         ok &= case("④ план показывает отставший файл и НИЧЕГО не пишет",
-                   "guard-utc.py" in план
+                   "guard-utc.py" in plan
                    and "устаревшая копия" in victim.read_text(encoding="utf-8"),
                    "обновление, которое пишет раньше показа, нельзя ни отменить, ни обсудить",
                    differ=True)
 
         p = subprocess.run([sys.executable, str(upd), "--apply"], capture_output=True,
-                           text=True, encoding="utf-8", timeout=300)
-        вернулся = "устаревшая копия" not in victim.read_text(encoding="utf-8")
+                           text=True, encoding="utf-8", timeout=300, env=env)
+        restored = "устаревшая копия" not in victim.read_text(encoding="utf-8")
         ok &= case("⑤ с --apply контур забирает свежее САМ, без чужой руки",
-                   вернулся and "Забрано" in (p.stdout or ""),
+                   restored and "Забрано" in (p.stdout or ""),
                    "это и есть самостоятельность: обновление не требует того, кто контур собирал",
                    differ=True)
 
         # ⑥⑦⑧ НАХОДКИ СОСЕДА (контур tapas, ответ 19.08 10:46 UTC). Он отказался брать
         # инструменты, пока шапка обещает сохранность правок, а код перезаписывает.
-        своя = tmp / ".mezosync" / "scripts" / "backlog.py"
-        было_своё = "# МОЯ ПРАВКА, её терять нельзя" + NL + своя.read_text(encoding="utf-8")
-        своя.write_text(было_своё, encoding="utf-8")
+        own_file = tmp / ".mezosync" / "scripts" / "backlog.py"
+        own_before = "# МОЯ ПРАВКА, её терять нельзя" + NL + own_file.read_text(encoding="utf-8")
+        own_file.write_text(own_before, encoding="utf-8")
         p = subprocess.run([sys.executable, str(upd)], capture_output=True, text=True,
-                           encoding="utf-8", timeout=300)
-        план = (p.stdout or "") + (p.stderr or "")
+                           encoding="utf-8", timeout=300, env=env)
+        plan = (p.stdout or "") + (p.stderr or "")
         p2 = subprocess.run([sys.executable, str(upd), "--apply"], capture_output=True,
-                            text=True, encoding="utf-8", timeout=300)
-        цела = "МОЯ ПРАВКА" in своя.read_text(encoding="utf-8")
+                            text=True, encoding="utf-8", timeout=300, env=env)
+        intact = "МОЯ ПРАВКА" in own_file.read_text(encoding="utf-8")
         ok &= case("⑥ файл, ПРАВЛЕННЫЙ У СЕБЯ, не затирается — обещание шапки исполняется",
-                   цела and "ПРАВЛЕН У ТЕБЯ" in план,
+                   intact and "ПРАВЛЕН У ТЕБЯ" in plan,
                    "до 19.08 шапка это обещала, а код перезаписывал безусловно; сосед отказался "
                    "брать инструменты, пока противоречие не снято — и был прав", differ=True)
 
         # ⑦ ЗВЕНО ИЗ vnext/prototype: у потребителя лежит рядом со скриптами, в источнике — нет.
-        звено = tmp / ".mezosync" / "scripts" / "mention.py"
-        if звено.exists():
-            состарить(звено, "# отставшее звено" + NL)
+        link = tmp / ".mezosync" / "scripts" / "mention.py"
+        if link.exists():
+            make_stale(link, "# отставшее звено" + NL)
             subprocess.run([sys.executable, str(upd), "--apply"],
-                           capture_output=True, text=True, encoding="utf-8", timeout=300)
+                           capture_output=True, text=True, encoding="utf-8", timeout=300, env=env)
             ok &= case("⑦ звено из соседнего каталога источника ТОЖЕ обновляется",
-                       "отставшее звено" not in звено.read_text(encoding="utf-8"),
+                       "отставшее звено" not in link.read_text(encoding="utf-8"),
                        "прежде обновлятор обходил только scripts/, и семь звеньев, которые "
                        "зовёт общий прогон, не обновлялись НИКОГДА — молча", differ=True)
         else:
@@ -153,10 +154,10 @@ def main() -> int:
         con.close()
         victim.write_text("# правка без отпечатка" + NL, encoding="utf-8")
         p = subprocess.run([sys.executable, str(upd), "--apply"], capture_output=True,
-                           text=True, encoding="utf-8", timeout=300)
-        не_тронут = "правка без отпечатка" in victim.read_text(encoding="utf-8")
+                           text=True, encoding="utf-8", timeout=300, env=env)
+        untouched = "правка без отпечатка" in victim.read_text(encoding="utf-8")
         ok &= case("⑧ КОНТРОЛЬ: без отпечатка установки файл НЕ обновляется молча",
-                   не_тронут and "Отпечатков установки нет" in (p.stdout or ""),
+                   untouched and "Отпечатков установки нет" in (p.stdout or ""),
                    "молчаливое обновление здесь неотличимо от затирания чужой правки; "
                    "цена названа ДО действия и требует явного согласия", differ=True)
     finally:

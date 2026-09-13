@@ -46,55 +46,56 @@ def case(title, ok, detail, differ=False):
     return ok
 
 
-def git(корень, *args, when=None):
+def git(root, *args, when=None):
     env = dict(os.environ, GIT_AUTHOR_NAME="проба", GIT_AUTHOR_EMAIL="p@p",
                GIT_COMMITTER_NAME="проба", GIT_COMMITTER_EMAIL="p@p")
     if when:                    # час записи задаём явно: приёмка не должна зависеть от «сейчас»
         env["GIT_AUTHOR_DATE"] = when
         env["GIT_COMMITTER_DATE"] = when
-    return subprocess.run(["git", "-C", str(корень), *args], capture_output=True,
+    return subprocess.run(["git", "-C", str(root), *args], capture_output=True,
                           text=True, encoding="utf-8", timeout=120, env=env)
 
 
-def стенд(tmp: pathlib.Path, с_репозиторием=True) -> tuple:
+def make_stand(tmp: pathlib.Path, with_repo=True) -> tuple:
     """Наш контур + сосед со своей исходящей. → (guard-all, наша папка, папка соседа)."""
     live = mezo_paths.container_root(__file__) / ".mezosync"
-    наш = tmp / "atlas"
-    shutil.copytree(live / "scripts", наш / ".mezosync" / "scripts")
-    shutil.copy(live / "mezosync.db", наш / ".mezosync" / "mezosync.db")
-    архив = наш / "atlas.archs"
-    наша_папка = архив / ".mezosync" / "bridges" / "atlas-neigh"
-    наша_папка.mkdir(parents=True)
+    our_root = tmp / "atlas"
+    shutil.copytree(live / "scripts", our_root / ".mezosync" / "scripts")
+    shutil.copy(live / "mezosync.db", our_root / ".mezosync" / "mezosync.db")
+    archs = our_root / "atlas.archs"
+    our_box = archs / ".mezosync" / "bridges" / "atlas-neigh"
+    our_box.mkdir(parents=True)
 
-    сосед = tmp / "neigh"
-    (сосед / ".mezosync").mkdir(parents=True)
-    sqlite3.connect(сосед / ".mezosync" / "mezosync.db").close()
-    их_папка = сосед / "neigh.archs" / ".mezosync" / "bridges" / "neigh-atlas"
-    их_папка.mkdir(parents=True)
+    neigh_root = tmp / "neigh"
+    (neigh_root / ".mezosync").mkdir(parents=True)
+    sqlite3.connect(neigh_root / ".mezosync" / "mezosync.db").close()
+    their_box = neigh_root / "neigh.archs" / ".mezosync" / "bridges" / "neigh-atlas"
+    their_box.mkdir(parents=True)
 
-    con = sqlite3.connect(наш / ".mezosync" / "mezosync.db")
+    con = sqlite3.connect(our_root / ".mezosync" / "mezosync.db")
     con.execute("DELETE FROM cross_links")
     con.execute("INSERT INTO cross_links (source_group, target_group, target_db_path,"
                 " description) VALUES ('atlas','neigh',?,'проба')",
-                (str(сосед / ".mezosync" / "mezosync.db"),))
+                (str(neigh_root / ".mezosync" / "mezosync.db"),))
     con.commit()
     con.close()
-    if с_репозиторием:
-        git(архив, "init", "-q")
-    return наш / ".mezosync" / "scripts" / "guard-all.py", наша_папка, их_папка
+    if with_repo:
+        git(archs, "init", "-q")
+    return our_root / ".mezosync" / "scripts" / "guard-all.py", our_box, their_box
 
 
-def записать(папка, имя, текст, when=None):
-    (папка / имя).write_text(текст, encoding="utf-8")
-    корень = папка.parents[2]
-    if (корень / ".git").exists():
-        git(корень, "add", "-A")
-        git(корень, "commit", "-q", "-m", f"запись {имя}", when=when)
+def write_file(folder, name, text, when=None):
+    (folder / name).write_text(text, encoding="utf-8")
+    root = folder.parents[2]
+    if (root / ".git").exists():
+        git(root, "add", "-A")
+        git(root, "commit", "-q", "-m", f"запись {name}", when=when)
 
 
 def run(guard) -> str:
     r = subprocess.run([sys.executable, str(guard), "--full", "--skip", "drift,память,ленты"],
-                       capture_output=True, text=True, encoding="utf-8", timeout=600)
+                       capture_output=True, text=True, encoding="utf-8", timeout=600,
+                       env=mezo_stand.stand_env(guard.parents[2]))  # стенд — контур, где лежит его guard-all
     return (r.stdout or "") + (r.stderr or "")
 
 
@@ -104,9 +105,9 @@ def main() -> int:
     try:
         # ① КОНТРОЛЬ: один ответ — лишней строки нет. Без него краснота ниже ничего
         #    не значит: молчать можно и от того, что проверка не смотрит вовсе.
-        guard, наша, их = стенд(tmp / "a")
-        записать(их, "ask.atlas.тема.md", "вопрос", when="2026-08-20T10:00:00+0000")
-        записать(наша, "answer.neigh.тема.md", "ответ", when="2026-08-20T11:00:00+0000")
+        guard, ours, theirs = make_stand(tmp / "a")
+        write_file(theirs, "ask.atlas.тема.md", "вопрос", when="2026-08-20T10:00:00+0000")
+        write_file(ours, "answer.neigh.тема.md", "ответ", when="2026-08-20T11:00:00+0000")
         out = run(guard)
         ok &= case("① контроль: ответ записан ОДИН раз — лишней строки нет",
                    "отвечен НАШИМ ответом" in out and "ПЕРЕПИСЫВАЛСЯ" not in out,
@@ -114,10 +115,10 @@ def main() -> int:
                    "при этом назван отвеченным")
 
         # ② ПЕРЕЗАПИСЬ — та самая молчаливая потеря.
-        guard, наша, их = стенд(tmp / "b")
-        записать(их, "ask.atlas.тема.md", "вопрос", when="2026-08-20T10:00:00+0000")
-        записать(наша, "answer.neigh.тема.md", "первый ответ", when="2026-08-20T11:00:00+0000")
-        записать(наша, "answer.neigh.тема.md", "второй ответ", when="2026-08-20T14:30:00+0000")
+        guard, ours, theirs = make_stand(tmp / "b")
+        write_file(theirs, "ask.atlas.тема.md", "вопрос", when="2026-08-20T10:00:00+0000")
+        write_file(ours, "answer.neigh.тема.md", "первый ответ", when="2026-08-20T11:00:00+0000")
+        write_file(ours, "answer.neigh.тема.md", "второй ответ", when="2026-08-20T14:30:00+0000")
         out = run(guard)
         ok &= case("② ответ переписан — названы число записей и оба часа",
                    "ПЕРЕПИСЫВАЛСЯ" in out and "записей 2" in out
@@ -128,10 +129,10 @@ def main() -> int:
         # ③ ЧАСЫ В UTC. 🪤 Найдено на СВОЁМ выводе через минуту после первой печати:
         #    строка называла локальное время автора записи без зоны — ровно тот дефект,
         #    за который в этом же прогоне краснеет соседняя проверка.
-        guard, наша, их = стенд(tmp / "c")
-        записать(их, "ask.atlas.тема.md", "вопрос", when="2026-08-20T10:00:00+0000")
-        записать(наша, "answer.neigh.тема.md", "раз", when="2026-08-20T12:00:00+0500")
-        записать(наша, "answer.neigh.тема.md", "два", when="2026-08-20T20:00:00-0700")
+        guard, ours, theirs = make_stand(tmp / "c")
+        write_file(theirs, "ask.atlas.тема.md", "вопрос", when="2026-08-20T10:00:00+0000")
+        write_file(ours, "answer.neigh.тема.md", "раз", when="2026-08-20T12:00:00+0500")
+        write_file(ours, "answer.neigh.тема.md", "два", when="2026-08-20T20:00:00-0700")
         out = run(guard)
         ok &= case("③ часы в UTC, а не в зоне записи",
                    "20.08 07:00 UTC" in out and "21.08 03:00 UTC" in out,
@@ -141,9 +142,9 @@ def main() -> int:
 
         # ④ ВНЕ РЕПОЗИТОРИЯ — «не знаю» вместо «однажды». Сводить их значило бы
         #    объявить единственной запись, которой никто не считал.
-        guard, наша, их = стенд(tmp / "d", с_репозиторием=False)
-        записать(их, "ask.atlas.тема.md", "вопрос")
-        записать(наша, "answer.neigh.тема.md", "ответ")
+        guard, ours, theirs = make_stand(tmp / "d", with_repo=False)
+        write_file(theirs, "ask.atlas.тема.md", "вопрос")
+        write_file(ours, "answer.neigh.тема.md", "ответ")
         out = run(guard)
         ok &= case("④ папка моста вне репозитория — сказано «НЕ ЗНАЮ»",
                    "НЕ ЗНАЮ" in out and "не «записан однажды»" in out,
@@ -151,11 +152,11 @@ def main() -> int:
                    "выдало бы второе за первое", differ=True)
 
         # ⑤ ИСТОРИЯ НЕ ЧИТАЕТСЯ: каталог .git есть, а репозиторий сломан.
-        guard, наша, их = стенд(tmp / "e")
-        записать(их, "ask.atlas.тема.md", "вопрос", when="2026-08-20T10:00:00+0000")
-        записать(наша, "answer.neigh.тема.md", "ответ", when="2026-08-20T11:00:00+0000")
-        shutil.rmtree(наша.parents[2] / ".git" / "refs")
-        (наша.parents[2] / ".git" / "HEAD").write_text("сломано", encoding="utf-8")
+        guard, ours, theirs = make_stand(tmp / "e")
+        write_file(theirs, "ask.atlas.тема.md", "вопрос", when="2026-08-20T10:00:00+0000")
+        write_file(ours, "answer.neigh.тема.md", "ответ", when="2026-08-20T11:00:00+0000")
+        shutil.rmtree(ours.parents[2] / ".git" / "refs")
+        (ours.parents[2] / ".git" / "HEAD").write_text("сломано", encoding="utf-8")
         out = run(guard)
         ok &= case("⑤ история не читается — та же честность, с причиной",
                    "НЕ ЗНАЮ" in out and "код" in out,
@@ -164,11 +165,11 @@ def main() -> int:
 
         # ⑥ ВСТРЕЧНЫЙ: у СОСЕДА своя история, и мы в неё не ходим (no-scan-external-contours).
         #    Его вопрос переписан дважды — числа записей у него мы не называем.
-        guard, наша, их = стенд(tmp / "f")
-        git(их.parents[2], "init", "-q")
-        записать(их, "ask.atlas.тема.md", "вопрос", when="2026-08-20T10:00:00+0000")
-        записать(их, "ask.atlas.тема.md", "вопрос переписан", when="2026-08-20T15:00:00+0000")
-        записать(наша, "answer.neigh.тема.md", "ответ", when="2026-08-20T16:00:00+0000")
+        guard, ours, theirs = make_stand(tmp / "f")
+        git(theirs.parents[2], "init", "-q")
+        write_file(theirs, "ask.atlas.тема.md", "вопрос", when="2026-08-20T10:00:00+0000")
+        write_file(theirs, "ask.atlas.тема.md", "вопрос переписан", when="2026-08-20T15:00:00+0000")
+        write_file(ours, "answer.neigh.тема.md", "ответ", when="2026-08-20T16:00:00+0000")
         out = run(guard)
         ok &= case("⑥ ВСТРЕЧНЫЙ: история ЧУЖОГО репозитория не читается",
                    "ПЕРЕПИСЫВАЛСЯ" not in out and "отвечен НАШИМ ответом" in out,

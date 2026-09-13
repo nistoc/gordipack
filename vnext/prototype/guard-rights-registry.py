@@ -50,9 +50,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
 
 # заголовок таблицы прав; у RCC он в рамке «═══», у прочих — «## §ПРАВА»
-ЗАГОЛОВОК_ПРАВ = re.compile(r"§\s*ПРАВА", re.I)
+RIGHTS_HEADER = re.compile(r"§\s*ПРАВА", re.I)
 # конец секции: следующий заголовок любого принятого в памяти вида
-СЛЕДУЮЩИЙ_ЗАГОЛОВОК = re.compile(r"^\s*(?:#{1,6}\s|═══|───\s|§\d)")
+NEXT_HEADER = re.compile(r"^\s*(?:#{1,6}\s|═══|───\s|§\d)")
 
 # ✅ РАЗРЕШИТЕЛЬНАЯ ПРИМЕТА — то, чем роль говорит «мне это можно».
 # 🩸 ВТОРАЯ ПЕРЕДЕЛКА ОТБОРА (05.09 08:1x UTC, находка @COORD, записка #4814).
@@ -66,59 +66,59 @@ import mezo_paths  # noqa: E402
 # ⚡ Класс тот же, что я поймала утром этажом выше: там молча пропадала РОЛЬ ЦЕЛИКОМ,
 # здесь молча пропадают СТРОКИ внутри найденной роли. И лечение то же: печатать ЧИСЛО
 # осмотренного и отсеянного — с ПРИЧИНОЙ отсева, иначе «отсеяно 88» обвинит весь контур.
-РАЗРЕШИТЕЛЬНАЯ = re.compile(
+PERMIT_PATTERN = re.compile(
     r"✅|стояч\w*|свободн\w*|\bда\b|разрешен\w*|без\s+спроса|без\s+вопроса|без\s+слова|"
     r"без\s+отдельного|^\s*зона\s*$",
     re.I)
-ЗАПРЕТИТЕЛЬНАЯ = re.compile(r"⛔|❌|⚰️|\bНЕТ\b|нельзя|запрещ\w*", re.I)
-ОБЯЗАННОСТЬ = re.compile(r"обязательн\w*|обязан\w*", re.I)
+DENY_PATTERN = re.compile(r"⛔|❌|⚰️|\bНЕТ\b|нельзя|запрещ\w*", re.I)
+DUTY_PATTERN = re.compile(r"обязательн\w*|обязан\w*", re.I)
 
 # ⛔ источник строки — КОНСТРУКЦИЯ РОЛИ, а не слово владельца: такие строки не судятся
 #    (граница названа в карточке #546: «не судить строки, где право — разрешение РОЛИ роли»)
 # ⚠️ «реестр зон» добавлен той же правкой: у @COORD две строки опираются на него, и он
 #    сам НЕ назвал их среди четырёх, которые должны краснеть. Зона — не слово владельца.
-ИСТОЧНИК_НЕ_ВЛАДЕЛЕЦ = re.compile(
+SOURCE_NOT_OWNER = re.compile(
     r"зона\s+роли|контракт\s+роли|профил[ья]\s+роли|конструкц\w*\s+роли|мо[яей]\s+зона|"
     r"реестр\s+зон|милстоун|протокол\b|конвенц\w*|§\s*\d",
     re.I)
-ИСТОЧНИК_ВЛАДЕЛЕЦ = re.compile(r"владел[ьц]\w*|\bowner\b", re.I)
+SOURCE_OWNER = re.compile(r"владел[ьц]\w*|\bowner\b", re.I)
 
 # ✅ ссылка на строку реестра: слово ВПЛОТНУЮ к номеру. «записка #N» сюда НЕ попадает
-ССЫЛКА_РЕЕСТРА = re.compile(
+REGISTRY_REF = re.compile(
     r"(?:запис[ьи]|прав[оа])\s*(?:прав\w*)?[\s*_«»\"]*#\s*(\d+)", re.I)
 
 # ✅ честная пометка «в реестре этого нет, вот след»
-ПОМЕТКА_НЕ_В_РЕЕСТРЕ = re.compile(r"НЕ\s+В\s+РЕЕСТРЕ", re.I)
+NOT_IN_REGISTRY_MARK = re.compile(r"НЕ\s+В\s+РЕЕСТРЕ", re.I)
 
 
-def строки_таблицы_прав(body: str):
+def rights_table_rows(body: str):
     """(номер строки, текст) — строки таблиц ПОД заголовком §ПРАВА и до следующего заголовка.
 
     Вхождений слова «§ПРАВА» в разделе бывает несколько (шапка, ссылка, сам заголовок),
     и заголовок далеко не всегда первый. Обходим ВСЕ — пустые вхождения ничего не дают.
     """
-    строки = (body or "").splitlines()
-    итог, взято = [], set()
-    for нач in [i for i, l in enumerate(строки) if ЗАГОЛОВОК_ПРАВ.search(l)]:
-        for i in range(нач + 1, len(строки)):
-            if СЛЕДУЮЩИЙ_ЗАГОЛОВОК.match(строки[i]):
+    lines = (body or "").splitlines()
+    result, taken = [], set()
+    for start in [i for i, l in enumerate(lines) if RIGHTS_HEADER.search(l)]:
+        for i in range(start + 1, len(lines)):
+            if NEXT_HEADER.match(lines[i]):
                 break
-            s = строки[i].strip()
-            if s.startswith("|") and i not in взято:
-                взято.add(i)
-                итог.append((i + 1, s))
+            s = lines[i].strip()
+            if s.startswith("|") and i not in taken:
+                taken.add(i)
+                result.append((i + 1, s))
     # ⛔ ШАПКА ТАБЛИЦЫ — не строка права, и отсеять её надо ПО МЕСТУ, а не по словам.
     # 🩸 Оплачено правкой 05.09 08:15 UTC: расширив отбор с галочки на слова, я захватила
     # заголовок столбца «| Действие | Разрешено? | Источник |» — слово «Разрешено?»
     # разрешительное, и шапка стала краснеть как право без записи. Одиннадцать случаев
     # приёмки покраснели разом, и все — по этой одной причине.
     # ⇒ шапка узнаётся НАДЁЖНО: за ней идёт разделитель «|---|». Ни одно слово не нужно.
-    разделители = {n for n, s in итог if set(s) <= set("|- :")}
-    шапки = {n - 1 for n in разделители}
-    return sorted((n, s) for n, s in итог if n not in шапки)
+    separators = {n for n, s in result if set(s) <= set("|- :")}
+    headers = {n - 1 for n in separators}
+    return sorted((n, s) for n, s in result if n not in headers)
 
 
-def ячейка_разрешения(s: str) -> str:
+def permission_cell(s: str) -> str:
     """Ячейка, где роль говорит «мне это можно» — по разрешительной примете.
 
     Номер ячейки НЕ фиксирован: у одних ролей это «✅ ДА», у @COORD — «стоячее»,
@@ -139,22 +139,22 @@ def ячейка_разрешения(s: str) -> str:
     с оговоркой; «⚰️ … стоячее по репозиторию» — надгробие.
     """
     for c in s.split("|"):
-        р = РАЗРЕШИТЕЛЬНАЯ.search(c)
-        з = ЗАПРЕТИТЕЛЬНАЯ.search(c)
-        if not р and not з:
+        permit = PERMIT_PATTERN.search(c)
+        deny = DENY_PATTERN.search(c)
+        if not permit and not deny:
             continue                      # ячейка ничего не судит — смотрим следующую
-        if р and (not з or р.start() < з.start()):
+        if permit and (not deny or permit.start() < deny.start()):
             return c
         return ""                         # первой высказалась запретительная — строка не про право
     return ""
 
 
-def судится(s: str) -> tuple[bool, str]:
+def is_judged(s: str) -> tuple[bool, str]:
     """(судить?, причина отсева) — строка заявляет ПРАВО, за которое отвечает реестр?"""
     if set(s) <= set("|- :"):
         return False, "шапка или разделитель"
-    ячейка = ячейка_разрешения(s)
-    if not ячейка:
+    cell = permission_cell(s)
+    if not cell:
         return False, "запрет или строка без разрешения"
     # ⛔ ОБЯЗАННОСТЬ — НЕ ПРАВО, и реестр прав о ней ничего не знает.
     # 🩸 Живой ложный случай (первая редакция, 05.09 06:24 UTC): строка OPSSRE
@@ -162,43 +162,43 @@ def судится(s: str) -> tuple[bool, str]:
     # право без записи реестра. Закрыть её нельзя НИКАК: записи о сверке в реестре
     # не будет никогда, потому что реестр — про разрешения. Проверка требовала
     # невыполнимого, то есть учила не верить себе.
-    if ОБЯЗАННОСТЬ.search(ячейка):
+    if DUTY_PATTERN.search(cell):
         return False, "обязанность, а не право"
     # ⛔ источник — конструкция роли, а НЕ слово владельца. Слово владельца в строке
     #    перевешивает: у @COORD есть строка «дежурно graphify | зона | владелец 16.07»,
     #    и она про право владельца, хотя слово «зона» в ней стои́т.
-    if ИСТОЧНИК_НЕ_ВЛАДЕЛЕЦ.search(s) and not ИСТОЧНИК_ВЛАДЕЛЕЦ.search(s):
+    if SOURCE_NOT_OWNER.search(s) and not SOURCE_OWNER.search(s):
         return False, "источник — конструкция роли, не слово владельца"
     return True, ""
 
 
-def приговор(s: str, роль: str, реестр: dict, правила: set = frozenset()):
+def verdict(s: str, role: str, registry: dict, rules: set = frozenset()):
     """(зелёная?, слово) — чем строка закрыта либо почему красная."""
-    if ПОМЕТКА_НЕ_В_РЕЕСТРЕ.search(s):
+    if NOT_IN_REGISTRY_MARK.search(s):
         return True, "пометка «НЕ В РЕЕСТРЕ» со следом"
-    m = ССЫЛКА_РЕЕСТРА.search(s)
+    m = REGISTRY_REF.search(s)
     if not m:
         # ⚖️ ДВА РАЗНЫХ КРАСНЫХ, А НЕ ОДНО ОБЩЕЕ — по слову @COORD (записка #4810 §②).
         # Его довод, и он сильный: обвинение, которое НЕЧЕМ ЗАКРЫТЬ, учит не верить
         # проверке целиком. Строка, честно сославшаяся на действующее правило свода,
         # виновата не в самозванстве — виновата незаведённая запись, и это чинит
         # не она одна. Одним словом эти два случая красить нельзя.
-        назв = sorted(k for k in правила if k in s)
-        if назв:
-            return False, (f"источник — правило свода «{назв[0]}», записи реестра НЕТ ⇒ "
+        names = sorted(k for k in rules if k in s)
+        if names:
+            return False, (f"источник — правило свода «{names[0]}», записи реестра НЕТ ⇒ "
                            f"завести запись ЛИБО пометить «⛔ НЕ В РЕЕСТРЕ — след: …»")
         return False, ("ни ссылки на запись реестра, ни пометки «⛔ НЕ В РЕЕСТРЕ — след: …» "
                        "⇒ право живёт только в памяти")
     n = int(m.group(1))
-    зап = реестр.get(n)
-    if зап is None:
+    entry = registry.get(n)
+    if entry is None:
         return False, f"ссылка на запись #{n}, а такой записи в реестре НЕТ"
-    чья, отозвана = зап
-    if отозвана:
-        return False, f"запись #{n} ОТОЗВАНА ({отозвана}) — право по ней не действует"
-    if чья != роль and чья != "ALL":
-        return False, f"запись #{n} принадлежит роли {чья}, а не {роль}"
-    return True, f"запись #{n} ({чья})"
+    owner, revoked = entry
+    if revoked:
+        return False, f"запись #{n} ОТОЗВАНА ({revoked}) — право по ней не действует"
+    if owner != role and owner != "ALL":
+        return False, f"запись #{n} принадлежит роли {owner}, а не {role}"
+    return True, f"запись #{n} ({owner})"
 
 
 def main() -> int:
@@ -210,70 +210,70 @@ def main() -> int:
     db = Path(a.db) if a.db else mezo_paths.live_db()
     try:
         con = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
-        память = con.execute("SELECT role, section, body FROM phoenix "
+        memory = con.execute("SELECT role, section, body FROM phoenix "
                              "ORDER BY role, section").fetchall()
-        реестр = {i: (r, rev) for i, r, rev in
+        registry = {i: (r, rev) for i, r, rev in
                   con.execute("SELECT id, role, revoked_at FROM role_rights")}
-        правила = {k for (k,) in con.execute(
+        rules = {k for (k,) in con.execute(
             "SELECT rule_key FROM rules WHERE status='active'")}
         con.close()
     except sqlite3.Error as e:
         print(f"⛔ память или реестр не прочитаны ({e}) — НЕ ПРОВЕРЕНО, это не «чисто»")
         return 2
-    if not память:
+    if not memory:
         print("⛔ в памяти НОЛЬ разделов — мерить нечего (это не «чисто»)")
         return 2
-    if not реестр:
+    if not registry:
         # ⚪ Различаем ПРИЧИНУ пустоты реестра, а не гадаем «новорождённость» (карточка #606).
         # Если НИ В ОДНОМ разделе памяти нет ни одной строки таблицы §ПРАВА, реестру нечего
         # было бы принять в любом случае — сверять действительно не с чем, и это честный
         # свежий контур, а не пропажа. Если хоть одна строка права в памяти ЕСТЬ, а реестр
         # пуст — это по-прежнему пропажа записи, прежний отказ остаётся дословно.
         no_rights_rows_anywhere = not any(
-            строки_таблицы_прав(body) for _, _, body in память)
+            rights_table_rows(body) for _, _, body in memory)
         if no_rights_rows_anywhere:
             print("⚪ прав не объявлено ни в памяти, ни в реестре — сверять нечего")
             return 0
         print("⛔ реестр прав ПУСТ — сверять не с чем, это не «чисто»")
         return 2
 
-    красные, зелёные, с_таблицей = [], [], set()
-    найдено, отсев = 0, {}
-    for роль, раздел, body in память:
-        if a.role and роль != a.role:
+    red_rows, green_rows, roles_with_table = [], [], set()
+    found, dropped = 0, {}
+    for role, section, body in memory:
+        if a.role and role != a.role:
             continue
-        строки = строки_таблицы_прав(body)
-        if строки:
-            с_таблицей.add(роль)
-        for n, s in строки:
-            найдено += 1
-            судить, почему = судится(s)
-            if not судить:
-                отсев[почему] = отсев.get(почему, 0) + 1
+        lines = rights_table_rows(body)
+        if lines:
+            roles_with_table.add(role)
+        for n, s in lines:
+            found += 1
+            judge, why = is_judged(s)
+            if not judge:
+                dropped[why] = dropped.get(why, 0) + 1
                 continue
-            ok, слово = приговор(s, роль, реестр, правила)
-            (зелёные if ok else красные).append((роль, раздел, n, s, слово))
+            ok, word = verdict(s, role, registry, rules)
+            (green_rows if ok else red_rows).append((role, section, n, s, word))
 
-    рассмотрено = len(красные) + len(зелёные)
-    print(f"ролей с таблицей прав: {len(с_таблицей)} · записей реестра: {len(реестр)} · "
-          f"строк в таблицах НАЙДЕНО: {найдено} · рассмотрено: {рассмотрено} · "
-          f"без записи реестра: {len(красные)}")
+    considered = len(red_rows) + len(green_rows)
+    print(f"ролей с таблицей прав: {len(roles_with_table)} · записей реестра: {len(registry)} · "
+          f"строк в таблицах НАЙДЕНО: {found} · рассмотрено: {considered} · "
+          f"без записи реестра: {len(red_rows)}")
     # 🩸 ОТСЕВ ПЕЧАТАЕТСЯ С ПРИЧИНОЙ, А НЕ ОДНИМ ЧИСЛОМ — по замеру @STUD (записка #4818):
     # «отсеяно 88» при 31 рассмотренной читается как «проверка не смотрит почти ни на что»,
     # а незаконным был отсев ЧЕТЫРЁХ строк. Голое число обвиняет весь контур; разряды
     # показывают роли её собственную строку.
-    if отсев:
-        print("   отсеяно " + str(sum(отсев.values())) + ", по причине: "
-              + " · ".join(f"{k}: {v}" for k, v in sorted(отсев.items())))
+    if dropped:
+        print("   отсеяно " + str(sum(dropped.values())) + ", по причине: "
+              + " · ".join(f"{k}: {v}" for k, v in sorted(dropped.items())))
         print("   ⚖️ отсев — НЕ «чисто»: это строки, за которые реестр прав не отвечает. "
               "Своя строка среди них? Скажи — признак поправим, он уже ошибался.")
-    for роль, раздел, n, s, слово in красные:
-        print(f"🔴 [{роль} · {раздел} · строка {n}] {слово}")
+    for role, section, n, s, word in red_rows:
+        print(f"🔴 [{role} · {section} · строка {n}] {word}")
         print(f"      {s[:180]}")
     if a.verbose:
-        for роль, раздел, n, s, слово in зелёные:
-            print(f"✅ [{роль} · {раздел} · строка {n}] {слово}")
-    if not красные:
+        for role, section, n, s, word in green_rows:
+            print(f"✅ [{role} · {section} · строка {n}] {word}")
+    if not red_rows:
         print("✅ строк права без записи реестра нет")
     else:
         print("ℹ️ Это ПРОВЕРКА, а не запрет: сохранение памяти проходит как обычно. "
@@ -282,7 +282,7 @@ def main() -> int:
               "права в реестре нет и не будет, пометить строку «⛔ НЕ В РЕЕСТРЕ — след: …».")
         print("⚖️ ЧЕГО ПРОВЕРКА НЕ ВИДИТ: верна ли САМА ссылка по существу (что запись #N "
               "про это же право), и права, записанные прозой вне таблицы §ПРАВА.")
-    return 1 if красные else 0
+    return 1 if red_rows else 0
 
 
 if __name__ == "__main__":

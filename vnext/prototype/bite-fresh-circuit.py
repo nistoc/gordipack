@@ -60,11 +60,12 @@ def case(title, verdict, detail, differ=False):
 def main() -> int:
     ok = True
     tmp = mezo_stand.new("bite-fresh-")
+    env = mezo_stand.stand_env(tmp)  # среда закреплена за стендом: MEZO_CONTAINER вызывающего сюда не доезжает (записка #5096)
     try:
         mez = tmp / ".mezosync"
         r = subprocess.run([sys.executable, str(PACK / "scripts" / "init-group.py"),
                             "--name", "bite", "--path", str(mez), "--roles", "coord"],
-                           capture_output=True, text=True, encoding="utf-8", timeout=300)
+                           capture_output=True, text=True, encoding="utf-8", timeout=300, env=env)
         out = (r.stdout or "") + (r.stderr or "")
 
         # ① СБОРКА ВООБЩЕ ПРОХОДИТ И НЕ ГОВОРИТ ДВУМЯ ГОЛОСАМИ
@@ -91,7 +92,7 @@ def main() -> int:
         # ④ ПЕРВАЯ КОМАНДА ПЕРВОЙ РОЛИ РАБОТАЕТ. Регистр имени роли — живой дефект.
         rd = subprocess.run([sys.executable, str(mez / "scripts" / "read-messages.py"),
                              "--role", "COORD"],
-                            capture_output=True, text=True, encoding="utf-8", timeout=120)
+                            capture_output=True, text=True, encoding="utf-8", timeout=120, env=env)
         ok &= case("④ первая команда первой роли отвечает (регистр имени)",
                    "не в реестре" not in (rd.stdout or "") + (rd.stderr or ""),
                    "сборка заводила отметку прочитанного «coord», читалка ждёт «COORD» — контур рождался"
@@ -100,7 +101,7 @@ def main() -> int:
         # ⑤ СТОРОЖА СУДЯТ СВОЮ БАЗУ, А НЕ БАЗУ РАЗРАБОТЧИКА ШАБЛОНА.
         #    Различающий признак: в выводе не должно быть имён НАШИХ ролей.
         g = subprocess.run([sys.executable, str(mez / "scripts" / "guard-all.py")],
-                           capture_output=True, text=True, encoding="utf-8", timeout=300)
+                           capture_output=True, text=True, encoding="utf-8", timeout=300, env=env)
         gout = (g.stdout or "") + (g.stderr or "")
         foreign = [n for n in ("RCC", "TAXO", "OPSSRE", "STUD", "CHROME") if n in gout]
         ok &= case("⑤ проверки судят СВОЮ базу, а не базу автора шаблона",
@@ -136,7 +137,7 @@ def main() -> int:
         #    10.08 06:34 — первая редакция случая искала её не там и краснела на исправном).
         rm = subprocess.run([sys.executable, str(mez / "scripts" / "check-retired-mechanism.py"),
                              "--db", str(mez / "mezosync.db"), "--root", str(mez / "scripts")],
-                            capture_output=True, text=True, encoding="utf-8", timeout=120)
+                            capture_output=True, text=True, encoding="utf-8", timeout=120, env=env)
         rmout = (rm.stdout or "") + (rm.stderr or "")
         # ⑩ ПОСЛЕДНЯЯ СТРОКА СБОРКИ НАЗЫВАЕТ СУЩЕСТВУЮЩИЙ ФАЙЛ.
         #    Она говорила «запусти COORD промптом из templates/coord.md» — файла с таким

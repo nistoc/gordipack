@@ -24,6 +24,10 @@ mezo_stand.py — временные рабочие каталоги прове�
 
     sys.exit(mezo_stand.finish(main()))                 # 3. вместо sys.exit(main())
 
+ЗАПУСК ИНСТРУМЕНТОВ СТЕНДА — только со средой стенда (записка #5096):
+    subprocess.run([...], env=mezo_stand.stand_env(root))
+Без неё инструмент стенда унаследует MEZO_CONTAINER вызывающего и может писать в чужой контур.
+
 СОХРАНИТЬ ВСЁ, ДАЖЕ ПРИ УСПЕХЕ — переменная окружения MEZO_KEEP_STANDS=1. Нужна, когда
 разбираешь зелёный прогон и хочешь посмотреть, на чём он был зелёным.
 """
@@ -37,7 +41,7 @@ import tempfile
 import time
 from pathlib import Path
 
-__all__ = ["new", "release", "finish", "keep_reason", "copy_tool", "neighbours_of"]
+__all__ = ["new", "release", "finish", "keep_reason", "copy_tool", "neighbours_of", "stand_env"]
 
 _stands: list[Path] = []
 _verdict: bool | None = None          # None — исход не объявлен, считаем провалом
@@ -64,6 +68,24 @@ def release(path) -> None:
         _stands.append(p)
 
 
+def stand_env(container, **extra) -> dict:
+    """Среда для запуска инструментов НА СТЕНДЕ: MEZO_CONTAINER — сам стенд, остальное — как у вызывающего.
+
+    ЗАЧЕМ (замер OPSSRE 13.09, записка #5093; решение PROTO, записка #5096). Инструменты
+    ищут «живой» контур СНАЧАЛА по переменной MEZO_CONTAINER и лишь потом — по своему
+    расположению. Приёмка, запускающая инструменты стенда без своей среды, отдаёт им среду
+    вызывающего: у кого MEZO_CONTAINER указывает на другой контур, у того update-tools.py
+    стенда пишет в ЧУЖУЮ базу, а guard-all.py судит смесь двух контуров.
+    Направление закрепляет ЗАПУСКАЮЩИЙ, а не mezo_paths: среду ставят нарочно, чтобы
+    направить инструменты на песочницу, и отнимать это у среды нельзя.
+
+    extra — переменные поверх (например, PYTHONIOENCODING="utf-8").
+    """
+    env = dict(os.environ, MEZO_CONTAINER=str(container))
+    env.update(extra)
+    return env
+
+
 def neighbours_of(tool) -> list[Path]:
     """Файлы-соседи, без которых инструмент не запустится, — ТРАНЗИТИВНО.
 
@@ -76,33 +98,33 @@ def neighbours_of(tool) -> list[Path]:
     и оставил падение на втором — то есть починил бы вид, а не беду.
     """
     tool = Path(tool)
-    каталог = tool.parent
-    рядом = {p.stem: p for p in каталог.glob("*.py")}
-    найдено: dict[str, Path] = {}
-    очередь = [tool]
-    видели = {tool.stem}
-    while очередь:
-        файл = очередь.pop()
+    folder = tool.parent
+    siblings = {p.stem: p for p in folder.glob("*.py")}
+    found: dict[str, Path] = {}
+    queue = [tool]
+    seen = {tool.stem}
+    while queue:
+        source = queue.pop()
         try:
-            дерево = ast.parse(файл.read_text(encoding="utf-8"))
+            tree = ast.parse(source.read_text(encoding="utf-8"))
         except (OSError, SyntaxError):
             continue          # нечитаемое или неразбираемое молча пропускаем: это не наша беда
-        for узел in ast.walk(дерево):
-            if isinstance(узел, ast.Import):
-                корни = [a.name.split(".")[0] for a in узел.names]
-            elif isinstance(узел, ast.ImportFrom) and узел.level == 0 and узел.module:
-                корни = [узел.module.split(".")[0]]
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                roots = [a.name.split(".")[0] for a in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                roots = [node.module.split(".")[0]]
             else:
                 continue
-            for корень in корни:
-                if корень in рядом and корень not in видели:
-                    видели.add(корень)
-                    найдено[корень] = рядом[корень]
-                    очередь.append(рядом[корень])
-    return [найдено[k] for k in sorted(найдено)]
+            for root in roots:
+                if root in siblings and root not in seen:
+                    seen.add(root)
+                    found[root] = siblings[root]
+                    queue.append(siblings[root])
+    return [found[k] for k in sorted(found)]
 
 
-def copy_tool(tool, куда) -> Path:
+def copy_tool(tool, dest) -> Path:
     """Скопировать инструмент на стенд ВМЕСТЕ с его соседями. Вернуть путь копии.
 
     ⚡ ЗАЧЕМ ЭТО ЕСТЬ (карточка #572, находка @COORD внутри приёмки карточки #571):
@@ -117,15 +139,15 @@ def copy_tool(tool, куда) -> Path:
     НОВЫМ стендам и даёт старым дешёвый способ перейти: одна строка вместо одной.
     """
     tool = Path(tool)
-    куда = Path(куда)
-    куда.mkdir(parents=True, exist_ok=True)
-    копия = куда / tool.name
-    shutil.copy2(tool, копия)
-    for сосед in neighbours_of(tool):
-        цель = куда / сосед.name
-        if not цель.exists():
-            shutil.copy2(сосед, цель)
-    return копия
+    dest = Path(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+    copied = dest / tool.name
+    shutil.copy2(tool, copied)
+    for neighbour in neighbours_of(tool):
+        target = dest / neighbour.name
+        if not target.exists():
+            shutil.copy2(neighbour, target)
+    return copied
 
 
 def finish(code: int) -> int:
@@ -177,21 +199,21 @@ def _at_exit() -> None:
     # из 51 — и уборка честно печатала предупреждение, которого раньше не было.
     gc.collect()
     removed = failed = 0
-    остались = []
+    remaining = []
     for p in _stands:
-        for попытка in range(4):
+        for attempt in range(4):
             try:
                 shutil.rmtree(p, onerror=_force_writable)
                 removed += 1
                 break
             except OSError:
-                if попытка == 3:
+                if attempt == 3:
                     failed += 1
-                    остались.append(p)
+                    remaining.append(p)
                 else:
                     time.sleep(0.15)
     print(f"🧹 убрано временных каталогов: {removed}"
           + (f" · занято другим процессом, останутся до уборки janitor-stands.py: {failed}"
              if failed else ""))
-    for p in остались:
+    for p in remaining:
         print(f"   {p}")

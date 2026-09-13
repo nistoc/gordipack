@@ -37,7 +37,7 @@
  "mezo_hints.py": "284e6c91baff",
  "mezo_paths.py": "6fb62805bfb3",
  "mezo_refs.py": "9f54db55b234",
- "mezo_stand.py": "9cc551032865",
+ "mezo_stand.py": "81e88c5e63ee",
  "migrate-md-to-sqlite.py": "d42481548ce7",
  "migrations/20260807-addressed-by-unset.py": "f87cf44d1837",
  "migrations/20260808-backfill-addressee.py": "0584c5a2484a",
@@ -75,7 +75,7 @@
  "migrations/20260913-role-sessions-session-id.py": "198206a7dbc3",
  "read-broadcasts.py": "0506eed3cfcb",
  "read-messages.py": "973901ffe4e7",
- "read-phoenix.py": "be610350a387",
+ "read-phoenix.py": "315c79e284b9",
  "rebirth-mark.py": "3b8306a08369",
  "refs_check.py": "85a8e37ddd24",
  "role-brief.py": "ff59f01a959e",
@@ -92,7 +92,7 @@
  "sync_backoff.py": "76e03a58bb50",
  "track.py": "65f393fe747f",
  "unsaved.py": "4947952357ca",
- "update-tools.py": "acad3160f2c4",
+ "update-tools.py": "288ac4f217d6",
  "urgency.py": "dadde2b10c2e",
  "write-message.py": "acb7957b4948"
 }

@@ -87,6 +87,11 @@ def git_history_root(path: pathlib.Path) -> tuple[pathlib.Path | None, str]:
     САМ является корнем рабочего дерева найденного репозитория (историю берём); не пусто ⇒
     `path` — подкаталог ЧУЖОГО репозитория, историю не берём и называем корень чужого явно.
 
+    🩸 ГРАНИЦА OPSSRE (повтор карточки #604 ③-1, записка #5116): репозиторий без единого
+    коммита — `--git-dir` и `--show-prefix` отвечают как у настоящего, а история ПУСТА, и
+    прежде это печаталось «в истории пакета такого содержимого нет», будто искали и не нашли.
+    Различитель — `git rev-parse --verify -q HEAD`: отказ ⇒ коммитов нет, так и говорим.
+
     Возвращает (path, "") — история есть, опрашивай `path` как обычно;
     (None, причина) — истории нет, причина ДЛЯ ЧЕЛОВЕКА, а не код ошибки.
     """
@@ -104,6 +109,10 @@ def git_history_root(path: pathlib.Path) -> tuple[pathlib.Path | None, str]:
                              capture_output=True, text=True)
         outer_root = (top.stdout or "").strip() or "корень не определился"
         return None, f"каталог внутри другого репозитория ({outer_root})"
+    head = subprocess.run(["git", "-C", str(path), "rev-parse", "--verify", "-q", "HEAD"],
+                          capture_output=True, text=True)
+    if head.returncode != 0:
+        return None, "в репозитории-источнике нет ни одного коммита"
     return path, ""
 
 
