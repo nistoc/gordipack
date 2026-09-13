@@ -40,107 +40,107 @@ BACKLOG = mezo_target.script("backlog.py")
 LEASE = mezo_target.script("lease.py")
 print(f"⚖️ испытуется: {mezo_target.label()}")
 
-ТАБЛИЦЫ = ("backlog", "backlog_events", "tracks", "roles", "role_rights",
+TABLES = ("backlog", "backlog_events", "tracks", "roles", "role_rights",
            "role_skill", "rules", "role_status", "tool_leases", "audit_log")
 
 
-def чистая_база(путь: pathlib.Path) -> None:
-    живая = sqlite3.connect(f"file:{mezo_paths.live_db().as_posix()}?mode=ro", uri=True)
-    ддл = [r[0] for r in живая.execute(
+def clean_db(path: pathlib.Path) -> None:
+    live_con = sqlite3.connect(f"file:{mezo_paths.live_db().as_posix()}?mode=ro", uri=True)
+    ddl = [r[0] for r in live_con.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name IN "
-        f"({','.join('?' * len(ТАБЛИЦЫ))})", ТАБЛИЦЫ)]
-    живая.close()
-    if len(ддл) != len(ТАБЛИЦЫ):
-        raise SystemExit(f"ПРИЁМКА НЕ СОСТОЯЛАСЬ: {len(ддл)} таблиц из {len(ТАБЛИЦЫ)}")
-    con = sqlite3.connect(str(путь))
-    for s in ддл:
+        f"({','.join('?' * len(TABLES))})", TABLES)]
+    live_con.close()
+    if len(ddl) != len(TABLES):
+        raise SystemExit(f"ПРИЁМКА НЕ СОСТОЯЛАСЬ: {len(ddl)} таблиц из {len(TABLES)}")
+    con = sqlite3.connect(str(path))
+    for s in ddl:
         con.execute(s)
     con.commit()
     con.close()
 
 
-def зов(инструмент: pathlib.Path, *args: str, окружение=None) -> tuple[int, str]:
+def call_tool(tool: pathlib.Path, *args: str, extra_env=None) -> tuple[int, str]:
     env = dict(os.environ)
-    if окружение:
-        env.update(окружение)
-    p = subprocess.run([sys.executable, str(инструмент), *args],
+    if extra_env:
+        env.update(extra_env)
+    p = subprocess.run([sys.executable, str(tool), *args],
                        capture_output=True, text=True, encoding="utf-8",
                        timeout=60, env=env)
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 
-def ослабить(живой, каталог, якорь, замена):
-    текст = живой.read_bytes().decode("utf-8")
-    if текст.count(якорь) != 1:
-        raise SystemExit(f"ПРИЁМКА НЕ СОСТОЯЛАСЬ: якорь найден {текст.count(якорь)} раз")
-    копия = каталог / живой.name
-    копия.write_bytes(текст.replace(якорь, замена).encode("utf-8"))
-    return копия
+def weaken(live_path, out_dir, anchor, replacement):
+    text = live_path.read_bytes().decode("utf-8")
+    if text.count(anchor) != 1:
+        raise SystemExit(f"ПРИЁМКА НЕ СОСТОЯЛАСЬ: якорь найден {text.count(anchor)} раз")
+    copy_path = out_dir / live_path.name
+    copy_path.write_bytes(text.replace(anchor, replacement).encode("utf-8"))
+    return copy_path
 
 
 def main() -> int:
     d = mezo_stand.new("actor-role-")
     db = d / "stand.db"
-    чистая_база(db)
-    провалы: list[str] = []
-    судов = 0
+    clean_db(db)
+    failures: list[str] = []
+    cases = 0
 
-    def суд(имя, условие, след=""):
-        nonlocal судов
-        судов += 1
-        print(f"{'✅' if условие else '🔴'} {имя}")
-        if not условие:
-            провалы.append(имя)
-            if след:
-                print(f"   след: {след[:400]}")
+    def case(name, condition, trace=""):
+        nonlocal cases
+        cases += 1
+        print(f"{'✅' if condition else '🔴'} {name}")
+        if not condition:
+            failures.append(name)
+            if trace:
+                print(f"   след: {trace[:400]}")
 
-    rc, _ = зов(BACKLOG, "--db", str(db), "add", "--role", "STUB1",
+    rc, _ = call_tool(BACKLOG, "--db", str(db), "add", "--role", "STUB1",
                 "--title", "проба", "--body", "т", "--done-when", "к")
     if rc != 0:
         raise SystemExit("ПРИЁМКА НЕ СОСТОЯЛАСЬ: карточка не завелась")
     con = sqlite3.connect(str(db))
-    к1 = con.execute("SELECT MAX(id) FROM backlog").fetchone()[0]
+    bid1 = con.execute("SELECT MAX(id) FROM backlog").fetchone()[0]
     con.close()
 
     # ── ① чужое имя у карточек: отказ с подсказкой ─────────────────────────────
-    rc1, out1 = зов(BACKLOG, "--db", str(db), "claim", str(к1), "--role", "STUB1")
-    суд("① backlog claim --role: ОТКАЗ, подсказка несёт --actor и карточку #409",
+    rc1, out1 = call_tool(BACKLOG, "--db", str(db), "claim", str(bid1), "--role", "STUB1")
+    case("① backlog claim --role: ОТКАЗ, подсказка несёт --actor и карточку #409",
         rc1 != 0 and "--actor" in out1 and "карточка #409" in out1, out1)
 
     # ── ② чужое имя у объявлений: отказ с подсказкой ───────────────────────────
-    rc2, out2 = зов(LEASE, "--db", str(db), "take", "--actor", "STUB1",
+    rc2, out2 = call_tool(LEASE, "--db", str(db), "take", "--actor", "STUB1",
                     "--tools", "x.py", "--reason", "проба")
-    суд("② lease take --actor: ОТКАЗ, подсказка несёт --role и карточку #409",
+    case("② lease take --actor: ОТКАЗ, подсказка несёт --role и карточку #409",
         rc2 != 0 and "--role" in out2 and "карточка #409" in out2, out2)
 
     # ── ③④⑤ встречные: прежние верные вызовы работают ─────────────────────────
-    rc3, out3 = зов(BACKLOG, "--db", str(db), "claim", str(к1), "--actor", "STUB1",
+    rc3, out3 = call_tool(BACKLOG, "--db", str(db), "claim", str(bid1), "--actor", "STUB1",
                     "--note", "проба взятия")
-    суд("③ backlog claim --actor: работает как прежде", rc3 == 0, out3)
+    case("③ backlog claim --actor: работает как прежде", rc3 == 0, out3)
 
-    rc4, out4 = зов(LEASE, "--db", str(db), "take", "--role", "STUB1",
+    rc4, out4 = call_tool(LEASE, "--db", str(db), "take", "--role", "STUB1",
                     "--tools", "x.py", "--reason", "проба", "--minutes", "5")
-    суд("④ lease take --role: работает как прежде", rc4 == 0, out4)
+    case("④ lease take --role: работает как прежде", rc4 == 0, out4)
 
-    rc5, out5 = зов(BACKLOG, "--db", str(db), "add", "--role", "STUB2",
+    rc5, out5 = call_tool(BACKLOG, "--db", str(db), "add", "--role", "STUB2",
                     "--title", "проба-два", "--body", "т", "--done-when", "к")
-    суд("⑤ backlog add --role: законный --role (владелец) не тронут", rc5 == 0, out5)
+    case("⑤ backlog add --role: законный --role (владелец) не тронут", rc5 == 0, out5)
 
     # ── Р1 обратный ход: подсказка ослеплена ───────────────────────────────────
-    к_р1 = ослабить(BACKLOG, d,
-                    'if _подкоманда in _КОМАНДЫ_ACTOR and "--role" in sys.argv:',
+    weak_rev1 = weaken(BACKLOG, d,
+                    'if _subcommand in _ACTOR_COMMANDS and "--role" in sys.argv:',
                     "if False:")
-    rc_r1, out_r1 = зов(к_р1, "--db", str(db), "claim", str(к1), "--role", "STUB1",
-                        окружение={"PYTHONPATH": str(BACKLOG.parent)})
-    суд("Р1 подсказка ослеплена: отказ голый, ссылки на карточку #409 нет — ① пал бы",
+    rc_r1, out_r1 = call_tool(weak_rev1, "--db", str(db), "claim", str(bid1), "--role", "STUB1",
+                        extra_env={"PYTHONPATH": str(BACKLOG.parent)})
+    case("Р1 подсказка ослеплена: отказ голый, ссылки на карточку #409 нет — ① пал бы",
         rc_r1 != 0 and "карточка #409" not in out_r1, out_r1)
 
     print("-" * 76)
-    if провалы:
-        print(f"🔴 ПРИЁМКА: {судов - len(провалы)} из {судов}, провалено: "
-              + " · ".join(провалы))
+    if failures:
+        print(f"🔴 ПРИЁМКА: {cases - len(failures)} из {cases}, провалено: "
+              + " · ".join(failures))
         return 1
-    print(f"✅ ПРИЁМКА: {судов} из {судов} — чужое имя получает подсказку, "
+    print(f"✅ ПРИЁМКА: {cases} из {cases} — чужое имя получает подсказку, "
           f"верные вызовы не тронуты")
     return 0
 

@@ -64,7 +64,7 @@ assert os.path.exists(SAVE), f"инструмент не найден: {SAVE} �
 LONG = "живой слепок роли. " * 40          # ~800 знаков
 
 
-def build(path: str, seed=(), история=True):
+def build(path: str, seed=(), with_history=True):
     """⚡ ИСТОРИЯ ЗАВОДИТСЯ ПО УМОЛЧАНИЮ — как в живой базе после шага схемы.
 
     🩸 Без неё стенд испытывал бы инструмент в режиме «истории нет», то есть ПОЛОВИНУ:
@@ -80,14 +80,39 @@ def build(path: str, seed=(), история=True):
     con.execute("""CREATE TABLE audit_log (id INTEGER PRIMARY KEY, timestamp TEXT
                    DEFAULT (datetime('now')), actor_role TEXT, action TEXT, target TEXT,
                    diff_md TEXT)""")
-    if история:
+    if with_history:
         con.execute("""CREATE TABLE phoenix_history (id INTEGER PRIMARY KEY, role TEXT NOT NULL,
                        section TEXT NOT NULL, body TEXT NOT NULL, body_chars INTEGER NOT NULL,
                        saved_at TEXT NOT NULL, actor TEXT NOT NULL, reason TEXT NOT NULL,
                        prev_chars INTEGER)""")
+        # 🩸 НАЙДЕНО ПРИ РАЗБОРЕ случаев ⑫/⑰ (задача PROTO, замер 2026-09-13): стенд заводил
+        # phoenix_history БЕЗ phoenix_history_archive, а save-phoenix.py с 05.09 чистит
+        # историю ТОЛЬКО когда архивная таблица есть (иначе печатает «ИСТОРИЯ НЕ ЧИСТИТСЯ» и
+        # ничего не удаляет — молчаливой потери здесь нет по конструкции, см. save-phoenix.py
+        # ~655-670). Стенд без архива проверял не чистку, а её ОТСУТСТВИЕ: ⑫ (10 свежих плюс
+        # самая длинная) и ⑰ (обратный ход по чистке — длинная обязана потеряться) не могли
+        # покраснеть НИ ПРИ КАКОЙ поломке, потому что чистка не запускалась вовсе.
+        # ⚖️ Определение — ДОСЛОВНО из миграции schema (единственный источник истины для
+        # формы этой таблицы): .mezosync/scripts/migrations/20260905-phoenix-history-archive.py
+        con.execute("""CREATE TABLE phoenix_history_archive (
+            id          INTEGER PRIMARY KEY,
+            role        TEXT NOT NULL,
+            section     TEXT NOT NULL,
+            body        TEXT NOT NULL,
+            body_chars  INTEGER NOT NULL,
+            saved_at    TEXT NOT NULL,
+            actor       TEXT NOT NULL,
+            reason      TEXT NOT NULL,
+            prev_chars  INTEGER,
+            moved_at    TEXT NOT NULL DEFAULT (datetime('now')),
+            moved_by    TEXT NOT NULL,
+            rule        TEXT NOT NULL
+        )""")
+        con.execute("CREATE INDEX idx_phoenix_history_archive_role "
+                    "ON phoenix_history_archive(role, section, saved_at)")
     for role, section, body in seed:
         con.execute("INSERT INTO phoenix VALUES (?,?,?,datetime('now'))", (role, section, body))
-        if история:
+        if with_history:
             con.execute("""INSERT INTO phoenix_history (role, section, body, body_chars,
                            saved_at, actor, reason, prev_chars)
                            VALUES (?,?,?,?,datetime('now'),'migration','seed',NULL)""",
@@ -96,12 +121,12 @@ def build(path: str, seed=(), история=True):
     con.close()
 
 
-def версии(path: str, section: str = "state"):
+def versions(path: str, section: str = "state"):
     con = sqlite3.connect(path)
-    строки = con.execute("SELECT id, body_chars, reason, body FROM phoenix_history "
+    rows = con.execute("SELECT id, body_chars, reason, body FROM phoenix_history "
                          "WHERE role='RCC' AND section=? ORDER BY id", (section,)).fetchall()
     con.close()
-    return строки
+    return rows
 
 
 def save(path: str, section: str, body: str, extra=()):
@@ -157,13 +182,13 @@ def main() -> int:
     # и учат не верить красному вообще; «не запускалась» говорит правду — опыта не было.
     # ⇒ Пробуем инструмент ОДИН раз на заведомо законном сохранении. Не работает —
     #   выходим кодом 2, тем же, каким контур метит отказ мерить.
-    _проба = os.path.join(tmp, "проба-запуска.db")
-    build(_проба)
-    _вывод, _код = save(_проба, "launcher", "проба запуска инструмента")
-    if _код != 0:
+    _probe_db = os.path.join(tmp, "проба-запуска.db")
+    build(_probe_db)
+    _output, _code = save(_probe_db, "launcher", "проба запуска инструмента")
+    if _code != 0:
         print("⛔ ПРИЁМКА НЕ ЗАПУСТИЛАСЬ: инструмент не отвечает даже на заведомо законном")
-        print(f"   сохранении (код {_код}). Это НЕ провал защиты — опыта не было вовсе.")
-        for _s in (_вывод or "").strip().splitlines()[:4]:
+        print(f"   сохранении (код {_code}). Это НЕ провал защиты — опыта не было вовсе.")
+        for _s in (_output or "").strip().splitlines()[:4]:
             print(f"   | {_s}")
         print(f"   👉 Инструмент: {SAVE}")
         print("   👉 Обычная причина: приёмку позвали В ОБРАЗЦЕ, а не в контуре. Образец")
@@ -225,24 +250,24 @@ def main() -> int:
     # ═══════════════════════════════════════════════════════════════════════════
     # ДОПИСАНО 2026-08-24 — порог по доле, отчёт содержимым, история версий
     # ═══════════════════════════════════════════════════════════════════════════
-    БОЛЬШОЕ = "\n".join(f"## Раздел {i}\nсодержательная строка раздела {i}, довольно длинная\n"
+    BIG = "\n".join(f"## Раздел {i}\nсодержательная строка раздела {i}, довольно длинная\n"
                         f"вторая содержательная строка раздела {i}, тоже длинная"
                         for i in range(20))
 
     # ⑦ ПОТЕРЯ 61 % — ОТКАЗ, и блоки названы ПОИМЁННО, а не числом.
     p = os.path.join(tmp, "g.db")
-    build(p, [("RCC", "state", БОЛЬШОЕ), ("RCC", "plan", LONG)])
-    out, code = save(p, "state", БОЛЬШОЕ[:int(len(БОЛЬШОЕ) * 0.39)])
-    названы = "ИСЧЕЗАЮТ БЛОКИ" in out and "Раздел 1" in out
+    build(p, [("RCC", "state", BIG), ("RCC", "plan", LONG)])
+    out, code = save(p, "state", BIG[:int(len(BIG) * 0.39)])
+    named = "ИСЧЕЗАЮТ БЛОКИ" in out and "Раздел 1" in out
     ok &= case("⑦ потеря 61 % — ОТКАЗ, исчезающие блоки НАЗВАНЫ поимённо",
-               code != 0 and названы and body_of(p, "state") == БОЛЬШОЕ and control_passes(p),
-               f"код {code} · блоки {'названы' if названы else 'НЕ НАЗВАНЫ'} · "
+               code != 0 and named and body_of(p, "state") == BIG and control_passes(p),
+               f"код {code} · блоки {'названы' if named else 'НЕ НАЗВАНЫ'} · "
                "прежний затвор «в 4 раза» здесь молчал: требовалось 75 %", differ=True)
 
     # ⑧ КОНТРОЛЬ к ⑦: потеря 18 % — законная правка, обязана пройти.
     p = os.path.join(tmp, "h.db")
-    build(p, [("RCC", "state", БОЛЬШОЕ)])
-    out, code = save(p, "state", БОЛЬШОЕ[:int(len(БОЛЬШОЕ) * 0.82)])
+    build(p, [("RCC", "state", BIG)])
+    out, code = save(p, "state", BIG[:int(len(BIG) * 0.82)])
     ok &= case("⑧ КОНТРОЛЬ к ⑦: потеря 18 % — проходит",
                code == 0,
                f"код {code} · без этого случая ⑦ доказывал бы лишь то, что инструмент "
@@ -251,77 +276,77 @@ def main() -> int:
     # ⑨ СЕКЦИЯ БЕЗ РАЗМЕТКИ. Замер по живой базе: у 16 секций из 63 заголовков «## » нет
     #    вовсе. Отчёт «по блокам» молчал бы на четверти контура, и молчание читалось бы
     #    как «ничего не исчезло».
-    ПЛОСКОЕ = "\n".join(f"строка номер {i}, достаточно длинная чтобы считаться содержательной"
+    FLAT = "\n".join(f"строка номер {i}, достаточно длинная чтобы считаться содержательной"
                         for i in range(60))
     p = os.path.join(tmp, "i.db")
-    build(p, [("RCC", "state", ПЛОСКОЕ)])
-    out, code = save(p, "state", ПЛОСКОЕ[:int(len(ПЛОСКОЕ) * 0.35)])
-    признался = "НИЧЕГО НЕ ЛОВИТ" in out or "разметки нет" in out
+    build(p, [("RCC", "state", FLAT)])
+    out, code = save(p, "state", FLAT[:int(len(FLAT) * 0.35)])
+    admitted = "НИЧЕГО НЕ ЛОВИТ" in out or "разметки нет" in out
     ok &= case("⑨ секция БЕЗ разметки — отчёт НЕ молчит и признаётся, что признак бессилен",
-               code != 0 and признался and "исчезло дословно" in out,
-               f"код {code} · {'признался' if признался else 'СКАЗАЛ «блоки целы» — успокаивающая ложь'}"
+               code != 0 and admitted and "исчезло дословно" in out,
+               f"код {code} · {'признался' if admitted else 'СКАЗАЛ «блоки целы» — успокаивающая ложь'}"
                " · «нечем сравнить» и «всё цело» не имеют права выглядеть одинаково",
                differ=True)
 
     # ⑩ ПРЕЖНЕЕ ТЕЛО В ИСТОРИИ — дословно, а не «примерно столько же знаков».
     p = os.path.join(tmp, "j.db")
-    build(p, [("RCC", "state", БОЛЬШОЕ)])
-    out, code = save(p, "state", БОЛЬШОЕ + "\n## Раздел 20\nдописанное")
-    в_истории = [v for v in версии(p) if v[3] == БОЛЬШОЕ]
+    build(p, [("RCC", "state", BIG)])
+    out, code = save(p, "state", BIG + "\n## Раздел 20\nдописанное")
+    in_history = [v for v in versions(p) if v[3] == BIG]
     ok &= case("⑩ прежнее тело легло в историю ДОСЛОВНО",
-               code == 0 and bool(в_истории),
-               f"версий {len(версии(p))} · прежнее тело "
-               f"{'найдено дословно' if в_истории else 'НЕ НАЙДЕНО'} · возврат обязан быть "
+               code == 0 and bool(in_history),
+               f"версий {len(versions(p))} · прежнее тело "
+               f"{'найдено дословно' if in_history else 'НЕ НАЙДЕНО'} · возврат обязан быть "
                "копированием: сборка по частям добавляет шаг, на котором «не смог собрать» "
                "превращается в «данных нет»", differ=True)
 
     # ⑪ ВОЗВРАТ ИЗ ИСТОРИИ — побайтно, прежние версии целы, возврат ложится НОВОЙ версией.
     p = os.path.join(tmp, "k.db")
-    build(p, [("RCC", "state", БОЛЬШОЕ)])
-    save(p, "state", БОЛЬШОЕ[:int(len(БОЛЬШОЕ) * 0.82)])
-    было_версий = len(версии(p))
-    цель = версии(p)[0][0]
+    build(p, [("RCC", "state", BIG)])
+    save(p, "state", BIG[:int(len(BIG) * 0.82)])
+    versions_before = len(versions(p))
+    target_id = versions(p)[0][0]
     r = subprocess.run([sys.executable, SAVE, "--db", p, "--role", "RCC", "--section", "state",
-                        "--restore", str(цель)], capture_output=True, text=True,
+                        "--restore", str(target_id)], capture_output=True, text=True,
                        encoding="utf-8")
-    вернулось = body_of(p, "state") == БОЛЬШОЕ
-    стало_версий = len(версии(p))
+    restored = body_of(p, "state") == BIG
+    versions_after = len(versions(p))
     ok &= case("⑪ возврат из истории — тело ПОБАЙТНО, прежние версии целы, лёг новой версией",
-               r.returncode == 0 and вернулось and стало_версий == было_версий + 1,
-               f"код {r.returncode} · тело {'побайтно' if вернулось else 'РАЗОШЛОСЬ'} · "
-               f"версий {было_версий} → {стало_версий} · откат отката тоже возможен",
+               r.returncode == 0 and restored and versions_after == versions_before + 1,
+               f"код {r.returncode} · тело {'побайтно' if restored else 'РАЗОШЛОСЬ'} · "
+               f"версий {versions_before} → {versions_after} · откат отката тоже возможен",
                differ=True)
 
     # ⑫ ЧИСТКА: последние десять ПЛЮС самая длинная. Окно по свежести прогорает —
     #    замер даёт до 15 сохранений одной секции в сутки.
     p = os.path.join(tmp, "l.db")
-    build(p, [("RCC", "state", БОЛЬШОЕ)])
-    среднее = БОЛЬШОЕ[:int(len(БОЛЬШОЕ) * 0.72)]
-    коды = []
+    build(p, [("RCC", "state", BIG)])
+    mid_text = BIG[:int(len(BIG) * 0.72)]
+    codes = []
     for i in range(14):
-        _, c = save(p, "state", среднее + f"\nправка {i}")
-        коды.append(c)
-    сохранённые = версии(p)
-    длинная_цела = any(v[1] == len(БОЛЬШОЕ) for v in сохранённые)
+        _, c = save(p, "state", mid_text + f"\nправка {i}")
+        codes.append(c)
+    saved_versions = versions(p)
+    long_intact = any(v[1] == len(BIG) for v in saved_versions)
     ok &= case("⑫ чистка: осталось 10 свежих ПЛЮС самая длинная",
-               set(коды) == {0} and len(сохранённые) == 11 and длинная_цела,
-               f"версий {len(сохранённые)} · самая длинная "
-               f"{'сбережена' if длинная_цела else 'ПОТЕРЯНА'} · по свежести она вылетела бы",
+               set(codes) == {0} and len(saved_versions) == 11 and long_intact,
+               f"версий {len(saved_versions)} · самая длинная "
+               f"{'сбережена' if long_intact else 'ПОТЕРЯНА'} · по свежести она вылетела бы",
                differ=True)
 
     # ⑬ БАЗА БЕЗ ТАБЛИЦЫ ИСТОРИИ — сохранение НЕ запрещается, но отсутствие говорится
     #    вслух И ложится в журнал. Один шаг схемы не вправе обездвижить память всех ролей;
     #    тихая деградация была бы худшим исходом.
     p = os.path.join(tmp, "m.db")
-    build(p, [("RCC", "state", LONG)], история=False)
+    build(p, [("RCC", "state", LONG)], with_history=False)
     out, code = save(p, "state", LONG + " дополнение")
     con = sqlite3.connect(p)
-    метка = con.execute("SELECT diff_md FROM audit_log ORDER BY id DESC LIMIT 1").fetchone()
+    mark = con.execute("SELECT diff_md FROM audit_log ORDER BY id DESC LIMIT 1").fetchone()
     con.close()
-    в_журнале = bool(метка) and "БЕЗ ИСТОРИИ" in (метка[0] or "")
+    in_journal = bool(mark) and "БЕЗ ИСТОРИИ" in (mark[0] or "")
     ok &= case("⑬ база БЕЗ таблицы истории — проходит, но предупреждает И метит журнал",
-               code == 0 and "ИСТОРИИ НЕТ" in out and в_журнале,
-               f"код {code} · пометка в журнале {'есть' if в_журнале else 'ОТСУТСТВУЕТ'} · "
+               code == 0 and "ИСТОРИИ НЕТ" in out and in_journal,
+               f"код {code} · пометка в журнале {'есть' if in_journal else 'ОТСУТСТВУЕТ'} · "
                "иначе потеря снова стала бы необратимой, и никто бы не узнал", differ=True)
 
     # ⑭⑮ ВТОРОЙ ПУТЬ ВЫЗОВА. Находка @OPSSRE (записка #3776): защита срабатывает верно,
@@ -331,39 +356,39 @@ def main() -> int:
     #     редкий невидимый дефект стал бы частым невидимым.
     WM = os.path.join(HERE, "write-message.py")
     if os.path.exists(WM):
-        контур = os.path.join(tmp, "контур", ".mezosync")
-        os.makedirs(os.path.join(контур, "scripts"), exist_ok=True)
+        fake_container = os.path.join(tmp, "контур", ".mezosync")
+        os.makedirs(os.path.join(fake_container, "scripts"), exist_ok=True)
         import shutil as _sh
-        for имя in os.listdir(HERE):
-            if имя.endswith(".py"):
-                _sh.copy(os.path.join(HERE, имя), os.path.join(контур, "scripts", имя))
-        pdb = os.path.join(контур, "mezosync.db")
-        build(pdb, [("RCC", "state", БОЛЬШОЕ)])
+        for fname in os.listdir(HERE):
+            if fname.endswith(".py"):
+                _sh.copy(os.path.join(HERE, fname), os.path.join(fake_container, "scripts", fname))
+        pdb = os.path.join(fake_container, "mezosync.db")
+        build(pdb, [("RCC", "state", BIG)])
         con = sqlite3.connect(pdb)
         con.execute("""CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY,
                        writer_role TEXT, timestamp TEXT, body_md TEXT, tags TEXT,
                        priority TEXT, resolved INTEGER, broadcast INTEGER, addressed_by TEXT)""")
         con.commit(); con.close()
-        файл = os.path.join(tmp, "урезанное.md")
-        with open(файл, "w", encoding="utf-8") as f:
-            f.write(БОЛЬШОЕ[:int(len(БОЛЬШОЕ) * 0.39)])
-        r = subprocess.run([sys.executable, os.path.join(контур, "scripts", "write-message.py"),
+        file_path = os.path.join(tmp, "урезанное.md")
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(BIG[:int(len(BIG) * 0.39)])
+        r = subprocess.run([sys.executable, os.path.join(fake_container, "scripts", "write-message.py"),
                             "--db", pdb, "--role", "RCC", "--body", "проба второго пути",
-                            "--save-state", файл],
+                            "--save-state", file_path],
                            capture_output=True, text=True, encoding="utf-8", errors="replace")
-        весь = (r.stdout or "") + (r.stderr or "")
+        combined_output = (r.stdout or "") + (r.stderr or "")
         ok &= case("⑭ второй путь вызова, отказ памяти — код 4, а не «успех»",
-                   r.returncode == 4 and "ПОВТОРЯТЬ НЕ НАДО" in весь,
+                   r.returncode == 4 and "ПОВТОРЯТЬ НЕ НАДО" in combined_output,
                    f"код {r.returncode} · из «записку откатывать нельзя» не следует "
                    "«операция удалась» · текст запрещает повтор явным словом, иначе "
                    "красное читается как «не ушло» и рождается дубль", differ=True)
 
-        файл2 = os.path.join(tmp, "законное.md")
-        with open(файл2, "w", encoding="utf-8") as f:
-            f.write(БОЛЬШОЕ + "\n## Раздел 20\nдописанное")
-        r2 = subprocess.run([sys.executable, os.path.join(контур, "scripts", "write-message.py"),
+        file_path2 = os.path.join(tmp, "законное.md")
+        with open(file_path2, "w", encoding="utf-8") as f:
+            f.write(BIG + "\n## Раздел 20\nдописанное")
+        r2 = subprocess.run([sys.executable, os.path.join(fake_container, "scripts", "write-message.py"),
                              "--db", pdb, "--role", "RCC", "--body", "проба законного",
-                             "--save-state", файл2],
+                             "--save-state", file_path2],
                             capture_output=True, text=True, encoding="utf-8", errors="replace")
         ok &= case("⑮ ВСТРЕЧНЫЙ к ⑭: второй путь, законное сохранение — код 0",
                    r2.returncode == 0,
@@ -376,27 +401,27 @@ def main() -> int:
 
     # ⑯ ОБРАТНЫЙ ХОД ПО ПОРОГУ. Ослабляем порог и требуем, чтобы инцидент ПРОСКОЧИЛ.
     #    Без этого случая ⑦ означал бы «сегодня отказало», а не «отказало из-за порога».
-    сломанный_каталог = os.path.join(tmp, "порог-ослаблен")
-    os.makedirs(сломанный_каталог, exist_ok=True)
-    исходник = open(SAVE, encoding="utf-8").read()
-    ослаблен = исходник.replace("SHRINK_HARD = 0.40", "SHRINK_HARD = 0.99", 1)
-    if ослаблен == исходник:
+    broken_dir = os.path.join(tmp, "порог-ослаблен")
+    os.makedirs(broken_dir, exist_ok=True)
+    source_text = open(SAVE, encoding="utf-8").read()
+    weakened = source_text.replace("SHRINK_HARD = 0.40", "SHRINK_HARD = 0.99", 1)
+    if weakened == source_text:
         ok &= case("⑯ ОБРАТНЫЙ ХОД: порог ослаблен — инцидент ПРОСКАКИВАЕТ", False,
                    "⛔ НЕ ЗАПУСТИЛСЯ: строки порога в инструменте нет — он менялся, "
                    "правь приёмку. Зелёный без опыта здесь недопустим")
     else:
-        путь_сломанного = os.path.join(сломанный_каталог, "save-phoenix.py")
-        with open(путь_сломанного, "w", encoding="utf-8") as f:
-            f.write(ослаблен)
+        broken_path = os.path.join(broken_dir, "save-phoenix.py")
+        with open(broken_path, "w", encoding="utf-8") as f:
+            f.write(weakened)
         import shutil as _sh2
-        for сосед in ("mezo_paths.py", "dryrun.py"):
-            если_есть = os.path.join(HERE, сосед)
-            if os.path.exists(если_есть):
-                _sh2.copy(если_есть, os.path.join(сломанный_каталог, сосед))
+        for neighbor in ("mezo_paths.py", "dryrun.py"):
+            neighbor_src = os.path.join(HERE, neighbor)
+            if os.path.exists(neighbor_src):
+                _sh2.copy(neighbor_src, os.path.join(broken_dir, neighbor))
         p = os.path.join(tmp, "n.db")
-        build(p, [("RCC", "state", БОЛЬШОЕ)])
-        r = subprocess.run([sys.executable, путь_сломанного, "--db", p, "--role", "RCC",
-                            "--section", "state", "--body", БОЛЬШОЕ[:int(len(БОЛЬШОЕ) * 0.39)]],
+        build(p, [("RCC", "state", BIG)])
+        r = subprocess.run([sys.executable, broken_path, "--db", p, "--role", "RCC",
+                            "--section", "state", "--body", BIG[:int(len(BIG) * 0.39)]],
                            capture_output=True, text=True, encoding="utf-8")
         ok &= case("⑯ ОБРАТНЫЙ ХОД: порог ослаблен — инцидент ПРОСКАКИВАЕТ",
                    r.returncode == 0,
@@ -406,36 +431,36 @@ def main() -> int:
     # ⑰ ОБРАТНЫЙ ХОД ПО ЧИСТКЕ. Меняем «самая длинная» на «самая короткая» — длинная
     #    обязана потеряться. Поломка СИНТАКСИЧЕСКИ ВЕРНА: сломать сам запрос значило бы
     #    испытывать падение, а не предмет (моя же ошибка при первом прогоне поломок).
-    сломанная_чистка = os.path.join(tmp, "чистка-сломана")
-    os.makedirs(сломанная_чистка, exist_ok=True)
-    порча = исходник.replace("ORDER BY body_chars DESC, id DESC LIMIT 1",
+    broken_cleanup_dir = os.path.join(tmp, "чистка-сломана")
+    os.makedirs(broken_cleanup_dir, exist_ok=True)
+    corruption = source_text.replace("ORDER BY body_chars DESC, id DESC LIMIT 1",
                              "ORDER BY body_chars ASC, id DESC LIMIT 1", 1)
-    if порча == исходник:
+    if corruption == source_text:
         ok &= case("⑰ ОБРАТНЫЙ ХОД: чистка без «самой длинной» — длинная ТЕРЯЕТСЯ", False,
                    "⛔ НЕ ЗАПУСТИЛСЯ: места чистки в инструменте нет — правь приёмку")
     else:
-        путь_порчи = os.path.join(сломанная_чистка, "save-phoenix.py")
-        with open(путь_порчи, "w", encoding="utf-8") as f:
-            f.write(порча)
+        corruption_path = os.path.join(broken_cleanup_dir, "save-phoenix.py")
+        with open(corruption_path, "w", encoding="utf-8") as f:
+            f.write(corruption)
         import shutil as _sh3
-        for сосед in ("mezo_paths.py", "dryrun.py"):
-            если_есть = os.path.join(HERE, сосед)
-            if os.path.exists(если_есть):
-                _sh3.copy(если_есть, os.path.join(сломанная_чистка, сосед))
+        for neighbor in ("mezo_paths.py", "dryrun.py"):
+            neighbor_src = os.path.join(HERE, neighbor)
+            if os.path.exists(neighbor_src):
+                _sh3.copy(neighbor_src, os.path.join(broken_cleanup_dir, neighbor))
         p = os.path.join(tmp, "o.db")
-        build(p, [("RCC", "state", БОЛЬШОЕ)])
-        коды2 = []
+        build(p, [("RCC", "state", BIG)])
+        codes2 = []
         for i in range(13):
-            r = subprocess.run([sys.executable, путь_порчи, "--db", p, "--role", "RCC",
-                                "--section", "state", "--body", среднее + f"\nправка {i}"],
+            r = subprocess.run([sys.executable, corruption_path, "--db", p, "--role", "RCC",
+                                "--section", "state", "--body", mid_text + f"\nправка {i}"],
                                capture_output=True, text=True, encoding="utf-8")
-            коды2.append(r.returncode)
-        осталось = версии(p)
-        длинная_цела2 = any(v[1] == len(БОЛЬШОЕ) for v in осталось)
+            codes2.append(r.returncode)
+        remaining = versions(p)
+        long_intact2 = any(v[1] == len(BIG) for v in remaining)
         ok &= case("⑰ ОБРАТНЫЙ ХОД: чистка без «самой длинной» — длинная ТЕРЯЕТСЯ",
-                   set(коды2) == {0} and not длинная_цела2,
-                   f"записи прошли: {set(коды2) == {0}} · длинная "
-                   f"{'ЦЕЛА — поломка не сработала' if длинная_цела2 else 'потеряна'} · "
+                   set(codes2) == {0} and not long_intact2,
+                   f"записи прошли: {set(codes2) == {0}} · длинная "
+                   f"{'ЦЕЛА — поломка не сработала' if long_intact2 else 'потеряна'} · "
                    "поломка обязана быть синтаксически верной, иначе испытывается падение",
                    differ=True)
 
