@@ -65,26 +65,72 @@ def digest(data: bytes) -> str:
     return hashlib.sha256(data.replace(b"\r\n", b"\n").rstrip()).hexdigest()[:12]
 
 
-def find_last_match(repo: pathlib.Path, git_rel: str, target: bytes) -> tuple[str, str] | tuple[None, None]:
-    """Карточка #604 ③: последний коммит истории source, где файл совпадал (same_text) с этим.
+def git_history_root(path: pathlib.Path) -> tuple[pathlib.Path | None, str]:
+    """Есть ли у `path` полноценная git-история — спрошено у git, а не угадано по файлам.
 
-    Сравнение — ТО ЖЕ same_text, что и везде в инструменте: окончания строк приведены,
-    иначе переехавший файл выглядит переписанным целиком. `repo` обязан быть git-репозиторием
-    С ИСТОРИЕЙ (не архивной распаковкой без .git) — вызывающий отвечает за это сам.
-    Ничего не находит — возвращает (None, None): «в истории пакета такого содержимого нет»
-    ЭТО ОТДЕЛЬНЫЙ ответ, не то же самое, что ошибка git.
+    🩸 ВОЗВРАТ OPSSRE (карточка #604 ③-1): прежняя проверка смотрела `(path / ".git").is_dir()`.
+    Она ошибается в ДВЕ стороны разом:
+      · выгрузка БЕЗ .git (архив, копия диска) — верно говорит «истории нет»;
+      · git WORKTREE — у него `.git` это ФАЙЛ (`gitdir: .../worktrees/<имя>`), не каталог,
+        и `.is_dir()` отвечает «не git» ОШИБОЧНО, хотя история там полная и доступна.
+    Замер OPSSRE: на выгрузке без .git — 38 ложных находок из 45; на worktree — 44 из 45.
+    `git rev-parse --git-dir` понимает ОБЕ формы — он и есть источник правды, не имя файла.
+    Возвращает (path, "") — история есть, опрашивай `path` как обычно;
+    (None, причина) — истории нет, причина ДЛЯ ЧЕЛОВЕКА, а не код ошибки.
     """
-    log = subprocess.run(["git", "-C", str(repo), "log", "--format=%H|%as", "--", git_rel],
-                         capture_output=True, text=True)
-    for line in (log.stdout or "").splitlines():
-        if "|" not in line:
-            continue
-        commit_hash, date = line.split("|", 1)
+    r = subprocess.run(["git", "-C", str(path), "rev-parse", "--git-dir"],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        err = (r.stderr or "").strip()
+        reason = ("источник не git-репозиторий" if "not a git repository" in err.lower()
+                 else (err[:200] or "git rev-parse --git-dir отказал без сообщения"))
+        return None, reason
+    return path, ""
+
+
+def is_shallow_clone(repo: pathlib.Path) -> bool:
+    """Спрошено у git (`--is-shallow-repository`), а не угадано по файлу `.git/shallow` —
+    тот же класс ошибки, что и у git_history_root: у worktree `.git` не каталог, и путь
+    `.git/shallow` там не существует НЕЗАВИСИМО от того, мелкий репозиторий или полный."""
+    r = subprocess.run(["git", "-C", str(repo), "rev-parse", "--is-shallow-repository"],
+                       capture_output=True, text=True)
+    return (r.stdout or "").strip() == "true"
+
+
+def find_version_span(repo: pathlib.Path, git_rel: str, target: bytes,
+                      anchor_rev: str | None = None) -> dict:
+    """Карточка #604 ③-2 (возврат OPSSRE): когда версия ПОЯВИЛАСЬ и когда пакет её СМЕНИЛ —
+    а не «последнее совпадение». Прежняя редакция брала САМЫЙ СВЕЖИЙ коммит с совпадающим
+    содержимым — а это дата, соседняя со СЛЕДУЮЩЕЙ сменой, не с ПОЯВЛЕНИЕМ версии: файл мог
+    не меняться неделями, и «последнее совпадение» называло бы день ПЕРЕД сменой, а не день,
+    когда эта версия появилась. Живой пример OPSSRE: mention.py появился в этом виде 09.08,
+    пакет держал его так до 05.09 — «последнее совпадение» назвало бы 04.09.
+
+    `anchor_rev`, если дан, ОГРАНИЧИВАЕТ историю ИМ И СТАРШЕ (при --rev не заглядываем ПОСЛЕ
+    взятой версии — иначе «пакет сменил её» назвала бы смену, которую этот вызов сознательно
+    не брал). Сравнение — ТО ЖЕ same_text, что и везде в инструменте.
+
+    Возвращает {"found": False} — в истории такого содержимого нет вовсе, ЭТО ОТДЕЛЬНЫЙ
+    ответ от «истории нет» (git_history_root) — здесь история ЕСТЬ и была просмотрена.
+    {"found": True, "date", "commit", "changed_date", "changed_commit"} — появление версии
+    и следующая смена; changed_* пусты, если версия держится и сейчас (в границах anchor_rev).
+    """
+    args = ["git", "-C", str(repo), "log"]
+    if anchor_rev:
+        args.append(anchor_rev)
+    args += ["--format=%H|%as", "--", git_rel]
+    log = subprocess.run(args, capture_output=True, text=True)
+    commits = [tuple(line.split("|", 1)) for line in (log.stdout or "").splitlines()
+              if "|" in line]
+    for i, (commit_hash, date) in enumerate(commits):
         show = subprocess.run(["git", "-C", str(repo), "show", f"{commit_hash}:{git_rel}"],
                               capture_output=True)
         if show.returncode == 0 and same_text(target, show.stdout):
-            return date, commit_hash[:12]
-    return None, None
+            changed = commits[i - 1] if i > 0 else None
+            return {"found": True, "date": date, "commit": commit_hash[:12],
+                    "changed_date": changed[1] if changed else None,
+                    "changed_commit": changed[0][:12] if changed else None}
+    return {"found": False}
 
 
 def fetch(source: str, rev: str | None = None) -> tuple[pathlib.Path, str, bool]:
@@ -289,32 +335,44 @@ def main() -> int:
         for rel in own_edits:
             print(f"   ✋ {str(rel):40} ПРАВЛЕН У ТЕБЯ — НЕ трогаем")
 
-        # 🪤 КАРТОЧКА #604 ③: у «❓» датой и коммитом называем ПОСЛЕДНЕЕ совпадение с историей
-        # источника — иначе «❓» читается как «не смотрели», а не «застряли месяц назад»
-        # (шесть таких файлов у tapas стояли на пакете 20.08 почти месяц, никто не заметил).
+        # 🪤 КАРТОЧКА #604 ③: у «❓» называем, КОГДА эта версия появилась и когда пакет её
+        # сменил — иначе «❓» читается как «не смотрели», а не «застряли месяц назад» (шесть
+        # таких файлов у tapas стояли на пакете 20.08 почти месяц, никто не заметил).
         # История нужна только когда есть хоть один «❓» — иначе это лишний git-вызов впустую.
-        history = {}
+        # ⚖️ ТРИ РАЗНЫХ ОТВЕТА, и путать их нельзя (возврат OPSSRE ③-1): история НЕ СМОТРЕЛАСЬ
+        # (источник не git или worktree распознан неверно) ≠ история ПРОСМОТРЕНА и такого
+        # содержимого в ней нет ≠ содержимое найдено — с датой появления и датой смены.
+        history: dict = {}
+        history_unavailable = None
         if unknown:
             source_as_dir = pathlib.Path(source)
-            history_repo = source_as_dir if source_as_dir.is_dir() else src_dir
-            if (history_repo / ".git").is_dir():
-                if (history_repo / ".git" / "shallow").exists():
+            probe_dir = source_as_dir if source_as_dir.is_dir() else src_dir
+            history_repo, reason = git_history_root(probe_dir)
+            if history_repo is not None:
+                if is_shallow_clone(history_repo):
                     # клон был --depth 1 — истории в нём нет, догружаем ПОЛНОСТЬЮ
                     subprocess.run(["git", "-C", str(history_repo), "fetch", "--unshallow"],
                                    capture_output=True, text=True)
                 for rel in unknown:
                     git_rel = git_rel_of.get(rel)
-                    history[rel] = (find_last_match(history_repo, git_rel,
-                                                     (tools / rel).read_bytes())
-                                    if git_rel else (None, None))
+                    history[rel] = (find_version_span(history_repo, git_rel,
+                                                       (tools / rel).read_bytes(),
+                                                       anchor_rev=rev)
+                                    if git_rel else {"found": False})
             else:
-                # источник — не git (или архивная распаковка без истории): сказать честно,
-                # а не выдумать дату
-                history = {rel: (None, None) for rel in unknown}
+                history_unavailable = reason
         for rel in unknown:
-            date, found_commit = history.get(rel, (None, None))
-            tail = (f" — последний раз совпадал с пакетом: {date}, коммит {found_commit}"
-                   if date else " — в истории пакета такого содержимого нет")
+            if history_unavailable is not None:
+                tail = f" — истории у источника нет — дату назвать нечем ({history_unavailable})"
+            else:
+                span = history.get(rel) or {"found": False}
+                if span.get("found"):
+                    tail = f" — версия пакета от {span['date']} (коммит {span['commit']})"
+                    tail += (f"; пакет сменил её {span['changed_date']} (коммит "
+                            f"{span['changed_commit']})" if span.get("changed_commit")
+                            else "; пакет держит её и сейчас")
+                else:
+                    tail = " — в истории пакета такого содержимого нет"
             print(f"   ❓ {str(rel):40} отличается, но отпечатка установки нет{tail}")
         if not (fresh or new_files or own_edits or unknown):
             print("   инструменты совпадают с источником — забирать нечего")
@@ -381,8 +439,16 @@ def main() -> int:
             print(f"✋ НЕ тронуто твоих правок: {len(own_edits)} — "
                   + " · ".join(str(x) for x in own_edits))
         if unknown and not a.overwrite_unknown:
-            print(f"❓ НЕ тронуто без отпечатка: {len(unknown)} — теперь отпечатки есть, "
-                  f"и следующий прогон скажет про них определённо.")
+            # 🪤 ВОЗВРАТ OPSSRE (карточка #604 ③-3): здесь стояло ложное обещание — «теперь
+            # отпечатки есть, и следующий прогон скажет про них определённо». Неправда:
+            # отпечаток пишется ТОЛЬКО взятым файлам (и так и должно быть — см. комментарий
+            # у updated_fingerprints выше: отпечаток у НЕвзятого файла сделал бы его правку
+            # невидимой). Значит эти файлы отпечатка не получат и на СЛЕДУЮЩЕМ прогоне снова
+            # придут «❓» — обещание «скажет определённо» никогда не сбывается само.
+            print(f"❓ НЕ тронуто без отпечатка: {len(unknown)} — они останутся «❓» и в "
+                  f"следующих прогонах: без отпечатка инструмент не отличит твою правку от "
+                  f"старой версии пакета. Взять версию пакета — тот же вызов с "
+                  f"--overwrite-unknown; оставить свои — ничего не делать.")
         print("👉 ОБЯЗАТЕЛЬНО СЛЕДОМ: прогони свои проверки (guard-all.py). Инструмент, "
               "приехавший и не прогнанный, — это не обновление, а надежда.")
         return 0

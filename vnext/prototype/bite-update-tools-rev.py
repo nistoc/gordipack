@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 r"""bite-update-tools-rev.py — приёмка карточки #604 ②③: update-tools.py умеет взять РОВНО
 названную версию источника (--rev), не подменяет источник контура молча, и у «❓»-файлов
-называет дату и коммит последнего совпадения с историей пакета.
+честно называет, когда версия появилась и когда пакет её сменил (или что истории нет вовсе).
 
 ПОВОД. Заявка @tapas после апгрейда v4→v6, три находки контура-потребителя:
   ② сосед дал `--source <локальная папка>`, чтобы взять ПРОВЕРЕННУЮ версию пакета — и
@@ -12,20 +12,38 @@ r"""bite-update-tools-rev.py — приёмка карточки #604 ②③: up
   ③ у шести файлов «❓ отпечатка установки нет» простояло на пакете 20.08 ПОЧТИ МЕСЯЦ,
     и строка «❓» не читалась как «застряли»: без даты неизвестно, вчера это или месяц назад.
 
+ВОЗВРАТ OPSSRE (приёмка чужой рукой нашла три беды в первой редакции этого же случая ③):
+  ③-1 проверка «источник — git?» смотрела `(path / ".git").is_dir()` — ошибалась в обе
+    стороны: 38/45 ложных на выгрузке без истории, 44/45 ложных на git WORKTREE (там `.git`
+    ФАЙЛ, не каталог). Чинится спросом у git (`rev-parse --git-dir`), а не именем файла.
+  ③-2 дата называла ПОСЛЕДНЕЕ совпадение (соседнюю со сменой), а не ПОЯВЛЕНИЕ версии —
+    живой пример: mention.py появился 09.08, пакет держал его так до 05.09, «последнее
+    совпадение» назвало бы 04.09. Подпись несёт ОБЕ даты: появления и следующей смены.
+  ③-3 обещание «следующий прогон скажет определённо» было ложным: отпечаток пишется
+    ТОЛЬКО взятым файлам, и «❓» без него остаются «❓» на всех следующих прогонах тоже.
+
 ЧТО ЗДЕСЬ ПРОВЕРЯЕТСЯ (случаи):
   ② --rev берёт названную версию, а не HEAD/latest
   ② source в meta НЕ меняется без --record-source (разовый --source не становится записью)
   ② встречный: --record-source МЕНЯЕТ источник в meta — слово дано явно
-  ③ у «❓» печатается дата и коммит ПОСЛЕДНЕГО совпадения с историей источника
+  ③ у «❓» печатается дата и коммит ПОЯВЛЕНИЯ версии (не последнего совпадения)
+  ③-2 подпись несёт ОБЕ даты: появления и следующей смены («пакет сменил её»)
   ③ встречный: содержимого нет в истории пакета вовсе — сказано так, а не выдумана дата
-  ⑥ КОНТРОЛЬ нарочной поломкой: сломанная копия (--rev молча игнорируется) красит РОВНО
-    случаи --rev и не трогает случай ③ (он от --rev не зависит) — иначе приёмка ловила бы
-    что угодно, а не то, что называет своим предметом.
+  ③-3 после --apply без --overwrite-unknown — правда «останутся «❓»», не ложь «скажет
+    определённо»; встречный — следующий план ДЕЙСТВИТЕЛЬНО показывает те же «❓»
+  ③-1а источник-выгрузка без .git вовсе → «истории у источника нет», а не «нет в истории»
+  ③-1б источник с `.git`-ФАЙЛОМ (как у git worktree) → история находится, а не теряется
+  ⑥ КОНТРОЛЬ нарочной поломкой: --rev молча игнорируется — красит РОВНО случаи --rev,
+    не трогает случай ③ (он от --rev не зависит)
+  ⑦ КОНТРОЛЬ нарочной поломкой: git-детект истории возвращён к `.is_dir()` — красит РОВНО
+    ③-1б (там способ проверки и есть предмет разницы) и не трогает ③-1а (там оба способа
+    честно отвечают одинаково)
 
 ИСПЫТУЕТСЯ через mezo_target (живой контур или MEZO_SCRIPTS_ROOT — копия для укуса).
-ПАКЕТ — ЛОКАЛЬНАЯ КОПИЯ <ШАБЛОН>, ТОЛЬКО ЧТЕНИЕ: git log/show/archive/worktree
-во временный каталог; ни файлов, ни веток, ни git checkout пакета эта приёмка не трогает —
-для подмены версии в стенде используется git archive, как и в самом update-tools.py.
+ПАКЕТ — ЛОКАЛЬНАЯ КОПИЯ <ШАБЛОН>, ТОЛЬКО ЧТЕНИЕ: git log/show — команды на
+чтение; ③-1б кладёт файл-указатель `.git` РЯДОМ С СОБОЙ (не в пакете, см.
+make_worktree_like_source) — пакет ни разу не открывается на запись, что проверяет
+контроль «пакет не тронут» в конце файла (HEAD · git status · отпечаток git diff, ДО/ПОСЛЕ).
 
     python <КОНТУР>/vnext-tools/bite-update-tools-rev.py
 """
@@ -106,6 +124,39 @@ def git_show(rev: str, rel: str) -> bytes:
     return r.stdout
 
 
+PACKAGE_GITDIR = subprocess.run(["git", "-C", str(PACKAGE), "rev-parse", "--absolute-git-dir"],
+                                capture_output=True, text=True).stdout.strip()
+
+
+def make_dump_source(dest: pathlib.Path, rel: str, content: bytes) -> None:
+    """Возврат OPSSRE ③-1а: источник — ВЫГРУЗКА БЕЗ ИСТОРИИ (копия диска, не git вовсе).
+
+    Только ЧТЕНИЕ пакета: содержимое кладётся сюда данными приёмки (`content`), не git archive
+    из PACKAGE — так проще гарантировать РОВНО тот же байт-в-байт текст, что уйдёт в сравнение.
+    """
+    p = dest / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(content)
+
+
+def make_worktree_like_source(dest: pathlib.Path, rel: str, content: bytes) -> None:
+    """Возврат OPSSRE ③-1б: источник, у которого `.git` — ФАЙЛ, не каталог (как у git worktree).
+
+    ⚖️ ВЫБОР ИЗ ДВУХ СПОСОБОВ, НАЗВАН ЯВНО (карточка #604 ③, OPSSRE предложил оба):
+    `git worktree add` в PACKAGE добавил бы запись в PACKAGE/.git/worktrees — временную,
+    но ЗАПИСЬ. Выбран способ БЕЗ единой записи в PACKAGE: файл `.git` кладётся ЗДЕСЬ,
+    в `dest`, и указывает НАПРЯМУЮ на PACKAGE/.git (`gitdir: <путь>`) — git понимает эту
+    форму (ровно так устроены worktree) и резолвит историю через неё, а сам PACKAGE/.git
+    при этом НЕ ПОЛУЧАЕТ НИ ОДНОЙ новой записи: git log/show/rev-parse — команды ТОЛЬКО НА
+    ЧТЕНИЕ, PACKAGE ни разу не открывается на запись. Проверено прогоном (см. контроль
+    «пакет не тронут» в конце этого файла) и отдельно — командой руками перед правкой.
+    """
+    p = dest / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(content)
+    (dest / ".git").write_text(f"gitdir: {PACKAGE_GITDIR}\n", encoding="utf-8")
+
+
 def make_contour(root: pathlib.Path, under_test: pathlib.Path) -> pathlib.Path:
     """Свежий контур из ПАКЕТА, с испытуемым update-tools.py (и соседями) НА МЕСТЕ шаблонного.
 
@@ -175,6 +226,8 @@ if len(_hist) < 8:
     sys.exit(f"⛔ НЕ ЗАПУСТИЛАСЬ: у scripts/backlog.py в {PACKAGE} меньше 8 редакций в истории "
              f"({len(_hist)}) — приёмке не на чем стоять")
 OLD_REV = _hist[7]                                    # заведомо старше HEAD на 7+ редакций
+CHANGED_REV = _hist[6]                                # СЛЕДУЮЩАЯ (более новая) правка того же пути —
+                                                        # для случая ③-2 «пакет сменил её»
 HEAD_CONTENT = git_show("HEAD", "scripts/backlog.py")
 OLD_CONTENT = git_show(OLD_REV, "scripts/backlog.py")
 if norm(HEAD_CONTENT) == norm(OLD_CONTENT):
@@ -182,6 +235,8 @@ if norm(HEAD_CONTENT) == norm(OLD_CONTENT):
              "случай ② не будет различающим")
 OLD_DATE = subprocess.run(["git", "-C", str(PACKAGE), "log", "-1", "--format=%as", OLD_REV],
                           capture_output=True, text=True).stdout.strip()
+CHANGED_DATE = subprocess.run(["git", "-C", str(PACKAGE), "log", "-1", "--format=%as", CHANGED_REV],
+                              capture_output=True, text=True).stdout.strip()
 
 stand = mezo_stand.new("bite-604-rev-")
 
@@ -215,7 +270,8 @@ case("② встречный: --record-source МЕНЯЕТ источник в m
      rc1b == 0 and meta_after2.get("template_source") == str(PACKAGE),
      f"стало {meta_after2.get('template_source')}")
 
-# ═══ ③ у «❓» — дата и коммит последнего совпадения; встречный — «нет в истории»
+# ═══ ③ у «❓» — версия появления + следующая смена (НЕ «последнее совпадение», возврат
+# OPSSRE ③-2); встречный — «нет в истории»
 t2 = stand / "t2"
 db2_dir = make_contour(t2, TARGET)
 db2 = db2_dir / "mezosync.db"
@@ -228,15 +284,71 @@ ghost_marker = ("# УНИКАЛЬНАЯ ПОДСТАВА bite-update-tools-rev, 
 drop_fingerprints(db2, "backlog.py", "write-message.py")
 
 rc2, out2 = run(upd2, "--source", str(PACKAGE))
-case("③ у «❓» печатается дата и коммит ПОСЛЕДНЕГО совпадения с историей источника",
-     rc2 == 0 and f"коммит {OLD_REV[:12]}" in out2 and OLD_DATE in out2
-     and "backlog.py" in out2.split(f"коммит {OLD_REV[:12]}")[0].splitlines()[-1],
-     f"код {rc2} · ищем «{OLD_DATE}, коммит {OLD_REV[:12]}» рядом с backlog.py")
+appearance_sig = f"версия пакета от {OLD_DATE} (коммит {OLD_REV[:12]})"
+changed_sig = f"пакет сменил её {CHANGED_DATE} (коммит {CHANGED_REV[:12]})"
+case("③ у «❓» печатается дата и коммит ПОЯВЛЕНИЯ версии, а не последнего совпадения",
+     rc2 == 0 and appearance_sig in out2
+     and "backlog.py" in out2.split(appearance_sig)[0].splitlines()[-1],
+     f"код {rc2} · ищем «{appearance_sig}» рядом с backlog.py")
+case("③-2 подпись несёт ОБЕ даты: появления И следующей смены («пакет сменил её»)",
+     rc2 == 0 and appearance_sig in out2 and changed_sig in out2
+     and out2.index(appearance_sig) < out2.index(changed_sig) < out2.index(appearance_sig) + 200,
+     f"ищем рядом «{appearance_sig}; {changed_sig}»")
 case("③ встречный: содержимого нет в истории пакета — сказано так, а не выдумана дата",
      rc2 == 0 and "в истории пакета такого содержимого нет" in out2
      and "write-message.py" in out2.split("в истории пакета такого содержимого нет")[0]
          .splitlines()[-1],
      f"код {rc2}")
+
+# ═══ ③-3 (возврат OPSSRE): после --apply без --overwrite-unknown — ПРАВДА, а не обещание
+# «следующий прогон скажет определённо» (он НЕ скажет — отпечаток пишется только взятым
+# файлам, «❓» без него так и останутся «❓»). Тот же t2/db2 — backlog.py и write-message.py
+# всё ещё без отпечатка, всё ещё «❓».
+rc2b, out2b = run(upd2, "--source", str(PACKAGE), "--apply")
+case("③-3 после --apply БЕЗ --overwrite-unknown нет ложного обещания «скажет определённо»",
+     rc2b == 0 and "следующий прогон скажет" not in out2b,
+     f"код {rc2b} · искомая ложь отсутствует: {'следующий прогон скажет' not in out2b}")
+case("③-3 вместо обещания — правда: «останутся «❓»» и рецепт (--overwrite-unknown / ничего)",
+     rc2b == 0 and "останутся «❓»" in out2b and "--overwrite-unknown" in out2b,
+     f"код {rc2b}")
+rc2c, out2c = run(upd2, "--source", str(PACKAGE))          # план ЕЩЁ РАЗ — без --apply
+case("③-3 встречный: следующий план ДЕЙСТВИТЕЛЬНО показывает те же «❓» — обещание было ложным не только на словах",
+     rc2c == 0 and "backlog.py" in out2c and "❓" in out2c
+     and appearance_sig in out2c,
+     f"код {rc2c}")
+
+# ═══ ③-1а (возврат OPSSRE): источник — ВЫГРУЗКА БЕЗ ИСТОРИИ. Обязана сказать «истории нет»,
+# а НЕ «в истории такого содержимого нет» — это РАЗНЫЕ ответы: второй лжёт, что смотрели.
+t2a = stand / "t2a"
+db2a_dir = make_contour(t2a, TARGET)
+upd2a = db2a_dir / "scripts" / "update-tools.py"
+dump_src = stand / "dump-source"
+make_dump_source(dump_src, "scripts/backlog.py", HEAD_CONTENT)
+(db2a_dir / "scripts" / "backlog.py").write_bytes(OLD_CONTENT)
+drop_fingerprints(db2a_dir / "mezosync.db", "backlog.py")
+rc2a, out2a = run(upd2a, "--source", str(dump_src))
+case("③-1а источник-выгрузка (без .git вовсе) → «истории у источника нет», не выдумана дата",
+     rc2a == 0 and "истории у источника нет" in out2a
+     and "в истории пакета такого содержимого нет" not in out2a
+     and "версия пакета от" not in out2a,
+     f"код {rc2a}")
+
+# ═══ ③-1б (возврат OPSSRE, ГЛАВНЫЙ по этому возврату): источник — как git WORKTREE
+# (`.git` ФАЙЛ, не каталог). Прежняя проверка `(path / ".git").is_dir()` считала такой
+# источник НЕ-гитом и лгала «в истории нет» — 44 ложных находки из 45 у OPSSRE. `.git`
+# здесь — ФАЙЛ-УКАЗАТЕЛЬ на PACKAGE/.git (см. make_worktree_like_source): PACKAGE
+# при этом НИ РАЗУ не открывается на запись — контроль «пакет не тронут» ниже это проверяет.
+t2b = stand / "t2b"
+db2b_dir = make_contour(t2b, TARGET)
+upd2b = db2b_dir / "scripts" / "update-tools.py"
+worktree_src = stand / "worktree-like-source"
+make_worktree_like_source(worktree_src, "scripts/backlog.py", HEAD_CONTENT)
+(db2b_dir / "scripts" / "backlog.py").write_bytes(OLD_CONTENT)
+drop_fingerprints(db2b_dir / "mezosync.db", "backlog.py")
+rc2b_wt, out2b_wt = run(upd2b, "--source", str(worktree_src))
+case("③-1б источник с `.git`-ФАЙЛОМ (как worktree) → история найдена, не «истории нет»",
+     rc2b_wt == 0 and appearance_sig in out2b_wt and "истории у источника нет" not in out2b_wt,
+     f"код {rc2b_wt} · ищем «{appearance_sig}»")
 
 # ═══ ⑥ КОНТРОЛЬ нарочной поломкой: --rev молча игнорируется (rev=a.rev → rev=None)
 # 🩸 БЕЗ ЭТОГО СЛУЧАЯ приёмка могла бы зеленеть по СЛУЧАЙНОЙ причине (например, если бы
@@ -274,9 +386,55 @@ upd4 = db4_dir / "scripts" / "update-tools.py"
 drop_fingerprints(db4, "backlog.py", "write-message.py")
 rc4, out4 = run(upd4, "--source", str(PACKAGE))
 case("⑥ та же поломка НЕ трогает случай ③ (он от --rev не зависит)",
-     rc4 == 0 and f"коммит {OLD_REV[:12]}" in out4
+     rc4 == 0 and appearance_sig in out4
      and "в истории пакета такого содержимого нет" in out4,
      f"код {rc4} — ③ обязан остаться зелёным при поломке, которая бьёт только --rev")
+
+# ═══ ⑦ КОНТРОЛЬ нарочной поломкой (возврат OPSSRE): git_history_root() возвращён к старой
+# проверке `(path / ".git").is_dir()`. Красить ОБЯЗАНА ровно ③-1б (worktree-подобный
+# источник — там разница между способами и есть сам предмет находки OPSSRE) и НЕ обязана
+# красить ③-1а (там и старая, и новая проверка одинаково честно отвечают «истории нет» —
+# .git там нет вовсе, никакого различия способ проверки не вносит).
+broken2_dir = stand / "broken2"
+broken2_tool = mezo_stand.copy_tool(TARGET, broken2_dir)
+old_check_src = broken2_tool.read_text(encoding="utf-8")
+old_check_anchor = "            history_repo, reason = git_history_root(probe_dir)\n"
+old_check_replacement = (
+    "            history_repo, reason = ((probe_dir, \"\") if (probe_dir / \".git\").is_dir()\n"
+    "                                    else (None, \"источник не git-репозиторий "
+    "(нарочная поломка ③-1)\"))\n")
+if old_check_anchor not in old_check_src:
+    sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: строка для поломки «git_history_root(probe_dir)» не найдена "
+             "в испытуемом — переименовали переменную/функцию, поломка бьёт мимо")
+broken2_tool.write_text(old_check_src.replace(old_check_anchor, old_check_replacement),
+                        encoding="utf-8")
+
+t2b_broken = stand / "t2b-broken"
+db2b_broken_dir = make_contour(t2b_broken, broken2_tool)
+upd2b_broken = db2b_broken_dir / "scripts" / "update-tools.py"
+worktree_src2 = stand / "worktree-like-source-2"
+make_worktree_like_source(worktree_src2, "scripts/backlog.py", HEAD_CONTENT)
+(db2b_broken_dir / "scripts" / "backlog.py").write_bytes(OLD_CONTENT)
+drop_fingerprints(db2b_broken_dir / "mezosync.db", "backlog.py")
+rc7a, out7a = run(upd2b_broken, "--source", str(worktree_src2))
+case_1b_turned_red = "истории у источника нет" in out7a
+case("⑦ поломка (вернули `.is_dir()`) КРАСИТ ровно ③-1б: worktree-подобный источник",
+     rc7a == 0 and case_1b_turned_red,
+     f"код {rc7a} · «истории у источника нет» напечатано (ложно): {case_1b_turned_red}")
+
+t2a_broken = stand / "t2a-broken"
+db2a_broken_dir = make_contour(t2a_broken, broken2_tool)
+upd2a_broken = db2a_broken_dir / "scripts" / "update-tools.py"
+dump_src2 = stand / "dump-source-2"
+make_dump_source(dump_src2, "scripts/backlog.py", HEAD_CONTENT)
+(db2a_broken_dir / "scripts" / "backlog.py").write_bytes(OLD_CONTENT)
+drop_fingerprints(db2a_broken_dir / "mezosync.db", "backlog.py")
+rc7b, out7b = run(upd2a_broken, "--source", str(dump_src2))
+case_1a_stayed_green = "истории у источника нет" in out7b
+case("⑦ та же поломка НЕ трогает ③-1а: у обеих проверок один честный ответ («истории нет»)",
+     rc7b == 0 and case_1a_stayed_green,
+     f"код {rc7b} · ответ прежний («истории нет»): {case_1a_stayed_green} — "
+     f"назван честно: этот случай поломка НЕ красит, различие способов проверки тут не видно")
 
 print("---- контроль: рабочая копия пакета не тронута ----")
 pack_after = pack_state()

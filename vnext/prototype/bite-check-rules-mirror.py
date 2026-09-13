@@ -88,10 +88,27 @@ def main() -> int:
                     help="нарочная поломка: вернуть образец замка к 🔒(\\w+)")
     a = ap.parse_args()
 
-    live_tool = Path(__file__).resolve().parent / "check-rules-mirror.py"
-    if not live_tool.is_file():
-        sys.exit(f"⛔ НЕ ЗАПУСТИЛСЯ: check-rules-mirror.py нет: {live_tool}")
+    # 🩸 ИСПЫТЫВАТЬ НАДО И ТУ КОПИЮ, КОТОРУЮ ЗОВЁТ ОБЩИЙ ПРОГОН (13.09, в тот же день): guard-all
+    # ищет звено РЯДОМ СО СКРИПТАМИ первым, а утренняя правка легла только в копию vnext-tools —
+    # приёмка была зелёной, а ложное красное у AIA оставалось. Одинаковые пути (у собранного
+    # контура звенья лежат рядом со скриптами) испытываются один раз.
+    here = Path(__file__).resolve().parent
+    targets = {}
+    for label, path in (("копия vnext-tools", here / "check-rules-mirror.py"),
+                        ("копия рядом со скриптами — её зовёт общий прогон",
+                         mezo_paths.live_scripts(__file__) / "check-rules-mirror.py")):
+        if not path.is_file():
+            sys.exit(f"⛔ НЕ ЗАПУСТИЛСЯ: check-rules-mirror.py нет: {path} ({label})")
+        targets.setdefault(path.resolve(), label)
+    for live_tool, label in targets.items():
+        print(f"━━ испытуется: {label} — {live_tool}")
+        run_cases(live_tool, a.porcha)
+        print("")
+    print(f"ИТОГ: {PASSED} из {CASES} · различающих {DIFFER}")
+    return 0 if PASSED == CASES else 1
 
+
+def run_cases(live_tool: Path, porcha) -> None:
     stand = Path(tempfile.mkdtemp(prefix="bite-rules-lock-"))
     try:
         tool = stand / "check-rules-mirror.py"
@@ -100,7 +117,7 @@ def main() -> int:
         # оба перебиваются явными --db/--file) — копируем рядом, как и другие bite-*.
         shutil.copy2(Path(__file__).resolve().parent / "mezo_paths.py", stand / "mezo_paths.py")
 
-        if a.porcha == "revert-to-\\w":
+        if porcha == "revert-to-\\w":
             text = tool.read_text(encoding="utf-8")
             old = r'🔒([\w:.-]+)\s*v(\d+)\s*$'
             new = r'🔒(\w+)\s*v(\d+)\s*$'
@@ -117,7 +134,8 @@ def main() -> int:
         write_mirror(mirror1, [("test-plain", "coord", 1, "тело правила без даты в замке")])
         code1, out1 = call_tool(tool, db1, mirror1)
         case("① ВСТРЕЧНЫЙ: обычный замок «coord» — распознаётся и сходится, как и раньше",
-             code1 == 0 and "СОШЛОСЬ" in out1,
+             # две копии говорят «сошлось» разным регистром — судим по коду и корню слова
+             code1 == 0 and "сошл" in out1.lower(),
              f"код {code1}")
 
         # ② ГЛАВНЫЙ: датированный замок «owner-2026-07-29»
@@ -128,7 +146,7 @@ def main() -> int:
                                 "тело правила с датированным замком")])
         code2, out2 = call_tool(tool, db2, mirror2)
         case("② ГЛАВНЫЙ: датированный замок «owner-2026-07-29» распознаётся, файл СОШЁЛСЯ",
-             code2 == 0 and "СОШЛОСЬ" in out2 and "НЕТ В ФАЙЛЕ" not in out2,
+             code2 == 0 and "сошл" in out2.lower() and "НЕТ В ФАЙЛЕ" not in out2,
              f"код {code2} · «НЕТ В ФАЙЛЕ» (ложное красное): "
              f"{'ЕСТЬ — дефис в замке всё ещё не берётся' if 'НЕТ В ФАЙЛЕ' in out2 else 'нет'}",
              differ=True)
@@ -143,10 +161,6 @@ def main() -> int:
              "ловится (правка не превратила разбор в «всегда зелено»)",
              code3 == 1 and "ВЕРСИИ РАВНЫ, А ТЕКСТ РАЗНЫЙ" in out3,
              f"код {code3}", differ=True)
-
-        print("")
-        print(f"ИТОГ: {PASSED} из {CASES} · различающих {DIFFER}")
-        return 0 if PASSED == CASES else 1
     finally:
         shutil.rmtree(stand, ignore_errors=True)
 

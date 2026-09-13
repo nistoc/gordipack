@@ -133,6 +133,73 @@ CANON = r"""
 """
 
 
+def archive_move_look(conn, role, section, body, saved, confirmed):
+    """«Взгляд» секции, прошедшей ШТАТНЫЙ ПЕРЕНОС части памяти в архив (карточка #605).
+
+    ЗАЧЕМ. memory-archive.py --move обновляет phoenix.saved_at (и вставляет строку
+    в phoenix_history с reason, начинающимся на «archive-move:»), но НЕ трогает
+    confirmed_at. После переноса confirmed_at < saved_at — и ветка ниже читала бы
+    это как «текст менялся мимо инструмента» (🔴), хотя роль сделала ПРАВИЛЬНОЕ
+    штатное действие. Живой случай: ING/plan — перенос 2026-09-07 16:47:18,
+    подтверждение 16:36:29 (последнее настоящее сохранение).
+
+    ЧТО ПРОВЕРЯЕТ: что расхождение ЦЕЛИКОМ объясняется цепочкой штатных переносов —
+      ① самая новая строка истории раздела — archive-move, и её тело РАВНО текущему;
+      ② у каждой такой строки в цепочке prev_chars обязан РАВНЯТЬСЯ body_chars
+         следующей (более старой) строки — иначе между переносами текст правили
+         мимо инструмента, и перенос этот обход НЕ ОТМЫВАЕТ;
+      ③ первая НЕ-archive-move строка — последнее НАСТОЯЩЕЕ сохранение (S_real),
+         её saved_at и есть та точка, с которой сравнивается взгляд.
+    Не нашлось таблицы истории, самой истории, целой цепочки или S_real — ВОЗВРАЩАЕТ
+    None, и вызывающий код печатает ПРЕЖНЕЕ 🔴 ДОСЛОВНО: это не отказ проверки, а её
+    честный ответ «здесь перенос не при чём, красное настоящее».
+
+    Возвращает готовую строку «взгляда» (без 🔴) или None.
+    """
+    if not confirmed or confirmed >= saved:
+        return None                         # эта функция — только для ветки confirmed < saved
+
+    has_history = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='phoenix_history'"
+    ).fetchone()
+    if not has_history:
+        return None
+
+    rows = conn.execute(
+        "SELECT body, body_chars, saved_at, reason, prev_chars FROM phoenix_history "
+        "WHERE role=? AND section=? ORDER BY id DESC", (role, section)).fetchall()
+    if not rows:
+        return None
+
+    # ① самая новая строка истории — штатный перенос, её тело равно ТЕКУЩЕМУ телу секции.
+    newest_body, _newest_chars, _newest_saved, newest_reason, _newest_prev = rows[0]
+    if not (newest_reason or "").startswith("archive-move") or newest_body != body:
+        return None
+
+    # ② идём к более старым строкам, пока reason начинается с «archive-move»: каждая
+    # такая строка обязана prev_chars = body_chars СЛЕДУЮЩЕЙ (более старой) строки.
+    i = 0
+    while i < len(rows) and (rows[i][3] or "").startswith("archive-move"):
+        if i + 1 >= len(rows):
+            return None                     # цепочка упёрлась в начало истории — S_real нет
+        if rows[i][4] != rows[i + 1][1]:
+            return None                     # разрыв цепочки: между переносами правили мимо
+        i += 1
+
+    # ③ первая не-archive-move строка — последнее настоящее сохранение, S_real.
+    if i >= len(rows):
+        return None
+    s_real = rows[i][2]
+
+    if confirmed == s_real:
+        return (f"после записи НЕ перечитывалось (взгляд равен записи); затем части "
+                f"унесены в архив штатным переносом {saved} UTC")
+    if confirmed > s_real:
+        return (f"перечитано и признано верным {confirmed} UTC; затем части унесены "
+                f"в архив штатным переносом {saved} UTC")
+    return None                             # confirmed < S_real — прежнее 🔴 дословно
+
+
 def main():
     ap = argparse.ArgumentParser()
     # R15a: --db не обязателен, резолвится от расположения СКРИПТА (не от CWD).
@@ -231,8 +298,18 @@ def main():
         elif confirmed > saved:
             look = f"перечитано и признано верным {confirmed} UTC"
         else:
-            look = (f"🔴 подтверждение {confirmed} СТАРШЕ текста — текст менялся мимо "
-                    f"инструмента, отметке верить нельзя")
+            # confirmed < saved: ПЕРЕД тем, как красить 🔴, проверяем ШТАТНЫЙ ПЕРЕНОС
+            # В АРХИВ (карточка #605, memory-archive.py --move) — он тоже двигает
+            # saved_at, не трогая confirmed_at, и без этой проверки роль, сделавшая
+            # ПРАВИЛЬНОЕ действие, получает то же 🔴, что и правка мимо инструмента.
+            # archive_move_look() не ОТМЕНЯЕТ красное само по себе — она его
+            # ПЕРЕОБЪЯСНЯЕТ: если расхождение целиком объяснено цепочкой переносов,
+            # возвращает мирную строку; обход мимо инструмента ДО переноса красным
+            # и остаётся (см. её докстринг).
+            look = archive_move_look(conn, role, s, body, saved, confirmed)
+            if look is None:
+                look = (f"🔴 подтверждение {confirmed} СТАРШЕ текста — текст менялся мимо "
+                        f"инструмента, отметке верить нельзя")
         print(f"\n{'─' * 79}\n## {TITLES[s]}   [сохранено {saved} UTC · {look}]\n")
         print(body.strip())
 

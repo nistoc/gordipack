@@ -157,7 +157,7 @@ def _ack(conn, role, ids):
 
 
 def _status(conn):
-    # известные роли группы — из курсоров чтения (нормализуем к UPPER)
+    # известные роли группы — из отметок прочитанного, таблица read_cursors (нормализуем к UPPER)
     roles = {r[0].upper() for r in conn.execute("SELECT reader_role FROM read_cursors")}
     ctas = [(mid, w, ts) for mid, w, ts, tags in conn.execute(
         "SELECT id, writer_role, timestamp, tags FROM messages "
