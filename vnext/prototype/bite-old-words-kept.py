@@ -235,15 +235,26 @@ def main() -> int:
                    f"код {r7.returncode}; хвост строки без чисел памяти ролей: {tail7!r} "
                    f"(ждём {expected_tail!r})")
 
-        # ⑧ живой прогон: все 45 записей настоящего списка нашли свою строку
+        # ⑧ живой прогон: все записи настоящего списка нашли свою строку.
+        # 🩸 13.09 первая редакция ждала РОВНО 45 записей — и провалилась, как только хозяин
+        #    каталога законно дописал список до 94 (находка COORD, записка #5144): приёмка судила
+        #    сегодняшние данные, а не поведение. Число записей берём из самого файла списка.
         real_report = mow.in_comments()
+        kept_file = pathlib.Path(mow.__file__).resolve().parent / "old-words-kept.txt"
+        listed = sum(1 for raw in (kept_file.read_text(encoding="utf-8").splitlines()
+                                   if kept_file.exists() else [])
+                     if raw.strip() and not raw.strip().startswith("#"))
         ok &= case("⑧ живой прогон на настоящих каталогах и настоящем списке: все записи "
                    "нашли свою строку",
-                   real_report.kept_exists and real_report.kept_records_count == 45
-                   and len(real_report.stale_records) == 0 and real_report.kept >= 45,
-                   f"записей в списке {real_report.kept_records_count} (ждём 45); не нашли "
-                   f"своей строки {len(real_report.stale_records)} (ждём 0); разобрано и "
-                   f"оставлено {real_report.kept} (ждём ≥45)")
+                   real_report.kept_exists and listed > 0
+                   and real_report.kept_records_count == listed
+                   and not real_report.corrupted_lines
+                   and len(real_report.stale_records) == 0
+                   and real_report.kept >= real_report.kept_records_count,
+                   f"строк данных в файле {listed}, разобрано записей {real_report.kept_records_count} "
+                   f"(ждём столько же); кривых {len(real_report.corrupted_lines)} (ждём 0); не нашли "
+                   f"своей строки {len(real_report.stale_records)} (ждём 0); разобрано и оставлено "
+                   f"{real_report.kept} (ждём не меньше числа записей — каждая покрывает хоть одно слово)")
 
         # ⑨ ПОЛОМКА (а) обязана покрасить случаи ③ и ④
         mow_a = load_mow(patch=patch_a, name="mow_bite_owk_a")
