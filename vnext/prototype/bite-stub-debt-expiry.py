@@ -110,8 +110,10 @@ def invented_statuses(tool_text: str, legal: set[str]) -> list[str]:
        случая искала по всему файлу и покраснела на исправном коде — признак отвечал
        не на тот вопрос: «встречается ли слово» вместо «числится ли статусом».
     """
+    # 🩸 13.09 20:08 UTC у проверки появился третий список (FROZEN_STATUSES, записка #5140) —
+    #    образец, знавший два имени, его не видел. Читаем ЛЮБОЙ список с именем …_STATUSES.
     import re
-    status_lists = " ".join(re.findall(r"(?:CLOSED_STATUSES|OPEN_STATUSES)\s*=\s*\(([^)]*)\)", tool_text))
+    status_lists = " ".join(re.findall(r"\b[A-Z_]*STATUSES\s*=\s*\(([^)]*)\)", tool_text))
     return sorted(set(re.findall(r'"([a-z_]+)"', status_lists)) - legal)
 
 
@@ -185,11 +187,13 @@ def main() -> int:
                differ=True)
 
     # ⑤-бис ВСТРЕЧНЫЙ: без него ⑤ могла бы проходить, не умея ловить вовсе.
-    fake_text = 'CLOSED_STATUSES = ("done", "dropped", "closed")\nOPEN_STATUSES = ("open",)'
+    fake_text = ('CLOSED_STATUSES = ("done", "dropped", "closed")\nOPEN_STATUSES = ("open",)\n'
+                 'FROZEN_STATUSES = ("frozen", "iced")')
     caught = invented_statuses(fake_text, legal)
-    ok &= case("⑤-бис встречный: статус, которого нет ни в словаре, ни в базе, — ловится",
-               caught == ["closed"],
-               f"в списке «closed» (так писала первая редакция починки) → выдуманных: {caught or 'нет'}",
+    ok &= case("⑤-бис встречный: статус, которого нет ни в словаре, ни в базе, — ловится в любом списке",
+               caught == ["closed", "iced"],
+               f"«closed» в списке закрытых (так писала первая редакция починки), «iced» в списке "
+               f"замороженных → выдуманных: {caught or 'нет'}",
                differ=True)
 
     # ⑤-тер ВСТРЕЧНЫЙ к находке 13.09: законный статус, которого сейчас нет ни у одной карточки.

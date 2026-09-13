@@ -78,13 +78,13 @@ def _who_is_calling() -> str | None:
     env = (os.environ.get(ROLE_ENV) or "").strip().upper()
     if env:
         return env
-    for флаг in ("--actor", "--role"):
-        if флаг in sys.argv:
-            i = sys.argv.index(флаг) + 1
+    for flag in ("--actor", "--role"):
+        if flag in sys.argv:
+            i = sys.argv.index(flag) + 1
             if i < len(sys.argv):
-                имя = sys.argv[i].strip().upper()
-                if имя and not имя.startswith("-"):
-                    return имя
+                caller_name = sys.argv[i].strip().upper()
+                if caller_name and not caller_name.startswith("-"):
+                    return caller_name
     return None
 
 
@@ -97,21 +97,21 @@ def _remember_wait(db, lease_id: int, tool: str) -> None:
     ⛔ Молчит при любой беде: таблицы нет (копия старше шага), база занята, прав нет.
     Отказ в работе инструмента важнее, чем след о нём, и заслонять его нельзя.
     """
-    роль = _who_is_calling()
+    role_name = _who_is_calling()
     try:
         con = sqlite3.connect(db, timeout=2)
     except sqlite3.Error:
         return
     try:
         # Первый отказ ценнее последующих: он несёт ЧАС, с которого роль ждёт.
-        уже = con.execute(
+        existing = con.execute(
             "SELECT 1 FROM tool_lease_waits WHERE lease_id=? AND tool=? "
             "AND ((role IS NULL AND ? IS NULL) OR role = ?)",
-            (lease_id, tool, роль, роль)).fetchone()
-        if not уже:
+            (lease_id, tool, role_name, role_name)).fetchone()
+        if not existing:
             con.execute(
                 "INSERT INTO tool_lease_waits (lease_id, role, tool) VALUES (?,?,?)",
-                (lease_id, роль, tool))
+                (lease_id, role_name, tool))
             con.commit()
     except sqlite3.Error:
         pass
@@ -317,24 +317,24 @@ def _cli() -> int:
     # тот увидел; снятие не расходится никак. Показываем ЗДЕСЬ, потому что рука снимающего
     # уже на инструменте: ему остаётся одна строка в ленте, и он единственный, кто знает,
     # что именно изменилось.
-    # ⛔ ЭТО НЕ ВОРОТА: снятие БЕЗ оповещения проходит, код успешный.
-    ждущие = _waiters(con, a.id)
+    # ⛔ ЭТО НЕ ЗАПРЕТ: снятие БЕЗ оповещения проходит, код успешный.
+    waiters = _waiters(con, a.id)
     con.close()
     print(f"🔓 СНЯТО ОБЪЯВЛЕНИЕ #{a.id}. Инструменты свободны."
           + (f"\n   итог: {a.note}" if a.note else ""))
-    if ждущие:
-        имена = [w for w in ждущие if w[0]]
-        безымянных = len(ждущие) - len(имена)
+    if waiters:
+        named_waiters = [w for w in waiters if w[0]]
+        unnamed_count = len(waiters) - len(named_waiters)
         # Пустого раздела при отсутствии ждущих НЕТ намеренно: признак, горящий всегда,
         # не значит ничего.
-        print(f"\n🫱 ТЕБЯ ЖДАЛИ: {len(ждущие)}"
-              + (f" · безымянных вызовов: {безымянных}" if безымянных else ""))
-        for роль, инструмент, час, часов in имена:
-            протухло = " · ⌛ ожиданию больше суток, роль могла обойтись без тебя" \
-                       if часов is not None and часов >= 24 else ""
-            print(f"   {роль} — {инструмент}, ждёт с {час} UTC{протухло}")
-        if безымянных:
-            print(f"   ⚖️ безымянные вызовы ({безымянных}) — это отказы, в доводах которых "
+        print(f"\n🫱 ТЕБЯ ЖДАЛИ: {len(waiters)}"
+              + (f" · безымянных вызовов: {unnamed_count}" if unnamed_count else ""))
+        for role_name, tool_name, since, hours_waiting in named_waiters:
+            stale_note = " · ⌛ ожиданию больше суток, роль могла обойтись без тебя" \
+                       if hours_waiting is not None and hours_waiting >= 24 else ""
+            print(f"   {role_name} — {tool_name}, ждёт с {since} UTC{stale_note}")
+        if unnamed_count:
+            print(f"   ⚖️ безымянные вызовы ({unnamed_count}) — это отказы, в доводах которых "
                   f"имени роли не было;\n"
                   f"      выдуманное имя было бы хуже пустого, поэтому они только сосчитаны")
         print("   👉 СКАЖИ ИМ СТРОКОЙ В ЛЕНТЕ: снятие само до них не доходит. "

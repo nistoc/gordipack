@@ -27,6 +27,10 @@ import sys
 HERE = pathlib.Path(__file__).resolve().parent
 sp = importlib.util.spec_from_file_location("mow", HERE / "measure-old-words.py")
 mow = importlib.util.module_from_spec(sp)
+# ⚡ ЗАРЕГИСТРИРОВАТЬ ДО exec_module: измеритель завёл @dataclasses.dataclass, а с
+# `from __future__ import annotations` разбор аннотаций каждого поля идёт через
+# sys.modules[cls.__module__] — без регистрации здесь падает NoneType на первом же классе.
+sys.modules["mow"] = mow
 _argv, sys.argv = sys.argv, ["bite"]
 sp.loader.exec_module(mow)
 sys.argv = _argv

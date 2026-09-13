@@ -120,12 +120,21 @@ def _task_state(task_id: str):
     #    🩸 Первая редакция этой правки перечисляла closed/cancelled/rejected — статусов,
     #    которых в базе НЕТ ВОВСЕ, и не знала про dropped. То есть проверка срока годности
     #    сама была написана по памяти о чужих системах. Поймано первым же запросом к базе.
-    CLOSED_STATUSES = ("done", "dropped")
+    # ➕ 13.09 (слово владельца 20:03 UTC; наблюдение PROTO, записка #5136): словарь backlog.py
+    #    (STATUSES) знает ещё failed и frozen — в базе их пока нет ни одного, но завести их можно.
+    #    failed — конечный статус: backlog.py сам ставит его в ряд с done и dropped ⇒ задача закрыта.
+    #    frozen — ни открыта, ни закрыта: работа на паузе с условием разморозки. В OPEN_STATUSES её
+    #    НЕТ намеренно — этот список равен OPEN_STATUSES backlog.py; для метки исход тот же, что у
+    #    открытой (причина долга не отпала), а пояснение говорит правду.
+    CLOSED_STATUSES = ("done", "dropped", "failed")
     OPEN_STATUSES = ("open", "in_progress", "in_review", "blocked", "awaiting_word")
+    FROZEN_STATUSES = ("frozen",)
     if status in CLOSED_STATUSES:
         return "closed", f"задача #{task_id} ЗАКРЫТА ({status})"
     if status in OPEN_STATUSES:
         return "open", f"задача #{task_id} открыта ({status})"
+    if status in FROZEN_STATUSES:
+        return "open", f"задача #{task_id} заморожена ({status}) — не закрыта, долг законен до разморозки"
     # ⚖️ ЧЕТВЁРТЫЙ ИСХОД: статус незнаком. Не «жива» и не «мертва» — НЕ ЗНАЮ.
     #    Отнести незнакомое к закрытым значило бы краснеть на каждом новом статусе;
     #    отнести к живым — молча пропускать просроченное. Оба врут увереннее, чем надо.
