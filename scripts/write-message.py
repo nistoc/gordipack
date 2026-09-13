@@ -254,7 +254,7 @@ def check_header_times(body: str, now_utc: str):
     now_h, now_m = int(now_utc[11:13]), int(now_utc[14:16])
     warns, checked = [], 0
 
-    def _расхождение(h, m, circular):
+    def _stamp_mismatch(h, m, circular):
         d = abs(h * 60 + m - (now_h * 60 + now_m))
         return min(d, 1440 - d) if circular else d
 
@@ -265,7 +265,7 @@ def check_header_times(body: str, now_utc: str):
             if m:
                 checked += 1
                 h, mi = map(int, m.group(1).split(":"))
-                d = _расхождение(h, mi, circular=True)
+                d = _stamp_mismatch(h, mi, circular=True)
                 if d >= 45:
                     warns.append(f"⚠️ час в ЗАГОЛОВКЕ ({m.group(1)} UTC) расходится с временем "
                                  f"записи ({now_utc[11:16]} UTC) на ~{d} мин")
@@ -275,7 +275,7 @@ def check_header_times(body: str, now_utc: str):
                 continue
             checked += 1
             h, mi = map(int, m2.group(2).split(":"))
-            d = _расхождение(h, mi, circular=False)
+            d = _stamp_mismatch(h, mi, circular=False)
             if d >= 45:
                 warns.append(f"⚠️ час в шапке тела ({m2.group(2)} UTC) расходится с временем "
                              f"записи ({now_utc[11:16]} UTC) на ~{d} мин")
@@ -286,7 +286,7 @@ def _save_phoenix_alongside(args, db_path: Path) -> list:
     """Сохранить память ТЕМ ЖЕ действием — и сказать вслух, если она отстала.
 
     → список разделов, сохранить которые НЕ УДАЛОСЬ (пустой, если всё легло).
-    ⚡ Возвращает, а не молчит: исход обязан дойти до кода возврата. См. врезку ниже.
+    ⚡ Возвращает, а не молчит: исход обязан дойти до кода возврата. См. вставку ниже.
 
     ⛔ Своей копии защит здесь НЕТ НАМЕРЕННО: зовётся ЖИВОЙ save-phoenix.py со всеми его
        отказами (пустое тело · обвал в разы · сравнение содержимого). Вторая копия правила
@@ -294,7 +294,7 @@ def _save_phoenix_alongside(args, db_path: Path) -> list:
     """
     import subprocess
     here = Path(__file__).resolve().parent
-    не_легло = []
+    not_saved = []
     # 🔴 ХОЛОСТОЙ ХОД НЕ ПЕРЕХОДИТ ЧЕРЕЗ ГРАНИЦУ ИНСТРУМЕНТА — карточка #473 (@ING),
     # починено 2026-08-30 10:42 UTC. Сохранение памяти идёт ОТДЕЛЬНЫМ ПРОЦЕССОМ, и он
     # открывает СВОЁ соединение с базой. Холостой прогон подменяет соединение ЭТОГО
@@ -310,7 +310,7 @@ def _save_phoenix_alongside(args, db_path: Path) -> list:
     # Не позвав его вовсе, мы отняли бы у роли предупреждение вместе с поломкой.
     # ⚠️ Отчёт дочернего в холостом ходе помечен ИМ САМИМ как холостой — это пункт ③
     # заявки: в двух прогонах вывод обязан звучать по-разному.
-    сухой = bool(getattr(args, "dry_run", False))
+    is_dry_run = bool(getattr(args, "dry_run", False))
     for section in ("state", "plan"):
         path = getattr(args, f"save_{section}", None)
         if not path:
@@ -318,11 +318,11 @@ def _save_phoenix_alongside(args, db_path: Path) -> list:
         out = subprocess.run(
             [sys.executable, str(here / "save-phoenix.py"), "--db", str(db_path),
              "--role", args.role, "--section", section, "--file", path]
-            + (["--dry-run"] if сухой else []),
+            + (["--dry-run"] if is_dry_run else []),
             capture_output=True, text=True, encoding="utf-8")
         for line in ((out.stdout or "") + (out.stderr or "")).splitlines():
             print(f"  {line}")
-        if сухой:
+        if is_dry_run:
             # ⚖️ Говорится СЛОВОМ и в потоке вывода, а не молчанием: строка «ничего
             # не записано» ниже относится к ЗАПИСКЕ, и роль без этой строки читала бы
             # отчёт дочернего как описание уже случившегося. Карточка #473 §④:
@@ -336,12 +336,12 @@ def _save_phoenix_alongside(args, db_path: Path) -> list:
             # и код возврата станет 4. Находка @OPSSRE, записка #3776.
             print(f"⚠️ память (§{section}) НЕ сохранена — записка #уже записана, память НЕТ.",
                   file=sys.stderr)
-            не_легло.append(section)
+            not_saved.append(section)
 
     # Отставание называется ВСЛУХ и с числом — но только когда оно ЕСТЬ. Признак, который
     # горит всегда, перестаёт значить что-либо: это довод COORD против вечно-жёлтого.
     if getattr(args, "save_state", None) or getattr(args, "save_plan", None):
-        return не_легло
+        return not_saved
     try:
         con = sqlite3.connect(f"file:{str(db_path).replace(chr(92), '/')}?mode=ro", uri=True)
         cols = {r[1] for r in con.execute("PRAGMA table_info(phoenix)")}
@@ -351,7 +351,7 @@ def _save_phoenix_alongside(args, db_path: Path) -> list:
             (args.role,)).fetchone()
         con.close()
         if not row or not row[0]:
-            return не_легло
+            return not_saved
         gap = (datetime.now(timezone.utc).replace(tzinfo=None)
                - datetime.fromisoformat(row[0])).total_seconds() / 3600
         if gap > 3:
@@ -361,7 +361,7 @@ def _save_phoenix_alongside(args, db_path: Path) -> list:
             print("     write-message.py … --save-state <файл> [--save-plan <файл>]")
     except Exception as exc:  # noqa: BLE001 — подсказка не имеет права ронять запись ноты
         print(f"  (подсказку о памяти собрать не удалось: {exc.__class__.__name__})")
-    return не_легло
+    return not_saved
 
 
 NEWLINE = chr(10)
@@ -393,27 +393,27 @@ def _strip_signature(body: str) -> str:
 #   11:09 UTC — @CORE отправил просьбу о приёмке, назвав адресатов только прозой.
 # ⚖️ Опечатка в имени была ещё хуже обеих: она ложилась молча, и записка числилась
 # адресованной — то есть отправлена и не дошла никому. Молчащий отказ читается как успех.
-СПЕЦ_АДРЕСАТЫ = {"ВЛАДЕЛЕЦ"}                      # адресуемо, но роли в реестре нет
-СИНОНИМЫ_АДРЕСАТОВ = {"OWNER": "ВЛАДЕЛЕЦ", "ALL": "ВСЕ", "ВСЕМ": "ВСЕ"}
+SPECIAL_ADDRESSEES = {"ВЛАДЕЛЕЦ"}                      # адресуемо, но роли в реестре нет
+ADDRESSEE_SYNONYMS = {"OWNER": "ВЛАДЕЛЕЦ", "ALL": "ВСЕ", "ВСЕМ": "ВСЕ"}
 
 
-def разбор_имён(s):
+def parse_names(s):
     """Запятая И пробел — оба разделители; «@» и регистр не значимы; синонимы к канону."""
-    имена = []
+    names_list = []
     for x in re.split(r"[,\s]+", s or ""):
         x = x.strip().upper().lstrip("@")
         if x:
-            имена.append(СИНОНИМЫ_АДРЕСАТОВ.get(x, x))
-    return имена
+            names_list.append(ADDRESSEE_SYNONYMS.get(x, x))
+    return names_list
 
 
-def проверить_адресатов(conn, to, cc):
+def check_addressees(conn, to, cc):
     """→ (to, cc, всем, отказ). Отказ — ДО записи: нота-призрак хуже ненаписанной.
 
     «ВСЕ» — СВОЙСТВО записки (колонка broadcast), а не роль: роли «ВСЕ» не существует,
     и строка о ней лгала бы о реестре.
     """
-    всем = "ВСЕ" in to or "ВСЕ" in cc
+    to_all = "ВСЕ" in to or "ВСЕ" in cc
     to = [r for r in to if r != "ВСЕ"]
     cc = [r for r in cc if r != "ВСЕ"]
     # 🩸 ЗАКРЫТЫЕ РОЛИ ОТДЕЛЕНЫ ОТ ЖИВЫХ (27.08, работа по карточке #330). Прежде реестр
@@ -421,30 +421,30 @@ def проверить_адресатов(conn, to, cc):
     # адресатами: записка им ложилась молча и выглядела в ленте адресованной. Это ровно
     # тот случай-призрак, ради которого словарь и заводился, только спрятанный на этаж ниже.
     try:
-        реестр = {r: (l or "alive") for r, l in
+        role_registry = {r: (l or "alive") for r, l in
                   conn.execute("SELECT role, lifecycle FROM roles")}
     except sqlite3.OperationalError:
         try:
-            реестр = {r: "alive" for (r,) in conn.execute("SELECT role FROM roles")}
+            role_registry = {r: "alive" for (r,) in conn.execute("SELECT role FROM roles")}
         except sqlite3.OperationalError:
-            return to, cc, всем, None      # старая база без реестра — сверять нечем
-    живые = {r for r, l in реестр.items() if l != "closed"} | СПЕЦ_АДРЕСАТЫ
-    закрытые = {r for r, l in реестр.items() if l == "closed"}
+            return to, cc, to_all, None      # старая база без реестра — сверять нечем
+    живые = {r for r, l in role_registry.items() if l != "closed"} | SPECIAL_ADDRESSEES
+    closed_set = {r for r, l in role_registry.items() if l == "closed"}
     for r in to + cc:
-        if r in закрытые:
-            return to, cc, всем, (
+        if r in closed_set:
+            return to, cc, to_all, (
                 f"⛔ ОТКАЗ: роль «{r}» ЗАКРЫТА — её не прочтёт никто и никогда.{NEWLINE}"
                 f"   Живые адресаты: {', '.join(sorted(живые))} + «все» (всем сразу).{NEWLINE}"
                 f"   Записка НЕ записана. Закрытая роль отличается от спящей: спящая"
                 f" проснётся и дочитает, закрытая — нет. Поэтому здесь отказ, а не"
                 f" предупреждение.")
         if r not in живые:
-            return to, cc, всем, (
+            return to, cc, to_all, (
                 f"⛔ ОТКАЗ: имени «{r}» нет в словаре адресатов.{NEWLINE}"
                 f"   Словарь: {', '.join(sorted(живые))} + «все» (всем сразу).{NEWLINE}"
                 f"   Записка НЕ записана. Адресат опечаткой — записка-призрак:"
                 f" отправлена и не дошла никому, а в ленте выглядит адресованной.")
-    return to, cc, всем, None
+    return to, cc, to_all, None
 
 
 # ── СПЯЩИЙ АДРЕСАТ (карточка #330) ────────────────────────────────────────────────
@@ -454,10 +454,10 @@ def проверить_адресатов(conn, to, cc):
 # не мог — писатель не обращался к отметкам прочтения ВООБЩЕ.
 # ⚖️ ПРЕДУПРЕЖДЕНИЕ, А НЕ ОТКАЗ: записка спящему обязана лечь в ленту, он дочитает её
 # при пробуждении. Правило владельца: предупреждать, а не запрещать.
-ЧАСОВ_МОЛЧАНИЯ = 6          # ЕДИНСТВЕННОЕ место порога: две копии числа разъедутся молча
+SILENCE_HOURS = 6          # ЕДИНСТВЕННОЕ место порога: две копии числа разъедутся молча
 
 
-def спящие_адресаты(conn, имена):
+def sleeping_addressees(conn, names_list):
     """→ [(роль, часов молчания)] для тех, кто не подавал признаков жизни дольше порога.
 
     🔑 ПРИЗНАК СУДИТ ОБА СЛЕДА СРАЗУ — последнюю СВОЮ ноту и отметку прочтения, — и берёт
@@ -466,27 +466,27 @@ def спящие_адресаты(conn, имена):
     работающую роль дороже, чем промолчать: предупреждение, кричащее на исправном,
     учит не слышать крик.
     """
-    имена = [r for r in имена if r not in СПЕЦ_АДРЕСАТЫ]
-    if not имена:
+    names_list = [r for r in names_list if r not in SPECIAL_ADDRESSEES]
+    if not names_list:
         return []
-    места = ",".join("?" * len(имена))
+    placeholders = ",".join("?" * len(names_list))
     try:
-        строки = conn.execute(
+        result_rows = conn.execute(
             f"""SELECT r.role,
                        (julianday('now') - julianday(
                             MAX(COALESCE(c.updated_at,''), COALESCE(m.последняя,'')))) * 24
-                  FROM (SELECT ? AS role{' UNION ALL SELECT ?' * (len(имена) - 1)}) r
+                  FROM (SELECT ? AS role{' UNION ALL SELECT ?' * (len(names_list) - 1)}) r
                   LEFT JOIN read_cursors c ON c.reader_role = r.role
                   LEFT JOIN (SELECT writer_role, MAX(timestamp) AS последняя
                                FROM messages GROUP BY writer_role) m ON m.writer_role = r.role
-                 WHERE r.role IN ({места})""",
-            (*имена, *имена)).fetchall()
+                 WHERE r.role IN ({placeholders})""",
+            (*names_list, *names_list)).fetchall()
     except sqlite3.OperationalError:
         return []                          # старая база без отметок — сказать нечего
     # ⚠️ Пустой след (роль не писала и не читала НИКОГДА) даёт NULL, а не большое число.
     # Молчать о нём нельзя — это самый спящий из спящих; но и часов у него нет.
-    return [(роль, часы) for роль, часы in строки
-            if часы is None or часы >= ЧАСОВ_МОЛЧАНИЯ]
+    return [(addressee_role, silent_hours) for addressee_role, silent_hours in result_rows
+            if silent_hours is None or silent_hours >= SILENCE_HOURS]
 
 
 def main():
@@ -494,7 +494,7 @@ def main():
     # первым же прогоном после воскрешения: печатная форма расходилась с тем, чему учит решето.
     # 🎯 Флаги --md/--no-md (⚰️ СНЯТЫ 2026-08-08 16:53 UTC) надгробия в своих подсказках несут —
     # а ОПИСАНИЕ инструмента, которое читается ПЕРВЫМ и целиком, обещало канал, замороженный
-    # 16.07 и снятый 08.08. ⚠️ Пометку снятия держать В ЭТОЙ ЖЕ СТРОКЕ: сторож соседние
+    # 16.07 и снятый 08.08. ⚠️ Пометку снятия держать В ЭТОЙ ЖЕ СТРОКЕ: проверка соседние
     # намеренно не читает, и первая редакция этого комментария зажгла его сама (11.08 — тот же класс).
     # 📌 Класс: надгробие на частности не спасает заголовок. Смотрят сверху вниз.
     parser = argparse.ArgumentParser(
@@ -530,7 +530,7 @@ def main():
     parser.add_argument("--again", metavar="ПРИЧИНА",
                         help="осознанно повторить записку, текст которой уже отправлен: причина уйдёт в ленту первой строкой")
     # ── ТРИ РУЧКИ К СОСУДАМ, ВНЕСЁННЫМ НАКАТОМ (замер @PROTO #3089: все три пусты при 90 нотах,
-    # потому что писать в них было нечем). Все НЕОБЯЗАТЕЛЬНЫЕ: старые вызовы ролей и слепков
+    # потому что писать в них было нечем). Все НЕОБЯЗАТЕЛЬНЫЕ: старые вызовы ролей и их сохранённой памяти
     # работают без единой правки — иначе ручка сломала бы то, ради чего заводилась.
     # ⚠️ СПРАВКА ПРИВЕДЕНА К КОДУ по находке @TAXO #3101. Первая редакция обещала «адресат задан
     # полем, а НЕ пересказан прозой» — а список адресатов как лежал в теле ноты, так и лежит:
@@ -598,7 +598,7 @@ def main():
     # ⚰️ --md БОЛЬШЕ НЕ АВАРИЙНЫЙ ВЫХОД. Владелец 2026-08-08 16:53 UTC снял страховку вместе
     # с завершением перехода (правило md-to-sqlite-phased-cutover v5, замок владельца):
     # «НЕ изобретать канал молча — сказать владельцу живым словом и остановиться».
-    # ⚠️ Флаг НЕ УДАЛЁН намеренно: он живёт в чужих слепках и промптах, и молчаливое
+    # ⚠️ Флаг НЕ УДАЛЁН намеренно: он живёт в чужой сохранённой памяти и промптах, и молчаливое
     # исчезновение дало бы «unrecognized arguments» — отказ инструмента, который роль
     # прочтёт как поломку тулкита и пойдёт искать обход. Отказ обязан назвать ПРИЧИНУ.
     parser.add_argument("--md", action="store_true",
@@ -723,11 +723,11 @@ def main():
     # ── СЛОВАРЬ АДРЕСАТОВ: разбор и сверка ДО записи (карточка #258) ──────────────
     # Отказ обязан прийти РАНЬШЕ вставки: записка с адресатом-опечаткой уже отправлена,
     # уже видна в ленте как адресованная — и уже не дошла никому. Отменить её нечем.
-    _to_имена = разбор_имён(args.to)
-    _cc_имена = разбор_имён(args.cc)
-    _to_имена, _cc_имена, _всем, _отказ = проверить_адресатов(conn, _to_имена, _cc_имена)
-    if has_note and _отказ:
-        print(_отказ)
+    _to_names = parse_names(args.to)
+    _cc_names = parse_names(args.cc)
+    _to_names, _cc_names, _to_all, _refused = check_addressees(conn, _to_names, _cc_names)
+    if has_note and _refused:
+        print(_refused)
         sys.exit(5)
 
     # ── ⛔ ОДНА И ТА ЖЕ ЗАПИСКА ДВАЖДЫ. Замер @COORD 18.08 (записка #3635 ②): за один день
@@ -779,7 +779,7 @@ def main():
         # штамп происхождения врал бы о записке, у которой адресаты как раз есть.
         # «Всем» — тоже объявленная адресация: записка без личных имён, но обращённая
         # ко всем, адресована не меньше прочих.
-        addressed = "field" if (_to_имена or _cc_имена or _всем) else None
+        addressed = "field" if (_to_names or _cc_names or _to_all) else None
         if not addressed:
             # ⚡ 2026-09-05 (заявка @CORE, записка #4764): у отправки БЕЗ адресата не было
             # встречного случая — поле не спрашивал никто, ни инструмент, ни читатель. Умолчание
@@ -790,15 +790,15 @@ def main():
                   file=sys.stderr)
             print("   не увидит НИКТО. Личное — --to РОЛЬ; всем сразу — --to ВСЕ. Отправляю как есть.",
                   file=sys.stderr)
-        _поля = "INSERT INTO messages (writer_role, body_md, tags, priority, timestamp"
-        _знач = (args.role, args.body, tags_json, args.priority, _now_utc)
+        _columns = "INSERT INTO messages (writer_role, body_md, tags, priority, timestamp"
+        _values = (args.role, args.body, tags_json, args.priority, _now_utc)
         if addressed:
-            _поля += ", addressed_by"
-            _знач += (addressed,)
-        if _всем:
-            _поля += ", broadcast"
-            _знач += (1,)
-        cur = conn.execute(_поля + ") VALUES (" + ", ".join("?" * len(_знач)) + ")", _знач)
+            _columns += ", addressed_by"
+            _values += (addressed,)
+        if _to_all:
+            _columns += ", broadcast"
+            _values += (1,)
+        cur = conn.execute(_columns + ") VALUES (" + ", ".join("?" * len(_values)) + ")", _values)
         msg_id = cur.lastrowid
         # 🪤 УКУС ПОЙМАЛ ЗДЕСЬ ДВЕ ОШИБКИ, обе в первой версии этой же правки:
         # ① resolved ставился МОЕЙ ноте. Но отменяется не она, а ТА, НА КОТОРУЮ ОТВЕЧАЮТ:
@@ -837,8 +837,8 @@ def main():
         # Имена уже разобраны и сверены со словарём ВЫШЕ, до вставки записки.
         # ⚰️ Здесь стоял свой разбор — `raw.split(",")`: он делил ТОЛЬКО по запятой,
         # и «--to "COORD ING"» ложилось ОДНОЙ строкой «COORD ING», невидимой обоим.
-        for kind, имена in (("to", _to_имена), ("cc", _cc_имена)):
-            for name in имена:
+        for kind, names_list in (("to", _to_names), ("cc", _cc_names)):
+            for name in names_list:
                 if not name:
                     continue
                 try:
@@ -912,31 +912,31 @@ def main():
     # вывода опирается на то, что подтверждение записи стои́т третьей строкой С КОНЦА,
     # и блок, вставленный ниже, сдвинул бы его молча — учащая поверхность отстала бы
     # от механизма в тот же час, когда механизм появился.
-    _спящие = спящие_адресаты(conn, (_to_имена or []) + (_cc_имена or [])) if msg_id else []
+    _sleeping = sleeping_addressees(conn, (_to_names or []) + (_cc_names or [])) if msg_id else []
     # ═══ 2.2 (28.08): СТАТУС РОЛИ — ТЕМ ЖЕ ВЫЗОВОМ. Отправка записки и есть событие
     # «чем занята роль»; отдельная кнопка статуса мертва замером (PROTO 22 дня, TAXO 20).
     # Только ЗАПИСЬ ноты: чтение ленты, --poll и --ack статус НЕ трогают — иначе он
     # перестанет значить. Ошибка не вправе отменить уже записанную ноту — только слова.
     if msg_id is not None:
         try:
-            _заголовок = (args.body or "").strip().splitlines()[0][:120]
+            _title_line = (args.body or "").strip().splitlines()[0][:120]
             conn.execute(
                 "INSERT INTO role_status (role, status, updated_at) "
                 "VALUES (?, ?, datetime('now')) "
                 "ON CONFLICT(role) DO UPDATE SET status = excluded.status, "
                 "updated_at = excluded.updated_at",
-                (args.role.upper(), f"записка #{msg_id}: {_заголовок}"))
+                (args.role.upper(), f"записка #{msg_id}: {_title_line}"))
             conn.commit()
         except Exception as _e:                        # noqa: BLE001
             print(f"⚠️ статус роли НЕ обновлён ({type(_e).__name__}) — записка записана",
                   file=sys.stderr)
     conn.close()
 
-    if _спящие:
+    if _sleeping:
         print("⚠️  АДРЕСАТ НЕ ПОДАВАЛ ПРИЗНАКОВ ЖИЗНИ — ответа можно не дождаться:")
-        for роль, часы in _спящие:
-            сколько = "НИ РАЗУ не писала и не читала" if часы is None else f"{часы:.0f} ч назад"
-            print(f"   {роль:9} последний след — {сколько}")
+        for addressee_role, silent_hours in _sleeping:
+            how_long = "НИ РАЗУ не писала и не читала" if silent_hours is None else f"{silent_hours:.0f} ч назад"
+            print(f"   {addressee_role:9} последний след — {how_long}")
         print("   Считано по ДВУМ следам сразу: последняя своя записка И отметка прочтения;")
         print("   берётся свежий из двух. Записка ВСЁ РАВНО ЗАПИСАНА — спящий дочитает её,")
         print("   когда его запустят. Это предупреждение о СРОКЕ ответа, а не об отправке.")
@@ -965,7 +965,7 @@ def main():
     #    вложенное ВНУТРЬ этой же отправки (--ack), прижилось. Разница не в дисциплине.
     # ⚖️ Записка пишется тогда, когда сложилось намерение, о котором стоит сказать другим, —
     #    то есть ровно в тот момент, который и надо было сохранять.
-    не_легло = _save_phoenix_alongside(args, db_path)
+    not_saved = _save_phoenix_alongside(args, db_path)
     # ⚡ ЧАСТЬ РАБОТЫ НЕ СДЕЛАНА ⇒ ИСХОД НЕ «УСПЕХ». Находка @OPSSRE (записка #3776):
     # отказ сохранения памяти уходил с кодом 0, и роль, зовущая это в конце смены,
     # видела ноль и уходила — память при этом не сохранена.
@@ -976,7 +976,7 @@ def main():
     # 🪤 И ПОЧЕМУ ТЕКСТ ТАКОЙ ГРОМКИЙ: ненулевой код сам по себе провоцирует повтор —
     # роль читает красное как «не ушло» и шлёт записку заново. Контур платил за это
     # дважды за день. Поэтому первым словом сказано, что записка ЗАПИСАНА.
-    if не_легло:
+    if not_saved:
         # ⚠️ Сначала выпускаем поток вывода: без этого итог из потока ошибок
         # обгоняет и подтверждение записки, и саму причину отказа — читающий
         # видит приговор раньше повода. Замер 24.08 23:26 UTC: без этого порядок
@@ -984,7 +984,7 @@ def main():
         sys.stdout.flush()
         print("\n⛔ ИСХОД: ЧАСТЬ РАБОТЫ НЕ СДЕЛАНА (код 4).", file=sys.stderr)
         print(f"   ✅ ЗАПИСКА ЗАПИСАНА — она в базе, ПОВТОРЯТЬ НЕ НАДО.", file=sys.stderr)
-        print(f"   🔴 ПАМЯТЬ НЕ СОХРАНЕНА: {', '.join('§' + s for s in не_легло)}.",
+        print(f"   🔴 ПАМЯТЬ НЕ СОХРАНЕНА: {', '.join('§' + s for s in not_saved)}.",
               file=sys.stderr)
         print("   👉 Разбери причину отказа выше и сохрани память отдельным вызовом "
               "save-phoenix.py.", file=sys.stderr)
