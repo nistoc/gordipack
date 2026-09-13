@@ -128,7 +128,7 @@ def warn_dangling(text, label="", *, role=None, full=False, db=None):
 #     ЧУЖУЮ работу» (дело движется не мной), frozen — «сознательно отложена ВНЕ пула,
 #     разбудит НАЗВАННОЕ УСЛОВИЕ». Слить их — повторить оплаченный класс «одно значение
 #     на две беды». Условие разморозки ОБЯЗАТЕЛЬНО и живёт в blocked_reason (оно уже
-#     на витрине). frozen НЕ входит в открытые: открытый список — то, что живо сейчас.
+#     в сводке). frozen НЕ входит в открытые: открытый список — то, что живо сейчас.
 STATUSES = ["open", "in_progress", "blocked", "awaiting_word", "in_review", "done",
             "failed", "dropped", "frozen"]
 OPEN_STATUSES = ["open", "in_progress", "blocked", "awaiting_word", "in_review"]
@@ -150,7 +150,7 @@ def direction_focus(conn):
     """Направление-фокус (карточка #399, слово владельца 29.08 14:39 UTC) → (имя | None).
 
     Механизм опирается на ЕДИНСТВЕННЫЙ активный набор задач: при нуле или нескольких
-    активных возвращает None — ворота фокуса НЕ судятся. Судить «вне направления» при
+    активных возвращает None — проверка фокуса НЕ включается. Судить «вне направления» при
     двух направлениях значит красить всё; замер 29.08: активных два, и это само по себе
     размывает направление (норма нового порядка — один, судьба лишнего — слово владельца)."""
     pools = active_pool_tracks(conn)
@@ -170,7 +170,7 @@ def offpool_share(conn, direction):
 
 def pool_sort_key(pools):
     """Ключ «карточки пула первыми, внутри — прежний порядок (срочность, номер)».
-    ЕДИНСТВЕННОЕ место, где живёт этот порядок: его же импортирует витрина пробуждения
+    ЕДИНСТВЕННОЕ место, где живёт этот порядок: его же импортирует сводка пробуждения
     (backlog_view) — вторая копия ключа разошлась бы с этой молча при первой правке.
     Ожидает кортежи, где [4] = priority, [0] = id, ПОСЛЕДНЕЕ поле = parent_track."""
     def key(r):
@@ -181,7 +181,7 @@ def pool_sort_key(pools):
 
 def live_and_overdue(conn, card_ids):
     """Живые и ПРОСРОЧЕННЫЕ объявления по карточкам — ЕДИНСТВЕННЫЙ источник предиката
-    (П② пула, 27.08): его зовут список карточек, обзор пробуждения, витрина пула
+    (П② пула, 27.08): его зовут список карточек, обзор пробуждения, сводка пула
     (track.py) и механизм сна. Предикат НЕ хранится — вычисляется при каждом чтении:
     хранимое поле гашения умерло с нулём вызовов, вычисляемая срочность живёт.
     Просрочено = срок объявления вышел, карточка не закрыта, объявление не снято,
@@ -234,7 +234,7 @@ def pool_open_ids(conn, pools):
 # Прежнее надгробие «конвертации больше нет» снято тем же словом; разбор — в модуле.
 try:
     from local_time import utc_to_local
-except Exception:  # noqa: BLE001 — без модуля витрина живёт: прежний показ «только UTC»
+except Exception:  # noqa: BLE001 — без модуля вывод живёт: прежний показ «только UTC»
     def utc_to_local(s, tz=None):
         return f"{s} UTC" if s else "—"
 
@@ -298,21 +298,21 @@ def cmd_claim(conn, a):
     # Лазейка --off-pool «причина» — для законного вне-направления (срочная починка
     # инструмента, слово владельца): причина ложится СОБЫТИЕМ в журнал карточки и видна
     # поимённо. Пустая причина неотличима от её отсутствия — отказ.
-    направление = direction_focus(conn)
+    focus_dir = direction_focus(conn)
     off = getattr(a, "off_pool", None)
     if off is not None and not off.strip():
         # Отказ ЕДИН для всех состояний мира: флаг с пустой причиной — ошибка вызова везде.
         sys.exit("⛔ --off-pool требует ПРИЧИНУ словами: пустая причина "
                  "не отличима от её отсутствия")
-    if направление and (track or "") != направление:
+    if focus_dir and (track or "") != focus_dir:
         if off is not None:
             _event(conn, a.id, a.actor, "off_pool", off.strip())
-            print(f"📝 взято ВНЕ направления {направление} с причиной вслух — "
+            print(f"📝 взято ВНЕ направления {focus_dir} с причиной вслух — "
                   f"она в журнале карточки")
         else:
-            вне, всего = offpool_share(conn, направление)
-            print(f"⚠️ карточка ВНЕ направления контура ({направление}). За 3 суток "
-                  f"так взято {вне} из {всего}. Есть причина — назови её вслух: "
+            outside_count, all_count = offpool_share(conn, focus_dir)
+            print(f"⚠️ карточка ВНЕ направления контура ({focus_dir}). За 3 суток "
+                  f"так взято {outside_count} из {all_count}. Есть причина — назови её вслух: "
                   f"--off-pool \"<причина>\" (ляжет событием в журнал)")
     elif off is not None:
         # ═══ Карточка #405 (замер @CHROME при приёмке #399): ветка обязана различать
@@ -321,7 +321,7 @@ def cmd_claim(conn, a):
         # а названная причина ТЕРЯЛАСЬ МОЛЧА: летопись «кто брал вне направления
         # и почему» несла бы дыру за период двух активных наборов, и дыра читалась бы
         # как «никто не брал», а не как «не записывали».
-        if направление:
+        if focus_dir:
             # Причина при взятии карточки САМОГО направления — не ошибка, но событие
             # не пишем: журнал «вне направления» обязан значить ровно это.
             print("ℹ️ карточка в направлении — причина --off-pool не нужна, "
@@ -337,7 +337,7 @@ def cmd_claim(conn, a):
     # последний claim роли без более позднего claim_release, срок которого не истёк;
     # истёкший шаг тихий — иначе роль научится пролистывать.
     сейчас = conn.execute("SELECT datetime('now')").fetchone()[0]
-    for кто, тело in conn.execute(
+    for who, note_body in conn.execute(
             "SELECT e.actor_role, e.body_md FROM backlog_events e "
             "WHERE e.backlog_id=? AND e.event_type='claim' "
             "AND UPPER(e.actor_role)<>UPPER(?) "
@@ -348,14 +348,14 @@ def cmd_claim(conn, a):
             "          WHERE r.backlog_id=e.backlog_id AND r.event_type='claim_release' "
             "          AND UPPER(r.actor_role)=UPPER(e.actor_role) AND r.id>e.id)",
             (a.id, a.actor)):
-        m = re.match(r"до (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) UTC", тело or "")
+        m = re.match(r"до (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) UTC", note_body or "")
         if m and m.group(1) > сейчас:
-            print(f"⚠️ карточку #{a.id} УЖЕ ДЕРЖИТ {кто} — до {m.group(1)[:16]} UTC: "
-                  f"«{(тело or '').split('·', 1)[-1].strip()[:100]}»")
+            print(f"⚠️ карточку #{a.id} УЖЕ ДЕРЖИТ {who} — до {m.group(1)[:16]} UTC: "
+                  f"«{(note_body or '').split('·', 1)[-1].strip()[:100]}»")
             print("   Двое на одной карточке иногда законны (сдающий и приёмщик), чаще — "
                   "столкновение. Твоё взятие всё равно записано ниже, оба видны в журнале.")
     # ═══ П② (27.08): шаг карточки ПУЛА — 60 минут вместо 120; длиннее 90 — предупреждение.
-    # Короткая итерация встроена ВОРОТАМИ инструмента, а не попрошена правилом.
+    # Короткая итерация встроена ПРОВЕРКОЙ инструмента, а не попрошена правилом.
     minutes = a.minutes if a.minutes is not None else (60 if in_pool else 120)
     if in_pool and minutes > 90:
         print(f"⚠️ шаг длинный ({minutes} мин) для карточки пула — раздели: "
@@ -377,13 +377,13 @@ def cmd_claim(conn, a):
     # (иначе отпечаток менялся бы при каждом claim и подсказка печаталась бы целиком всегда).
     # Карточка #441, третий встречный (случай TAXO/лента): граница названа ЧЕСТНО —
     # тишина выше не значит «свободна», машина видит только взятия инструментом.
-    ТЕКСТ_ХВОСТА = (
+    TAIL_HINT_TEXT = (
         "   Видно коллегам при пробуждении и в общем прогоне проверок. Гаснет само —\n"
         "   снимать не обязательно; досрочно: backlog.py claim <id> --actor <роль> --release\n"
         "   ⚖️ проверено ТОЛЬКО против взятий ИНСТРУМЕНТОМ: объявление комментарием "
         "или запиской в ленте машина не читает")
     mezo_hints.подсказка(conn, (a.actor or "").upper(), "backlog-claim-как-снять",
-                         ТЕКСТ_ХВОСТА, full=a.full)
+                         TAIL_HINT_TEXT, full=a.full)
     # 2.2 (28.08): claim и есть «чем занята роль» — статус тем же вызовом, кнопки нет.
     try:
         conn.execute(
@@ -421,7 +421,7 @@ def cmd_edit(conn, a):
         # вернее, чем с неверным.
         sys.exit("⛔ пустое имя НЕ записывается: карточка без заголовка невидима "
                  "в списках вернее, чем с неверным")
-    # Ворота чужой карточки — те же, что у смены состояния: сверка НАЗВАННОГО
+    # Проверка чужой карточки — та же, что у смены состояния: сверка НАЗВАННОГО
     # владельца с базой (знание, а не намерение).
     actor = (a.actor or "").upper()
     if actor != (owner or "").upper():
@@ -458,10 +458,10 @@ def cmd_edit(conn, a):
 # 29.08 21:24 UTC, чат PROTO). Разбор замысла — ВОПРОСАМИ, и вопросы РАЗНЫЕ для разных
 # видов работы: один набор на всё горит всегда и потому не значит ничего (текст правила).
 # Вид угадывается по ТЕГАМ карточки; не угадался — набор «прочее». Это ПОДСКАЗКА
-# и ПРЕДУПРЕЖДЕНИЕ, не ворота: блокировка наказывала бы правильное поведение
+# и ПРЕДУПРЕЖДЕНИЕ, не запрет: блокировка наказывала бы правильное поведение
 # (🔴-провал критерия карточки #430). Ответы никуда не вводятся и не проверяются.
-ОБЯЗАТЕЛЬНЫЙ_ВОПРОС = "НА ЧЕЙ ВОПРОС ОТВЕЧАЕТ ПРЕДЛАГАЕМОЕ? (умение вещи ≠ нужда спрашивающего)"
-ВИДЫ_ВОПРОСОВ = [
+MANDATORY_QUESTION = "НА ЧЕЙ ВОПРОС ОТВЕЧАЕТ ПРЕДЛАГАЕМОЕ? (умение вещи ≠ нужда спрашивающего)"
+QUESTION_KINDS = [
     ({"rules", "rule", "skills", "norm"}, "правило/норма", [
         "кому это сказано — зона и адресат (зона рук)?",
         "когда и чем это протухнет — срок годности (порядок)?",
@@ -475,22 +475,22 @@ def cmd_edit(conn, a):
         "у каждого требования есть встречный случай (охват)?",
         "что увидит роль при отказе — молчание или слово (режим отказа)?"]),
 ]
-ВОПРОСЫ_ПРОЧЕЕ = ("прочее", [
+OTHER_QUESTIONS = ("прочее", [
     "есть ли путь дешевле (альтернатива)?",
     "боль в числах: сколько раз и почём (боль в числах)?",
     "чьи руки нужны кроме твоих (зона рук)?"])
 
 
-def вид_и_вопросы(tags_json):
+def kind_and_questions(tags_json):
     """Вид работы по тегам карточки → (имя вида, три вопроса разбора)."""
     try:
         теги = {t.strip().lower() for t in json.loads(tags_json or "[]")}
     except Exception:                                  # noqa: BLE001 — кривые теги ≠ отказ
         теги = set()
-    for ключи, имя, вопросы in ВИДЫ_ВОПРОСОВ:
+    for ключи, kind_label, questions in QUESTION_KINDS:
         if теги & ключи:
-            return имя, вопросы
-    return ВОПРОСЫ_ПРОЧЕЕ
+            return kind_label, questions
+    return OTHER_QUESTIONS
 
 
 def _parse_tags(raw):
@@ -508,29 +508,29 @@ def _parse_tags(raw):
         print("   JSON не разбирается НАМЕРЕННО: вторая законная форма входа — вторая жизнь"
               " этой же порчи (карточка #447)", file=sys.stderr)
         sys.exit(1)
-    метки = [t.strip() for t in raw.split(",")]
-    if any(not t for t in метки):
+    tag_items = [t.strip() for t in raw.split(",")]
+    if any(not t for t in tag_items):
         print(f"⛔ метки НЕ приняты — пустая метка между запятыми: {raw!r}", file=sys.stderr)
         print('   форма: --tags "a,b,c" без пустот; не нужны метки — не передавай --tags',
               file=sys.stderr)
         sys.exit(1)
-    слово = None
-    if метки != raw.split(","):
+    notice = None
+    if tag_items != raw.split(","):
         # Принято, но не молча: пробел у запятой прежде уезжал ВНУТРЬ метки —
         # роль обязана видеть, что записалось не байт-в-байт её строке.
         # Показ СПИСКОМ, не строкой через «, »: строка "a, b" неотличима глазом
         # от необрезанного входа — слово было бы правдой, а показ лгал бы рядом.
-        слово = f"⚠️ пробелы вокруг меток обрезаны, записано: {метки}"
-    return метки, слово
+        notice = f"⚠️ пробелы вокруг меток обрезаны, записано: {tag_items}"
+    return tag_items, notice
 
 
 def cmd_add(conn, a):
     body = _text(a.body, a.body_file)
-    метки, слово_меток = _parse_tags(a.tags)
-    tags = json.dumps(метки, ensure_ascii=False)
+    tag_items, tags_notice = _parse_tags(a.tags)
+    tags = json.dumps(tag_items, ensure_ascii=False)
     done_when = _text(a.done_when, getattr(a, "done_when_file", None)).strip() or None
 
-    # ⛔ ВОРОТА ЗАВЕДЕНИЯ. Слово владельца 2026-08-07 12:56 UTC (через @PROTO #3228, дословно):
+    # ⛔ ЗАПРЕТ ПРИ ЗАВЕДЕНИИ. Слово владельца 2026-08-07 12:56 UTC (через @PROTO #3228, дословно):
     #   «1. критерий приемки - делай обязательным.»
     #   «3. тело - требуем непустым, если подразумевается тело задачи.»
     #
@@ -568,8 +568,8 @@ def cmd_add(conn, a):
     # со стороны будет трудно». Смешать их значило бы утопить отказ в шуме.
     warn_dangling(body, label="тело карточки", role=mezo_hints.кто_читает(a.actor, a.role), full=a.full, db=a.db)
     warn_dangling(done_when, label="критерий", role=mezo_hints.кто_читает(a.actor, a.role), full=a.full, db=a.db)
-    if слово_меток:
-        print(слово_меток)
+    if tags_notice:
+        print(tags_notice)
 
     # ═══ П① (27.08): при живом пуле НОВОЕ — В ПУЛ. Предупреждение осталось для случая
     # «активных наборов не один». Встречный держится сам: пула нет — строки нет.
@@ -579,15 +579,15 @@ def cmd_add(conn, a):
     # направления (замер 29.08: за 3 суток 71% новых карточек — вне наборов).
     # Слово владельца в чате роли всегда выше этих ворот.
     pools = active_pool_tracks(conn)
-    направление = next(iter(pools)) if len(pools) == 1 else None
-    статус, причина_мороза = "open", None
+    focus_dir = next(iter(pools)) if len(pools) == 1 else None
+    initial_status, freeze_reason = "open", None
     if pools and not a.track:
-        if направление:
-            статус = "frozen"
-            причина_мороза = (f"направление-фокус: заведена вне направления {направление} — "
+        if focus_dir:
+            initial_status = "frozen"
+            freeze_reason = (f"направление-фокус: заведена вне направления {focus_dir} — "
                               f"разморозка после закрытия набора; раньше — слово владельца "
                               f"или status <id> open --note <причина>")
-            print(f"🧊 направление контура — {направление}: карточка ВНЕ его заводится "
+            print(f"🧊 направление контура — {focus_dir}: карточка ВНЕ его заводится "
                   f"ЗАМОРОЖЕННОЙ (заявка не теряется и не соблазняет). Разморозить: "
                   f"после закрытия набора, раньше — слово владельца или причина вслух")
         else:
@@ -598,14 +598,14 @@ def cmd_add(conn, a):
     cur = conn.execute(
         "INSERT INTO backlog (role, title, body_md, status, blocked_reason, priority, tags, parent_id, parent_track, created_by, done_when) "
         "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-        (a.role.upper(), a.title, body, статус, причина_мороза, a.priority, tags, a.parent,
+        (a.role.upper(), a.title, body, initial_status, freeze_reason, a.priority, tags, a.parent,
          a.track, (a.actor or a.role).upper(), done_when))
     bid = cur.lastrowid
-    _event(conn, bid, a.actor or a.role, "created", f"created: {a.title}", None, статус)
+    _event(conn, bid, a.actor or a.role, "created", f"created: {a.title}", None, initial_status)
     if done_when:
         _event(conn, bid, a.actor or a.role, "criterion_set", f"критерий: {done_when}")
     conn.commit()
-    print(f"✅ backlog #{bid} [{a.role.upper()}] «{a.title}» ({a.priority}, {статус})")
+    print(f"✅ backlog #{bid} [{a.role.upper()}] «{a.title}» ({a.priority}, {initial_status})")
     if done_when:
         print(f"   🎯 критерий: {done_when}")
         # Приём обязан быть так же честен, как отказ — просьба @ING (#3231) с двумя его
@@ -623,10 +623,10 @@ def cmd_add(conn, a):
     # снова целиком). Текст зависит ТОЛЬКО от вида разбора (устойчивая категория из
     # ВИДЫ_ВОПРОСОВ/«прочее») — номера карточки, заголовка и прочих переменных частей
     # здесь нет, поэтому отпечаток текста не меняется при каждом добавлении.
-    имя_вида, вопросы = вид_и_вопросы(tags)
+    kind_name, questions = kind_and_questions(tags)
     ТЕКСТ_ВОПРОСОВ = (
-        f"   💬 разбор замысла — три вопроса к себе (вид: {имя_вида}; подсказка, а не запрет):\n"
-        + "\n".join(f"      · {в}" for в in вопросы))
+        f"   💬 разбор замысла — три вопроса к себе (вид: {kind_name}; подсказка, а не запрет):\n"
+        + "\n".join(f"      · {question}" for question in questions))
     mezo_hints.подсказка(conn, mezo_hints.кто_читает(a.actor, a.role), "backlog-add-три-вопроса",
                          ТЕКСТ_ВОПРОСОВ, full=a.full)
 
@@ -726,25 +726,25 @@ def cmd_list(conn, a):
     # и число из подписи уходит в записки и промпты. «status=open» при blocked внутри — ложь
     # на одну карточку, уже уехавшая в промпт как «открытых 11» при фактических 10.
     from collections import Counter
-    состав = Counter(r[3] for r in rows)
-    if len(состав) > 1:
-        подпись = " · ".join(f"{s} {n}" for s, n in состав.most_common())
+    status_counts = Counter(r[3] for r in rows)
+    if len(status_counts) > 1:
+        summary_line = " · ".join(f"{s} {n}" for s, n in status_counts.most_common())
     else:
-        подпись = f"status={next(iter(состав))}"
-    print(f"📋 backlog [{a.role.upper()}{'' if a.only_mine else ' + SHARED'}] — {len(rows)} задач ({подпись}{age_note})\n")
+        summary_line = f"status={next(iter(status_counts))}"
+    print(f"📋 backlog [{a.role.upper()}{'' if a.only_mine else ' + SHARED'}] — {len(rows)} задач ({summary_line}{age_note})\n")
     # ═══ ПУЛ ПЕРВЫМ (шаг 0 нового порядка, слово владельца 27.08 18:33 UTC) ═══
     # Карточки активного пула стоят В НАЧАЛЕ списка и помечены 🎯. У роли без карточек
     # пула это сказано СЛОВАМИ: пустая секция неотличима от «пула нет» — класс
     # «молчащий отказ читается как успех», он в контуре уже оплачен.
     if pools:
         in_pool = sum(1 for r in rows if r[7] in pools)
-        имя_пула = ", ".join(sorted(pools))
+        pool_names = ", ".join(sorted(pools))
         if len(pools) > 1:
-            print(f"⚠️ активных пулов {len(pools)} ({имя_пула}) — норма нового порядка: ОДИН")
+            print(f"⚠️ активных пулов {len(pools)} ({pool_names}) — норма нового порядка: ОДИН")
         if in_pool:
-            print(f"🎯 пул {имя_пула}: твоих карточек {in_pool} — они первыми")
+            print(f"🎯 пул {pool_names}: твоих карточек {in_pool} — они первыми")
         else:
-            print(f"🎯 в пуле ({имя_пула}) твоих карточек нет")
+            print(f"🎯 в пуле ({pool_names}) твоих карточек нет")
         # ═══ П② (27.08): ПРОСРОЧЕННЫЕ объявления пула — при КАЖДОМ чтении, у ЛЮБОЙ
         # роли (не только виновной): застрявший шаг пула — общая новость. Предикат
         # вычисляется сейчас, не хранится; демона нет. Роль БЕЗ объявления просрочки
@@ -787,7 +787,7 @@ def cmd_list(conn, a):
                 "AND body_md IS NOT NULL AND TRIM(body_md) != '' "
                 "ORDER BY id DESC LIMIT 1", (bid,)).fetchone()
             print(f"        ✗ причина: {why[0][:140] if why else 'НЕ ЗАПИСАНА (карточка закрыта до того, как причину стали требовать, 14.08)'}")
-        # Замороженная обязана показывать, ЧТО её разбудит, — условие без витрины
+        # Замороженная обязана показывать, ЧТО её разбудит, — условие без показа
         # умирает как всякое поле «пишется-не-читается» (П① пула, 27.08).
         if status == "frozen":
             cond = conn.execute("SELECT blocked_reason FROM backlog WHERE id=?", (bid,)).fetchone()
@@ -808,10 +808,10 @@ def cmd_list(conn, a):
     # там, где скрывать было нечего. Текст ПОСТОЯННЫЙ — без номеров и чисел карточек,
     # иначе отпечаток менялся бы при каждом вызове и подсказка печаталась бы целиком всегда.
     if digest_hidden:
-        ТЕКСТ_СРЕЗА_СКРЫТ = ("ℹ️ срез критерия у карточек скрыт — полный вид: "
+        CRITERION_HIDDEN_TEXT = ("ℹ️ срез критерия у карточек скрыт — полный вид: "
                              "backlog.py list … --full")
         mezo_hints.подсказка(conn, mezo_hints.кто_читает(a.actor, a.role), "backlog-list-full",
-                             ТЕКСТ_СРЕЗА_СКРЫТ, full=a.full)
+                             CRITERION_HIDDEN_TEXT, full=a.full)
 
 
 def cmd_show(conn, a):
@@ -882,14 +882,14 @@ def cmd_status(conn, a):
     # ЕДИНСТВЕННОГО активного набора — предупреждение с живой долей. Только in_progress:
     # закрытия, заморозки и возвраты не судятся — они не «взятие».
     if a.new_status == "in_progress":
-        направление = direction_focus(conn)
-        if направление and (card_track or "") != направление:
-            вне, всего = offpool_share(conn, направление)
-            print(f"⚠️ карточка ВНЕ направления контура ({направление}). За 3 суток "
-                  f"взятий вне направления {вне} из {всего}. Есть причина — возьми через "
+        focus_dir = direction_focus(conn)
+        if focus_dir and (card_track or "") != focus_dir:
+            outside_count, all_count = offpool_share(conn, focus_dir)
+            print(f"⚠️ карточка ВНЕ направления контура ({focus_dir}). За 3 суток "
+                  f"взятий вне направления {outside_count} из {all_count}. Есть причина — возьми через "
                   f"claim с --off-pool \"<причина>\": она ляжет событием в журнал")
 
-    # ⛔ ВОРОТА: чужую карточку двигаешь — НАЗОВИ её владельца, инструмент сверит имя с базой.
+    # ⛔ ЗАПРЕТ: чужую карточку двигаешь — НАЗОВИ её владельца, инструмент сверит имя с базой.
     #
     # Полевой факт 07.08 10:51 UTC (@STUD #3170): он завёл карточку и ТЕМ ЖЕ вызовом закрыл
     # «свою» по номеру 92 — номер он ВЫВЕЛ («сосед завёл 91 минуту назад, значит моя 92»),
@@ -925,7 +925,7 @@ def cmd_status(conn, a):
                   f"инструмента. Посмотри: backlog.py show {a.id}", file=sys.stderr)
             sys.exit(1)
 
-    # ⛔ ВОРОТА: `done` без критерия приёмки. Слово владельца 07.08 10:31 UTC (Р3, через @PROTO):
+    # ⛔ ЗАПРЕТ: `done` без критерия приёмки. Слово владельца 07.08 10:31 UTC (Р3, через @PROTO):
     # «37 закрытых НЕ ТРОГАТЬ, требовать при СЛЕДУЮЩЕМ касании». Закрытие и есть касание.
     #
     # Почему ОТКАЗ, а не подсветка. Замер @PROTO 10:23 UTC: 37 закрытых карточек из 41 — БЕЗ
@@ -949,11 +949,11 @@ def cmd_status(conn, a):
 
     note = _text(a.note, a.note_file)
 
-    # ⛔ ВОРОТА: `dropped` без причины. Слово владельца 07.08 10:20 UTC (карточка #86 ⑥):
+    # ⛔ ЗАПРЕТ: `dropped` без причины. Слово владельца 07.08 10:20 UTC (карточка #86 ⑥):
     # объявлять устаревшими — С ОБЪЯСНЕНИЕМ. Замер 14.08: dropped проходил МОЛЧА, а подсказка
     # отказа `done` выше сама направляла в эту дверь. Причина — не критерий (доказывать
     # нечего), но без «почему» отменённая карточка молчит, жив ли предмет и чем заменён.
-    # ⛔ ВОРОТА: «не вышло» без рассказа, ЧТО пробовали, — это не запись неудачи, а её сокрытие.
+    # ⛔ ЗАПРЕТ: «не вышло» без рассказа, ЧТО пробовали, — это не запись неудачи, а её сокрытие.
     if a.new_status == "failed" and not note.strip():
         print(f"⛔ backlog #{a.id} «{title}» — НЕ ВЫШЛО, но не сказано ЧТО ПРОБОВАЛИ.",
               file=sys.stderr)
@@ -963,7 +963,7 @@ def cmd_status(conn, a):
               f'--note "пробовал так-то; встало на том-то"', file=sys.stderr)
         sys.exit(1)
 
-    # ⛔ ВОРОТА: «жду слова» без вопроса — владелец не узнает, чего от него хотят.
+    # ⛔ ЗАПРЕТ: «жду слова» без вопроса — владелец не узнает, чего от него хотят.
     if a.new_status == "awaiting_word" and not note.strip():
         print(f"⛔ backlog #{a.id} «{title}» — ЖДЁТ СЛОВА, но вопрос не назван.", file=sys.stderr)
         print("   Напиши сам вопрос: его увидит владелец, а не тот, кто ставил состояние.",
@@ -975,15 +975,15 @@ def cmd_status(conn, a):
     # наказывал бы правильное поведение — 🔴-провал критерия). Прошедший разбор говорит
     # это флагом --interviewed и проходит ТИХО: протокол вопросов НЕ требуется и не
     # проверяется — так стоит в самом правиле («роль несёт рекомендацию тихо»).
-    # Слово владельца «хватит» тоже останавливает разбор — и эти ворота ничего
-    # не запирают: перевод состоится в любом случае.
+    # Слово владельца «хватит» тоже останавливает разбор — и эта проверка ничего
+    # не запирает: перевод состоится в любом случае.
     if a.new_status == "awaiting_word" and not a.interviewed:
-        имя_вида, вопросы = вид_и_вопросы(card_tags)
+        kind_name, questions = kind_and_questions(card_tags)
         print(f"⚠️ вынос владельцу БЕЗ объявленного разбора замысла "
-              f"(правило interview-before-recommend). Незаданные вопросы (вид: {имя_вида}):")
-        print(f"   · {ОБЯЗАТЕЛЬНЫЙ_ВОПРОС}")
-        for в in вопросы[:2]:
-            print(f"   · {в}")
+              f"(правило interview-before-recommend). Незаданные вопросы (вид: {kind_name}):")
+        print(f"   · {MANDATORY_QUESTION}")
+        for question in questions[:2]:
+            print(f"   · {question}")
         print("   разбор пройден — скажи это флагом --interviewed; перевод НЕ задержан")
 
     if a.new_status == "dropped" and not note.strip():
@@ -995,7 +995,7 @@ def cmd_status(conn, a):
               f'--note "причина; заменено: карточка #N"', file=sys.stderr)
         sys.exit(1)
 
-    # ⛔ ВОРОТА: «заморожена» БЕЗ УСЛОВИЯ РАЗМОРОЗКИ не бывает (П① пула, 27.08).
+    # ⛔ ЗАПРЕТ: «заморожена» БЕЗ УСЛОВИЯ РАЗМОРОЗКИ не бывает (П① пула, 27.08).
     # Заморозка без условия — это dropped, стесняющийся себя: карточка молчит, ЧТО её
     # разбудит, и лежит вечно. Условие — событие или дата, а не «когда-нибудь».
     if a.new_status == "frozen" and not note.strip():
@@ -1009,9 +1009,9 @@ def cmd_status(conn, a):
 
     # причина стоянки хранится одинаково для «жду чужую работу», «жду слово» и «заморожена»
     blocked_reason = note if a.new_status in ("blocked", "awaiting_word", "frozen") else None
-    приёмщик = (getattr(a, "reviewer", None) or "").strip()
-    if приёмщик:
-        conn.execute("UPDATE backlog SET reviewer = ? WHERE id = ?", (приёмщик, a.id))
+    reviewer_name = (getattr(a, "reviewer", None) or "").strip()
+    if reviewer_name:
+        conn.execute("UPDATE backlog SET reviewer = ? WHERE id = ?", (reviewer_name, a.id))
     conn.execute(
         "UPDATE backlog SET status = ?, blocked_reason = ?, updated_at = datetime('now') WHERE id = ?",
         (a.new_status, blocked_reason, a.id))
@@ -1019,8 +1019,8 @@ def cmd_status(conn, a):
     conn.commit()
     # Заголовок и владелец печатаются В ПОДТВЕРЖДЕНИИ, а не только в отказе: строка
     # «✅ backlog #92: open → done» одинаково выглядит для верной и для ошибочной карточки.
-    чьё = "" if actor == owner_u else f" [карточка {owner}]"
-    print(f"✅ backlog #{a.id}{чьё} «{title}»: {old} → {a.new_status}"
+    owner_suffix = "" if actor == owner_u else f" [карточка {owner}]"
+    print(f"✅ backlog #{a.id}{owner_suffix} «{title}»: {old} → {a.new_status}"
           + (f" ({note})" if note else ""))
 
     # ═══ Карточка #482 (слово владельца 30.08 11:02 UTC): КТО ПРИНИМАЕТ — спрашивает
@@ -1032,12 +1032,12 @@ def cmd_status(conn, a):
     # в момент сдачи рука занята предметом, а не формой.
     # 📏 Замер @COORD (записка #4436): своя заявка ждёт приёмки ВТРОЕ дольше по медиане
     # (2.1 ч против 0.6 ч), худший случай 264 ч против 107 ч, и таких в очереди две трети.
-    # ⛔ ПОДСКАЗКА, А НЕ ВОРОТА — намеренно: инструмент, не давший роли сдать работу,
+    # ⛔ ПОДСКАЗКА, А НЕ ЗАПРЕТ — намеренно: инструмент, не давший роли сдать работу,
     # толкает её сдавать мимо механизма. Перевод состоится в любом случае.
-    if a.new_status == "in_review" and not приёмщик:
-        уже = conn.execute("SELECT reviewer FROM backlog WHERE id=?", (a.id,)).fetchone()[0]
-        if not (уже or "").strip():
-            завёл = conn.execute("SELECT created_by FROM backlog WHERE id=?",
+    if a.new_status == "in_review" and not reviewer_name:
+        existing_reviewer = conn.execute("SELECT reviewer FROM backlog WHERE id=?", (a.id,)).fetchone()[0]
+        if not (existing_reviewer or "").strip():
+            creator = conn.execute("SELECT created_by FROM backlog WHERE id=?",
                                  (a.id,)).fetchone()[0]
             print(f"⚠️ ПРИЁМЩИК НЕ НАЗНАЧЕН. Правило требует чужую руку, но КТО именно — "
                   f"не назначает никто, и такая работа ждёт втрое дольше.")
@@ -1046,18 +1046,18 @@ def cmd_status(conn, a):
             # на карточке #530: прошла проверку владельца с --foreign, скопировала подсказку — и
             # упала на ней же. Подсказка, ведущая в отказ, хуже отсутствия подсказки.
             чужая = f" --foreign {owner}" if actor != owner_u else ""
-            if завёл and завёл.upper() != actor:
-                print(f"   👉 карточку завела роль {завёл} — по обыкновению контура "
+            if creator and creator.upper() != actor:
+                print(f"   👉 карточку завела роль {creator} — по обыкновению контура "
                       f"принимает она:")
                 print(f"      backlog.py status {a.id} in_review --actor {a.actor}{чужая} "
-                      f"--reviewer {завёл}")
+                      f"--reviewer {creator}")
             else:
                 print(f"   👉 карточку ты завела себе — рук ей не назначено ничем. Назови "
                       f"роль ИЛИ правило словами:")
                 print(f'      backlog.py status {a.id} in_review --actor {a.actor}{чужая} '
                       f'--reviewer "любая, не писавшая правку"')
     elif a.new_status == "in_review":
-        print(f"   🫱 приёмщик: {приёмщик}")
+        print(f"   🫱 приёмщик: {reviewer_name}")
 
     # ═══ П⑤ (27.08): карточка, рождённая каналом issues, при закрытии напоминает
     # закрыть и issue — иначе заявка снаружи висит открытой при сделанной работе,
@@ -1075,13 +1075,13 @@ def cmd_status(conn, a):
 
     # ═══ П② (27.08): взятие карточки ПУЛА в работу требует ЖИВОГО объявления — пока
     # ПРЕДУПРЕЖДЕНИЕМ (доля замеряется по событиям). Объявление говорит коллегам ЧТО
-    # и НА СКОЛЬКО; смена статуса без него — молчаливая работа, её не видит витрина пула.
+    # и НА СКОЛЬКО; смена статуса без него — молчаливая работа, её не видит сводка пула.
     if a.new_status == "in_progress":
         try:
             pools = active_pool_tracks(conn)
-            трек = conn.execute("SELECT parent_track FROM backlog WHERE id=?",
+            parent_track_id = conn.execute("SELECT parent_track FROM backlog WHERE id=?",
                                 (a.id,)).fetchone()[0]
-            if трек and трек in pools:
+            if parent_track_id and parent_track_id in pools:
                 alive, _ = live_and_overdue(conn, [a.id])
                 if not alive:
                     print(f"⚠️ карточка пула взята в работу БЕЗ живого объявления — "
@@ -1102,21 +1102,21 @@ def cmd_status(conn, a):
     if a.new_status in ("done", "failed", "dropped"):
         try:
             pools = active_pool_tracks(conn)
-            карточкин_пул = conn.execute(
+            card_pool = conn.execute(
                 "SELECT parent_track FROM backlog WHERE id = ?", (a.id,)).fetchone()[0]
-            в_пуле = bool(карточкин_пул) and карточкин_пул in pools
-            текст = (f"карточка #{a.id} «{title[:70]}» → {a.new_status}"
+            card_in_pool = bool(card_pool) and card_pool in pools
+            message_text = (f"карточка #{a.id} «{title[:70]}» → {a.new_status}"
                      + (f" — {note[:120]}" if note else "")
-                     + (f" (пул {карточкин_пул})" if в_пуле else "")
+                     + (f" (пул {card_pool})" if card_in_pool else "")
                      + " [записано закрытием карточки]")
             conn.execute(
                 "INSERT INTO role_status (role, status, updated_at) "
                 "VALUES (?, ?, datetime('now')) "
                 "ON CONFLICT(role) DO UPDATE SET status = excluded.status, "
-                "updated_at = excluded.updated_at", (actor, текст))
+                "updated_at = excluded.updated_at", (actor, message_text))
             conn.commit()
             print(f"📌 статус роли {actor} обновлён ТЕМ ЖЕ вызовом"
-                  + (f" (пул {карточкин_пул})" if в_пуле else ""))
+                  + (f" (пул {card_pool})" if card_in_pool else ""))
         except Exception as e:                    # noqa: BLE001
             print(f"⚠️ статус роли НЕ обновлён ({type(e).__name__}) — карточка закрыта, "
                   f"статус запиши рукой", file=sys.stderr)
@@ -1145,8 +1145,8 @@ def cmd_queue(conn, a):
     ЧАС ЗАМЕРА печатает МЕХАНИЗМ запросом к базе — роль не может приписать чужому
     часу свой список; при пустой очереди печатается число просмотренных ролей —
     «пусто» и «не смотрел» различимы (класс, оплаченный 29.08 трижды)."""
-    час = conn.execute("SELECT strftime('%Y-%m-%d %H:%M:%S', 'now')").fetchone()[0]
-    ролей = conn.execute(
+    db_now = conn.execute("SELECT strftime('%Y-%m-%d %H:%M:%S', 'now')").fetchone()[0]
+    alive_roles = conn.execute(
         "SELECT COUNT(*) FROM roles WHERE lifecycle='alive'").fetchone()[0]
     rows = conn.execute(
         "SELECT b.id, b.role, b.title,"
@@ -1161,18 +1161,18 @@ def cmd_queue(conn, a):
         "  THEN 1 ELSE 0 END"
         " FROM backlog b WHERE b.status = 'in_review' ORDER BY сдано").fetchall()
     # Строка с часом — КОПИРУЕМАЯ ЦЕЛИКОМ в записку (критерий ③).
-    print(f"🧾 ОЧЕРЕДЬ ПРИЁМОК — замер {час} UTC · ролей просмотрено {ролей} (alive)")
+    print(f"🧾 ОЧЕРЕДЬ ПРИЁМОК — замер {db_now} UTC · ролей просмотрено {alive_roles} (alive)")
     if not rows:
         print("   очередь приёмок ПУСТА: карточек на приёмке (in_review) — 0")
         return
-    возраст = lambda ч: f"{ч // 24} дн" if ч >= 48 else f"{ч} ч"   # noqa: E731
-    for bid, role, title, сдано, ч, рецепт in rows:
-        метка = "🆕 " if (a.since and сдано and сдано > a.since) else ""
-        print(f"   {метка}карточка #{bid} [{role}] «{title[:64]}» — на приёмке "
-              f"{возраст(ч)} · рецепт (python-строка в теле/комментариях): "
-              f"{'есть' if рецепт else 'НЕ ВИДНО'}")
+    age_text = lambda age_hours: f"{age_hours // 24} дн" if age_hours >= 48 else f"{age_hours} ч"   # noqa: E731
+    for bid, role, title, submitted_at, age_hours, recipe in rows:
+        new_mark = "🆕 " if (a.since and submitted_at and submitted_at > a.since) else ""
+        print(f"   {new_mark}карточка #{bid} [{role}] «{title[:64]}» — на приёмке "
+              f"{age_text(age_hours)} · рецепт (python-строка в теле/комментариях): "
+              f"{'есть' if recipe else 'НЕ ВИДНО'}")
     print(f"   итого {len(rows)} · сданное после твоего прошлого запроса помечает "
-          f'--since "{час}"')
+          f'--since "{db_now}"')
 
 
 READ_CMDS = {"show", "list", "queue"}
@@ -1218,7 +1218,7 @@ def main():
     # у критерия не было, и критерий из четырёх пунктов пришлось сплющивать в одну строку.
     # 🪤 Класс, ради которого правка: ФОРМА АРГУМЕНТА ПОДТАЛКИВАЕТ ПИСАТЬ КРИТЕРИЙ КОРОТКО,
     #    а короткий критерий легче сделать неопровержимым. «Работает» помещается в строку,
-    #    «укус краснеет, если убрать запись» — уже с трудом. Проверяемость обычно длиннее фразы.
+    #    «приёмка краснеет, если убрать запись» — уже с трудом. Проверяемость обычно длиннее фразы.
     pa.add_argument("--done-when-file", dest="done_when_file")
     pa.add_argument("--full", action="store_true",
                     help="печатать общие подсказки полностью, даже если уже показывались")
