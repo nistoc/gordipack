@@ -7,7 +7,7 @@ track.py — ПУЛ КАК РАБОЧАЯ ЕДИНИЦА (П③ плана «Р�
 (plan_md — 7 записей, ни одна не читалась; owner_decision — то же) и даёт пулу
 вид, закрытие с вердиктами и триаж остатка.
 
-    python <КОНТУР>/.mezosync/scripts/track.py view                # витрина активного пула
+    python <КОНТУР>/.mezosync/scripts/track.py view                # сводка активного пула
     python <КОНТУР>/.mezosync/scripts/track.py open --id TRACK-X --title "..." --actor РОЛЬ
     python <КОНТУР>/.mezosync/scripts/track.py plan --id TRACK-X --actor РОЛЬ --file план.md
     python <КОНТУР>/.mezosync/scripts/track.py verdict --id TRACK-X --role РОЛЬ --kind process --verdict "чисто"
@@ -278,16 +278,16 @@ def cmd_triage(conn, a):
         f"AND (parent_track IS NULL OR parent_track NOT IN ({ph})) ORDER BY role, id",
         OPEN_STATUSES + pools).fetchall()
     now = conn.execute("SELECT datetime('now', '-21 days')").fetchone()[0]
-    доделать = [r for r in rows if r[3] in ("in_progress", "in_review", "awaiting_word", "blocked")]
-    закрыть = [r for r in rows if r[3] == "open" and r[4] <= now]
-    заморозить = [r for r in rows if r not in доделать and r not in закрыть]
+    to_finish = [r for r in rows if r[3] in ("in_progress", "in_review", "awaiting_word", "blocked")]
+    to_close = [r for r in rows if r[3] == "open" and r[4] <= now]
+    to_freeze = [r for r in rows if r not in to_finish and r not in to_close]
     total = len(rows)
     print(f"═══ ТРИАЖ остатка вне пула ({', '.join(pools)}) — открытых вне пула: {total}")
-    if len(доделать) + len(закрыть) + len(заморозить) != total:
+    if len(to_finish) + len(to_close) + len(to_freeze) != total:
         sys.exit(f"🔴 корзины не сходятся с числом открытых дня "
-                 f"({len(доделать)}+{len(закрыть)}+{len(заморозить)} ≠ {total}) — триаж НЕ ЗАКОНЧЕН, "
+                 f"({len(to_finish)}+{len(to_close)}+{len(to_freeze)} ≠ {total}) — триаж НЕ ЗАКОНЧЕН, "
                  f"свод владельцу не уходит")
-    print(f"   ДОДЕЛАТЬ {len(доделать)} · ЗАКРЫТЬ {len(закрыть)} · ЗАМОРОЗИТЬ {len(заморозить)} "
+    print(f"   ДОДЕЛАТЬ {len(to_finish)} · ЗАКРЫТЬ {len(to_close)} · ЗАМОРОЗИТЬ {len(to_freeze)} "
           f"(сумма = {total} ✅)")
     print("⚖️ триаж НИЧЕГО НЕ МЕНЯЕТ: ниже — корзины и ГОТОВЫЕ команды, решение рукой "
           "роли-хозяина за одну переходную сверку; свод — COORD владельцу")
@@ -305,13 +305,13 @@ def cmd_triage(conn, a):
                 c = cmd_of(bid, role)
                 if c:
                     print(f"         {c}")
-    block("ДОДЕЛАТЬ — до критерия приёмки или ближайшей записанной точки", доделать,
+    block("ДОДЕЛАТЬ — до критерия приёмки или ближайшей записанной точки", to_finish,
           lambda b, r: None)
     # Печатаемые команды — ПРЯМЫМИ косыми (as_posix): смешанные `C:\…\scripts/имя.py`
-    # в bash-инструменте мертвы — ровно класс E сторожа печатных форм, пойман смоком.
-    block("ЗАКРЫТЬ — открыта без событий >21 суток («отпала», с причиной)", закрыть,
+    # в bash-инструменте мертвы — ровно класс E проверки печатных форм, пойман смоком.
+    block("ЗАКРЫТЬ — открыта без событий >21 суток («отпала», с причиной)", to_close,
           lambda b, r: f"python {S.as_posix()}/backlog.py status {b} dropped --actor {r} --note \"отпала: <почему>\"")
-    block("ЗАМОРОЗИТЬ — вне пула, с ОБЯЗАТЕЛЬНЫМ условием разморозки", заморозить,
+    block("ЗАМОРОЗИТЬ — вне пула, с ОБЯЗАТЕЛЬНЫМ условием разморозки", to_freeze,
           lambda b, r: f"python {S.as_posix()}/backlog.py status {b} frozen --actor {r} --note \"условие разморозки: <какое>\"")
 
 

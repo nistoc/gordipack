@@ -317,7 +317,8 @@ def main() -> int:
     sandbox_dir11 = mezo_stand.new("bite-foreign-sabotage-")
     sabotaged11 = mezo_stand.copy_tool(GENERATOR, sandbox_dir11)
     text11 = sabotaged11.read_text(encoding="utf-8")
-    original_line11 = "                new_package[field] = _ATLAS_WORD_RE.sub(group, new_package[field])"
+    original_line11 = ("                new_package[field] = _ATLAS_WORD_RE.sub(lambda _m: group, "
+                       "new_package[field])")
     if original_line11 not in text11:
         sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: точка поломки (подстановка имени) в rules-to-skills.py "
                  "не найдена — текст функции packages_with_group_prefix разошёлся с приёмкой.")
@@ -390,11 +391,25 @@ def main() -> int:
          reddened13 == {9, 10},
          f"покраснели номера: {sorted(reddened13) or 'ни один'} — ждём ровно {{9, 10}}")
 
+    # ── ⑭ имя группы с «\» подставляется ДОСЛОВНО (граница OPSSRE, записка #5127): строку
+    # замены re.sub читает шаблоном — «a\b» превращалось в «a» + символ 0x08. Судим саму функцию.
+    import importlib.util
+    spec14 = importlib.util.spec_from_file_location("rules_to_skills_14", GENERATOR)
+    module14 = importlib.util.module_from_spec(spec14)
+    spec14.loader.exec_module(module14)
+    odd_group = "a\\b"
+    desc14 = next(p["описание"] for n, p in module14.packages_with_group_prefix(odd_group).items()
+                  if n.endswith("-owner-reply"))
+    ok14 = case("⑭ имя группы с «\\» подставляется дословно, а не шаблоном замены",
+                f"владельцу {odd_group}" in desc14 and "\x08" not in desc14,
+                f"описание: {desc14[:60]!r}")
+
     total_ok = (sum(live_results.values())
                 + (1 if reddened6 == {2, 7} else 0)
                 + (1 if reddened11 == {7} else 0)
                 + (1 if reddened12 == {9, 10} else 0)
-                + (1 if reddened13 == {9, 10} else 0))
+                + (1 if reddened13 == {9, 10} else 0)
+                + (1 if ok14 else 0))
     print()
     print(f"{'✅ ПРИЁМКА ПРИНЯТА' if OK else '🔴 ПРИЁМКА НЕ ПРИНЯТА'} — {total_ok} из {CASES}")
     return 0 if OK else 1

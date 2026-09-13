@@ -51,9 +51,9 @@ def case(title, ok, detail, differ=False):
     return ok
 
 
-def run(*argv):
+def run(*argv, env=None):
     r = subprocess.run([sys.executable, *argv], capture_output=True, text=True,
-                       encoding="utf-8", timeout=120)
+                       encoding="utf-8", timeout=120, env=env)
     return (r.stdout or "") + (r.stderr or ""), r.returncode
 
 
@@ -62,6 +62,19 @@ def stamps(db, role="PROTO", section="state"):
     try:
         return con.execute("SELECT saved_at, confirmed_at, LENGTH(body) FROM phoenix "
                            "WHERE role=? AND section=?", (role, section)).fetchone()
+    finally:
+        con.close()
+
+
+def history_saved_at(db, role="PROTO", section="state"):
+    """saved_at САМОЙ НОВОЙ строки phoenix_history для роли/раздела (карточка #605,
+    возврат COORD, вариант «б») — для сверки с phoenix.saved_at/confirmed_at."""
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        row = con.execute(
+            "SELECT saved_at FROM phoenix_history WHERE role=? AND section=? "
+            "ORDER BY id DESC LIMIT 1", (role, section)).fetchone()
+        return row[0] if row else None
     finally:
         con.close()
 
@@ -85,6 +98,21 @@ def main() -> int:
                code == 0 and conf1 == saved1,
                f"после записи: текст {saved1}, взгляд {conf1} — РАВЕНСТВО и есть отпечаток "
                f"состояния «записан, с тех пор не перечитывался»", differ=True)
+
+    # ── ①-бис ВОЗВРАТ COORD (карточка #605, вариант «б»): ОДНА метка времени
+    #     на ДЕЙСТВИЕ — phoenix.saved_at, phoenix.confirmed_at И saved_at строки
+    #     phoenix_history ЭТОГО ЖЕ сохранения обязаны быть ОДНОЙ И ТОЙ ЖЕ строкой.
+    #     До правки каждое поле ставилось СВОИМ вызовом datetime('now') — секунда
+    #     между отдельными командами SQL одной транзакции могла перещёлкнуть, и
+    #     read-phoenix.py читал бы это как «текст правили мимо инструмента» ──────
+    hist1 = history_saved_at(db)
+    ok &= case("①-бис одна метка времени на действие: saved_at, confirmed_at и "
+               "saved_at строки истории — ОДНА И ТА ЖЕ строка",
+               code == 0 and hist1 == saved1 == conf1,
+               f"phoenix.saved_at={saved1} · phoenix.confirmed_at={conf1} · "
+               f"phoenix_history.saved_at={hist1} — три разных вызова datetime('now') "
+               f"тремя разными командами SQL заменены ОДНИМ значением, взятым один раз "
+               f"и переданным параметром", differ=True)
 
     # ── ② ОТМЕТКА СТАВИТСЯ И НЕ ТРОГАЕТ НИ ТЕЛО, НИ ЕГО ВОЗРАСТ ──────────────
     # ⏱ Пауза обязательна: у времени в базе разрешение СЕКУНДА, и без неё «взгляд
@@ -172,6 +200,52 @@ def main() -> int:
                "СТАРШЕ текста" not in out and "перечитано и признано верным" in out,
                "без этого случая краснота ⑥ ничего не доказывала бы: проверка, красящая всё, "
                "не различает")
+
+    # ── ⑩ НАРОЧНАЯ ПОЛОМКА (карточка #605, возврат COORD, вариант «б»): saved_at
+    #     строки phoenix_history СНОВА берёт время ОТДЕЛЬНЫМ источником — но
+    #     ДЕТЕРМИНИРОВАННЫМ сдвигом +1 сек, а не редкой удачей настоящего
+    #     перещёлкивания секунды, чтобы поломка ловилась КАЖДЫЙ прогон, а не
+    #     раз в сколько-то попыток ─────────────────────────────────────────────
+    broken_save_dir = mezo_stand.new("bite-confirm-broken-")
+    broken_save = mezo_stand.copy_tool(SAVE, broken_save_dir)
+    original_text = broken_save.read_text(encoding="utf-8")
+    TARGET = (
+        '            VALUES (?,?,?,?,?,?,?,?)\n'
+        '        """, (role, args.section, body, now, action_time, actor,\n'
+    )
+    if TARGET not in original_text:
+        sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: место записи saved_at строки истории не найдено "
+                 "в испытуемом save-phoenix.py — переименовали, поломка ⑩ бьёт мимо")
+    broken_text = original_text.replace(
+        TARGET,
+        # ПОРЧА: saved_at строки истории детерминированно сдвинут на +1 сек
+        # относительно action_time, использованного для phoenix.saved_at/confirmed_at —
+        # имитация «секунда перещёлкнула между отдельными командами SQL».
+        '            VALUES (?,?,?,?,datetime(?, \'+1 second\'),?,?,?)\n'
+        '        """, (role, args.section, body, now, action_time, actor,\n')
+    broken_save.write_text(broken_text, encoding="utf-8")
+
+    db10 = broken_save_dir / "copy10.db"
+    shutil.copyfile(LIVE_DB, db10)
+    body10 = broken_save_dir / "b10.md"
+    body10.write_text("тело пробы поломки ⑩\n" + "w" * 500, encoding="utf-8")
+    # ⚠️ КОПИЯ инструмента лежит ВНЕ .mezosync/scripts — по своему расположению она
+    # контур не найдёт (второй замок mezo_paths.container_root()). MEZO_CONTAINER
+    # указывает на РЕАЛЬНЫЙ контур для этого поиска; --db остаётся явным и целится
+    # в копию базы — какая база читается/пишется, решает --db, а не MEZO_CONTAINER
+    # (см. bite-archive-move-look.py, тот же приём для копий read-phoenix.py).
+    broken_env = mezo_stand.stand_env(mezo_paths.container_root())
+    out, code = run(str(broken_save), "--db", str(db10), "--role", "PROTO", "--section", "state",
+                    "--file", str(body10), "--allow-shrink", env=broken_env)
+    saved10, conf10, _ = stamps(db10)
+    hist10 = history_saved_at(db10)
+    ok &= case("⑩ поломка (детерминированный сдвиг +1 сек) КРАСИТ: вернувшийся "
+               "второй источник времени рвёт равенство трёх меток",
+               code == 0 and saved10 == conf10 and hist10 != saved10,
+               f"phoenix.saved_at={saved10} · confirmed_at={conf10} · "
+               f"phoenix_history.saved_at={hist10} — строка истории детерминированно "
+               f"отстаёт от phoenix на секунду; без этой поломки случай ①-бис ничего "
+               f"не доказывал бы", differ=True)
 
     mezo_stand.release(d)  # уборка отложена до исхода прогона
     print()

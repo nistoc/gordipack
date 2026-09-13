@@ -373,6 +373,94 @@ case("③г возврат COORD: секунда МЕЖДУ КОМАНДАМИ �
      "«перенос», не 🔴: окно по всей цепочке шире равенства одному звену",
      "СТАРШЕ текста" not in out3g and "унесены в архив штатным переносом" in out3g)
 
+# ── ③д ТРЕТИЙ ВОЗВРАТ COORD (карточка #605, вариант «б»): у ИСТОЧНИКА (memory-
+#     archive.py) ОДНА метка времени на ДЕЙСТВИЕ --move — moved_at КАЖДОГО
+#     унесённого блока, saved_at раздела в phoenix и saved_at строки истории
+#     ЭТОГО переноса обязаны быть ОДНОЙ И ТОЙ ЖЕ строкой (а не совпадать по
+#     секундному разрешению случайно) ─────────────────────────────────────────
+dir3d = stand / "case3d"
+db3d = fresh_case_db(dir3d)
+env3d = stand_env(dir3d)
+body3d = dir3d / "body3d.md"
+body3d.write_text(make_body("③д"), encoding="utf-8")
+
+run(SAVE, "--db", str(db3d), "--role", ROLE, "--section", SECTION, "--file", str(body3d), env=env3d)
+time.sleep(1.1)
+rc, out_move3d = run(ARCHIVE, "--db", str(db3d), "--role", ROLE, "--section", SECTION,
+                     "--move", "1", "--actor", ROLE, env=env3d)
+if rc != 0:
+    sys.exit(f"⛔ НЕ ЗАПУСТИЛАСЬ: memory-archive --move не перенёс блок в случае ③д:\n{out_move3d}")
+
+con3d = sqlite3.connect(f"file:{db3d.as_posix()}?mode=ro", uri=True)
+try:
+    archived_times = [r[0] for r in con3d.execute(
+        "SELECT moved_at FROM phoenix_archive WHERE role=? AND section=?", (ROLE, SECTION))]
+    section_saved3d = con3d.execute(
+        "SELECT saved_at FROM phoenix WHERE role=? AND section=?", (ROLE, SECTION)).fetchone()[0]
+    history_saved3d = con3d.execute(
+        "SELECT saved_at FROM phoenix_history WHERE role=? AND section=? "
+        "ORDER BY id DESC LIMIT 1", (ROLE, SECTION)).fetchone()[0]
+finally:
+    con3d.close()
+case("③д одна метка времени на действие --move: moved_at унесённых блоков, "
+     "saved_at раздела и saved_at строки истории — ОДНА И ТА ЖЕ строка",
+     len(archived_times) >= 1 and all(t == section_saved3d for t in archived_times)
+     and history_saved3d == section_saved3d,
+     f"moved_at унесённых блоков={set(archived_times)} · phoenix.saved_at={section_saved3d} · "
+     f"phoenix_history.saved_at={history_saved3d} — три разных вызова datetime('now') "
+     f"тремя разными командами SQL заменены ОДНИМ значением move_time")
+
+# ── ③д-поломка: у ИСТОЧНИКА (memory-archive.py) saved_at строки истории СНОВА
+#     берёт время ОТДЕЛЬНЫМ вызовом — детерминированным сдвигом +1 сек, чтобы
+#     поломка ловилась КАЖДЫЙ прогон, а не редкой удачей перещёлкнувшей секунды ─
+broken_archive_dir = stand / "broken-archive-source-time"
+broken_archive_tool = mezo_stand.copy_tool(ARCHIVE, broken_archive_dir)
+archive_original_text = broken_archive_tool.read_text(encoding="utf-8")
+ARCHIVE_HISTORY_BLOCK = (
+    '            "INSERT INTO phoenix_history (role, section, body, body_chars, saved_at, "\n'
+    '            "actor, reason, prev_chars) VALUES (?,?,?,?,?,?,?,?)",\n'
+)
+if ARCHIVE_HISTORY_BLOCK not in archive_original_text:
+    sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: строка записи истории переноса не найдена в "
+             "испытуемом memory-archive.py — переименовали, поломка ③д бьёт мимо")
+archive_broken_text = archive_original_text.replace(
+    ARCHIVE_HISTORY_BLOCK,
+    # ПОРЧА: saved_at строки истории переноса детерминированно сдвинут на +1 сек
+    # относительно move_time, использованного для phoenix_archive.moved_at и
+    # phoenix.saved_at — имитация «секунда перещёлкнула между отдельными командами».
+    '            "INSERT INTO phoenix_history (role, section, body, body_chars, saved_at, "\n'
+    '            "actor, reason, prev_chars) VALUES (?,?,?,?,datetime(?, \'+1 second\'),?,?,?)",\n')
+broken_archive_tool.write_text(archive_broken_text, encoding="utf-8")
+
+dir3d_broken = stand / "case3d-broken"
+db3d_broken = fresh_case_db(dir3d_broken)
+env3d_broken = stand_env(dir3d_broken)
+body3d_broken = dir3d_broken / "body3d-broken.md"
+body3d_broken.write_text(make_body("③д-поломка"), encoding="utf-8")
+run(SAVE, "--db", str(db3d_broken), "--role", ROLE, "--section", SECTION,
+    "--file", str(body3d_broken), env=env3d_broken)
+time.sleep(1.1)
+rc, out_move3d_broken = run(broken_archive_tool, "--db", str(db3d_broken), "--role", ROLE,
+                            "--section", SECTION, "--move", "1", "--actor", ROLE, env=env3d_broken)
+if rc != 0:
+    sys.exit(f"⛔ НЕ ЗАПУСТИЛАСЬ: поломанный memory-archive --move не перенёс блок "
+             f"в случае ③д-поломка:\n{out_move3d_broken}")
+con3d_broken = sqlite3.connect(f"file:{db3d_broken.as_posix()}?mode=ro", uri=True)
+try:
+    section_saved3d_b = con3d_broken.execute(
+        "SELECT saved_at FROM phoenix WHERE role=? AND section=?", (ROLE, SECTION)).fetchone()[0]
+    history_saved3d_b = con3d_broken.execute(
+        "SELECT saved_at FROM phoenix_history WHERE role=? AND section=? "
+        "ORDER BY id DESC LIMIT 1", (ROLE, SECTION)).fetchone()[0]
+finally:
+    con3d_broken.close()
+case("③д-поломка (детерминированный сдвиг +1 сек у ИСТОЧНИКА) КРАСИТ: вернувшийся "
+     "второй источник времени рвёт равенство меток переноса",
+     section_saved3d_b != history_saved3d_b,
+     f"phoenix.saved_at={section_saved3d_b} · phoenix_history.saved_at={history_saved3d_b} — "
+     f"строка истории детерминированно отстаёт на секунду; без этой поломки случай ③д "
+     f"ничего не доказывал бы")
+
 # ── ④ ПРАВКА МИМО ИНСТРУМЕНТА, ПОТОМ штатный перенос — перенос НЕ ОТМЫВАЕТ ──
 dir4 = stand / "case4"
 db4 = fresh_case_db(dir4)

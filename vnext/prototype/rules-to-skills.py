@@ -274,7 +274,9 @@ def packages_with_group_prefix(group: str | None) -> dict:
         new_package = dict(package)
         for field in ("описание", "когда"):
             if field in new_package:
-                new_package[field] = _ATLAS_WORD_RE.sub(group, new_package[field])
+                # функцией, а не строкой: строку замены re.sub читает ШАБЛОНОМ — имя группы
+                # с «\» («\b» → символ 0x08) испортилось бы (граница OPSSRE, записка #5127)
+                new_package[field] = _ATLAS_WORD_RE.sub(lambda _m: group, new_package[field])
         renamed[new_name] = new_package
     return renamed
 

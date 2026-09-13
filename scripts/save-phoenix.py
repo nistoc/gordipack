@@ -597,6 +597,19 @@ def main():
         say_volume_threshold(now, role, args.section)
         return
 
+    # 🕐 ОДНА МЕТКА ВРЕМЕНИ НА ДЕЙСТВИЕ (возврат COORD, карточка #605, вариант «б»).
+    # ЗАЧЕМ. Ниже это ОДНО действие («настоящее сохранение») пишет ВРЕМЯ в ТРИ места:
+    # phoenix.saved_at, phoenix.confirmed_at (если колонка есть) и phoenix_history.saved_at.
+    # До этой правки каждое место звало СВОЙ datetime('now') СВОЕЙ отдельной командой SQL
+    # (conn.execute()) — а SQLite держит 'now' одинаковым только ВНУТРИ ОДНОЙ команды,
+    # не между отдельными командами одной транзакции. Секунда между командами МОГЛА
+    # перещёлкнуть — редко, но не гипотетически: read-phoenix.py (archive_move_look)
+    # сравнивает эти самые поля СТРОКАМИ, и расхождение в секунду читалось бы им как
+    # «текст правили мимо инструмента». ⇒ время берётся у ИСТОЧНИКА (самой базы, той же
+    # транзакцией) ОДИН раз и подставляется ПАРАМЕТРОМ во все три места — тем же
+    # приёмом, каким это чинит memory-archive.py (возврат COORD того же дня).
+    action_time = conn.execute("SELECT datetime('now')").fetchone()[0]
+
     if has_confirmed:
         # ⚖️ ЗАПИСЬ ТЕЛА СТАВИТ ОБЕ ДАТЫ — это МЕРА ③ ВАРИАНТА А, слово владельца
         # 2026-08-08 16:19 UTC, и у неё есть своя приёмка (bite-phoenix-confirmed,
@@ -611,24 +624,24 @@ def main():
         # и признан верным»; confirmed < saved — правка мимо инструмента.
         conn.execute("""
             INSERT INTO phoenix (role, section, body, saved_at, confirmed_at)
-            VALUES (?, ?, ?, datetime('now'), datetime('now'))
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(role, section) DO UPDATE SET body = excluded.body,
-                saved_at = excluded.saved_at, confirmed_at = datetime('now')
-        """, (role, args.section, body))
+                saved_at = excluded.saved_at, confirmed_at = excluded.confirmed_at
+        """, (role, args.section, body, action_time, action_time))
     else:
         conn.execute("""
             INSERT INTO phoenix (role, section, body, saved_at)
-            VALUES (?, ?, ?, datetime('now'))
+            VALUES (?, ?, ?, ?)
             ON CONFLICT(role, section) DO UPDATE SET body = excluded.body,
                 saved_at = excluded.saved_at
-        """, (role, args.section, body))
+        """, (role, args.section, body, action_time))
 
     if has_history:
         conn.execute("""
             INSERT INTO phoenix_history
                 (role, section, body, body_chars, saved_at, actor, reason, prev_chars)
-            VALUES (?,?,?,?,datetime('now'),?,?,?)
-        """, (role, args.section, body, now, actor,
+            VALUES (?,?,?,?,?,?,?,?)
+        """, (role, args.section, body, now, action_time, actor,
               ("restore %s" % args.restore) if args.restore
               else ("save --allow-shrink" if args.allow_shrink else "save"),
               was if prev_body is not None else None))

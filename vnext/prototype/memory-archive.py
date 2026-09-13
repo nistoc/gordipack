@@ -22,10 +22,10 @@ r"""ГОРЯЧАЯ ПАМЯТЬ И АРХИВ: унести из раздела 
 в истории разделов. Ни один путь этого инструмента не удаляет текст.
 
 Зовут так:
-    python C:/guts/.atlas/vnext-tools/memory-archive.py --role PROTO --section state --preview
-    python C:/guts/.atlas/vnext-tools/memory-archive.py --role PROTO --section state --move 3 7 9
-    python C:/guts/.atlas/vnext-tools/memory-archive.py --role PROTO --find "будильник"
-    python C:/guts/.atlas/vnext-tools/memory-archive.py --role PROTO --list
+    python <КОНТУР>/vnext-tools/memory-archive.py --role PROTO --section state --preview
+    python <КОНТУР>/vnext-tools/memory-archive.py --role PROTO --section state --move 3 7 9
+    python <КОНТУР>/vnext-tools/memory-archive.py --role PROTO --find "будильник"
+    python <КОНТУР>/vnext-tools/memory-archive.py --role PROTO --list
 """
 from __future__ import annotations
 
@@ -394,7 +394,7 @@ def показать(conn, роль, раздел):
     print("👉 Унести: --move <номера через пробел>. Номера — из ЭТОГО вывода;")
     print("   он пересчитывается после каждого переноса, поэтому уноси за один вызов.")
     print("⚖️ Приметы — подсказка, не приговор. Что горячее, а что нет, говорит правило:")
-    print("   python C:/guts/.atlas/.mezosync/scripts/set-rule.py "
+    print("   python <КОНТУР>/.mezosync/scripts/set-rule.py "
           "--key memory-hot-and-archive --show")
 
 
@@ -426,14 +426,25 @@ def унести(conn, роль, раздел, номера, actor):
     print("  ✅ сумма сошлась: горячее + унесённое = прежнее тело, знак в знак")
 
     conn.execute("BEGIN")
+    # 🕐 ОДНА МЕТКА ВРЕМЕНИ НА ДЕЙСТВИЕ (возврат COORD, карточка #605, вариант «б»).
+    # Это ОДНО действие («штатный перенос») пишет ВРЕМЯ в ТРИ места: moved_at КАЖДОГО
+    # унесённого блока в phoenix_archive, saved_at раздела в phoenix и saved_at строки
+    # phoenix_history. До этой правки каждое место звало СВОЙ datetime('now') СВОЕЙ
+    # отдельной командой SQL (phoenix_archive — DEFAULT схемы, остальные — inline) —
+    # а SQLite держит 'now' одинаковым только ВНУТРИ одной команды, не между отдельными
+    # командами одной транзакции: секунда между ними МОГЛА перещёлкнуть. read-phoenix.py
+    # (archive_move_look) сравнивает эти поля СТРОКАМИ — расхождение читалось бы им как
+    # разрыв цепочки переносов. ⇒ время берётся у ИСТОЧНИКА (самой базы, той же
+    # транзакцией) ОДИН раз и подставляется ПАРАМЕТРОМ во все три места.
+    move_time = conn.execute("SELECT datetime('now')").fetchone()[0]
     for i in берём:
         к = куски[i - 1]
         conn.execute(
             "INSERT INTO phoenix_archive (role, section, topic, body, body_chars, "
-            "moved_by, origin_saved_at) VALUES (?,?,?,?,?,?,?)",
-            (роль, раздел, к["тема"], к["тело"], к["знаков"], actor, saved))
-    conn.execute("UPDATE phoenix SET body=?, saved_at=datetime('now') "
-                 "WHERE role=? AND section=?", (новое_тело, роль, раздел))
+            "moved_at, moved_by, origin_saved_at) VALUES (?,?,?,?,?,?,?,?)",
+            (роль, раздел, к["тема"], к["тело"], к["знаков"], move_time, actor, saved))
+    conn.execute("UPDATE phoenix SET body=?, saved_at=? "
+                 "WHERE role=? AND section=?", (новое_тело, move_time, роль, раздел))
     # 🩸 ЗАПИСЬ В ИСТОРИЮ РАЗДЕЛОВ — ОБЯЗАТЕЛЬНА, И ВОТ ЧЕМ ЭТО ОПЛАЧЕНО.
     # Первая редакция меняла горячее тело напрямую и историю не трогала. Общий прогон
     # тем же часом покраснел: «память: правка мимо инструмента, расхождений 1» — и был
@@ -445,8 +456,8 @@ def унести(conn, роль, раздел, номера, actor):
     if conn.execute("SELECT 1 FROM sqlite_master WHERE name='phoenix_history'").fetchone():
         conn.execute(
             "INSERT INTO phoenix_history (role, section, body, body_chars, saved_at, "
-            "actor, reason, prev_chars) VALUES (?,?,?,?,datetime('now'),?,?,?)",
-            (роль, раздел, новое_тело, len(новое_тело), actor,
+            "actor, reason, prev_chars) VALUES (?,?,?,?,?,?,?,?)",
+            (роль, раздел, новое_тело, len(новое_тело), move_time, actor,
              f"archive-move: унесено {len(берём)} кусков, {ушло} знаков", len(тело)))
     else:
         print("⚠️ ИСТОРИИ РАЗДЕЛОВ В ЭТОЙ БАЗЕ НЕТ — перенос НЕобратим штатным путём. "
@@ -542,9 +553,11 @@ def main() -> int:
     conn = sqlite3.connect(str(db))
     if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='phoenix_archive'"
                         ).fetchone():
+        # путь шага выводится от расположения базы, а не пишется литералом машины:
+        # у чужого контура база лежит в другом месте (перенос в образец это ловит)
+        migration = db.resolve().parent / "scripts" / "migrations" / "20260904-phoenix-archive.py"
         sys.exit("⛔ В этой базе нет архива памяти. Накати шаг:\n"
-                 "   python C:/guts/.atlas/.mezosync/scripts/migrations/"
-                 "20260904-phoenix-archive.py")
+                 f"   python {migration.as_posix()}")
 
     роль = a.role.upper()      # токен роли регистрозависим — приводим сразу
     # 🪤 РУКА БЕРЁТСЯ ИЗ СРЕДЫ, А НЕ ИЗ АРГУМЕНТА — и вот почему это не придирка.
