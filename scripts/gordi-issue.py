@@ -44,10 +44,51 @@ def _gh(*args):
     return p.returncode, (p.stdout or ""), (p.stderr or "")
 
 
-def _writer_gate(role):
-    if (role or "").upper() != "COORD":
-        sys.exit("⛔ писатель канала ОДИН — координатор (правило «один писатель на канал»; "
-                 "канал публичный). Отдай текст COORD запиской — решение и рука его.")
+# 🪤 НАЙДЕНО КОНТУРОМ AIA, ПОДТВЕРЖДЕНО В НАШЕМ КОДЕ (2026-09-13): координатор был литералом
+# «COORD» ПРЯМО В ТЕКСТЕ. Роль-координатор — это ФАКТ КОНТУРА, а не константа кода: смени
+# владелец координатора словом (как уже менялись зоны CHROME/OPSSRE/PROTO по roster.json),
+# литерал остался бы верен вчера и ошибался бы молча сегодня, отказывая НАСТОЯЩЕМУ
+# координатору и пропуская самозванца с именем COORD, если оно освободится.
+def _find_coordinator(db_path=None):
+    """(имя, источник) — координатор контура ИЗ ДАННЫХ, не литералом.
+
+    Источник данных — `roles.lifecycle_reason`: единственное МЕСТО КОНТУРА, где роль
+    названа координатором СТРУКТУРНО (полем таблицы, а не прозой правила). Правило свода
+    role-roster-and-zones несёт то же самое, но текстом markdown — разбирать его регуляркой
+    ради одного слова означало бы завести ВТОРОЙ, более хрупкий путь к тому же факту.
+    Находит РОВНО ОДНУ живую роль — иначе (нашлось 0 или больше 1, база недоступна) падает
+    на запасной литерал «COORD» и ГОВОРИТ ОБ ЭТОМ, откуда взять верное.
+    """
+    import mezo_paths
+    import sqlite3
+    try:
+        db = db_path or mezo_paths.live_db(__file__)
+        con = sqlite3.connect(f"file:{Path(db).as_posix()}?mode=ro", uri=True, timeout=3)
+        try:
+            rows = con.execute(
+                "SELECT role FROM roles WHERE lifecycle='alive' "
+                "AND lifecycle_reason LIKE '%координатор%'").fetchall()
+        finally:
+            con.close()
+        if len(rows) == 1:
+            return rows[0][0].upper(), "roles.lifecycle_reason (таблица ролей контура)"
+    except Exception:  # noqa: BLE001 — отказ базы откатывает к запасному пути, не роняет писателя
+        pass
+    return "COORD", (
+        "ЗАПАСНОЙ ЛИТЕРАЛ: не нашёл РОВНО ОДНУ живую роль-координатора в "
+        "roles.lifecycle_reason (база недоступна, роль не одна или не названа вовсе). "
+        "Верный источник: python <s>/set-rule.py --key role-roster-and-zones --show, "
+        "либо таблица roles (столбец lifecycle_reason)")
+
+
+def _writer_gate(role, db_path=None):
+    coordinator, source = _find_coordinator(db_path)
+    if not source.startswith("roles.lifecycle_reason"):
+        print(f"⚠️ координатор взят {source}", file=sys.stderr)
+    if (role or "").upper() != coordinator:
+        sys.exit(f"⛔ писатель канала ОДИН — координатор {coordinator} (правило «один "
+                 f"писатель на канал»; канал публичный). Отдай текст {coordinator} "
+                 f"запиской — решение и рука его.")
 
 
 def cmd_create(a):

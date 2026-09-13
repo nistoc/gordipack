@@ -28,7 +28,7 @@ r"""ПРИЁМКА memory-records.py — карточка #524, встречны
     ⑪ ПОРЧА: потерянный кусок обязан покраснеть
 
 Зовут так:
-    python C:/guts/.atlas/vnext-tools/bite-memory-records.py
+    python <КОНТУР>/vnext-tools/bite-memory-records.py
 """
 from __future__ import annotations
 
@@ -45,181 +45,198 @@ import tempfile
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
-ЗДЕСЬ = pathlib.Path(__file__).resolve().parent
+HERE = pathlib.Path(__file__).resolve().parent
 # ⛔ НЕ ВПЕЧАТАННЫЙ ПУТЬ: инструмент берётся от РАСПОЛОЖЕНИЯ ЭТОГО ФАЙЛА, иначе приёмка,
 # положенная в песочницу вместе с копией инструмента, продолжит судить живой оригинал.
-ИНСТРУМЕНТ = ЗДЕСЬ / "memory-records.py"
-БАЗА = pathlib.Path("C:/guts/.atlas/.mezosync/mezosync.db")
-РОЛЬ = "PROTO"
-СИД = 524
+TOOL = HERE / "memory-records.py"
+sys.path.insert(0, str(HERE))
+import mezo_paths  # noqa: E402 — база контура выводится от расположения, не впечатана (перенос в образец 13.09)
 
-прошло: list[str] = []
-пало: list[str] = []
+DB = mezo_paths.live_db(__file__)
+ROLE = "PROTO"
+SEED = 524
 
-
-def случай(имя: str, ок: bool, чем: str = "") -> None:
-    (прошло if ок else пало).append(имя)
-    print(f"  {'✅' if ок else '🔴'} {имя}" + (f"\n       {чем}" if чем and not ок else ""))
+passed: list[str] = []
+failed: list[str] = []
 
 
-def зов(инструмент: pathlib.Path, *ключи: str, база: pathlib.Path = БАЗА):
-    среда = dict(os.environ, MEZO_ROLE=РОЛЬ, PYTHONIOENCODING="utf-8")
-    p = subprocess.run([sys.executable, str(инструмент), "--role", РОЛЬ,
-                        "--db", str(база), *ключи],
-                       capture_output=True, text=True, encoding="utf-8", env=среда)
+def record_case(name: str, ok: bool, detail: str = "") -> None:
+    (passed if ok else failed).append(name)
+    print(f"  {'✅' if ok else '🔴'} {name}" + (f"\n       {detail}" if detail and not ok else ""))
+
+
+def call_tool(tool: pathlib.Path, *args: str, db: pathlib.Path = DB):
+    env = dict(os.environ, MEZO_ROLE=ROLE, PYTHONIOENCODING="utf-8")
+    p = subprocess.run([sys.executable, str(tool), "--role", ROLE,
+                        "--db", str(db), *args],
+                       capture_output=True, text=True, encoding="utf-8", env=env)
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 
-def куски_жребием(тела: dict, записи: dict, сколько: int = 10):
+def random_chunks(bodies: dict, records: dict, count: int = 10):
     """Вернуть [(раздел, начало, кусок, найден_целиком, найден_в_склейке)]."""
-    rnd = random.Random(СИД)
-    разделы = sorted(тела)
-    итог = []
-    for _ in range(сколько):
-        р = rnd.choice(разделы)
-        т = тела[р]
-        нач = rnd.randrange(0, max(1, len(т) - 90))
-        кусок = т[нач:нач + 80]
-        целиком = any(кусок in з for з in записи.get(р, []))
+    rnd = random.Random(SEED)
+    sections = sorted(bodies)
+    result = []
+    for _ in range(count):
+        sect = rnd.choice(sections)
+        body = bodies[sect]
+        start = rnd.randrange(0, max(1, len(body) - 90))
+        chunk = body[start:start + 80]
+        whole = any(chunk in rec for rec in records.get(sect, []))
         # ⚖️ КУСОК, ЛЁГШИЙ НА СТЫК ДВУХ ЗАПИСЕЙ, — НЕ ПОТЕРЯ. Он есть целиком, просто
         # разрезан границей. Проверка, не умеющая этого различить, краснеет на здоровом
         # переносе — а ложная тревога дороже пропуска: перестают верить проверке ЦЕЛИКОМ.
-        склейка = "".join(записи.get(р, []))
-        итог.append((р, нач, кусок, целиком, кусок in склейка))
-    return итог
+        joined = "".join(records.get(sect, []))
+        result.append((sect, start, chunk, whole, chunk in joined))
+    return result
 
 
 def main() -> int:
     print("=" * 88)
     print("ПРИЁМКА memory-records.py — карточка #524")
-    print(f"инструмент: {ИНСТРУМЕНТ}")
-    print(f"база:       {БАЗА}")
+    print(f"инструмент: {TOOL}")
+    print(f"база:       {DB}")
     print("=" * 88)
-    if not ИНСТРУМЕНТ.is_file():
-        sys.exit(f"⛔ инструмента нет рядом: {ИНСТРУМЕНТ}")
+    if not TOOL.is_file():
+        sys.exit(f"⛔ инструмента нет рядом: {TOOL}")
 
-    conn = sqlite3.connect(f"file:{БАЗА}?mode=ro", uri=True)
-    тела = dict(conn.execute(
-        "SELECT section, body FROM phoenix WHERE role=?", (РОЛЬ,)))
-    записи: dict[str, list[str]] = {}
-    for р, т in conn.execute(
+    conn = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+    bodies = dict(conn.execute(
+        "SELECT section, body FROM phoenix WHERE role=?", (ROLE,)))
+    records: dict[str, list[str]] = {}
+    for sect, body in conn.execute(
             "SELECT section, body FROM phoenix_records WHERE role=? ORDER BY ord",
-            (РОЛЬ,)):
-        записи.setdefault(р, []).append(т)
-    if not записи:
-        sys.exit(f"⛔ у {РОЛЬ} нет записей — приёмке нечего судить. Сначала --разобрать")
+            (ROLE,)):
+        records.setdefault(sect, []).append(body)
+    if not records:
+        sys.exit(f"⛔ у {ROLE} нет записей — приёмке нечего судить. Сначала --разобрать")
 
     print("\n── ЖИВЫЕ СЛУЧАИ ───────────────────────────────────────────────────────")
 
     # ① сборка по каждому разделу
-    беда = []
-    for р in sorted(тела):
-        код, вывод = зов(ИНСТРУМЕНТ, "--section", р, "--собрать")
-        if код != 0 or "СОВПАДАЕТ ЗНАК В ЗНАК" not in вывод:
-            беда.append(р)
-    случай(f"① сборка сходится знак в знак по всем разделам ({len(тела)})",
-           not беда, f"не сошлись: {', '.join(беда)}")
+    bad_sections = []
+    for sect in sorted(bodies):
+        code, output = call_tool(TOOL, "--section", sect, "--собрать")
+        if code != 0 or "СОВПАДАЕТ ЗНАК В ЗНАК" not in output:
+            bad_sections.append(sect)
+    record_case(f"① сборка сходится знак в знак по всем разделам ({len(bodies)})",
+           not bad_sections, f"не сошлись: {', '.join(bad_sections)}")
 
     # ② суммы
-    с_тел = sum(len(v) for v in тела.values())
-    с_зап = sum(len(x) for v in записи.values() for x in v)
-    случай(f"② сумма знаков совпадает ({с_зап} = {с_тел})", с_тел == с_зап,
-           f"расхождение {с_зап - с_тел}")
+    body_total = sum(len(v) for v in bodies.values())
+    records_total = sum(len(x) for v in records.values() for x in v)
+    record_case(f"② сумма знаков совпадает ({records_total} = {body_total})", body_total == records_total,
+           f"расхождение {records_total - body_total}")
 
     # ③ жребий со стыками
-    жр = куски_жребием(тела, записи)
-    потеряны = [(р, н) for р, н, _, ц, скл in жр if not ц and not скл]
-    на_стыке = sum(1 for *_, ц, скл in жр if not ц and скл)
-    случай(f"③ жребий: 10 из 10 на месте (целиком {10 - на_стыке - len(потеряны)} · "
-           f"на стыке записей {на_стыке} · потеряно {len(потеряны)})",
-           not потеряны, f"потеряны: {потеряны}")
+    draws = random_chunks(bodies, records)
+    lost = [(sect, start) for sect, start, _, whole, joined in draws if not whole and not joined]
+    at_seam = sum(1 for *_, whole, joined in draws if not whole and joined)
+    record_case(f"③ жребий: 10 из 10 на месте (целиком {10 - at_seam - len(lost)} · "
+           f"на стыке записей {at_seam} · потеряно {len(lost)})",
+           not lost, f"потеряны: {lost}")
 
     # ④ три состояния поля «условие снятия»
-    код, вывод = зов(ИНСТРУМЕНТ, "--показать")
+    code, output = call_tool(TOOL, "--показать")
     m = re.search(r"условие снятия: назначено (\d+) · решено «условия нет» (\d+) · "
-                  r"⚠️ НЕ РЕШЕНО (\d+)", вывод)
-    случай("④ поле «условие снятия» различает ТРИ состояния числом", bool(m),
+                  r"⚠️ НЕ РЕШЕНО (\d+)", output)
+    record_case("④ поле «условие снятия» различает ТРИ состояния числом", bool(m),
            "строки с тремя числами в выводе --показать нет")
     if m:
         print(f"       назначено {m.group(1)} · «условия нет» {m.group(2)} · "
               f"НЕ решено {m.group(3)}")
 
     # ⑤ снятое читается вместе с «чем снята»
-    код, вывод = зов(ИНСТРУМЕНТ, "--снятые")
-    снятых = conn.execute("SELECT COUNT(*) FROM phoenix_records "
-                          "WHERE role=? AND alive='revoked'", (РОЛЬ,)).fetchone()[0]
-    случай(f"⑤ отбор снятых показывает «чем снята» (снятых {снятых})",
-           снятых == 0 or "чем снята каждая" in вывод,
+    code, output = call_tool(TOOL, "--снятые")
+    revoked_count = conn.execute("SELECT COUNT(*) FROM phoenix_records "
+                          "WHERE role=? AND alive='revoked'", (ROLE,)).fetchone()[0]
+    record_case(f"⑤ отбор снятых показывает «чем снята» (снятых {revoked_count})",
+           revoked_count == 0 or "чем снята каждая" in output,
            "снятые есть, а причины в выводе нет — снятое без причины "
            "неотличимо от потерянного")
 
     # ⑥ отбор отвечает списком, а не телами
-    код, вывод = зов(ИНСТРУМЕНТ, "--отобрать", "право")
-    длина_тел = sum(len(x) for v in записи.values() for x in v)
-    случай("⑥ отбор отвечает СПИСКОМ, а не потоком тел",
-           len(вывод) < длина_тел // 3 and "начало" in вывод,
-           f"вывод {len(вывод)} знаков — это тела, а критерий ② требует список")
+    code, output = call_tool(TOOL, "--отобрать", "право")
+    body_len = sum(len(x) for v in records.values() for x in v)
+    record_case("⑥ отбор отвечает СПИСКОМ, а не потоком тел",
+           len(output) < body_len // 3 and "начало" in output,
+           f"вывод {len(output)} знаков — это тела, а критерий ② требует список")
 
     print("\n── ВСТРЕЧНЫЕ: ЧТО ОБЯЗАНО ОТКАЗАТЬ ────────────────────────────────────")
 
     # ⑦ чужая запись
-    чужая = conn.execute("SELECT id, role FROM phoenix_records WHERE role<>? LIMIT 1",
-                         (РОЛЬ,)).fetchone()
-    if чужая:
-        код, вывод = зов(ИНСТРУМЕНТ, "--поля", str(чужая[0]), "--источник", "порча")
-        случай(f"⑦ правка ЧУЖОЙ записи #{чужая[0]} (роль {чужая[1]}) отказывает",
-               код != 0 and "НЕ ДОПИСАНО" in вывод, вывод.strip()[:200])
+    foreign = conn.execute("SELECT id, role FROM phoenix_records WHERE role<>? LIMIT 1",
+                         (ROLE,)).fetchone()
+    if foreign:
+        code, output = call_tool(TOOL, "--поля", str(foreign[0]), "--источник", "порча")
+        record_case(f"⑦ правка ЧУЖОЙ записи #{foreign[0]} (роль {foreign[1]}) отказывает",
+               code != 0 and "НЕ ДОПИСАНО" in output, output.strip()[:200])
     else:
         # ⚖️ Случай не пропускается молча: сказать «проверить нечем» честнее, чем
         # промолчать — молчание неотличимо от пройденной проверки.
         print("  ⚪ ⑦ чужих записей в базе нет — случай проверен на копии ниже")
 
     # ⑧ несуществующая запись
-    код, вывод = зов(ИНСТРУМЕНТ, "--поля", "999999", "--источник", "порча")
-    случай("⑧ правка НЕСУЩЕСТВУЮЩЕЙ записи краснеет, а не молчит зелёным",
-           код != 0 and "НЕ ДОПИСАНО" in вывод, вывод.strip()[:200])
+    code, output = call_tool(TOOL, "--поля", "999999", "--источник", "порча")
+    record_case("⑧ правка НЕСУЩЕСТВУЮЩЕЙ записи краснеет, а не молчит зелёным",
+           code != 0 and "НЕ ДОПИСАНО" in output, output.strip()[:200])
 
     # ⑨ повторный разбор
-    раздел = sorted(записи)[0]
-    код, вывод = зов(ИНСТРУМЕНТ, "--section", раздел, "--разобрать")
-    случай(f"⑨ повторный разбор «{раздел}» отказывает (не затирает ручные поля)",
-           код != 0 and "НЕ РАЗОБРАНО" in вывод, вывод.strip()[:200])
+    section = sorted(records)[0]
+    code, output = call_tool(TOOL, "--section", section, "--разобрать")
+    record_case(f"⑨ повторный разбор «{section}» отказывает (не затирает ручные поля)",
+           code != 0 and "НЕ РАЗОБРАНО" in output, output.strip()[:200])
+
+    # ⑨-бис (карточка #600, найдено контуром AIA, подтверждено в нашем коде): --пересобрать
+    # ЗДЕСЬ НЕ СЧИТАЛСЯ пишущей операцией и обходил проверку «роль правит СВОЮ память
+    # сама» — чужая роль могла пересобрать разбор чужого раздела молча. Отказ ничего
+    # не мутирует (как ⑦⑧⑨ выше), поэтому случай безопасен на ЖИВОЙ базе.
+    foreign_role = "STUD" if ROLE != "STUD" else "CORE"
+    foreign_env = dict(os.environ, MEZO_ROLE=foreign_role, PYTHONIOENCODING="utf-8")
+    p = subprocess.run([sys.executable, str(TOOL), "--role", ROLE,
+                        "--db", str(DB), "--section", section, "--пересобрать"],
+                       capture_output=True, text=True, encoding="utf-8", env=foreign_env)
+    code, output = p.returncode, (p.stdout or "") + (p.stderr or "")
+    record_case(f"⑨-бис карточка #600: --пересобрать ЧУЖОЙ ролью ({foreign_role} правит "
+           f"{ROLE}) отказывает",
+           code != 0 and "ОТКАЗ" in output and foreign_role in output, output.strip()[:200])
 
     conn.close()
 
     print("\n── ПОРЧА НА КОПИИ: ИНСТРУМЕНТ ОБЯЗАН ПОКРАСНЕТЬ ───────────────────────")
     with tempfile.TemporaryDirectory() as tmp:
-        песок = pathlib.Path(tmp)
-        копия_бд = песок / "mezosync.db"
-        shutil.copy2(БАЗА, копия_бд)
+        sandbox = pathlib.Path(tmp)
+        db_copy = sandbox / "mezosync.db"
+        shutil.copy2(DB, db_copy)
         # инструмент и его сосед-резак кладутся РЯДОМ: инструмент импортирует резак
         # от своего расположения, значит в песочнице он возьмёт песочный.
-        for имя in ("memory-records.py", "memory-archive.py", "mezo_paths.py"):
-            if (ЗДЕСЬ / имя).is_file():
-                shutil.copy2(ЗДЕСЬ / имя, песок / имя)
-        копия_инстр = песок / "memory-records.py"
+        for filename in ("memory-records.py", "memory-archive.py", "mezo_paths.py"):
+            if (HERE / filename).is_file():
+                shutil.copy2(HERE / filename, sandbox / filename)
+        tool_copy = sandbox / "memory-records.py"
 
-        c = sqlite3.connect(копия_бд)
+        c = sqlite3.connect(db_copy)
         # ⑩ ломаем ОДНУ запись: сборка обязана перестать сходиться
-        порченая = c.execute(
+        corrupted_id = c.execute(
             "SELECT id FROM phoenix_records WHERE role=? AND section=? "
-            "ORDER BY ord LIMIT 1", (РОЛЬ, раздел)).fetchone()[0]
+            "ORDER BY ord LIMIT 1", (ROLE, section)).fetchone()[0]
         c.execute("UPDATE phoenix_records SET body=body||'ПОРЧА' WHERE id=?",
-                  (порченая,))
+                  (corrupted_id,))
         c.commit()
-        код, вывод = зов(копия_инстр, "--section", раздел, "--собрать", база=копия_бд)
-        случай("⑩ ПОРЧА сборки: расхождение поймано и показано первым различием",
-               код != 0 and "РАСХОЖДЕНИЕ" in вывод and "первое различие" in вывод,
+        code, output = call_tool(tool_copy, "--section", section, "--собрать", db=db_copy)
+        record_case("⑩ ПОРЧА сборки: расхождение поймано и показано первым различием",
+               code != 0 and "РАСХОЖДЕНИЕ" in output and "первое различие" in output,
                "порча прошла как ✅ — сборка не сверяет содержимое")
 
         # ⑪ теперь наоборот: УДАЛЯЕМ запись — потеря обязана вылезти числом
         c.execute("UPDATE phoenix_records SET body=replace(body,'ПОРЧА','') WHERE id=?",
-                  (порченая,))
-        c.execute("DELETE FROM phoenix_records WHERE id=?", (порченая,))
+                  (corrupted_id,))
+        c.execute("DELETE FROM phoenix_records WHERE id=?", (corrupted_id,))
         c.commit()
-        код, вывод = зов(копия_инстр, "--section", раздел, "--собрать", база=копия_бд)
-        случай("⑪ ПОРЧА потерей: удалённая запись ломает сборку",
-               код != 0 and "РАСХОЖДЕНИЕ" in вывод,
+        code, output = call_tool(tool_copy, "--section", section, "--собрать", db=db_copy)
+        record_case("⑪ ПОРЧА потерей: удалённая запись ломает сборку",
+               code != 0 and "РАСХОЖДЕНИЕ" in output,
                "запись пропала, а сборка сказала ✅")
 
         # ⑫ ЗАДАЧА #532 (находка @TAXO): правка тела ВЫШЕ по тексту не должна сдвигать
@@ -233,46 +250,46 @@ def main() -> int:
         # того, как все случаи сошлись. Зелёный итог при ненулевом коде выхода — худший
         # вид отчёта: и «прошло», и «упало» одновременно.
         c.close()
-        c = sqlite3.connect(копия_бд)
+        c = sqlite3.connect(db_copy)
         # раздел с НАИБОЛЬШИМ числом записей: там резка складывает соседей, и случай
         # получается настоящий, а не вырожденный (на разделе из двух записей сдвигать нечего)
-        разд = c.execute(
+        section = c.execute(
             "SELECT section FROM phoenix_records WHERE role=? "
-            "GROUP BY section ORDER BY COUNT(*) DESC LIMIT 1", (РОЛЬ,)).fetchone()[0]
-        до = dict(c.execute("SELECT id, body FROM phoenix_records "
-                            "WHERE role=? AND section=?", (РОЛЬ, разд)).fetchall())
-        тело = c.execute("SELECT body FROM phoenix WHERE role=? AND section=?",
-                         (РОЛЬ, разд)).fetchone()[0]
+            "GROUP BY section ORDER BY COUNT(*) DESC LIMIT 1", (ROLE,)).fetchone()[0]
+        before = dict(c.execute("SELECT id, body FROM phoenix_records "
+                            "WHERE role=? AND section=?", (ROLE, section)).fetchall())
+        body = c.execute("SELECT body FROM phoenix WHERE role=? AND section=?",
+                         (ROLE, section)).fetchone()[0]
         # ⚖️ Порча ДВОЙНАЯ и нарочно: вставка в начало (сдвигает порядок) плюс правка
         # ОДНОГО куска в середине (его запись обязана исчезнуть). Без второй половины
         # встречный случай ⑬ не поставить — а без него ⑫ доказывает только полдела.
-        середина = len(тело) // 2
-        порченое = ("## БЛОК, ВСТАВЛЕННЫЙ ПРИЁМКОЙ В НАЧАЛО\nстрока\n\n"
-                    + тело[:середина] + "ПРАВКА-ПРИЁМКИ" + тело[середина:])
+        midpoint = len(body) // 2
+        corrupted_body = ("## БЛОК, ВСТАВЛЕННЫЙ ПРИЁМКОЙ В НАЧАЛО\nстрока\n\n"
+                    + body[:midpoint] + "ПРАВКА-ПРИЁМКИ" + body[midpoint:])
         c.execute("UPDATE phoenix SET body=? WHERE role=? AND section=?",
-                  (порченое, РОЛЬ, разд))
+                  (corrupted_body, ROLE, section))
         c.commit()
         c.close()
-        код, вывод = зов(копия_инстр, "--section", разд, "--пересобрать", база=копия_бд)
-        c = sqlite3.connect(копия_бд)
-        после = dict(c.execute("SELECT id, body FROM phoenix_records "
-                               "WHERE role=? AND section=?", (РОЛЬ, разд)).fetchall())
-        подмены = [i for i, т in до.items() if i in после and после[i] != т]
-        исчезли = [i for i in до if i not in после]
-        случай(f"⑫ правка ВЫШЕ по тексту: тихой подмены НЕТ "
-               f"(номеров {len(до)} · сохранили себя {len(до) - len(подмены) - len(исчезли)}"
-               f" · исчезли законно {len(исчезли)})",
-               not подмены,
-               f"за номерами {подмены[:5]} теперь ДРУГИЕ записи — вызов пройдёт с ✅")
+        code, output = call_tool(tool_copy, "--section", section, "--пересобрать", db=db_copy)
+        c = sqlite3.connect(db_copy)
+        after = dict(c.execute("SELECT id, body FROM phoenix_records "
+                               "WHERE role=? AND section=?", (ROLE, section)).fetchall())
+        replaced = [i for i, old_body in before.items() if i in after and after[i] != old_body]
+        vanished = [i for i in before if i not in after]
+        record_case(f"⑫ правка ВЫШЕ по тексту: тихой подмены НЕТ "
+               f"(номеров {len(before)} · сохранили себя {len(before) - len(replaced) - len(vanished)}"
+               f" · исчезли законно {len(vanished)})",
+               not replaced,
+               f"за номерами {replaced[:5]} теперь ДРУГИЕ записи — вызов пройдёт с ✅")
         # ⑬ встречный к ⑫: исчезнувший номер обязан ОТКАЗАТЬ, а не молчать
-        if исчезли:
-            код2, вывод2 = зов(копия_инстр, "--поля", str(исчезли[0]),
-                               "--источник", "проба", база=копия_бд)
-            случай("⑬ ВСТРЕЧНЫЙ: обращение по исчезнувшему номеру ОТКАЗЫВАЕТ поимённо",
-                   код2 != 0 and "НЕ ДОПИСАНО" in вывод2, вывод2.strip()[:200])
+        if vanished:
+            code2, output2 = call_tool(tool_copy, "--поля", str(vanished[0]),
+                               "--источник", "проба", db=db_copy)
+            record_case("⑬ ВСТРЕЧНЫЙ: обращение по исчезнувшему номеру ОТКАЗЫВАЕТ поимённо",
+                   code2 != 0 and "НЕ ДОПИСАНО" in output2, output2.strip()[:200])
         else:
             # ⛔ Не зелёное и не молчание: опыт не поставлен — значит ⑫ доказал полдела
-            случай("⑬ ВСТРЕЧНЫЙ: исчезнувших номеров не возникло — ОПЫТ НЕ ПОСТАВЛЕН",
+            record_case("⑬ ВСТРЕЧНЫЙ: исчезнувших номеров не возникло — ОПЫТ НЕ ПОСТАВЛЕН",
                    False, "правка середины не изменила ни одной записи; без этого "
                           "случая не видно, отказывает ли обращение по исчезнувшему номеру")
 
@@ -281,73 +298,73 @@ def main() -> int:
                   "body_chars, alive, ord, created_by) "
                   "VALUES ('COORD','state','право','чужое тело',10,'active',1,'COORD')")
         c.commit()
-        чужой_id = c.execute("SELECT id FROM phoenix_records WHERE role='COORD'"
+        foreign_id = c.execute("SELECT id FROM phoenix_records WHERE role='COORD'"
                              ).fetchone()[0]
-        код, вывод = зов(копия_инстр, "--поля", str(чужой_id), "--источник", "порча",
-                         база=копия_бд)
-        тронуто = c.execute("SELECT source FROM phoenix_records WHERE id=?",
-                            (чужой_id,)).fetchone()[0]
-        случай("⑦-бис чужая запись на копии: отказ И поле НЕ тронуто",
-               код != 0 and "принадлежит роли COORD" in вывод and тронуто is None,
-               f"код {код} · поле source={тронуто!r}")
+        code, output = call_tool(tool_copy, "--поля", str(foreign_id), "--источник", "порча",
+                         db=db_copy)
+        touched = c.execute("SELECT source FROM phoenix_records WHERE id=?",
+                            (foreign_id,)).fetchone()[0]
+        record_case("⑦-бис чужая запись на копии: отказ И поле НЕ тронуто",
+               code != 0 and "принадлежит роли COORD" in output and touched is None,
+               f"код {code} · поле source={touched!r}")
         c.close()
 
         # ── ПРЕДМЕТ ЗАПИСИ — карточка #534 (замеры @TAXO и @CHROME) ──
         # Судится сама подсказка, без базы: вход — тело блока, выход — (предмет, спор).
         import importlib.util as _ilu
-        def _модуль(путь):
-            sp = _ilu.spec_from_file_location("mr_под_судом", str(путь))
+        def _load_module(path):
+            sp = _ilu.spec_from_file_location("mr_под_судом", str(path))
             m = _ilu.module_from_spec(sp); sp.loader.exec_module(m); return m
-        mr = _модуль(ИНСТРУМЕНТ)
-        хром = ("## 🪤 УРОКИ — ОНИ ДОРОЖЕ СДЕЛАННОГО" + chr(10)
+        mr = _load_module(TOOL)
+        chrome_case = ("## 🪤 УРОКИ — ОНИ ДОРОЖЕ СДЕЛАННОГО" + chr(10)
                 + "1. ⚰️ прежний порядок отозван, правило снято." + chr(10)
                 + "2. ⚰️ второе тоже снято 30.08.")
-        таксо = ("## 🎯 МОИ КЛАССЫ — ЖИВЫЕ, ОПЛАЧЕННЫЕ СОБОЙ" + chr(10)
+        taxo_case = ("## 🎯 МОИ КЛАССЫ — ЖИВЫЕ, ОПЛАЧЕННЫЕ СОБОЙ" + chr(10)
                  + "🩸 первый поймал сам; 🩸 второй поймал на приёмке; ошибся дважды.")
-        одно = "замер сделан: померил числом, 📏 три раза."
+        single_case = "замер сделан: померил числом, 📏 три раза."
         # ⚖️ заголовок нарочно НЕМОЙ — иначе судится ветка «заголовок называет два»
-        спорное = "## Заметка" + chr(10) + "право ⛔ на отправку есть; замер померил дважды."
-        двое = "## ⚡ УРОК, ИЗ КОТОРОГО ВЫРОС ПЛАН" + chr(10) + "план: следующий шаг один. урок оплачен."
+        disputed_case = "## Заметка" + chr(10) + "право ⛔ на отправку есть; замер померил дважды."
+        two_case = "## ⚡ УРОК, ИЗ КОТОРОГО ВЫРОС ПЛАН" + chr(10) + "план: следующий шаг один. урок оплачен."
 
-        пр, сп = mr.предмет_и_спор(хром)
-        случай("⑭ случай @CHROME поимённо: «🪤 УРОКИ…» с тремя словами отзыва в теле → «урок», без спора",
-               пр == "урок" and сп is None, f"получено {пр!r}, спор {сп!r}")
-        пр, сп = mr.предмет_и_спор(таксо)
-        случай("⑮ случай @TAXO поимённо: «🎯 МОИ КЛАССЫ…» с двумя 🩸 в теле → «урок», не «ошибка»",
-               пр == "урок" and сп is None, f"получено {пр!r}, спор {сп!r}")
-        пр, сп = mr.предмет_и_спор(одно)
-        случай("⑯ ВСТРЕЧНЫЙ: одна примета, заголовок молчит → предмет как прежде, спора НЕТ",
-               пр == "замер" and сп is None, f"получено {пр!r}, спор {сп!r}")
-        пр, сп = mr.предмет_и_спор(спорное)
-        случай("⑰ спор помечен: заголовок молчит, тело 2:2 → спор назван с соперником и счётом",
-               сп is not None and "замер" in сп and "2:2" in сп, f"получено {пр!r}, спор {сп!r}")
-        пр, сп = mr.предмет_и_спор(двое)
-        случай("⑱ заголовок называет ДВА предмета → спор между ними, решает тело",
-               пр in ("план", "урок") and сп is not None and "заголовок называет" in сп,
-               f"получено {пр!r}, спор {сп!r}")
+        subj, dispute = mr.subject_and_dispute(chrome_case)
+        record_case("⑭ случай @CHROME поимённо: «🪤 УРОКИ…» с тремя словами отзыва в теле → «урок», без спора",
+               subj == "урок" and dispute is None, f"получено {subj!r}, спор {dispute!r}")
+        subj, dispute = mr.subject_and_dispute(taxo_case)
+        record_case("⑮ случай @TAXO поимённо: «🎯 МОИ КЛАССЫ…» с двумя 🩸 в теле → «урок», не «ошибка»",
+               subj == "урок" and dispute is None, f"получено {subj!r}, спор {dispute!r}")
+        subj, dispute = mr.subject_and_dispute(single_case)
+        record_case("⑯ ВСТРЕЧНЫЙ: одна примета, заголовок молчит → предмет как прежде, спора НЕТ",
+               subj == "замер" and dispute is None, f"получено {subj!r}, спор {dispute!r}")
+        subj, dispute = mr.subject_and_dispute(disputed_case)
+        record_case("⑰ спор помечен: заголовок молчит, тело 2:2 → спор назван с соперником и счётом",
+               dispute is not None and "замер" in dispute and "2:2" in dispute, f"получено {subj!r}, спор {dispute!r}")
+        subj, dispute = mr.subject_and_dispute(two_case)
+        record_case("⑱ заголовок называет ДВА предмета → спор между ними, решает тело",
+               subj in ("план", "урок") and dispute is not None and "заголовок называет" in dispute,
+               f"получено {subj!r}, спор {dispute!r}")
 
         # ⑲ ПОРЧА правила «заголовок решает» на КОПИИ инструмента → случай @CHROME обязан вернуться
-        исходный = ИНСТРУМЕНТ.read_text(encoding="utf-8")
-        порченый = исходный.replace("    if len(в_заг) == 1:", "    if False:")
-        if порченый == исходный:
-            случай("⑲ ПОРЧА правила заголовка: образец не найден — ОПЫТ НЕ ПОСТАВЛЕН", False,
+        original = TOOL.read_text(encoding="utf-8")
+        corrupted = original.replace("    if len(in_head) == 1:", "    if False:")
+        if corrupted == original:
+            record_case("⑲ ПОРЧА правила заголовка: образец не найден — ОПЫТ НЕ ПОСТАВЛЕН", False,
                    "порча не легла; прогон бессмыслен, а не зелён")
         else:
-            коп = pathlib.Path(tempfile.mkdtemp()) / "memory-records.py"
-            коп.write_text(порченый, encoding="utf-8")
+            patched_copy = pathlib.Path(tempfile.mkdtemp()) / "memory-records.py"
+            patched_copy.write_text(corrupted, encoding="utf-8")
             # инструмент подгружает соседа (резак блоков) ИЗ СВОЕГО каталога — без него копия
             # не поднимется, и порча упадёт ДО суда: поймано первым прогоном 20:29 UTC
-            shutil.copy(ИНСТРУМЕНТ.parent / "memory-archive.py", коп.parent)
-            пр2, _ = _модуль(коп).предмет_и_спор(хром)
-            случай("⑲ ПОРЧА правила заголовка → «🪤 УРОКИ…» снова становится «надгробие»",
-                   пр2 == "надгробие",
-                   f"порченый инструмент дал {пр2!r} ⇒ ⑭ проходил не по правилу заголовка")
+            shutil.copy(TOOL.parent / "memory-archive.py", patched_copy.parent)
+            subj2, _ = _load_module(patched_copy).subject_and_dispute(chrome_case)
+            record_case("⑲ ПОРЧА правила заголовка → «🪤 УРОКИ…» снова становится «надгробие»",
+                   subj2 == "надгробие",
+                   f"порченый инструмент дал {subj2!r} ⇒ ⑭ проходил не по правилу заголовка")
 
     print("\n" + "=" * 88)
-    print(f"ИТОГ: прошло {len(прошло)} · пало {len(пало)}")
-    if пало:
-        for и in пало:
-            print(f"   🔴 {и}")
+    print(f"ИТОГ: прошло {len(passed)} · пало {len(failed)}")
+    if failed:
+        for item in failed:
+            print(f"   🔴 {item}")
     else:
         print("   ✅ все случаи сошлись, и порча краснеет — значит проверка способна")
         print("      отличить рабочий инструмент от сломанного, а не только сказать ✅")
@@ -359,7 +376,7 @@ def main() -> int:
     print("   84; по чтению заголовков у @TAXO промахов было 4 из 14, осталось 1 (#257:")
     print("   «очередью ввода» ушло в «план»). Остаток — не ноль, и он назван числом.")
     print("   Судит здесь рука роли — ключом --поля.")
-    return 1 if пало else 0
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

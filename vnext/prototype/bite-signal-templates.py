@@ -70,61 +70,62 @@ import tokenize
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
 
-CASES = DIFFER = ЗЕЛЁНЫХ = 0
+CASES = DIFFER = GREENS = 0
 
 
 def case(title, verdict, detail, differ=False):
-    global CASES, DIFFER, ЗЕЛЁНЫХ
+    global CASES, DIFFER, GREENS
     CASES += 1
     DIFFER += bool(differ)
-    ЗЕЛЁНЫХ += bool(verdict)
+    GREENS += bool(verdict)
     print(f"{'✅' if verdict else '🔴'} {title}")
     print(f"   {detail}")
     return verdict
 
 
-def зови(инструмент: pathlib.Path, db: pathlib.Path, *args, среда=None):
+def call_tool(tool: pathlib.Path, db: pathlib.Path, *args, extra_env=None):
     """Позвать печатника. `среда` дополняет переменные окружения — ею случай ⑭ показывает
     печатнику ДРУГОЙ контейнер контура, чтобы проверить поиск каталогов обмена на диске."""
-    окружение = None
-    if среда:
-        окружение = dict(os.environ)
-        окружение.update(среда)
-    r = subprocess.run([sys.executable, "-B", str(инструмент), "--db", str(db), *args],
+    full_env = None
+    if extra_env:
+        full_env = dict(os.environ)
+        full_env.update(extra_env)
+    r = subprocess.run([sys.executable, "-B", str(tool), "--db", str(db), *args],
                        capture_output=True, text=True, encoding="utf-8", errors="replace",
-                       env=окружение)
+                       env=full_env)
     return r.returncode, (r.stdout or "") + (r.stderr or "")
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--porcha", choices=["впечатанное-имя", "ослеплённая-связь",
-                                        "ослеплённый-каталог", "условие-всем"],
+                                        "ослеплённый-каталог", "условие-всем",
+                                        "session-id-order"],
                     help="нарочная поломка: чем ослепить печатника перед прогоном")
     a = ap.parse_args()
 
-    живой = pathlib.Path(__file__).resolve().parent / "signal-templates.py"
-    шаг = mezo_paths.live_scripts(__file__) / "migrations" / "20260905-role-sessions.py"
-    if not живой.is_file():
-        sys.exit(f"⛔ НЕ ЗАПУСТИЛСЯ: печатника нет: {живой}")
+    live_tool = pathlib.Path(__file__).resolve().parent / "signal-templates.py"
+    schema_step = mezo_paths.live_scripts(__file__) / "migrations" / "20260905-role-sessions.py"
+    if not live_tool.is_file():
+        sys.exit(f"⛔ НЕ ЗАПУСТИЛСЯ: печатника нет: {live_tool}")
 
-    стенд = pathlib.Path(tempfile.mkdtemp(prefix="bite-signal-"))
+    sandbox = pathlib.Path(tempfile.mkdtemp(prefix="bite-signal-"))
     try:
         # копия базы (backup API — согласованный снимок, не копия файла на ходу)
-        db = стенд / "copy.db"
+        db = sandbox / "copy.db"
         src = sqlite3.connect(str(mezo_paths.live_db(__file__)))
         dst = sqlite3.connect(str(db))
         src.backup(dst)
         dst.close()
         src.close()
 
-        инструмент = стенд / "signal-templates.py"
-        shutil.copy2(живой, инструмент)
-        shutil.copy2(pathlib.Path(__file__).resolve().parent / "mezo_paths.py", стенд / "mezo_paths.py")
+        tool = sandbox / "signal-templates.py"
+        shutil.copy2(live_tool, tool)
+        shutil.copy2(pathlib.Path(__file__).resolve().parent / "mezo_paths.py", sandbox / "mezo_paths.py")
         # 🧪 НАРОЧНЫЕ ПОЛОМКИ. Ожидание каждой стои́т ЗДЕСЬ, в коде, и печатается ДО
         # случаев — чтобы исход сверяли с названным заранее, а не подгоняли объяснение
         # под увиденное. Неподтвердившееся ожидание — находка, и записывается как было.
-        ПОЛОМКИ = {
+        BREAKS = {
             "впечатанное-имя": (
                 '"текст": ("{from} → {role}: в ленте записка #{last_note} к тебе. ',
                 '"текст": ("PROTO → {role}: в ленте записка #{last_note} к тебе. ',
@@ -142,30 +143,40 @@ def main() -> int:
                 "ослеплён ВТОРОЙ источник — поиск каталогов обмена на диске. Ждём красным "
                 "РОВНО ⑭; ⑩ и ⑬ зелёными (их сосед записан в базе); остальные целы"),
             "условие-всем": (
-                'сосед = соседние_контуры(conn, наш, путь_бд).get(кому.lower())',
-                'сосед = соседние_контуры(conn, наш, путь_бд).get(кому.lower()) '
+                'neighbor = neighbor_groups(conn, our, db_path).get(to_role.lower())',
+                'neighbor = neighbor_groups(conn, our, db_path).get(to_role.lower()) '
                 'or {"откуда": [], "каталог": None}',
                 "обратная слепота: КАЖДЫЙ адресат считается соседним контуром. Ждём красным "
-                "①②③④⑤⑥⑨ ⑪ ⑫ — всё, что судит поведение ВНУТРИ контура (роль своего "
-                "контура попадёт под отказ «имя значится и там и там»); целыми ⑦ ⑧ (судят "
-                "исходники и запись адреса) и ⑩ ⑬ ⑭ (их адресат и так за пределами)"),
+                "①②③④⑤⑥⑨ ⑪ ⑫ ⑮ ⑯ — всё, что судит поведение ВНУТРИ контура, включая "
+                "случаи session_id ⑮⑯ (роль своего контура попадёт под отказ «имя значится и "
+                "там и там», и до печати формы дело не доходит); целыми ⑦ ⑧ (судят исходники и "
+                "запись адреса) и ⑩ ⑬ ⑭ (их адресат и так за пределами)"),
+            # ⚡ AIA-A (карточка A из пятёрки правок 2026-09-13): session_id перестаёт
+            # учитываться при печати самой формы вызова — как если бы правку откатили.
+            "session-id-order": (
+                'if target.get("session_id"):',
+                'if False and target.get("session_id"):',
+                "session_id перестаёт учитываться при печати формы вызова (откат правки A). "
+                "Ждём красным РОВНО ⑮ (форма по идентификатору не появляется вовсе); ⑯ остаётся "
+                "зелёным — он и так проверяет случай БЕЗ session_id и поломки не касается; "
+                "⑰ ⑱ не про эту ветку кода и тоже целы"),
         }
         if a.porcha:
-            было, стало, ожидание = ПОЛОМКИ[a.porcha]
-            текст = инструмент.read_text(encoding="utf-8")
-            assert текст.count(было) == 1, (
+            before_text, after_text, expectation = BREAKS[a.porcha]
+            patch_text = tool.read_text(encoding="utf-8")
+            assert patch_text.count(before_text) == 1, (
                 f"поломка «{a.porcha}» НЕ ЛЕГЛА: искомое место встречается "
-                f"{текст.count(было)} раз — поправь приёмку, а не инструмент")
-            инструмент.write_text(текст.replace(было, стало), encoding="utf-8")
-            print(f"🧪 НАРОЧНАЯ ПОЛОМКА «{a.porcha}»: {ожидание}\n")
+                f"{patch_text.count(before_text)} раз — поправь приёмку, а не инструмент")
+            tool.write_text(patch_text.replace(before_text, after_text), encoding="utf-8")
+            print(f"🧪 НАРОЧНАЯ ПОЛОМКА «{a.porcha}»: {expectation}\n")
 
         con = sqlite3.connect(str(db))
         if "role_sessions" not in {r[0] for r in con.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'")}:
             con.close()
-            код, вывод = зови(шаг, db)
-            if код != 0:
-                sys.exit(f"⛔ шаг схемы на копии не прошёл:\n{вывод}")
+            code, output = call_tool(schema_step, db)
+            if code != 0:
+                sys.exit(f"⛔ шаг схемы на копии не прошёл:\n{output}")
             con = sqlite3.connect(str(db))
 
         # ── подготовка: две роли с адресами, одна со СТАРЫМ адресом
@@ -177,12 +188,12 @@ def main() -> int:
         con.execute("INSERT INTO role_sessions (role, address, noted_at, noted_by, source) "
                     "VALUES ('STUD', 'atlas-old [000000]', datetime('now','-30 hours'), 'STUD', 'self')")
         # свежая записка PROTO к COORD — чтобы номер в тексте брался из живой базы
-        нота = con.execute("SELECT max(id) FROM messages WHERE writer_role='PROTO'").fetchone()[0]
+        note_id = con.execute("SELECT max(id) FROM messages WHERE writer_role='PROTO'").fetchone()[0]
         # карточка с ЧУЖИМ держателем: взятие от CHROME
-        карточка = con.execute("SELECT max(id) FROM backlog").fetchone()[0]
+        card = con.execute("SELECT max(id) FROM backlog").fetchone()[0]
         con.execute("INSERT INTO backlog_events (backlog_id, at, actor_role, event_type, body_md) "
                     "VALUES (?, datetime('now'), 'CHROME', 'claim', ?)",
-                    (карточка, "до 2026-09-09 10:00:00 UTC · чужая рука"))
+                    (card, "до 2026-09-09 10:00:00 UTC · чужая рука"))
         # истёкшее объявление о правке у COORD
         con.execute("INSERT INTO tool_leases (role, tools, reason, taken_at, until_utc) "
                     "VALUES ('COORD', 'x.py', 'опыт приёмки', datetime('now','-3 hours'), "
@@ -200,53 +211,53 @@ def main() -> int:
         # ⇒ случай судит СВОЙСТВО напечатанного номера, а не СПОСОБ его выбора:
         #      напечатанная записка адресована цели И новее её к цели ничего нет.
         # Свойство проверяемо при любом способе выбора и не зависит от того, кто писал последним.
-        код, вывод = зови(инструмент, db, "--role", "PROTO", "--to", "COORD", "--kind", "записка")
-        напечатан = re.search(r"записка #(\d+) к тебе", вывод)
-        номер = int(напечатан.group(1)) if напечатан else None
-        адресована = новее = None
-        if номер:
-            адресована = con2.execute(
+        code, output = call_tool(tool, db, "--role", "PROTO", "--to", "COORD", "--kind", "записка")
+        printed = re.search(r"записка #(\d+) к тебе", output)
+        number = int(printed.group(1)) if printed else None
+        addressed = newer = None
+        if number:
+            addressed = con2.execute(
                 "SELECT 1 FROM message_addressee WHERE message_id = ? AND upper(role) = 'COORD'",
-                (номер,)).fetchone() is not None
-            новее = con2.execute(
+                (number,)).fetchone() is not None
+            newer = con2.execute(
                 "SELECT COUNT(*) FROM messages m JOIN message_addressee a ON a.message_id = m.id "
                 "WHERE m.writer_role = 'PROTO' AND upper(a.role) = 'COORD' AND m.id > ?",
-                (номер,)).fetchone()[0]
+                (number,)).fetchone()[0]
         case("① номер в сигнале — записка, ДЕЙСТВИТЕЛЬНО адресованная цели, и свежее её нет",
-             код == 0 and номер is not None and bool(адресована) and новее == 0,
-             f"код {код} · напечатан #{номер} · адресован COORD: {адресована} · "
-             f"новее к COORD: {новее}", differ=True)
+             code == 0 and number is not None and bool(addressed) and newer == 0,
+             f"код {code} · напечатан #{number} · адресован COORD: {addressed} · "
+             f"новее к COORD: {newer}", differ=True)
 
         # ② имя отправителя не впечатано
-        код2, вывод2 = зови(инструмент, db, "--role", "COORD", "--to", "PROTO", "--kind", "записка")
-        от_coord = "COORD → PROTO:" in вывод2
+        code2, output2 = call_tool(tool, db, "--role", "COORD", "--to", "PROTO", "--kind", "записка")
+        from_coord = "COORD → PROTO:" in output2
         case("② имя отправителя подставляется, а не впечатано",
-             код2 == 0 and от_coord,
-             f"вызов от COORD даёт «COORD → PROTO»: {'да' if от_coord else 'НЕТ — имя впечатано'}",
+             code2 == 0 and from_coord,
+             f"вызов от COORD даёт «COORD → PROTO»: {'да' if from_coord else 'НЕТ — имя впечатано'}",
              differ=True)
 
         # ③ адреса нет
-        код3, вывод3 = зови(инструмент, db, "--role", "PROTO", "--to", "CORE", "--kind", "записка")
+        code3, output3 = call_tool(tool, db, "--role", "PROTO", "--to", "CORE", "--kind", "записка")
         case("③ адреса роли в реестре нет → отказ СЛОВАМИ, не пустота",
-             код3 == 2 and "АДРЕСА РОЛИ CORE" in вывод3 and "--set-address" in вывод3,
-             f"код {код3} · сказано, чего не хватает и что делать: "
-             f"{'да' if '--set-address' in вывод3 else 'НЕТ'}", differ=True)
+             code3 == 2 and "АДРЕСА РОЛИ CORE" in output3 and "--set-address" in output3,
+             f"код {code3} · сказано, чего не хватает и что делать: "
+             f"{'да' if '--set-address' in output3 else 'НЕТ'}", differ=True)
 
         # ④ «держишь» про чужую карточку
-        код4, вывод4 = зови(инструмент, db, "--role", "PROTO", "--to", "COORD", "--kind", "держишь",
-                            "--card", str(карточка))
-        нет_текста = "SendMessage(" not in вывод4
+        code4, output4 = call_tool(tool, db, "--role", "PROTO", "--to", "COORD", "--kind", "держишь",
+                            "--card", str(card))
+        no_text = "SendMessage(" not in output4
         case("④ «держишь» про карточку ЧУЖОГО держателя → отказ, текст не печатается",
-             код4 == 2 and нет_текста and "CHROME" in вывод4,
-             f"код {код4} · вызов не напечатан: {'да' if нет_текста else 'НЕТ — ушла бы неправда'}",
+             code4 == 2 and no_text and "CHROME" in output4,
+             f"код {code4} · вызов не напечатан: {'да' if no_text else 'НЕТ — ушла бы неправда'}",
              differ=True)
 
         # ⑤ старый адрес
-        код5, вывод5 = зови(инструмент, db, "--role", "PROTO", "--to", "STUD", "--kind", "записка")
+        code5, output5 = call_tool(tool, db, "--role", "PROTO", "--to", "STUD", "--kind", "записка")
         case("⑤ адрес старше суток → отказ с часом записи и доводом",
-             код5 == 2 and "СТАР" in вывод5 and "признака недоставки" in вывод5,
-             f"код {код5} · назван час записи и почему это важно: "
-             f"{'да' if 'признака недоставки' in вывод5 else 'НЕТ'}", differ=True)
+             code5 == 2 and "СТАР" in output5 and "признака недоставки" in output5,
+             f"код {code5} · назван час записи и почему это важно: "
+             f"{'да' if 'признака недоставки' in output5 else 'НЕТ'}", differ=True)
 
         # ⑥ истёкшее объявление о правке в текст НЕ входит.
         # 🩸 ЗДЕСЬ БЫЛ СЛЕПОЙ СЛУЧАЙ, НАЙДЕННЫЙ ЧУЖОЙ ПОРЧЕЙ (TAXO, 18:46 UTC): прежняя
@@ -265,70 +276,70 @@ def main() -> int:
         # Опыт судил бы тогда не то, что обещает.
         con3.execute("UPDATE tool_leases SET until_utc = datetime('now','-2 hours') "
                      "WHERE role = 'COORD' AND released_at IS NULL")
-        своя = con3.execute("SELECT max(backlog_id) FROM backlog_events").fetchone()[0]
+        own_card = con3.execute("SELECT max(backlog_id) FROM backlog_events").fetchone()[0]
         con3.execute("INSERT INTO backlog_events (backlog_id, at, actor_role, event_type, body_md) "
                      "VALUES (?, datetime('now'), 'COORD', 'claim', ?)",
-                     (своя, "до 2026-09-09 10:00:00 UTC · держит сам адресат"))
+                     (own_card, "до 2026-09-09 10:00:00 UTC · держит сам адресат"))
         con3.commit()
         con3.close()
-        код6, вывод6 = зови(инструмент, db, "--role", "PROTO", "--to", "COORD", "--kind", "держишь",
-                            "--card", str(своя))
-        напечатан = "SendMessage(" in вывод6
+        code6, output6 = call_tool(tool, db, "--role", "PROTO", "--to", "COORD", "--kind", "держишь",
+                            "--card", str(own_card))
+        printed = "SendMessage(" in output6
         # 🪤 Смотрим ТОЛЬКО текст сообщения, а не весь вывод: ниже печатается справка
         # «когда слать: чужое взятие ИЛИ ОБЪЯВЛЕНИЕ О ПРАВКЕ держит твою работу» — и первая
         # редакция случая красила её, то есть краснела по посторонней причине (третий такой
         # случай за смену). Судим то, что уедет соседу, а не то, что видит отправитель.
-        тело = re.search(r'message="([^"]*)"', вывод6)
-        есть_объявление = bool(тело) and "объявление о правке" in тело.group(1)
+        body_text = re.search(r'message="([^"]*)"', output6)
+        has_lease_text = bool(body_text) and "объявление о правке" in body_text.group(1)
         case("⑥ истёкшее объявление о правке не считается «держит» (текст напечатан, его там нет)",
-             код6 == 0 and напечатан and not есть_объявление,
-             f"код {код6} · текст напечатан: {напечатан} · объявление в тексте: "
-             f"{'ЕСТЬ — сигнал о том, чего давно нет' if есть_объявление else 'нет'}", differ=True)
+             code6 == 0 and printed and not has_lease_text,
+             f"код {code6} · текст напечатан: {printed} · объявление в тексте: "
+             f"{'ЕСТЬ — сигнал о том, чего давно нет' if has_lease_text else 'нет'}", differ=True)
 
         # ⑦ контроль: печатник не отправляет.
         # ⚡ Разбором ТОКЕНОВ, а не образцом по строке: первый вариант этого случая искал
         # «SendMessage(» регулярным выражением и покраснел на строке, которая его ПЕЧАТАЕТ.
         # Печать вызова и вызов выглядят одинаково ровно до того часа, когда код разобран.
-        текст_кода = живой.read_text(encoding="utf-8")
-        код_без_текстов = []
-        with io.open(живой, "rb") as fh:
-            for т in tokenize.tokenize(fh.readline):
+        source_text = live_tool.read_text(encoding="utf-8")
+        code_without_text = []
+        with io.open(live_tool, "rb") as fh:
+            for tok in tokenize.tokenize(fh.readline):
                 # 🪤 f-строка с версии 3.12 разбирается НА ЧАСТИ (FSTRING_START/MIDDLE/END),
                 # и её текст выходит из-под фильтра «STRING». Первый вариант этого случая
                 # честно отбрасывал STRING и всё равно видел печатаемую строку как код.
-                if т.type not in (tokenize.STRING, tokenize.COMMENT,
+                if tok.type not in (tokenize.STRING, tokenize.COMMENT,
                                   getattr(tokenize, "FSTRING_START", -1),
                                   getattr(tokenize, "FSTRING_MIDDLE", -1),
                                   getattr(tokenize, "FSTRING_END", -1)):
-                    код_без_текстов.append(т.string)
-        исполняемое = " ".join(код_без_текстов)
-        зовёт_отправку = "SendMessage" in исполняемое
-        печатает = "SendMessage(to=" in текст_кода
+                    code_without_text.append(tok.string)
+        executable_text = " ".join(code_without_text)
+        calls_send = "SendMessage" in executable_text
+        prints_call = "SendMessage(to=" in source_text
         case("⑦ печатник только ПЕЧАТАЕТ вызов, отправки в исполняемом коде нет",
-             печатает and not зовёт_отправку,
-             f"вызов есть в тексте для человека: {'да' if печатает else 'НЕТ'} · "
-             f"в исполняемом коде: {'ЕСТЬ — отправка мимо руки роли' if зовёт_отправку else 'нет'}",
+             prints_call and not calls_send,
+             f"вызов есть в тексте для человека: {'да' if prints_call else 'НЕТ'} · "
+             f"в исполняемом коде: {'ЕСТЬ — отправка мимо руки роли' if calls_send else 'нет'}",
              differ=True)  # 🔑 РАЗЛИЧАЮЩИЙ, а не «контроль»: доказано чужой порчей (TAXO 18:57 UTC —
         # вызов настоящей отправки внутри незовомой функции ⇒ случай покраснел первым же прогоном).
         # Пометка «контроль» была РАЗМЕТКОЙ автора, а не свойством случая.
 
         # ⑧ адрес без различителя в скобках (находка COORD: одно имя носят ДВА разговора)
-        код8, вывод8 = зови(инструмент, db, "--role", "CORE", "--set-address", "atlas-17")
+        code8, output8 = call_tool(tool, db, "--role", "CORE", "--set-address", "atlas-17")
         case("⑧ адрес без различителя в скобках не принимается",
-             код8 == 2 and "РАЗЛИЧИТЕЛ" in вывод8,
-             f"код {код8} · сказано, что имя указывает на несколько разговоров: "
-             f"{"да" if "НЕСКОЛЬКО" in вывод8 else "НЕТ"}", differ=True)
+             code8 == 2 and "РАЗЛИЧИТЕЛ" in output8,
+             f"код {code8} · сказано, что имя указывает на несколько разговоров: "
+             f"{"да" if "НЕСКОЛЬКО" in output8 else "НЕТ"}", differ=True)
 
         # ⑨ свежая записка отправителя, НЕ числящаяся адресату → сказано вслух
         con2.execute("INSERT INTO messages (writer_role, timestamp, body_md) "
                      "VALUES ('PROTO', datetime('now'), 'записка без адресатов полями')")
         con2.commit()
-        свежая = con2.execute("SELECT max(id) FROM messages WHERE writer_role='PROTO'").fetchone()[0]
-        код9, вывод9 = зови(инструмент, db, "--role", "PROTO", "--to", "COORD", "--kind", "записка")
+        latest = con2.execute("SELECT max(id) FROM messages WHERE writer_role='PROTO'").fetchone()[0]
+        code9, output9 = call_tool(tool, db, "--role", "PROTO", "--to", "COORD", "--kind", "записка")
         case("⑨ есть записка новее, но не числящаяся адресату → сказано вслух, не подставлено молча",
-             код9 == 0 and f"#{свежая}" in вывод9 and "НОВЕЕ" in вывод9,
-             f"код {код9} · про записку #{свежая} сказано: "
-             f"{'да' if 'НОВЕЕ' in вывод9 else 'НЕТ — подставлена старая молча'}", differ=True)
+             code9 == 0 and f"#{latest}" in output9 and "НОВЕЕ" in output9,
+             f"код {code9} · про записку #{latest} сказано: "
+             f"{'да' if 'НОВЕЕ' in output9 else 'НЕТ — подставлена старая молча'}", differ=True)
         con2.close()
 
         # ═══ 🌉 УСЛОВИЕ РЕДАКЦИИ 2 ПРАВИЛА signal-not-carrier (карточка #570) ═══
@@ -336,95 +347,159 @@ def main() -> int:
         # Имя соседа и имя своего контура берутся ИЗ БАЗЫ, а не впечатаны: впечатанное
         # «tapas» пережило бы закрытие моста и судило бы несуществующее.
         con4 = sqlite3.connect(str(db))
-        наш_контур = con4.execute(
+        our_group = con4.execute(
             "SELECT lower(value) FROM meta WHERE key = 'group_name'").fetchone()
-        строка_соседа = con4.execute(
+        neighbor_row = con4.execute(
             "SELECT target_group FROM cross_links WHERE lower(source_group) = "
             "(SELECT lower(value) FROM meta WHERE key = 'group_name') LIMIT 1").fetchone()
-        if not наш_контур or not строка_соседа:
+        if not our_group or not neighbor_row:
             con4.close()
             sys.exit("⛔ ПРИЁМКА НЕ СОСТОЯЛАСЬ: в базе нет имени своего контура либо ни одной "
                      "связи с соседом — случаям ⑩–⑬ судить нечего, и зелёный тут был бы ложью")
-        наш_контур, сосед_имя = наш_контур[0], строка_соседа[0].strip().lower()
+        our_group, neighbor_name = our_group[0], neighbor_row[0].strip().lower()
 
         # ⑩ адресат ЗА пределами контура: условие НАЗВАНО словами правила
-        код10, вывод10 = зови(инструмент, db, "--role", "PROTO", "--to", сосед_имя.upper())
-        условие = "ТЕЛО ЕДЕТ ТАМ, ГДЕ ОБЩЕГО МЕСТА НЕТ" in вывод10
-        письмо = "ПИСЬМО СОСЕДНЕМУ КОНТУРУ" in вывод10
-        без_звонка = "SendMessage(" not in вывод10
+        code10, output10 = call_tool(tool, db, "--role", "PROTO", "--to", neighbor_name.upper())
+        condition_shown = "ТЕЛО ЕДЕТ ТАМ, ГДЕ ОБЩЕГО МЕСТА НЕТ" in output10
+        letter = "ПИСЬМО СОСЕДНЕМУ КОНТУРУ" in output10
+        no_call = "SendMessage(" not in output10
         case("⑩ адресат ЗА пределами контура → условие НАЗВАНО словами правила, печатается "
              "письмо, а не строка с номером записки",
-             код10 == 0 and условие and письмо and без_звонка,
-             f"код {код10} · условие названо: "
-             f"{'да' if условие else 'НЕТ — печатник молчит там, где обязан говорить'} · "
-             f"форма письма: {письмо} · номер записки соседу НЕ послан: {без_звонка}",
+             code10 == 0 and condition_shown and letter and no_call,
+             f"код {code10} · условие названо: "
+             f"{'да' if condition_shown else 'НЕТ — печатник молчит там, где обязан говорить'} · "
+             f"форма письма: {letter} · номер записки соседу НЕ послан: {no_call}",
              differ=True)
 
         # ⑪ ВСТРЕЧНЫЙ. Без него ⑩ зелен и у печатника, который называет условие ВСЕМ:
         # такой печатник учит роль возить тело мимо ленты внутри контура — то есть
         # ровно тому, что правило запрещает, и учит с полной уверенностью.
-        код11, вывод11 = зови(инструмент, db, "--role", "PROTO", "--to", "COORD",
+        code11, output11 = call_tool(tool, db, "--role", "PROTO", "--to", "COORD",
                               "--kind", "записка")
-        молчит = "ТЕЛО ЕДЕТ ТАМ" not in вывод11 and "ПИСЬМО СОСЕДНЕМУ" not in вывод11
-        прежнее = "SendMessage(" in вывод11 and "СИГНАЛ — НЕ НОСИТЕЛЬ" in вывод11
+        silent = "ТЕЛО ЕДЕТ ТАМ" not in output11 and "ПИСЬМО СОСЕДНЕМУ" not in output11
+        previous_output = "SendMessage(" in output11 and "СИГНАЛ — НЕ НОСИТЕЛЬ" in output11
         case("⑪ ВСТРЕЧНЫЙ: адресат ВНУТРИ контура → условие НЕ печатается, прежний вывод цел",
-             код11 == 0 and молчит and прежнее,
-             f"код {код11} · условие не названо: "
-             f"{'да' if молчит else 'НЕТ — печатник называет его всем подряд'} · "
-             f"прежний короткий сигнал на месте: {прежнее}", differ=True)
+             code11 == 0 and silent and previous_output,
+             f"код {code11} · условие не названо: "
+             f"{'да' if silent else 'НЕТ — печатник называет его всем подряд'} · "
+             f"прежний короткий сигнал на месте: {previous_output}", differ=True)
 
         # ⑫ ВСТРЕЧНЫЙ: тело в сообщении внутри контура — по-прежнему отказ
-        тело_файл = стенд / "body.md"
-        тело_файл.write_text("разбор на две строки\nвторая строка тела", encoding="utf-8")
-        код12, вывод12 = зови(инструмент, db, "--role", "PROTO", "--to", "COORD",
-                              "--body-file", str(тело_файл))
-        тело_не_уехало = "разбор на две строки" not in вывод12 and "SendMessage(" not in вывод12
+        body_file_path = sandbox / "body.md"
+        body_file_path.write_text("разбор на две строки\nвторая строка тела", encoding="utf-8")
+        code12, output12 = call_tool(tool, db, "--role", "PROTO", "--to", "COORD",
+                              "--body-file", str(body_file_path))
+        body_stayed = "разбор на две строки" not in output12 and "SendMessage(" not in output12
         case("⑫ ВСТРЕЧНЫЙ: попытка вложить тело адресату ВНУТРИ контура → по-прежнему ОТКАЗ",
-             код12 == 2 and "ВНУТРИ КОНТУРА" in вывод12 and тело_не_уехало,
-             f"код {код12} · тело в вывод не попало: "
-             f"{'да' if тело_не_уехало else 'НЕТ — условие растянули на свой контур'}",
+             code12 == 2 and "ВНУТРИ КОНТУРА" in output12 and body_stayed,
+             f"код {code12} · тело в вывод не попало: "
+             f"{'да' if body_stayed else 'НЕТ — условие растянули на свой контур'}",
              differ=True)
 
         # ⑬ ВСТРЕЧНЫЙ к ⑫: то же тело за пределы контура ВХОДИТ в письмо. Без него ⑫
         # зелен и у печатника, который отклоняет --body-file вообще всем, — а тогда на
         # мосту он снова предписывает неисполнимое, ради чего условие и вносили.
-        код13, вывод13 = зови(инструмент, db, "--role", "PROTO", "--to", сосед_имя.upper(),
-                              "--body-file", str(тело_файл))
-        вошло = "разбор на две строки" in вывод13 and "вторая строка тела" in вывод13
+        code13, output13 = call_tool(tool, db, "--role", "PROTO", "--to", neighbor_name.upper(),
+                              "--body-file", str(body_file_path))
+        included = "разбор на две строки" in output13 and "вторая строка тела" in output13
         case("⑬ ВСТРЕЧНЫЙ к ⑫: то же тело адресату ЗА пределами контура ВХОДИТ в письмо "
              "(отказ ⑫ — про сторону, а не про сам ключ вызова)",
-             код13 == 0 and вошло,
-             f"код {код13} · тело в письме: "
-             f"{'да' if вошло else 'НЕТ — ключ отклонён всем подряд'}", differ=True)
+             code13 == 0 and included,
+             f"код {code13} · тело в письме: "
+             f"{'да' if included else 'НЕТ — ключ отклонён всем подряд'}", differ=True)
 
         # ⑭ ВТОРОЙ ИСТОЧНИК ПРИЗНАКА — каталог обмена НА ДИСКЕ, без записи связи в базе.
         # Заводится СВОЙ контейнер во временном каталоге и показывается печатнику
         # переменной среды: так проверяется, что сосед опознаётся по каталогу, а не
         # только по базе. Имя соседа выбрано заведомо отсутствующим в базе — это
         # проверено тут же, иначе случай зеленел бы по посторонней причине.
-        новый_сосед = "neigh"
-        есть_в_базе = con4.execute("SELECT 1 FROM cross_links WHERE lower(target_group) = ?",
-                                   (новый_сосед,)).fetchone()
-        assert not есть_в_базе, "имя нового соседа уже есть в базе — случай ⑭ судил бы не то"
+        new_neighbor = "neigh"
+        already_in_db = con4.execute("SELECT 1 FROM cross_links WHERE lower(target_group) = ?",
+                                   (new_neighbor,)).fetchone()
+        assert not already_in_db, "имя нового соседа уже есть в базе — случай ⑭ судил бы не то"
         con4.close()
-        контейнер = стенд / "чужой-контейнер"
-        (контейнер / ".mezosync").mkdir(parents=True, exist_ok=True)
-        (контейнер / ".mezosync" / "mezosync.db").write_bytes(b"")
-        (контейнер / "repo" / ".mezosync" / "bridges" /
-         f"{наш_контур}-{новый_сосед}").mkdir(parents=True, exist_ok=True)
-        код14, вывод14 = зови(инструмент, db, "--role", "PROTO", "--to", новый_сосед.upper(),
-                              среда={"MEZO_CONTAINER": str(контейнер)})
-        опознан = f"ПИСЬМО СОСЕДНЕМУ КОНТУРУ «{новый_сосед}»" in вывод14
-        по_каталогу = "каталог обмена" in вывод14
+        container = sandbox / "чужой-контейнер"
+        (container / ".mezosync").mkdir(parents=True, exist_ok=True)
+        (container / ".mezosync" / "mezosync.db").write_bytes(b"")
+        (container / "repo" / ".mezosync" / "bridges" /
+         f"{our_group}-{new_neighbor}").mkdir(parents=True, exist_ok=True)
+        code14, output14 = call_tool(tool, db, "--role", "PROTO", "--to", new_neighbor.upper(),
+                              extra_env={"MEZO_CONTAINER": str(container)})
+        recognized = f"ПИСЬМО СОСЕДНЕМУ КОНТУРУ «{new_neighbor}»" in output14
+        by_directory = "каталог обмена" in output14
         case("⑭ сосед, о котором в базе связи НЕТ, опознаётся по каталогу обмена на диске",
-             код14 == 0 and опознан and по_каталогу,
-             f"код {код14} · опознан как соседний контур: "
-             f"{'да' if опознан else 'НЕТ — второй источник признака не работает'} · "
-             f"путь назван: {по_каталогу}", differ=True)
+             code14 == 0 and recognized and by_directory,
+             f"код {code14} · опознан как соседний контур: "
+             f"{'да' if recognized else 'НЕТ — второй источник признака не работает'} · "
+             f"путь назван: {by_directory}", differ=True)
+
+        # ═══ AIA-A (карточка A из пятёрки правок 2026-09-13): role_sessions.session_id ═══
+        # Стойкий идентификатор сессии — переживает возобновление чата, в отличие от
+        # короткого адреса «имя [код]». Шаг схемы накатывается ЗДЕСЬ, на ту же копию:
+        # он идёт ПОСЛЕ 20260905-role-sessions.py и ничего не портит поверх него.
+        session_id_step = mezo_paths.live_scripts(__file__) / "migrations" / \
+            "20260913-role-sessions-session-id.py"
+        code_session_id_step, output_session_id_step = call_tool(session_id_step, db)
+        if code_session_id_step != 0:
+            sys.exit(f"⛔ шаг схемы session_id на копии не прошёл:\n{output_session_id_step}")
+        con5 = sqlite3.connect(str(db))
+        con5.execute("INSERT INTO role_sessions (role, address, session_id, noted_at, "
+                     "noted_by, source) VALUES ('SIDROLE', 'atlas-sid [abc123]', "
+                     "'local_deadbeef00', datetime('now'), 'SIDROLE', 'self')")
+        con5.commit()
+        con5.close()
+
+        # ⑮ session_id есть → форма ПО ИДЕНТИФИКАТОРУ печатается ПЕРВОЙ
+        code15, output15 = call_tool(tool, db, "--role", "PROTO", "--to", "SIDROLE",
+                              "--kind", "записка")
+        by_id = 'mcp__ccd_session_mgmt__send_message(session_id="local_deadbeef00"' in output15
+        by_id_first = (by_id and output15.find("mcp__ccd_session_mgmt__send_message")
+                        < output15.find('SendMessage(to="atlas-sid'))
+        case("⑮ session_id есть → форма по идентификатору печатается ПЕРВОЙ, форма по имени — второй",
+             code15 == 0 and by_id and by_id_first and "переживает возобновление" in output15,
+             f"код {code15} · форма по id есть: {by_id} · идёт раньше формы по имени: "
+             f"{by_id_first}", differ=True)
+
+        # ⑯ ВСТРЕЧНЫЙ: session_id НЕ записан → формы по идентификатору нет вовсе
+        code16, output16 = call_tool(tool, db, "--role", "PROTO", "--to", "COORD",
+                              "--kind", "записка")
+        case("⑯ ВСТРЕЧНЫЙ: session_id не записан → формы по идентификатору НЕТ, только по имени",
+             code16 == 0 and "mcp__ccd_session_mgmt__send_message" not in output16
+             and 'SendMessage(to="' in output16,
+             f"код {code16} · форма по id отсутствует: "
+             f"{'да' if 'mcp__ccd_session_mgmt__send_message' not in output16 else 'НЕТ'}",
+             differ=True)
+
+        # ⑰ --list не выдаёт свежий адрес за «жив»: ✅ убран, граница названа словами
+        code17, output17 = call_tool(tool, db, "--list")
+        case("⑰ --list не печатает «✅» как «жив»: возраст + явная граница вместо галочки",
+             code17 == 0 and "✅" not in output17 and "живость не проверялась" in output17
+             and "≠ «жива»" in output17 and "≠ «мертва»" in output17,
+             f"код {code17} · «✅» в выводе: "
+             f"{'ЕСТЬ — читается как живость' if '✅' in output17 else 'нет'} · "
+             f"граница названа: {'да' if '≠ «мертва»' in output17 else 'НЕТ'}", differ=True)
+
+        # ⑱ перезапись адреса печатает «ПЕРЕЗАПИСАН: было …», прежняя строка уходит в историю
+        con6 = sqlite3.connect(str(db))
+        history_before = con6.execute("SELECT COUNT(*) FROM role_sessions_history "
+                                  "WHERE role='SIDROLE'").fetchone()[0]
+        con6.close()
+        code18, output18 = call_tool(tool, db, "--role", "SIDROLE", "--set-address",
+                              "atlas-sid2 [fedcba]")
+        con6 = sqlite3.connect(str(db))
+        history_after = con6.execute("SELECT COUNT(*) FROM role_sessions_history "
+                                     "WHERE role='SIDROLE'").fetchone()[0]
+        con6.close()
+        case("⑱ перезапись адреса печатает «ПЕРЕЗАПИСАН: было …» и уводит прежнюю строку в историю",
+             code18 == 0 and "ПЕРЕЗАПИСАН: было" in output18 and "local_deadbeef00" in output18
+             and history_after == history_before + 1,
+             f"код {code18} · «ПЕРЕЗАПИСАН» напечатан: {'ПЕРЕЗАПИСАН: было' in output18} · "
+             f"история {history_before} → {history_after}", differ=True)
 
         print("")
-        print(f"ИТОГ: {ЗЕЛЁНЫХ} из {CASES} · различающих {DIFFER}, "
-              f"из них ДОКАЗАНО нарочной поломкой 14")
+        print(f"ИТОГ: {GREENS} из {CASES} · различающих {DIFFER}, "
+              f"из них ДОКАЗАНО нарочной поломкой 15 (14 прежних + ⑮ поломкой "
+              f"«session-id-order»)")
         # ⚖️ Форма TAXO (приёмка 05.09): число различающих растёт вместе с числом случаев
         # и перестаёт что-либо значить, если не сказано, сколько из них ПОДТВЕРЖДЕНО поломкой.
         # Доказаны поломкой ВСЕ ЧЕТЫРНАДЦАТЬ: ① ② ④ ⑨ (автор) · ③ ⑤ ⑦ ⑧ (чужая рука,
@@ -435,9 +510,9 @@ def main() -> int:
         # который тогда краснеть не мог, и НЕ зачтён ⑦, который мог. Две ошибки взаимно
         # погасились, и число вышло верным ПО ПОСТОРОННЕЙ ПРИЧИНЕ. Сверив только итог,
         # не нашли бы ни одной.
-        return 0 if ЗЕЛЁНЫХ == CASES else 1
+        return 0 if GREENS == CASES else 1
     finally:
-        shutil.rmtree(стенд, ignore_errors=True)
+        shutil.rmtree(sandbox, ignore_errors=True)
 
 
 if __name__ == "__main__":

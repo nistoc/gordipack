@@ -221,7 +221,9 @@ def main():
     linked = 0
     if proto_dir.is_dir():
         want = set()
-        for s in SCRIPT_DIR.glob("*.py"):
+        # 🪤 13.09: шаг схемы 20260904-rule-skill-delivery зовёт сборщик подсказок по имени, а шаги
+        # схемы сюда не просматривались — свежий контур не доходил до вехи v6 (замер помощника PROTO).
+        for s in [*SCRIPT_DIR.glob("*.py"), *SCRIPT_DIR.glob("migrations/*.py")]:
             want |= set(re.findall(r'"([a-z0-9_.-]+\.py)"',
                                    s.read_text(encoding="utf-8", errors="replace")))
         seen = set()
@@ -254,10 +256,10 @@ def main():
     # (правило `bytes-are-not-content`, оплачено ложным обвинением соседа 19.08).
     import hashlib as _h
 
-    def _печать(данные: bytes) -> str:
-        return _h.sha256(данные.replace(b"\r\n", b"\n").rstrip()).hexdigest()[:12]
+    def _fingerprint(data: bytes) -> str:
+        return _h.sha256(data.replace(b"\r\n", b"\n").rstrip()).hexdigest()[:12]
 
-    печати = {f.name: _печать(f.read_bytes())
+    fingerprints = {f.name: _fingerprint(f.read_bytes())
               for f in sorted(tools_dir.glob("*.py"))}
     # ⚠️ СВОЁ СОЕДИНЕНИЕ, А НЕ `conn`: к этому шагу прежнее соединение уже закрыто выше по
     # ходу сборки. Первая редакция звала закрытое и роняла сборку ЦЕЛИКОМ — а приёмка
@@ -266,10 +268,10 @@ def main():
     _c = sqlite3.connect(str(db_path))
     _c.execute("INSERT INTO meta (key, value) VALUES ('template_files_sha', ?) "
                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-               (json.dumps(печати, ensure_ascii=False),))
+               (json.dumps(fingerprints, ensure_ascii=False),))
     _c.commit()
     _c.close()
-    print(f"  ✅ Отпечатки установки: {len(печати)} файлов — по ним обновление отличит "
+    print(f"  ✅ Отпечатки установки: {len(fingerprints)} файлов — по ним обновление отличит "
           f"твою правку от свежести источника")
 
     # 7в. ЗЕРКАЛО ПРАВИЛ — собирается СРАЗУ, а не при первой правке (#145).
@@ -363,10 +365,10 @@ def main():
     # даёт либо молчание, либо вечно-красное.
     # ⚖️ Мост нужен с ПЕРВОГО дня отдельно: пока папки нет, сосед не может ничего положить,
     # и «некуда написать» выглядит для контура как «нам не пишут».
-    for имя, зачем in (("coordination", "замороженные каналы и общие выборки"),
+    for dir_name, purpose in (("coordination", "замороженные каналы и общие выборки"),
                        ("bridges", "переписка с соседними контурами")):
-        (mezosync_dir.parent / имя).mkdir(parents=True, exist_ok=True)
-        print(f"  ✅ Каталог {имя}: {mezosync_dir.parent / имя} — {зачем}")
+        (mezosync_dir.parent / dir_name).mkdir(parents=True, exist_ok=True)
+        print(f"  ✅ Каталог {dir_name}: {mezosync_dir.parent / dir_name} — {purpose}")
 
     # 8. ПРОБА СОБРАННОГО — «ГОТОВА» ГОВОРИТ ЗАПУСК, А НЕ СБОРЩИК (#145).
     # 🪤 Три дефекта подряд нашлись ТОЛЬКО потому, что я вызвал инструменты свежего

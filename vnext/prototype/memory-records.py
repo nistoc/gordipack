@@ -28,10 +28,10 @@ r"""ПАМЯТЬ ЗАПИСЯМИ С ПОЛЯМИ: завести · отобр�
 остальные сами»). Чужую можно ПОКАЗАТЬ и ОТОБРАТЬ, разобрать и править — нет.
 
 Зовут так:
-    python C:/guts/.atlas/vnext-tools/memory-records.py --role PROTO --section state --разобрать
-    python C:/guts/.atlas/vnext-tools/memory-records.py --role PROTO --показать
-    python C:/guts/.atlas/vnext-tools/memory-records.py --role PROTO --отобрать права
-    python C:/guts/.atlas/vnext-tools/memory-records.py --role PROTO --section state --собрать
+    python <КОНТУР>/vnext-tools/memory-records.py --role PROTO --section state --разобрать
+    python <КОНТУР>/vnext-tools/memory-records.py --role PROTO --показать
+    python <КОНТУР>/vnext-tools/memory-records.py --role PROTO --отобрать права
+    python <КОНТУР>/vnext-tools/memory-records.py --role PROTO --section state --собрать
 """
 from __future__ import annotations
 
@@ -51,16 +51,16 @@ import mezo_paths  # noqa: E402 — пути машины выводятся, н
 # одного разбора разъехались бы молча, и тогда «собрать обратно» перестало бы сходиться
 # ровно в тех разделах, где резали по-разному. Это тот же довод, что и у правила
 # «полный текст живёт в одном месте», только про код.
-_спек = importlib.util.spec_from_file_location(
+_spec = importlib.util.spec_from_file_location(
     "ma", pathlib.Path(__file__).with_name("memory-archive.py"))
-_ma = importlib.util.module_from_spec(_спек)
-_спек.loader.exec_module(_ma)
+_ma = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_ma)
 
 # ── ПРЕДМЕТЫ ЗАПИСЕЙ ───────────────────────────────────────────────────────────────
 # ⚖️ Список ОТКРЫТ: инструмент принимает любой предмет, а эти лишь предлагает и печатает.
 # Закрытый список состарился бы молча — ровно то, за что контур платил в перечне
 # слов-типов (карточка #497). Здесь он стареет ВИДИМО: печатается при разборе.
-ПРЕДМЕТЫ = {
+SUBJECTS = {
     "право": ("право", "разрешено", "запрещено", "⛔", "мандат", "слово владельца",
               "слова владельца", "решения владельца"),
     "позиция": ("позиция", "сейчас", "в работе", "остановил", "сделано"),
@@ -73,20 +73,20 @@ _спек.loader.exec_module(_ma)
     "надгробие": ("⚰️", "надгробие", "отозван", "снято"),
     "указатель": ("бери запросом", "смотри", "живое:", "role-brief"),
 }
-ЧАС_В_ТЕКСТЕ = (
+DATE_PATTERNS = (
     re.compile(r"\b(20\d\d)-(\d\d)-(\d\d)\b"),
     re.compile(r"\b(\d\d)\.(\d\d)\.(20\d\d)\b"),
     re.compile(r"\b(\d\d)\.(\d\d)\b(?!\.)"),
 )
 
 
-def _очки(текст: str) -> dict:
-    низ = текст.lower()
-    return {имя: sum(1 for п in приметы if п.lower() in низ)
-            for имя, приметы in ПРЕДМЕТЫ.items()}
+def _scores(text: str) -> dict:
+    low = text.lower()
+    return {name: sum(1 for mark in marks if mark.lower() in low)
+            for name, marks in SUBJECTS.items()}
 
 
-def предмет_и_спор(тело: str) -> tuple[str, str | None]:
+def subject_and_dispute(body: str) -> tuple[str, str | None]:
     """(предмет, спор). Спор — строка «кто с кем и с каким счётом» или None.
 
     ⚡ ПРАВИЛО С 2026-09-04 20:27 UTC — карточка #534, замеры @TAXO (3 промаха из 10)
@@ -105,31 +105,31 @@ def предмет_и_спор(тело: str) -> tuple[str, str | None]:
     ⚖️ Это по-прежнему подсказка по СЛОВАМ, а предмет — смысл. Ноль промахов недостижим;
     цель — верно чаще И спорное видно. Правится рукой: --поля <id> --предмет.
     """
-    строки = тело.strip().splitlines() or [""]
-    заголовок = строки[0]
-    в_заг = {имя: n for имя, n in _очки(заголовок).items() if n}
-    в_теле = _очки(тело)
-    if len(в_заг) == 1:
-        return next(iter(в_заг)), None
-    if len(в_заг) >= 2:
-        кандидаты = sorted(в_заг, key=lambda k: (-в_теле[k], -в_заг[k]))
-        и1, и2 = кандидаты[0], кандидаты[1]
-        return и1, f"заголовок называет и «{и2}» (тело {в_теле[и1]}:{в_теле[и2]})"
-    порядок = sorted(в_теле.items(), key=lambda kv: -kv[1])
-    (и1, s1), (и2, s2) = порядок[0], порядок[1]
+    lines = body.strip().splitlines() or [""]
+    heading = lines[0]
+    in_head = {name: n for name, n in _scores(heading).items() if n}
+    in_body = _scores(body)
+    if len(in_head) == 1:
+        return next(iter(in_head)), None
+    if len(in_head) >= 2:
+        candidates = sorted(in_head, key=lambda k: (-in_body[k], -in_head[k]))
+        c1, c2 = candidates[0], candidates[1]
+        return c1, f"заголовок называет и «{c2}» (тело {in_body[c1]}:{in_body[c2]})"
+    ranked = sorted(in_body.items(), key=lambda kv: -kv[1])
+    (c1, s1), (c2, s2) = ranked[0], ranked[1]
     if s1 == 0:
         return "разное", None
     if s2 > 0 and s1 - s2 <= 1:
-        return и1, f"«{и2}» отстаёт на {s1 - s2} ({s1}:{s2}) — заголовок молчит"
-    return и1, None
+        return c1, f"«{c2}» отстаёт на {s1 - s2} ({s1}:{s2}) — заголовок молчит"
+    return c1, None
 
 
-def предмет_блока(тело: str) -> str:
+def subject_of_block(body: str) -> str:
     """Какой предмет вероятнее. ⚖️ ПОДСКАЗКА, а не приговор — правится ключом --поля."""
-    return предмет_и_спор(тело)[0]
+    return subject_and_dispute(body)[0]
 
 
-def час_блока(тело: str, сегодня: datetime.date):
+def time_of_block(body: str, today: datetime.date):
     """Самая свежая дата в блоке, НО НЕ ИЗ БУДУЩЕГО. None — дат нет.
 
     🩸 ОПЛАЧЕНО ПЕРВЫМ ЖЕ РАЗБОРОМ СВОЕЙ ПАМЯТИ (2026-09-04 15:04 UTC): признак взял
@@ -142,31 +142,31 @@ def час_блока(тело: str, сегодня: datetime.date):
     ⚖️ Будущее отбрасывается целиком: часом события оно быть не может по определению.
     Остальные два рода признак по-прежнему не различает — сказано прямо, а не умолчано.
     """
-    найдено = []
-    for n, обр in enumerate(ЧАС_В_ТЕКСТЕ):
-        for m in обр.finditer(тело):
+    found = []
+    for n, pat in enumerate(DATE_PATTERNS):
+        for m in pat.finditer(body):
             try:
                 if n == 0:
-                    д = datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+                    d = datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
                 elif n == 1:
-                    д = datetime.date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+                    d = datetime.date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
                 else:
-                    д = datetime.date(сегодня.year, int(m.group(2)), int(m.group(1)))
-                    if д > сегодня:
-                        д = д.replace(year=сегодня.year - 1)
+                    d = datetime.date(today.year, int(m.group(2)), int(m.group(1)))
+                    if d > today:
+                        d = d.replace(year=today.year - 1)
             except ValueError:
                 continue
-            if д <= сегодня:          # ⛔ будущее часом события быть не может
-                найдено.append(д)
-    return max(найдено).isoformat() if найдено else None
+            if d <= today:          # ⛔ будущее часом события быть не может
+                found.append(d)
+    return max(found).isoformat() if found else None
 
 
-def есть_таблица(conn) -> bool:
+def has_table(conn) -> bool:
     return bool(conn.execute(
         "SELECT 1 FROM sqlite_master WHERE name='phoenix_records'").fetchone())
 
 
-def пересобрать(conn, роль, раздел, actor):
+def rebuild(conn, role, section, actor):
     """Разобрать раздел ЗАНОВО после того, как тело изменилось, СОХРАНИВ ручные поля.
 
     ⚡ ЗАЧЕМ ЭТО ЕСТЬ — зазор нашёлся на первом же живом применении, через час после
@@ -182,30 +182,30 @@ def пересобрать(conn, роль, раздел, actor):
     чего никто не проверял; оно хуже пустоты, потому что выглядит проверенным.
     """
     r = conn.execute("SELECT body FROM phoenix WHERE role=? AND section=?",
-                     (роль, раздел)).fetchone()
+                     (role, section)).fetchone()
     if not r:
-        sys.exit(f"⛔ У роли {роль} нет раздела «{раздел}»")
-    тело = r[0]
-    прежние = conn.execute(
+        sys.exit(f"⛔ У роли {role} нет раздела «{section}»")
+    body = r[0]
+    previous = conn.execute(
         "SELECT body, subject, happened_at, source, expiry_cond, alive, revoked_at, "
         "revoked_note FROM phoenix_records WHERE role=? AND section=?",
-        (роль, раздел)).fetchall()
-    if not прежние:
-        sys.exit(f"⛔ У {роль}·{раздел} записей нет — это первый разбор, зови --разобрать")
+        (role, section)).fetchall()
+    if not previous:
+        sys.exit(f"⛔ У {role}·{section} записей нет — это первый разбор, зови --разобрать")
     # ручные поля прежних записей, ключ — ТЕЛО дословно
-    было_с_полями = {}
-    for т, п, ч, ист, усл, жив, снят_к, снят_ч in прежние:
-        if ист or усл or жив != "active":
-            было_с_полями[т] = (п, ч, ист, усл, жив, снят_к, снят_ч)
+    had_fields = {}
+    for rec_body, subj, when, src, cond, alive, rev_at, rev_note in previous:
+        if src or cond or alive != "active":
+            had_fields[rec_body] = (subj, when, src, cond, alive, rev_at, rev_note)
 
-    куски, способ = _ma.блоки(тело)
-    сегодня = datetime.datetime.now(datetime.UTC).date()
-    новые_тела = {к["тело"] for к in куски}
-    осиротели = [т for т in было_с_полями if т not in новые_тела]
+    chunks, method = _ma.блоки(body)
+    today = datetime.datetime.now(datetime.UTC).date()
+    new_bodies = {chunk["тело"] for chunk in chunks}
+    orphaned = [rec_body for rec_body in had_fields if rec_body not in new_bodies]
 
     print("=" * 88)
-    print(f"ПЕРЕСБОРКА {роль}·{раздел}: {len(прежние)} записей → {len(куски)}")
-    print(f"РЕЗАНО: {способ}")
+    print(f"ПЕРЕСБОРКА {role}·{section}: {len(previous)} записей → {len(chunks)}")
+    print(f"РЕЗАНО: {method}")
     print("=" * 88)
 
     conn.execute("BEGIN")
@@ -223,94 +223,94 @@ def пересобрать(conn, роль, раздел, actor):
     # 👉 Чиним ПРИЧИНУ: запись, чьё тело совпало дословно, СОХРАНЯЕТ свой номер
     # (обновляются только порядок и длина источника). Новые куски вставляются, исчезнувшие
     # удаляются. Тогда правка выше по тексту не трогает адреса неизменённых записей.
-    прежние_по_телу = {}
-    for стр in conn.execute(
+    previous_by_body = {}
+    for row in conn.execute(
             "SELECT id, body FROM phoenix_records WHERE role=? AND section=?",
-            (роль, раздел)):
-        прежние_по_телу.setdefault(стр[1], []).append(стр[0])
+            (role, section)):
+        previous_by_body.setdefault(row[1], []).append(row[0])
 
-    уцелело_полей, сохранили_номер, новых = 0, 0, 0
-    занятые = set()
-    for n, к in enumerate(куски, 1):
-        свободные = прежние_по_телу.get(к["тело"], [])
-        старый_id = next((i for i in свободные if i not in занятые), None)
-        поля = было_с_полями.get(к["тело"])
-        if поля:
-            п, ч, ист, усл, жив, снят_к, снят_ч = поля
-            уцелело_полей += 1
+    fields_kept, ids_kept, new_count = 0, 0, 0
+    used_ids = set()
+    for n, chunk in enumerate(chunks, 1):
+        free_ids = previous_by_body.get(chunk["тело"], [])
+        old_id = next((i for i in free_ids if i not in used_ids), None)
+        manual_fields = had_fields.get(chunk["тело"])
+        if manual_fields:
+            subj, when, src, cond, alive, rev_at, rev_note = manual_fields
+            fields_kept += 1
         else:
-            п, ч, ист, усл, жив, снят_к, снят_ч = (
-                предмет_блока(к["тело"]), час_блока(к["тело"], сегодня),
+            subj, when, src, cond, alive, rev_at, rev_note = (
+                subject_of_block(chunk["тело"]), time_of_block(chunk["тело"], today),
                 None, None, "active", None, None)
-        if старый_id is not None:
-            занятые.add(старый_id)
-            сохранили_номер += 1
+        if old_id is not None:
+            used_ids.add(old_id)
+            ids_kept += 1
             conn.execute(
                 "UPDATE phoenix_records SET subject=?, body_chars=?, happened_at=?, "
                 "source=?, expiry_cond=?, alive=?, revoked_at=?, revoked_note=?, "
                 "ord=?, origin_chars=? WHERE id=?",
-                (п, к["знаков"], ч, ист, усл, жив, снят_к, снят_ч, n, len(тело),
-                 старый_id))
+                (subj, chunk["знаков"], when, src, cond, alive, rev_at, rev_note, n, len(body),
+                 old_id))
         else:
-            новых += 1
+            new_count += 1
             conn.execute(
                 "INSERT INTO phoenix_records (role, section, subject, body, body_chars, "
                 "happened_at, source, expiry_cond, alive, revoked_at, revoked_note, "
                 "ord, origin_chars, created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (роль, раздел, п, к["тело"], к["знаков"], ч, ист, усл, жив, снят_к,
-                 снят_ч, n, len(тело), actor))
+                (role, section, subj, chunk["тело"], chunk["знаков"], when, src, cond, alive, rev_at,
+                 rev_note, n, len(body), actor))
     # исчезнувшие: их тела больше нет в разделе
-    все_прежние = {i for сп in прежние_по_телу.values() for i in сп}
-    убрать = все_прежние - занятые
-    for i in убрать:
+    all_previous_ids = {i for id_list in previous_by_body.values() for i in id_list}
+    to_remove = all_previous_ids - used_ids
+    for i in to_remove:
         conn.execute("DELETE FROM phoenix_records WHERE id=?", (i,))
     conn.commit()
 
-    собрано = "".join(к["тело"] for к in куски)
-    print(f"  🔗 НОМЕРА СОХРАНЕНЫ у {сохранили_номер} записей · новых {новых} · "
-          f"удалено {len(убрать)}")
+    assembled = "".join(chunk["тело"] for chunk in chunks)
+    print(f"  🔗 НОМЕРА СОХРАНЕНЫ у {ids_kept} записей · новых {new_count} · "
+          f"удалено {len(to_remove)}")
     print("     ⚖️ номер держится за ТЕЛО: правка выше по тексту больше не сдвигает")
     print("        адреса неизменённых записей (задача #532, находка @TAXO)")
     # ⚖️ СТРОКА ОБЯЗАНА РАЗЛИЧАТЬ «ПЕРЕНОСИТЬ БЫЛО НЕЧЕГО» И «НИЧЕГО НЕ СОВПАЛО».
     # Прежде обе давали «уцелели у 0» — одинаково при исправной работе роли без ручных
     # полей и при полном несовпадении границ (пункт ④ задачи #532).
-    было_полей = len(было_с_полями)
-    if not было_полей:
+    had_fields_count = len(had_fields)
+    if not had_fields_count:
         print("  ⚪ ручных полей не было ни у одной записи — переносить было НЕЧЕГО")
         print("     (это не то же, что «ничего не совпало»: там поля были и пропали)")
     else:
-        print(f"  ✅ ручные поля уцелели у {уцелело_полей} из {было_полей} записей, "
+        print(f"  ✅ ручные поля уцелели у {fields_kept} из {had_fields_count} записей, "
               f"что их несли (тело совпало дословно)")
-    if осиротели:
+    if orphaned:
         # ⛔ ПОТЕРЯ НАЗЫВАЕТСЯ ПОИМЁННО, А НЕ ЧИСЛОМ: число сообщает, что что-то пропало,
         # имя — ЧТО ИМЕННО переставить рукой. Без имён роль не знает, куда смотреть.
-        print(f"  ⚠️ ПОЛЯ ПОТЕРЯНЫ у {len(осиротели)} записей — их текст изменился, "
+        print(f"  ⚠️ ПОЛЯ ПОТЕРЯНЫ у {len(orphaned)} записей — их текст изменился, "
               f"и переносить поля было бы утверждением о непроверенном:")
-        for т in осиротели:
-            первая = т.strip().splitlines()[0] if т.strip() else ""
-            print(f"       🔸 «{первая[:70]}»")
+        for rec_body in orphaned:
+            first_line = rec_body.strip().splitlines()[0] if rec_body.strip() else ""
+            print(f"       🔸 «{first_line[:70]}»")
         print("     👉 проставь заново: --поля <id> --источник … --условие …")
     else:
         print("  ✅ осиротевших полей нет — ни одна запись с полями не изменилась")
-    print(f"  сборка: {len(собрано)} = тело {len(тело)}  "
-          f"{'✅ сходится знак в знак' if собрано == тело else '🔴 РАСХОЖДЕНИЕ'}")
-    return 0 if собрано == тело else 1
+    print(f"  сборка: {len(assembled)} = тело {len(body)}  "
+          f"{'✅ сходится знак в знак' if assembled == body else '🔴 РАСХОЖДЕНИЕ'}")
+    return 0 if assembled == body else 1
 
 
-def разобрать(conn, роль, раздел, actor):
+def parse(conn, role, section, actor):
     r = conn.execute("SELECT body FROM phoenix WHERE role=? AND section=?",
-                     (роль, раздел)).fetchone()
+                     (role, section)).fetchone()
     if not r:
-        sys.exit(f"⛔ У роли {роль} нет раздела «{раздел}»")
-    тело = r[0]
-    было = conn.execute(
+        sys.exit(f"⛔ У роли {role} нет раздела «{section}»")
+    body = r[0]
+    existing_count = conn.execute(
         "SELECT COUNT(*) FROM phoenix_records WHERE role=? AND section=?",
-        (роль, раздел)).fetchone()[0]
-    if было:
+        (role, section)).fetchone()[0]
+    if existing_count:
         # ⚖️ ОТКАЗ, А НЕ ПЕРЕЗАПИСЬ. Повторный разбор затёр бы поля, проставленные рукой
         # (источник, условие снятия) — то есть самую дорогую часть работы. Молчаливая
         # потеря ручного труда хуже отказа: она выглядит успехом.
-        sys.exit(f"⛔ НЕ РАЗОБРАНО: у {роль}·{раздел} уже {было} записей. Повторный "
+        sys.exit(f"⛔ НЕ РАЗОБРАНО: у {role}·{section} уже {existing_count} записей. Повторный "
                  "разбор затёр бы поля, проставленные рукой.\n"
                  "   👉 ТЕЛО ИЗМЕНИЛОСЬ — обычное дело после сохранения памяти? "
                  "зови --пересобрать:\n"
@@ -320,31 +320,31 @@ def разобрать(conn, роль, раздел, actor):
                  "заново.\n"
                  "   Посмотреть: --показать · снять запись: --снять <id> · "
                  "дописать поля: --поля <id>")
-    куски, способ = _ma.блоки(тело)
-    сегодня = datetime.datetime.now(datetime.UTC).date()
+    chunks, method = _ma.блоки(body)
+    today = datetime.datetime.now(datetime.UTC).date()
     print("=" * 84)
-    print(f"РАЗБОР {роль}·{раздел}: {len(тело)} знаков → {len(куски)} записей")
-    print(f"РЕЗАНО: {способ}")
+    print(f"РАЗБОР {role}·{section}: {len(body)} знаков → {len(chunks)} записей")
+    print(f"РЕЗАНО: {method}")
     print("=" * 84)
     conn.execute("BEGIN")
-    сумма = 0
-    предметы = {}
-    for n, к in enumerate(куски, 1):
-        п = предмет_блока(к["тело"])
-        ч = час_блока(к["тело"], сегодня)
-        предметы[п] = предметы.get(п, 0) + 1
-        сумма += к["знаков"]
+    total = 0
+    subject_counts = {}
+    for n, chunk in enumerate(chunks, 1):
+        subj = subject_of_block(chunk["тело"])
+        when = time_of_block(chunk["тело"], today)
+        subject_counts[subj] = subject_counts.get(subj, 0) + 1
+        total += chunk["знаков"]
         conn.execute(
             "INSERT INTO phoenix_records (role, section, subject, body, body_chars, "
             "happened_at, source, expiry_cond, alive, ord, origin_chars, created_by) "
             "VALUES (?,?,?,?,?,?,?,?,'active',?,?,?)",
-            (роль, раздел, п, к["тело"], к["знаков"], ч, None, None, n, len(тело), actor))
-        print(f"  {n:3}. {п:12} {к['знаков']:>6}б  {ч or 'часа нет':10}  {к['тема'][:44]}")
+            (role, section, subj, chunk["тело"], chunk["знаков"], when, None, None, n, len(body), actor))
+        print(f"  {n:3}. {subj:12} {chunk['знаков']:>6}б  {when or 'часа нет':10}  {chunk['тема'][:44]}")
     conn.commit()
     print("-" * 84)
-    print(f"предметы: " + " · ".join(f"{k} {v}" for k, v in sorted(предметы.items())))
-    print(f"сумма знаков записей {сумма} · длина тела {len(тело)} · "
-          f"{'✅ сходится' if сумма == len(тело) else '🔴 РАСХОЖДЕНИЕ ' + str(len(тело)-сумма)}")
+    print(f"предметы: " + " · ".join(f"{k} {v}" for k, v in sorted(subject_counts.items())))
+    print(f"сумма знаков записей {total} · длина тела {len(body)} · "
+          f"{'✅ сходится' if total == len(body) else '🔴 РАСХОЖДЕНИЕ ' + str(len(body)-total)}")
     print("⚠️ ПОЛЯ «источник» и «условие снятия» ПУСТЫ у всех записей — их не из чего")
     print("   вывести из сплошного текста. Это не недоделка, а честное состояние:")
     print("   пустота ОТЛИЧИМА запросом (--отобрать без-условия) и не молчит.")
@@ -354,176 +354,176 @@ def разобрать(conn, роль, раздел, actor):
 # Особое значение поля «условие снятия»: решено, что условия нет вовсе (замер о прошлом,
 # надгробие, провенанс). ⛔ Пишется ВМЕСТЕ С ПРИЧИНОЙ — «никогда: ...», иначе это отписка,
 # неотличимая от нерешённого.
-НЕТ_УСЛОВИЯ = "никогда"
+NO_CONDITION = "никогда"
 
 
-def показать(conn, роль):
-    строки = conn.execute(
+def show(conn, role):
+    rows = conn.execute(
         "SELECT id, section, subject, body_chars, COALESCE(happened_at,'—'), "
         "COALESCE(source,'—'), COALESCE(expiry_cond,'—'), alive, "
         "substr(replace(body, char(10), ' '), 1, 52), body "
-        "FROM phoenix_records WHERE role=? ORDER BY section, ord", (роль,)).fetchall()
-    if not строки:
-        print(f"⚪ у роли {роль} записей нет. Разобрать раздел: "
+        "FROM phoenix_records WHERE role=? ORDER BY section, ord", (role,)).fetchall()
+    if not rows:
+        print(f"⚪ у роли {role} записей нет. Разобрать раздел: "
               f"--section <раздел> --разобрать")
         return
-    свод = conn.execute(
+    summary = conn.execute(
         "SELECT COUNT(*), SUM(body_chars), SUM(alive='revoked'), "
         "SUM(source IS NULL), SUM(expiry_cond IS NULL), "
-        f"SUM(expiry_cond LIKE '{НЕТ_УСЛОВИЯ}%') "
-        "FROM phoenix_records WHERE role=?", (роль,)).fetchone()
-    решено_нет, всего = свод[5] or 0, свод[0]
-    с_условием = всего - (свод[4] or 0) - решено_нет
+        f"SUM(expiry_cond LIKE '{NO_CONDITION}%') "
+        "FROM phoenix_records WHERE role=?", (role,)).fetchone()
+    decided_none, total = summary[5] or 0, summary[0]
+    with_condition = total - (summary[4] or 0) - decided_none
     print("=" * 100)
-    print(f"ПАМЯТЬ {роль} ЗАПИСЯМИ: {всего} записей · {свод[1]} знаков · "
-          f"снятых {свод[2]}")
-    print(f"  без источника: {свод[3]}")
+    print(f"ПАМЯТЬ {role} ЗАПИСЯМИ: {total} записей · {summary[1]} знаков · "
+          f"снятых {summary[2]}")
+    print(f"  без источника: {summary[3]}")
     # ⚡ ТРИ СОСТОЯНИЯ У ПОЛЯ «УСЛОВИЕ СНЯТИЯ», А НЕ ДВА. Сложи «не решено» с «условия
     # нет по природе записи» — и счётчик НИКОГДА не дойдёт до нуля: у замера о прошлом
     # условия устаревания не бывает вовсе. А вечно ненулевой счётчик перестают смотреть,
     # и поле снова замолкает — ровно то, против чего заведён критерий ⑥ карточки #524.
-    print(f"  условие снятия: назначено {с_условием} · "
-          f"решено «условия нет» {решено_нет} · ⚠️ НЕ РЕШЕНО {свод[4]}")
+    print(f"  условие снятия: назначено {with_condition} · "
+          f"решено «условия нет» {decided_none} · ⚠️ НЕ РЕШЕНО {summary[4]}")
     print("=" * 100)
     print(f"{'id':>4} {'раздел':9} {'предмет':12} {'знаков':>7} {'час':11} "
           f"{'жив':4} начало")
     print("-" * 100)
-    споров, рукой = 0, 0
-    for id_, разд, п, зн, ч, ист, усл, жив, начало, тело in строки:
-        знак = "✅" if жив == "active" else "⚰️"
+    disputed, manual = 0, 0
+    for id_, sect, subj, chars, when, src, cond, alive, started, body in rows:
+        mark = "✅" if alive == "active" else "⚰️"
         # ⚖️ СПОР ПЕЧАТАЕТСЯ, А НЕ ГЛОТАЕТСЯ (карточка #534). Предмет, назначенный не по
         # примете (рукой через --поля или прежним правилом), помечен ✍ и споров не несёт:
         # у него уже есть автор. Различаю по расхождению с тем, что дала бы примета.
-        по_примете, спор = предмет_и_спор(тело)
-        if п != по_примете:
-            метка, рукой = "✍", рукой + 1
-        elif спор:
-            метка, споров = "?", споров + 1
+        by_hint, dispute = subject_and_dispute(body)
+        if subj != by_hint:
+            tag, manual = "✍", manual + 1
+        elif dispute:
+            tag, disputed = "?", disputed + 1
         else:
-            метка = ""
-        print(f"{id_:>4} {разд:9} {(п + метка):12} {зн:>7} {ч:11} {знак:4} {начало}")
-        if метка == "?":
-            print(f"{'':4} {'':9} └ спор: {спор}")
+            tag = ""
+        print(f"{id_:>4} {sect:9} {(subj + tag):12} {chars:>7} {when:11} {mark:4} {started}")
+        if tag == "?":
+            print(f"{'':4} {'':9} └ спор: {dispute}")
     print("-" * 100)
-    if споров or рукой:
-        print(f"⚖️ предмет: споров {споров} (помечены «?», соперник назван строкой ниже) · "
-              f"назначен рукой или прежним правилом {рукой} («✍»)")
+    if disputed or manual:
+        print(f"⚖️ предмет: споров {disputed} (помечены «?», соперник назван строкой ниже) · "
+              f"назначен рукой или прежним правилом {manual} («✍»)")
         print("   спор — это НЕ ошибка, это честное «по словам не решить»; реши --поля <id> --предмет")
     print("👉 отобрать: --отобрать <предмет|слово> · за день: --за 2026-09-04 · "
           "снятые: --снятые · НЕ решено про условие: --без-условия")
     print(f"👉 проставить: --поля <id> --источник <чем добыто> --условие <при чём снимается>")
     print(f"   у записи, которой условие не положено (замер о прошлом, надгробие,")
-    print(f"   провенанс), условие пишется словом «{НЕТ_УСЛОВИЯ}: <почему>» — "
+    print(f"   провенанс), условие пишется словом «{NO_CONDITION}: <почему>» — "
           f"это РЕШЕНИЕ, а не пустота")
 
 
-def отобрать(conn, роль, что=None, за=None, снятые=False, без_условия=False,
-             целиком=False):
-    где, парам = ["role=?"], [роль]
-    заголовок = []
-    if что:
-        где.append("(subject LIKE ? OR lower(body) LIKE lower(?))")
-        парам += [f"%{что}%", f"%{что}%"]
-        заголовок.append(f"предмет или слово «{что}»")
+def select(conn, role, query=None, on_date=None, revoked=False, no_condition=False,
+             full=False):
+    clauses, params = ["role=?"], [role]
+    heading = []
+    if query:
+        clauses.append("(subject LIKE ? OR lower(body) LIKE lower(?))")
+        params += [f"%{query}%", f"%{query}%"]
+        heading.append(f"предмет или слово «{query}»")
         # ⚖️ Запись, у которой «{что}» — ПРОИГРАВШИЙ соперник спора, в выборку тоже
         # попадает: слово-примета лежит в её теле, и второе условие её берёт. Это не
         # случайность, а то, ради чего спор вообще считается по словам тела.
-    if за:
-        где.append("happened_at=?")
-        парам.append(за)
-        заголовок.append(f"час события {за}")
-    if снятые:
-        где.append("alive='revoked'")
-        заголовок.append("только снятые")
-    if без_условия:
-        где.append("expiry_cond IS NULL")
-        заголовок.append("без условия снятия")
-    строки = conn.execute(
+    if on_date:
+        clauses.append("happened_at=?")
+        params.append(on_date)
+        heading.append(f"час события {on_date}")
+    if revoked:
+        clauses.append("alive='revoked'")
+        heading.append("только снятые")
+    if no_condition:
+        clauses.append("expiry_cond IS NULL")
+        heading.append("без условия снятия")
+    rows = conn.execute(
         "SELECT id, section, subject, body_chars, COALESCE(happened_at,'—'), alive, "
         "COALESCE(source,'—'), COALESCE(expiry_cond,'—'), body FROM phoenix_records "
-        f"WHERE {' AND '.join(где)} ORDER BY section, ord", парам).fetchall()
+        f"WHERE {' AND '.join(clauses)} ORDER BY section, ord", params).fetchall()
     print("=" * 96)
-    print(f"ОТБОР по памяти {роль}: {' · '.join(заголовок) or 'всё'} → записей {len(строки)}")
+    print(f"ОТБОР по памяти {role}: {' · '.join(heading) or 'всё'} → записей {len(rows)}")
     print("=" * 96)
-    if not строки:
+    if not rows:
         # ⚖️ Пустой ответ обязан отличать «не нашлось» от «искать негде»: одно «ничего»
         # на две беды заставляет спрашивающего гадать, и гадает он неверно.
-        всего = conn.execute("SELECT COUNT(*) FROM phoenix_records WHERE role=?",
-                             (роль,)).fetchone()[0]
-        print(f"⚪ совпадений нет. Записей у роли {всего} — "
+        total = conn.execute("SELECT COUNT(*) FROM phoenix_records WHERE role=?",
+                             (role,)).fetchone()[0]
+        print(f"⚪ совпадений нет. Записей у роли {total} — "
               + ("значит под отбор ничего не подошло."
-                 if всего else "память ещё НЕ РАЗОБРАНА, то есть искать было негде."))
+                 if total else "память ещё НЕ РАЗОБРАНА, то есть искать было негде."))
         return
     # ⚖️ ОТВЕТ — СПИСОК ЗАПИСЕЙ, А НЕ ПОТОК ТЕКСТА. Ровно затем задача и заводилась:
     # владелец спрашивает «покажи всё про права» ЧТОБЫ НЕ ЧИТАТЬ двадцать тысяч знаков.
     # Отбор, отвечающий телами, возвращает его в ту же беду, только с фильтром
     # (критерий ② карточки #524 говорит дословно: «списком записей, а не куском текста»).
     # Тело — по --целиком, и это ВТОРОЙ ход, сделанный осознанно.
-    if not целиком:
+    if not full:
         print(f"{'id':>4} {'раздел':9} {'предмет':11} {'знаков':>7} {'час':11} "
               f"{'жив':9} {'усл':4} начало")
         print("-" * 96)
-        for id_, разд, п, зн, ч, жив, ист, усл, тело in строки:
-            знак = "✅" if жив == "active" else "⚰️СНЯТА"
-            у = "—" if усл == "—" else ("нет" if усл.startswith(НЕТ_УСЛОВИЯ) else "да")
-            первая = тело.strip().splitlines()[0] if тело.strip() else ""
-            print(f"{id_:>4} {разд:9} {п:11} {зн:>7} {ч:11} {знак:9} {у:4} {первая[:40]}")
+        for id_, sect, subj, chars, when, alive, src, cond, body in rows:
+            mark = "✅" if alive == "active" else "⚰️СНЯТА"
+            cond_flag = "—" if cond == "—" else ("нет" if cond.startswith(NO_CONDITION) else "да")
+            first_line = body.strip().splitlines()[0] if body.strip() else ""
+            print(f"{id_:>4} {sect:9} {subj:11} {chars:>7} {when:11} {mark:9} {cond_flag:4} {first_line[:40]}")
         print("-" * 96)
         # ⚖️ ВОПРОС ВЛАДЕЛЬЦА ЗВУЧИТ «ЧТО СНЯТО И ЧЕМ» — ДВЕ ПОЛОВИНЫ, И ВТОРАЯ ДОРОЖЕ.
         # Список, отвечающий только первой, оставляет снятое без причины: а снятое без
         # причины неотличимо от потерянного, и через месяц никто не скажет, отзывали
         # запись или она пропала. Потому «чем» печатается ЦЕЛИКОМ, без усечения.
-        снятых = [с for с in строки if с[5] != "active"]
-        if снятых:
-            print(f"⚰️ СНЯТЫХ В ЭТОМ ОТБОРЕ: {len(снятых)} — чем снята каждая:")
-            for id_, *_ in снятых:
-                когда, чем = conn.execute(
+        revoked_rows = [line_ for line_ in rows if line_[5] != "active"]
+        if revoked_rows:
+            print(f"⚰️ СНЯТЫХ В ЭТОМ ОТБОРЕ: {len(revoked_rows)} — чем снята каждая:")
+            for id_, *_ in revoked_rows:
+                when_, why_ = conn.execute(
                     "SELECT COALESCE(revoked_at,'—'), COALESCE(revoked_note,'—') "
                     "FROM phoenix_records WHERE id=?", (id_,)).fetchone()
-                print(f"\n   ⚰️ #{id_} · снята {когда} UTC")
-                for с in чем.splitlines():
-                    print(f"      {с}")
+                print(f"\n   ⚰️ #{id_} · снята {when_} UTC")
+                for line_ in why_.splitlines():
+                    print(f"      {line_}")
             print("-" * 96)
         print("👉 тела записей целиком — тем же отбором с ключом --целиком")
         return
-    for id_, разд, п, зн, ч, жив, ист, усл, тело in строки:
-        знак = "✅" if жив == "active" else "⚰️ СНЯТА"
-        print(f"\n📄 #{id_} · {разд} · предмет «{п}» · {зн}б · час {ч} · {знак}")
-        print(f"   источник: {ист}")
-        print(f"   условие снятия: {усл}")
+    for id_, sect, subj, chars, when, alive, src, cond, body in rows:
+        mark = "✅" if alive == "active" else "⚰️ СНЯТА"
+        print(f"\n📄 #{id_} · {sect} · предмет «{subj}» · {chars}б · час {when} · {mark}")
+        print(f"   источник: {src}")
+        print(f"   условие снятия: {cond}")
         print("   " + "─" * 88)
-        for с in тело.splitlines():
-            print(f"   {с}")
+        for line_ in body.splitlines():
+            print(f"   {line_}")
 
 
-def собрать(conn, роль, раздел):
+def assemble(conn, role, section):
     """Сложить записи обратно в сплошное тело и СВЕРИТЬ с живым (критерий ④)."""
-    строки = conn.execute(
+    rows = conn.execute(
         "SELECT body FROM phoenix_records WHERE role=? AND section=? ORDER BY ord",
-        (роль, раздел)).fetchall()
-    if not строки:
-        sys.exit(f"⛔ У {роль}·{раздел} записей нет — собирать нечего")
-    собрано = "".join(r[0] for r in строки)
-    живое = conn.execute("SELECT body FROM phoenix WHERE role=? AND section=?",
-                         (роль, раздел)).fetchone()
-    живое = живое[0] if живое else ""
+        (role, section)).fetchall()
+    if not rows:
+        sys.exit(f"⛔ У {role}·{section} записей нет — собирать нечего")
+    assembled = "".join(r[0] for r in rows)
+    live_body = conn.execute("SELECT body FROM phoenix WHERE role=? AND section=?",
+                         (role, section)).fetchone()
+    live_body = live_body[0] if live_body else ""
     print("=" * 84)
-    print(f"СБОРКА {роль}·{раздел} ИЗ ЗАПИСЕЙ — встречный критерий карточки #524 ④")
+    print(f"СБОРКА {role}·{section} ИЗ ЗАПИСЕЙ — встречный критерий карточки #524 ④")
     print("=" * 84)
-    print(f"  записей .......... {len(строки)}")
-    print(f"  собрано знаков ... {len(собрано)}")
-    print(f"  живое тело ....... {len(живое)}")
-    if собрано == живое:
+    print(f"  записей .......... {len(rows)}")
+    print(f"  собрано знаков ... {len(assembled)}")
+    print(f"  живое тело ....... {len(live_body)}")
+    if assembled == live_body:
         print("  ✅ СОВПАДАЕТ ЗНАК В ЗНАК — из записей собирается ровно прежнее тело,")
         print("     значит откат к сплошному тексту возможен в любой момент")
         return 0
     print("  🔴 РАСХОЖДЕНИЕ — слои разошлись. Это не мелочь: значит одно из двух мест")
     print("     изменилось без другого, и дальше они будут спорить молча.")
-    n = min(len(собрано), len(живое))
-    i = next((k for k in range(n) if собрано[k] != живое[k]), n)
+    n = min(len(assembled), len(live_body))
+    i = next((k for k in range(n) if assembled[k] != live_body[k]), n)
     print(f"     первое различие на знаке {i}:")
-    print(f"       записи: {собрано[max(0,i-40):i+40]!r}")
-    print(f"       тело:   {живое[max(0,i-40):i+40]!r}")
+    print(f"       записи: {assembled[max(0,i-40):i+40]!r}")
+    print(f"       тело:   {live_body[max(0,i-40):i+40]!r}")
     return 1
 
 
@@ -532,108 +532,111 @@ def main() -> int:
     ap.add_argument("--db")
     ap.add_argument("--role", required=True)
     ap.add_argument("--section")
-    ap.add_argument("--разобрать", action="store_true")
-    ap.add_argument("--пересобрать", dest="пересобрать", action="store_true",
+    ap.add_argument("--parse", "--разобрать", dest="parse", action="store_true")
+    ap.add_argument("--rebuild", "--пересобрать", dest="rebuild", action="store_true",
                     help="разобрать заново после правки тела, сохранив ручные поля")
-    ap.add_argument("--показать", action="store_true")
-    ap.add_argument("--отобрать", metavar="СЛОВО")
-    ap.add_argument("--за", metavar="ГГГГ-ММ-ДД")
-    ap.add_argument("--снятые", action="store_true")
-    ap.add_argument("--без-условия", dest="без_условия", action="store_true")
-    ap.add_argument("--целиком", dest="целиком", action="store_true",
+    ap.add_argument("--show", "--показать", dest="show", action="store_true")
+    ap.add_argument("--select", "--отобрать", dest="select", metavar="СЛОВО")
+    ap.add_argument("--on-date", "--за", dest="on_date", metavar="ГГГГ-ММ-ДД")
+    ap.add_argument("--revoked", "--снятые", dest="revoked", action="store_true")
+    ap.add_argument("--no-condition", "--без-условия", dest="no_condition", action="store_true")
+    ap.add_argument("--full", "--целиком", dest="full", action="store_true",
                     help="печатать тела записей, а не список")
-    ap.add_argument("--собрать", action="store_true")
-    ap.add_argument("--снять", type=int, metavar="ID")
-    ap.add_argument("--чем", help="чем снята запись (для --снять)")
-    ap.add_argument("--поля", type=int, metavar="ID")
-    ap.add_argument("--источник")
-    ap.add_argument("--условие")
-    ap.add_argument("--предмет")
+    ap.add_argument("--assemble", "--собрать", dest="assemble", action="store_true")
+    ap.add_argument("--revoke", "--снять", dest="revoke", type=int, metavar="ID")
+    ap.add_argument("--why", "--чем", dest="why", help="чем снята запись (для --revoke)")
+    ap.add_argument("--fields", "--поля", dest="fields", type=int, metavar="ID")
+    ap.add_argument("--source", "--источник", dest="source")
+    ap.add_argument("--condition", "--условие", dest="condition")
+    ap.add_argument("--subject", "--предмет", dest="subject")
     a = ap.parse_args()
 
     db = pathlib.Path(a.db) if a.db else mezo_paths.live_db()
     conn = sqlite3.connect(str(db))
-    if not есть_таблица(conn):
+    if not has_table(conn):
+        step = mezo_paths.live_scripts(__file__) / "migrations" / "20260904-phoenix-records.py"
         sys.exit("⛔ В этой базе нет записей памяти. Накати шаг:\n"
-                 "   python C:/guts/.atlas/.mezosync/scripts/migrations/"
-                 "20260904-phoenix-records.py")
+                 f"   python {step.as_posix()}")
 
-    роль = a.role.upper()
-    из_среды = (os.environ.get("MEZO_ROLE") or "").strip().upper()
+    role = a.role.upper()
+    env_actor = (os.environ.get("MEZO_ROLE") or "").strip().upper()
     # ⚖️ Рука берётся из среды, а не из флага: запрет, обходимый забытым флагом,
     # защищает только добросовестного (оплачено на соседнем инструменте 04.09).
-    actor = из_среды
+    actor = env_actor
 
-    пишущее = a.разобрать or a.снять or a.поля
-    if пишущее:
+    # ⚡ КАРТОЧКА #600 (найдено контуром AIA, подтверждено в нашем коде): --пересобрать
+    # ЗДЕСЬ НЕ СЧИТАЛСЯ пишущей операцией и обходил проверку «роль правит СВОЮ память
+    # сама» — чужая роль могла пересобрать разбор чужого раздела, не назвавшись.
+    is_write = a.parse or a.rebuild or a.revoke or a.fields
+    if is_write:
         if not actor:
             sys.exit("⛔ НЕ ЗНАЮ, ЧЬЯ РУКА. Назовись: MEZO_ROLE=<ТВОЯ РОЛЬ>")
-        if actor != роль:
-            sys.exit(f"⛔ ОТКАЗ: {actor} правит память роли {роль}. Роль разбирает СВОЮ "
+        if actor != role:
+            sys.exit(f"⛔ ОТКАЗ: {actor} правит память роли {role}. Роль разбирает СВОЮ "
                      "память сама (слово владельца 2026-09-04 13:41 UTC).\n"
                      "   Смотреть и отбирать чужую можно: --показать · --отобрать")
 
-    if a.пересобрать:
+    if a.rebuild:
         if not a.section:
             sys.exit("⛔ нужен --section")
-        return пересобрать(conn, роль, a.section, actor)
-    if a.разобрать:
+        return rebuild(conn, role, a.section, actor)
+    if a.parse:
         if not a.section:
             sys.exit("⛔ нужен --section")
-        разобрать(conn, роль, a.section, actor)
+        parse(conn, role, a.section, actor)
         return 0
-    if a.снять is not None:
+    if a.revoke is not None:
         cur = conn.execute("UPDATE phoenix_records SET alive='revoked', "
                            "revoked_at=datetime('now'), revoked_note=? "
                            "WHERE id=? AND role=?",
-                           (a.чем or "снято рукой роли", a.снять, роль))
+                           (a.why or "снято рукой роли", a.revoke, role))
         # ⚡ НЕ ТРОНУТО ≠ СДЕЛАНО. Без этой проверки чужой или несуществующий номер даёт
         # зелёную строку и ноль изменений: молчащий отказ читается как успех, и роль
         # уходит уверенная, что запись снята. Отвечает ПОИМЁННО, чем именно не сошлось.
         if cur.rowcount == 0:
-            есть = conn.execute("SELECT role FROM phoenix_records WHERE id=?",
-                                (a.снять,)).fetchone()
+            existing = conn.execute("SELECT role FROM phoenix_records WHERE id=?",
+                                (a.revoke,)).fetchone()
             conn.rollback()
-            sys.exit(f"🔴 НЕ СНЯТО: записи #{a.снять} у роли {роль} нет — " +
-                     (f"она принадлежит роли {есть[0]}, а чужую память не правят "
-                      f"(слово владельца 2026-09-04 13:41 UTC)" if есть
+            sys.exit(f"🔴 НЕ СНЯТО: записи #{a.revoke} у роли {role} нет — " +
+                     (f"она принадлежит роли {existing[0]}, а чужую память не правят "
+                      f"(слово владельца 2026-09-04 13:41 UTC)" if existing
                       else "записи с таким номером нет вовсе"))
         conn.commit()
-        print(f"⚰️ запись #{a.снять} помечена снятой. Тело НЕ удалено: снятое читается "
+        print(f"⚰️ запись #{a.revoke} помечена снятой. Тело НЕ удалено: снятое читается "
               "отбором --снятые, потому что «чем снято» дороже самого снятия")
         return 0
-    if a.поля is not None:
-        поля, знач = [], []
-        for имя, столбец in (("источник", "source"), ("условие", "expiry_cond"),
-                             ("предмет", "subject")):
-            v = getattr(a, имя, None)
+    if a.fields is not None:
+        updates, values = [], []
+        for attr_name, column in (("source", "source"), ("condition", "expiry_cond"),
+                             ("subject", "subject")):
+            v = getattr(a, attr_name, None)
             if v:
-                поля.append(f"{столбец}=?")
-                знач.append(v)
-        if not поля:
+                updates.append(f"{column}=?")
+                values.append(v)
+        if not updates:
             sys.exit("⛔ нечего дописывать: назови --источник, --условие или --предмет")
-        знач += [a.поля, роль]
-        cur = conn.execute(f"UPDATE phoenix_records SET {', '.join(поля)} "
-                           "WHERE id=? AND role=?", знач)
+        values += [a.fields, role]
+        cur = conn.execute(f"UPDATE phoenix_records SET {', '.join(updates)} "
+                           "WHERE id=? AND role=?", values)
         if cur.rowcount == 0:  # тот же класс, что и у --снять: см. комментарий выше
-            есть = conn.execute("SELECT role FROM phoenix_records WHERE id=?",
-                                (a.поля,)).fetchone()
+            existing = conn.execute("SELECT role FROM phoenix_records WHERE id=?",
+                                (a.fields,)).fetchone()
             conn.rollback()
-            sys.exit(f"🔴 НЕ ДОПИСАНО: записи #{a.поля} у роли {роль} нет — " +
-                     (f"она принадлежит роли {есть[0]}, а чужую память не правят "
-                      f"(слово владельца 2026-09-04 13:41 UTC)" if есть
+            sys.exit(f"🔴 НЕ ДОПИСАНО: записи #{a.fields} у роли {role} нет — " +
+                     (f"она принадлежит роли {existing[0]}, а чужую память не правят "
+                      f"(слово владельца 2026-09-04 13:41 UTC)" if existing
                       else "записи с таким номером нет вовсе"))
         conn.commit()
-        print(f"✅ запись #{a.поля}: дописано полей {len(поля)}")
+        print(f"✅ запись #{a.fields}: дописано полей {len(updates)}")
         return 0
-    if a.собрать:
+    if a.assemble:
         if not a.section:
             sys.exit("⛔ нужен --section")
-        return собрать(conn, роль, a.section)
-    if a.отобрать or a.за or a.снятые or a.без_условия:
-        отобрать(conn, роль, a.отобрать, a.за, a.снятые, a.без_условия, a.целиком)
+        return assemble(conn, role, a.section)
+    if a.select or a.on_date or a.revoked or a.no_condition:
+        select(conn, role, a.select, a.on_date, a.revoked, a.no_condition, a.full)
         return 0
-    показать(conn, роль)
+    show(conn, role)
     return 0
 
 

@@ -109,15 +109,50 @@ def cmd_spend(a):
 
 
 def cmd_revoke(a):
+    """Отозвать право — только роль-владелец записи либо координатор ЯВНО (--foreign).
+
+    ⚡ ГРАНИЦА ЗАВЕДЕНА 2026-09-13 (найдено контуром AIA, подтверждено в нашем коде):
+    ДО этой правки отозвать чужое право могла ЛЮБАЯ роль, назвав чужой --id, — отзыв не
+    проверял ни владельца записи, ни чью руку он несёт. Тот же класс, что у amend: правка
+    (здесь — отзыв) без руки неотличима от того, что её не было вовсе. `--by` обязателен
+    ТОЙ ЖЕ фразой отказа, что у amend — довод один и тот же для обеих подкоманд.
+    """
     if not a.why:
         sys.exit("⛔ отзыв без причины — это пропажа. Нужен --why: отозванное право спрашивают "
                  "именно тогда, когда что-то пошло не так.")
+    if not a.by:
+        sys.exit("⛔ нужен --by: кто правит. Правка без руки неотличима от того, что запись "
+                 "всегда была такой.")
     conn = connect(a.db)
-    n = conn.execute("UPDATE role_rights SET revoked_at = datetime('now'), revoked_why = ? "
-                     "WHERE id=? AND revoked_at IS NULL", (a.why, a.id)).rowcount
+    row = conn.execute("SELECT role, revoked_at FROM role_rights WHERE id=?", (a.id,)).fetchone()
+    if not row:
+        conn.close()
+        sys.exit(f"⛔ права #{a.id} нет. Ничего не изменено.")
+    owner_role, revoked_at = row
+    by = a.by.upper()
+    # ⛔ ОТЗЫВАТЬ ВПРАВЕ РОЛЬ-ВЛАДЕЛЕЦ ЗАПИСИ ЛИБО КООРДИНАТОР ЯВНО (--foreign).
+    # Владелец («ALL» включительно — общее право тоже не гасит первая попавшаяся роль)
+    # отзывает СВОЁ без вопросов; координатор — чужое, но только назвав это явно, а не
+    # молча по факту роли «COORD»: молчаливое право координатора гасить что угодно —
+    # ровно та дыра, которую находка AIA и назвала.
+    if owner_role.upper() != by:
+        if by != "COORD":
+            conn.close()
+            sys.exit(f"⛔ ОТКАЗ: право #{a.id} принадлежит роли {owner_role}, а отозвать "
+                     f"просит {by}. Отзывать вправе роль-владелец записи либо координатор "
+                     f"ЯВНО (--foreign). Чужое право не гасят молча.")
+        if not a.foreign:
+            conn.close()
+            sys.exit(f"⛔ ОТКАЗ: право #{a.id} принадлежит роли {owner_role}, не координатору. "
+                     f"Координатор отзывает ЧУЖОЕ право только ЯВНО — с флагом --foreign. "
+                     f"Без него отзыв неотличим от ошибки в --id.")
+    n = conn.execute("UPDATE role_rights SET revoked_at = datetime('now'), revoked_why = ?, "
+                     "revoked_by = ? WHERE id=? AND revoked_at IS NULL",
+                     (a.why, by, a.id)).rowcount
     conn.commit()
     conn.close()
-    print(f"✅ право #{a.id} отозвано" if n else f"⚠️ право #{a.id} не найдено или уже отозвано")
+    print(f"✅ право #{a.id} отозвано ролью {by}" if n
+          else f"⚠️ право #{a.id} не найдено или уже отозвано")
     return 0 if n else 1
 
 
@@ -286,7 +321,10 @@ def main() -> int:
 
     r = sub.add_parser("revoke", help="отозвать право (не удалить)")
     r.add_argument("--id", type=int, required=True)
+    r.add_argument("--by", help="КТО отзывает: роль-владелец записи либо координатор")
     r.add_argument("--why")
+    r.add_argument("--foreign", action="store_true",
+                   help="координатор отзывает ЧУЖОЕ право — явно, не молча по факту роли")
     r.set_defaults(fn=cmd_revoke)
 
     am = sub.add_parser("amend", help="исправить ФАКТИЧЕСКУЮ ошибку в записи "

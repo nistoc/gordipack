@@ -22,32 +22,55 @@ from glob import glob
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from mezo_paths import resolve_db, live_scripts  # noqa: E402
+from mezo_paths import resolve_db, live_scripts, container_root  # noqa: E402
 
 S = live_scripts().as_posix()
-ПОРОГ = 20000
+# vnext-tools лежит РЯДОМ с .mezosync, не внутри него (раскладка по образцу find-phoenix.py:
+# CONTAINER_ROOT / "vnext-tools" / "…") — вычислено от контейнера, а не литералом машины.
+V = (container_root() / "vnext-tools").as_posix()
 
 
-def числа(conn, role):
+# 🪤 13.09 (перед обновлением tapas): у СОБРАННОГО контура звенья образца лежат РЯДОМ со
+# скриптами, у нашего — в vnext-tools; путь только от контейнера печатал бы потребителю
+# несуществующий вызов (тот же класс, что находка AIA №6 и tool() в guard-all.py). Ищем в тех
+# же четырёх местах; не нашли — называем ожидаемое место и откуда взять, а не молчим.
+def _link_path(name):
+    scripts = live_scripts()
+    candidates = [scripts / name,
+                  scripts.parent.parent / "vnext-tools" / name,
+                  scripts.parent / "vnext" / "prototype" / name,
+                  scripts.parent.parent / "vnext" / "prototype" / name]
+    found = next((c for c in candidates if c.exists()), None)
+    return (found or candidates[0]).as_posix(), found is not None
+
+
+SIGNAL_TOOL, SIGNAL_TOOL_FOUND = _link_path("signal-templates.py")
+SIGNAL_NOTE = "" if SIGNAL_TOOL_FOUND else (
+    "\n   ⚠️ инструмента реестра адресов в этом контуре НЕТ — возьми signal-templates.py из пакета"
+    " (vnext/prototype) и положи рядом со скриптами; до того адрес не записывается")
+THRESHOLD = 20000
+
+
+def counts(conn, role):
     cur = conn.execute("SELECT last_read_id FROM read_cursors WHERE reader_role=?",
                        (role,)).fetchone()
     cursor = cur[0] if cur else 0
-    долг = conn.execute("SELECT COUNT(*) FROM messages WHERE id>? AND writer_role<>?",
+    backlog_debt = conn.execute("SELECT COUNT(*) FROM messages WHERE id>? AND writer_role<>?",
                         (cursor, role)).fetchone()[0]
-    раздуто = conn.execute(
+    bloated = conn.execute(
         "SELECT section, LENGTH(body) FROM phoenix WHERE role=? AND LENGTH(body)>? "
-        "ORDER BY 2 DESC", (role, ПОРОГ)).fetchall()
-    пулы = [r[0] for r in conn.execute("SELECT track_id FROM tracks WHERE status='active'")]
-    карточки = []
-    if пулы:
-        ph = ",".join("?" * len(пулы))
-        карточки = conn.execute(
+        "ORDER BY 2 DESC", (role, THRESHOLD)).fetchall()
+    pools = [r[0] for r in conn.execute("SELECT track_id FROM tracks WHERE status='active'")]
+    cards = []
+    if pools:
+        ph = ",".join("?" * len(pools))
+        cards = conn.execute(
             f"SELECT id, title FROM backlog WHERE role=? AND parent_track IN ({ph}) "
             f"AND status IN ('open','in_progress','blocked','awaiting_word','in_review') "
-            f"ORDER BY id", (role, *пулы)).fetchall()
-    правило = conn.execute(
+            f"ORDER BY id", (role, *pools)).fetchall()
+    rule_row = conn.execute(
         "SELECT status FROM rules WHERE rule_key='sync-alarm-in-chat'").fetchone()
-    return долг, раздуто, карточки, (правило and правило[0] == "active")
+    return backlog_debt, bloated, cards, (rule_row and rule_row[0] == "active")
 
 
 # ═══ Карточка #463 (заявка @COORD, слово владельца 30.08 10:06 UTC «починить выбор файла
@@ -74,25 +97,25 @@ def числа(conn, role):
 # Поймано формой @RCC (записка #4457): натравить мерку на случай, ответ по которому
 # знаешь наизусть, — прогноз «снятых два» не сошёлся, вышло три, и третий был живым.
 # ⇒ Годится только САМОРЕФЕРЕНЦИЯ: текст запрещает исполнять ИМЕННО СЕБЯ.
-СНЯТ = ("не исполнять текст ниже", "этот файл не исполняется",
+RETIRED_MARKERS = ("не исполнять текст ниже", "этот файл не исполняется",
         "не исполнять текст ниже", "не исполнять — текст ниже")
-ЖИВОЙ_О_СЕБЕ = ("этот текст живой", "этот файл — живой наказ", "этот файл - живой наказ")
-ГОЛОВА = 4000        # знаков от начала: и заголовок описания, и первые абзацы
+LIVE_ABOUT_SELF = ("этот текст живой", "этот файл — живой наказ", "этот файл - живой наказ")
+HEAD_CHARS = 4000        # знаков от начала: и заголовок описания, и первые абзацы
 
 
-def _разобрать(путь):
+def _parse_file(path):
     """Живой файл или пометка о снятии. Возвращает (снят, почему)."""
     try:
-        with open(путь, encoding="utf-8", errors="replace") as f:
-            голова = f.read(ГОЛОВА).lower()
+        with open(path, encoding="utf-8", errors="replace") as f:
+            head_text = f.read(HEAD_CHARS).lower()
     except OSError as e:
         return None, f"прочитать не удалось: {e}"      # третий исход, не «живой»
-    себя_живым = next((м for м in ЖИВОЙ_О_СЕБЕ if м in голова), None)
-    if себя_живым:
-        return False, f"объявляет себя живым: «{себя_живым}»"
-    сам_запрет = next((м for м in СНЯТ if м in голова), None)
-    if сам_запрет:
-        return True, f"запрещает себя исполнять: «{сам_запрет}»"
+    self_alive_marker = next((marker for marker in LIVE_ABOUT_SELF if marker in head_text), None)
+    if self_alive_marker:
+        return False, f"объявляет себя живым: «{self_alive_marker}»"
+    self_retired_marker = next((marker for marker in RETIRED_MARKERS if marker in head_text), None)
+    if self_retired_marker:
+        return True, f"запрещает себя исполнять: «{self_retired_marker}»"
     return False, "признаков снятия нет"
 
 
@@ -102,48 +125,48 @@ def _разобрать(путь):
 PROMPTS_ROOT_ENV = "MEZO_PROMPTS_ROOT"
 
 
-def _корень_поручений():
+def _prompts_root():
     return os.environ.get(PROMPTS_ROOT_ENV) or os.path.join(
         os.path.expanduser("~"), ".claude", "scheduled-tasks")
 
 
-def наказ_файлы(role):
+def mandate_files(role):
     """ВСЕ совпавшие каталоги с разбором каждого. Выбор — отдельно, чтобы он был виден."""
-    пути = sorted(glob(os.path.join(_корень_поручений(),
+    paths = sorted(glob(os.path.join(_prompts_root(),
                                     f"*{role.lower()}*", "SKILL.md")))
-    найдено = []
-    for п in пути:
-        снят, почему = _разобрать(п)
-        найдено.append({"путь": п.replace("\\", "/"), "снят": снят, "почему": почему,
-                        "правлен": os.path.getmtime(п) if os.path.exists(п) else 0})
-    return найдено
+    found = []
+    for path in paths:
+        retired, why = _parse_file(path)
+        found.append({"путь": path.replace("\\", "/"), "снят": retired, "почему": why,
+                        "правлен": os.path.getmtime(path) if os.path.exists(path) else 0})
+    return found
 
 
-def выбрать_наказ(найдено):
+def choose_mandate(found):
     """(выбранный или None, строки отчёта). Отчёт печатается ВСЕГДА при неоднозначности.
 
     ⛔ Ноль совпадений и «все совпавшие — пометки о снятии» — РАЗНЫЕ исходы, и оба отказ:
     прежде оба выглядели как исправная работа (печаталась заглушка «<путь к наказ-файлу>»).
     """
-    отчёт = []
-    живые = [н for н in найдено if н["снят"] is False]
-    снятые = [н for н in найдено if н["снят"] is True]
-    нечитаемые = [н for н in найдено if н["снят"] is None]
-    if len(найдено) > 1 or снятые or нечитаемые:
-        отчёт.append(f"📁 совпавших каталогов: {len(найдено)} — показываю ВСЕ, "
+    report = []
+    alive_entries = [entry for entry in found if entry["снят"] is False]
+    retired_entries = [entry for entry in found if entry["снят"] is True]
+    unreadable_entries = [entry for entry in found if entry["снят"] is None]
+    if len(found) > 1 or retired_entries or unreadable_entries:
+        report.append(f"📁 совпавших каталогов: {len(found)} — показываю ВСЕ, "
                      f"выбор виден строкой ниже")
-        for н in найдено:
-            знак = "⚰️ СНЯТ" if н["снят"] else ("⚠️ НЕЧИТАЕМ" if н["снят"] is None else "✅ живой")
-            отчёт.append(f"   {знак}  {н['путь']}  ({н['почему']})")
-    if not найдено:
-        отчёт.append("⛔ файла-поручения НЕТ НИ ОДНОГО — это ОТКАЗ, а не «пустой наказ». "
+        for entry in found:
+            marker_icon = "⚰️ СНЯТ" if entry["снят"] else ("⚠️ НЕЧИТАЕМ" if entry["снят"] is None else "✅ живой")
+            report.append(f"   {marker_icon}  {entry['путь']}  ({entry['почему']})")
+    if not found:
+        report.append("⛔ файла-поручения НЕТ НИ ОДНОГО — это ОТКАЗ, а не «пустой наказ». "
                      "Прежде здесь печаталась заглушка, и отсутствие файла было "
                      "неотличимо от исправной работы (замер @COORD, карточка #463)")
-        return None, отчёт
-    if not живые:
-        отчёт.append("⛔ ВСЕ совпавшие каталоги — пометки о снятии: исполнять нечего. "
+        return None, report
+    if not alive_entries:
+        report.append("⛔ ВСЕ совпавшие каталоги — пометки о снятии: исполнять нечего. "
                      "Это ОТДЕЛЬНЫЙ исход, он не то же, что «файла нет»")
-        return None, отчёт
+        return None, report
     # 🩸 БОЛЬШЕ ОДНОГО ЖИВОГО — ОТКАЗ, А НЕ ДОГАДКА. Первая редакция брала последний
     # правленый и печатала предупреждение. Живой прогон 30.08 12:17 UTC показал, чего это
     # стои́т: у OPSSRE два живых файла (сверка каждые 30 минут и РАЗОВОЕ напоминание
@@ -151,17 +174,17 @@ def выбрать_наказ(найдено):
     # на ошибку: было «выбирает по коду символа», стало «выбирает по времени правки» —
     # а время правки лжёт не реже (копия сохраняет время старого файла).
     # ⇒ Неоднозначность — ИСХОД, а не помеха. Её называют, а не решают за человека.
-    if len(живые) > 1:
-        отчёт.append(f"⛔ ЖИВЫХ ФАЙЛОВ БОЛЬШЕ ОДНОГО ({len(живые)}) — выбирать за тебя "
+    if len(alive_entries) > 1:
+        report.append(f"⛔ ЖИВЫХ ФАЙЛОВ БОЛЬШЕ ОДНОГО ({len(alive_entries)}) — выбирать за тебя "
                      f"не буду: у них разное назначение, и машине оно не видно")
-        for н in живые:
-            отчёт.append(f"   · {н['путь']}")
-        отчёт.append("   👉 назови нужный доводом: --prompt-file <путь>")
-        return None, отчёт
-    выбран = живые[0]
-    if len(найдено) > 1 or снятые or нечитаемые:
-        отчёт.append(f"👉 ВЫБРАН: {выбран['путь']}")
-    return выбран["путь"], отчёт
+        for entry in alive_entries:
+            report.append(f"   · {entry['путь']}")
+        report.append("   👉 назови нужный доводом: --prompt-file <путь>")
+        return None, report
+    chosen = alive_entries[0]
+    if len(found) > 1 or retired_entries or unreadable_entries:
+        report.append(f"👉 ВЫБРАН: {chosen['путь']}")
+    return chosen["путь"], report
 
 
 def main():
@@ -180,20 +203,20 @@ def main():
     if not db.exists():
         sys.exit(f"⛔ ПАРА НЕ СОБРАНА: базы нет ({db}) — это не «пустые промпты»")
     conn = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
-    долг, раздуто, карточки, ритм_жив = числа(conn, role)
+    backlog_debt, bloated, cards, rhythm_active = counts(conn, role)
     conn.close()
     if a.prompt_file:
         # Названный рукой путь сильнее любого отбора — но он ОБЯЗАН существовать:
         # молча принять несуществующий значило бы вернуть ту же заглушку другим путём.
-        файл, отчёт_о_файле = a.prompt_file.replace("\\", "/"), [
+        mandate_file, file_report = a.prompt_file.replace("\\", "/"), [
             f"📌 файл-поручение НАЗВАН ЯВНО доводом: {a.prompt_file}"]
         if not os.path.exists(a.prompt_file):
             sys.exit(f"⛔ ПАРА НЕ СОБРАНА: названного файла нет на диске ({a.prompt_file})")
     else:
-        файл, отчёт_о_файле = выбрать_наказ(наказ_файлы(role))
-    for строка in отчёт_о_файле:
-        print(строка, file=sys.stderr)
-    if файл is None:
+        mandate_file, file_report = choose_mandate(mandate_files(role))
+    for line in file_report:
+        print(line, file=sys.stderr)
+    if mandate_file is None:
         if not a.no_prompt_file:
             sys.exit(
                 "⛔ ПАРА НЕ СОБРАНА: у роли нет исполнимого файла-поручения (см. выше).\n"
@@ -201,16 +224,16 @@ def main():
                 "   и пересозданная роль получала текст без поручения — молча.\n"
                 "   Если файла и не должно быть (ритм ведёт только разговор), скажи это\n"
                 "   явно: повтори вызов с --no-prompt-file.")
-        файл = "<файла-поручения у роли НЕТ — сказано явно доводом --no-prompt-file>"
+        mandate_file = "<файла-поручения у роли НЕТ — сказано явно доводом --no-prompt-file>"
 
-    сжать = "".join(
-        f"   ⚠️ Раздел {s} раздут: {n} знаков при пороге {ПОРОГ} — СОЖМИ ниже порога\n"
+    shrink_block = "".join(
+        f"   ⚠️ Раздел {s} раздут: {n} знаков при пороге {THRESHOLD} — СОЖМИ ниже порога\n"
         f"   (история памяти хранит прежнее целиком), сохраняй с --allow-shrink;\n"
         f"   приказы и права сверяй ПОИМЁННО, не глазами по объёму.\n"
-        for s, n in раздуто) or "   (раздутых разделов нет — сохраняй как есть)\n"
-    дела = "".join(f"   карточка #{i} — {t[:70]}\n" for i, t in карточки) \
+        for s, n in bloated) or "   (раздутых разделов нет — сохраняй как есть)\n"
+    tasks_block = "".join(f"   карточка #{i} — {t[:70]}\n" for i, t in cards) \
         or "   (карточек пула на роли нет — первое дело возьми из ленты и стартовой сводки)\n"
-    if not ритм_жив:
+    if not rhythm_active:
         print("⚠️ правило sync-alarm-in-chat не активно — блок ритма в промпте открытия "
               "проверь рукой, стандарту не верь")
 
@@ -222,9 +245,9 @@ def main():
 1. Сохрани память — все разделы свежими. Сначала перечитай СВОЮ последнюю записку
    в ленте (память отстаёт от неё), затем обнови отставшие разделы:
    python {S}/save-phoenix.py --role {role} --section <раздел> --file <файл>
-{сжать}2. Прощальная записка в ленту: что сделано, что открыто, где след:
+{shrink_block}2. Прощальная записка в ленту: что сделано, что открыто, где след:
    python {S}/write-message.py --role {role} --file <нота.md>
-3. Долг ленты (~{долг} записок) НЕ разбирай — его примет новый чат.
+3. Долг ленты (~{backlog_debt} записок) НЕ разбирай — его примет новый чат.
 После записки — стоп: не бери карточки, не правь файлы.
 
 ═══ ПРОМПТ ОТКРЫТИЯ (вставить в НОВЫЙ чат {role}) ═══
@@ -240,16 +263,23 @@ def main():
    python {S}/role-brief.py --role {role}
 Шаг 2 — память: python {S}/read-phoenix.py --role {role}
    ⚠️ Память сохранена ДО последней записки роли — первой прочитай СВОЮ последнюю записку.
-Шаг 3 — лента (долг ~{долг} записок): читай ЦЕЛИКОМ, подтверждай --ack; длинно —
+Шаг 3 — лента (долг ~{backlog_debt} записок): читай ЦЕЛИКОМ, подтверждай --ack; длинно —
    сужай ЗАПРОС (--limit порциями), не вывод:
    python {S}/read-messages.py --role {role}
 Шаг 4 — ритм (правило свода sync-alarm-in-chat): заведи будильник ВНУТРИ этого чата
-   (минуты возьми не :00 и не :30) с промптом «исполни наказ-файл {файл}».
+   (минуты возьми не :00 и не :30) с промптом «исполни наказ-файл {mandate_file}».
    Период — именное слово владельца твоей роли; без слова — 30 минут. Задачу-расписание
    вне чата НЕ заводи. Правило целиком:
    python {S}/set-rule.py --key sync-alarm-in-chat --show
+Шаг 4-бис — адрес сессии, КАЖДОЕ пробуждение (правило rhythm-survives-rebirth п.①: имя
+   сессии принадлежит процессу, возобновлённый чат получает НОВОЕ — прежняя запись
+   реестра указывает в пустоту). Узнай СТОЙКИЙ идентификатор вызовом приложения
+   get_session("self") (поле sessionId вида local_…: он переживает возобновление, в
+   отличие от имени) и короткое имя из ListAgents («This session is <имя [код]>»),
+   запиши ОБА:
+   python {SIGNAL_TOOL} --role {role} --set-address "<имя [код]>" --session-id "<sessionId>"{SIGNAL_NOTE}
 Шаг 5 — первое дело (карточки активного пула первыми, взятие — с живым объявлением):
-{дела}Правило ответов владельцу — перед КАЖДЫМ ответом:
+{tasks_block}Правило ответов владельцу — перед КАЖДЫМ ответом:
    python {S}/set-rule.py --key owner-reply-format --show""")
 
 

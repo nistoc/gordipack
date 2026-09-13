@@ -284,7 +284,7 @@ def _section_is_stale(conn, role, section):
 def _rebuild_command(conn, role, section) -> str:
     count = conn.execute("SELECT COUNT(*) FROM phoenix_records WHERE role=? AND section=?",
                          (role, section)).fetchone()[0]
-    flag = "--разобрать" if count == 0 else "--пересобрать"
+    flag = "--parse" if count == 0 else "--rebuild"
     memory_records = (CONTAINER_ROOT / "vnext-tools" / "memory-records.py").as_posix()
     return f"python {memory_records} --role {role} --section {section} {flag}"
 

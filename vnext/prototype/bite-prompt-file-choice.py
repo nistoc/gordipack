@@ -166,7 +166,7 @@ import importlib.util  # noqa: E402
 spec = importlib.util.spec_from_file_location("rp", str(ИСПЫТУЕМЫЙ))
 rp = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(rp)
-снят, почему = rp._разобрать(str(Path(stand) / "нет-такого-файла.md"))
+снят, почему = rp._parse_file(str(Path(stand) / "нет-такого-файла.md"))
 case("⑨ нечитаемый файл — ТРЕТИЙ исход, не «живой» и не «снят»",
      снят is None and "прочитать не удалось" in почему, f"ответ: {снят!r} · {почему[:60]}")
 

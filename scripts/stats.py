@@ -102,10 +102,10 @@ def collect(conn, since_min):
         "SELECT COUNT(*) FROM messages_all WHERE tags LIKE '%\"DWERR\"%' AND (resolved IS NULL OR resolved=0)") or 0
     dwerr_total = _q1(conn, "SELECT COUNT(*) FROM messages_all WHERE tags LIKE '%\"DWERR\"%'") or 0
 
-    # phoenix-слепки
+    # phoenix — сохранённая память ролей
     phoenix_cnt = _q1(conn, "SELECT COUNT(*) FROM phoenix") or 0
 
-    # курсоры чтения — отставание ролей
+    # отметки прочитанного — отставание ролей
     cursors = {}
     try:
         max_id = _q1(conn, "SELECT MAX(id) FROM messages") or 0
@@ -119,7 +119,7 @@ def collect(conn, since_min):
         # ЛЕЧИМ КОРЕНЬ, А НЕ ДАННЫЕ (его же довод): удалить дубли — дисциплина, они
         # вернутся при следующей инициализации и метрика снова тихо соврёт. Агрегируем
         # в SQL по регистр-независимому ключу и берём МАКСИМУМ: ноль-дубль проигрывает
-        # живому курсору, а не затирает его.
+        # живой строке, а не затирает её.
         for role, lr in conn.execute(
                 "SELECT UPPER(reader_role), MAX(last_read_id) FROM read_cursors "
                 "GROUP BY UPPER(reader_role) ORDER BY 1"):

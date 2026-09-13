@@ -65,6 +65,10 @@ def build():
     con = sqlite3.connect(db)
     ddl = DDL.split('DDL = """')[1].split('"""')[0]
     con.executescript(ddl)
+    # ⚡ AIA-B (карточка B, 2026-09-13): revoke пишет revoked_by — колонка добавлена шагом
+    # 20260913-role-rights-revoked-by.py ПОВЕРХ базового DDL 009-role-rights, тем же приёмом,
+    # каким сама живая база получает шаг схемы отдельным ходом.
+    con.execute("ALTER TABLE role_rights ADD COLUMN revoked_by TEXT")
     con.commit()
     con.close()
     return db
@@ -138,11 +142,55 @@ def main() -> int:
                "отозванное право спрашивают именно тогда, когда что-то пошло не так", differ=True)
 
     live_before, all_before = rows(db), rows(db, live=False)
-    out, code = run(db, "revoke", "--id", "1", "--why", "слово владельца отозвано 09.08")
+    # ⚡ AIA-B: revoke теперь требует --by (владелец записи #1 — PROTO, отзывает сам себя).
+    out, code = run(db, "revoke", "--id", "1", "--why", "слово владельца отозвано 09.08",
+                    "--by", "PROTO")
     ok &= case("⑧ отозванное ушло из живых, но НЕ удалено",
                code == 0 and rows(db) == live_before - 1 and rows(db, live=False) == all_before,
                f"живых {live_before} → {rows(db)} · всего {all_before} → {rows(db, live=False)}",
                differ=True)
+
+    # ═══ AIA-B (карточка B, слово владельца 2026-09-13 10:07 UTC): revoke — рука ОБЯЗАТЕЛЬНА,
+    # отзывает роль-владелец либо координатор ЯВНО (--foreign). Найдено контуром AIA:
+    # ДО правки отозвать чужое право могла ЛЮБАЯ роль, назвав чужой --id.
+    run(db, "grant", "--role", "ING", "--right", "deploy", "--kind", "standing",
+        "--scope", "stage", *FULL)
+    row_id = None
+    out_list, _ = run(db, "list", "--all")
+    for line in out_list.splitlines():
+        if "ING" in line and "deploy" in line:
+            row_id = int(line.split("#")[1].split()[0])
+            break
+
+    live_before_b = rows(db)
+    out, code = run(db, "revoke", "--id", str(row_id), "--why", "проба AIA-B")
+    ok &= case("⑮ revoke БЕЗ --by — ОТКАЗ той же фразой, что у amend",
+               code != 0 and "нужен --by" in out and rows(db) == live_before_b,
+               "рука обязательна: отзыв без неё неотличим от того, что запись всегда "
+               "была такой (право за ING осталось живым)", differ=True)
+
+    out, code = run(db, "revoke", "--id", str(row_id), "--why", "проба AIA-B", "--by", "STUD")
+    ok &= case("⑯ ЧУЖАЯ роль (не владелец, не COORD) не отзывает — ОТКАЗ",
+               code != 0 and "принадлежит роли ING" in out and rows(db) == live_before_b,
+               "владелец записи — ING, отозвать просит STUD, не координатор", differ=True)
+
+    out, code = run(db, "revoke", "--id", str(row_id), "--why", "проба AIA-B", "--by", "COORD")
+    ok &= case("⑰ COORD БЕЗ --foreign не отзывает чужое право молча",
+               code != 0 and "--foreign" in out and "не координатору" in out
+               and rows(db) == live_before_b,
+               "координатор без явного --foreign не гасит чужое право по факту роли",
+               differ=True)
+
+    out, code = run(db, "revoke", "--id", str(row_id), "--why", "проба AIA-B", "--by", "COORD",
+                    "--foreign")
+    # revoked_by в list --all не печатается — сверяем полем напрямую
+    con_chk = sqlite3.connect(db)
+    revoked_by_val = con_chk.execute("SELECT revoked_by FROM role_rights WHERE id=?",
+                                     (row_id,)).fetchone()[0]
+    con_chk.close()
+    ok &= case("⑱ COORD С --foreign отзывает ЧУЖОЕ право, revoked_by записан",
+               code == 0 and revoked_by_val == "COORD",
+               f"код {code} · revoked_by = {revoked_by_val!r}", differ=True)
 
     run(db, "grant", "--role", "TAXO", "--right", "seed", "--kind", "standing",
         "--scope", "phd1", *FULL)

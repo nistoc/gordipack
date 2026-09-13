@@ -58,6 +58,20 @@ KEEP_VERSIONS = 10      # сколько версий секции держим 
 # Число, переписанное в другой инструмент, живёт своей жизнью (класс @RCC 04.09 20:56
 # «правка идёт туда, куда смотрели»): разойдись они — роль получит два разных порога,
 # и ни одна проверка этого не покрасит.
+# 🪤 13.09 (перед обновлением tapas): у НАШЕЙ раскладки соседи лежат в <контейнер>/vnext-tools,
+# у СОБРАННОГО из пакета контура — рядом со скриптами. Путь только «три уровня вверх» там
+# молча превращал порог, подсказку разгрузки и пересборку записей в «файла нет» (класс
+# находки AIA №6). Ищем в тех же четырёх местах, что tool() в guard-all.py; наша раскладка
+# первой — у нас поведение не меняется. Не нашли — первый кандидат: печать назовёт путь.
+def vnext_tool(name):
+    here = Path(__file__).resolve().parent
+    candidates = [here.parent.parent / "vnext-tools" / name,
+                  here / name,
+                  here.parent / "vnext" / "prototype" / name,
+                  here.parent.parent / "vnext" / "prototype" / name]
+    return next((c for c in candidates if c.exists()), candidates[0])
+
+
 def volume_limit():
     """→ (порог, имя источника) либо (None, причина).
 
@@ -66,8 +80,7 @@ def volume_limit():
     `read-failure-blocks-write`: иначе поломка соседнего файла даёт вечное молчание,
     неотличимое от «уложился», то есть ровно ту беду, ради которой задача заведена.
     """
-    file = (Path(__file__).resolve().parent.parent.parent
-            / "vnext-tools" / "guard-phoenix-volume.py")
+    file = vnext_tool("guard-phoenix-volume.py")
     if not file.exists():
         return None, f"файла нет: {file}"
     try:
@@ -116,8 +129,7 @@ def say_volume_threshold(now, role, section):
         # литерал печатает несуществующий путь и роль СНОВА получает «can't open file»,
         # с другой причиной. ⇒ путь вычисляется ТЕМ ЖЕ приёмом, каким volume_limit()
         # находит guard-phoenix-volume.py — три уровня вверх от расположения ЭТОГО файла.
-        archive = (Path(__file__).resolve().parent.parent.parent
-                 / "vnext-tools" / "memory-archive.py")
+        archive = vnext_tool("memory-archive.py")
         print(f"   🔴 СВЕРХ ПОРОГА ОБЪЁМА: {now} знаков при пороге {limit}"
               f" (+{now - limit}, источник порога — {source})."
               f" ⚖️ Это ДОЛГ, а не отказ: ничего не остановлено и не откачено,"
@@ -792,8 +804,7 @@ def rebuild_records(db_path, role, section, actor):
     # в say_volume_threshold() несла именно эту болезнь литералом «<КОНТУР>/...» — здесь
     # та же ловушка не заводится вовсе, «пересобери рукой» ниже зовёт {файл}, а не второй,
     # переписанный вручную путь.
-    file = (Path(__file__).resolve().parent.parent.parent
-            / "vnext-tools" / "memory-records.py")
+    file = vnext_tool("memory-records.py")
     if not file.exists():
         print(f"⚠️ записи раздела НЕ пересобраны: файла нет: {file} — сохранение прошло, "
               f"пересобери рукой (когда файл появится): python {file.as_posix()} "
@@ -812,7 +823,7 @@ def rebuild_records(db_path, role, section, actor):
         spec.loader.exec_module(mr)
 
         conn2 = sqlite3.connect(str(db_path))
-        if not mr.есть_таблица(conn2):
+        if not mr.has_table(conn2):
             print("ℹ️ слой записей памяти не заведён (шаг схемы 20260904-phoenix-records)"
                   " — пересборка пропущена")
             return
@@ -823,9 +834,9 @@ def rebuild_records(db_path, role, section, actor):
         first_parse = (prior_count == 0)
         with contextlib.redirect_stdout(buffer):
             if prior_count:
-                outcome = mr.пересобрать(conn2, role, section, actor)
+                outcome = mr.rebuild(conn2, role, section, actor)
             else:
-                mr.разобрать(conn2, role, section, actor)
+                mr.parse(conn2, role, section, actor)
     except (Exception, SystemExit) as e:
         print(f"⚠️ записи раздела НЕ пересобраны: {_one_line(e)} — сохранение прошло, "
               f"пересобери рукой: python {file.as_posix()} "

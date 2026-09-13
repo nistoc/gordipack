@@ -54,28 +54,40 @@ from schema_journal import record_step, verify  # noqa: E402
 VERSION = "20260904-rule-skill-delivery"
 
 
-def состав_пакетов(container):
+def package_rule_keys(container):
     """Ключи правил, названные в пакетах сборщика. ИМПОРТОМ, не копией.
 
     ⚖️ Если сборщика нет или он не читается — шаг НЕ ДОГАДЫВАЕТСЯ и не проставляет
     ничего: пустой состав молча оставил бы все правила «не решёнными», и роль увидела
     бы 64 красных вместо 27, не понимая почему. Отказ говорит, чего не хватило.
     """
-    tools = os.path.join(container, 'vnext-tools')
+    # 🪤 13.09 (перед обновлением tapas): у контура, собранного из пакета, звенья образца лежат
+    # РЯДОМ СО СКРИПТАМИ, а не в <контейнер>/vnext-tools — шаг отказывал, и веха v6 не
+    # достигалась штатным прогоном (замер помощника на свежем контуре). Ищем в тех же четырёх
+    # местах, что tool() в guard-all.py. Имя — в ДВОЙНЫХ кавычках намеренно: по ним сборка
+    # контура (init-group.py) находит звенья, которые надо положить потребителю.
+    name = "rules-to-skills.py"
+    mezosync_dir = os.path.dirname(SCRIPTS)
+    places = [os.path.join(container, 'vnext-tools'),
+             SCRIPTS,
+             os.path.join(mezosync_dir, 'vnext', 'prototype'),
+             os.path.join(container, 'vnext', 'prototype')]
+    tools = next((m for m in places if os.path.isfile(os.path.join(m, name))), None)
+    if tools is None:
+        return None, ('сборщика нет ни в одном из мест: ' + ' · '.join(places)
+                      + f'. Возьми {name} из пакета (vnext/prototype) и положи рядом со скриптами')
     if tools not in sys.path:
         sys.path.insert(0, tools)
     try:
         import importlib.util
-        путь = os.path.join(tools, 'rules-to-skills.py')
-        if not os.path.isfile(путь):
-            return None, f'сборщика нет по пути {путь}'
-        spec = importlib.util.spec_from_file_location('rules_to_skills', путь)
+        path = os.path.join(tools, name)
+        spec = importlib.util.spec_from_file_location('rules_to_skills', path)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        ключи = set()
-        for имя, пакет in mod.ПАКЕТЫ.items():
-            ключи.update(пакет['правила'])
-        return ключи, None
+        keys = set()
+        for pkg_name, package in mod.ПАКЕТЫ.items():
+            keys.update(package['правила'])
+        return keys, None
     except Exception as e:                                   # noqa: BLE001
         return None, f'сборщик не прочитан: {type(e).__name__}: {e}'
 
@@ -103,32 +115,32 @@ def main():
 
     # ── состав пакетов: ИМПОРТОМ из сборщика ──
     container = os.path.dirname(os.path.dirname(SCRIPTS))
-    в_пакетах, почему = состав_пакетов(container)
-    if в_пакетах is None:
-        sys.exit(f'⛔ НЕ ЗАПУСТИЛСЯ: состав пакетов взять неоткуда — {почему}.\n'
+    in_packages, why_not = package_rule_keys(container)
+    if in_packages is None:
+        sys.exit(f'⛔ НЕ ЗАПУСТИЛСЯ: состав пакетов взять неоткуда — {why_not}.\n'
                  '   Шаг НЕ проставляет решения наугад: пустой состав оставил бы все\n'
                  '   правила «не решёнными» и дал бы красное, которого никто не поймёт.')
 
-    живые = {r[0] for r in conn.execute("SELECT rule_key FROM rules WHERE status='active'")}
-    все = {r[0] for r in conn.execute("SELECT rule_key FROM rules")}
-    в_пакетах_живых = в_пакетах & живые
-    призраки = в_пакетах - все
-    снятые_в_пакетах = (в_пакетах & все) - живые
-    не_решено = живые - в_пакетах
+    active = {r[0] for r in conn.execute("SELECT rule_key FROM rules WHERE status='active'")}
+    all_keys = {r[0] for r in conn.execute("SELECT rule_key FROM rules")}
+    active_in_packages = in_packages & active
+    ghosts = in_packages - all_keys
+    revoked_in_packages = (in_packages & all_keys) - active
+    undecided = active - in_packages
 
-    print(f'правил в своде: {len(все)} · живых: {len(живые)}')
-    print(f'названы в пакетах подсказок: {len(в_пакетах)} '
-          f'(из них живых: {len(в_пакетах_живых)})')
-    print(f'⇒ получат «да»: {len(в_пакетах_живых)}')
-    print(f'⇒ останутся НЕ РЕШЕНО (и будут краснеть): {len(не_решено)}')
-    if призраки:
-        print(f'🔴 в пакете названы, а в своде их НЕТ: {sorted(призраки)}')
-    if снятые_в_пакетах:
-        print(f'⛔ в пакете названы СНЯТЫЕ правила: {sorted(снятые_в_пакетах)}')
+    print(f'правил в своде: {len(all_keys)} · живых: {len(active)}')
+    print(f'названы в пакетах подсказок: {len(in_packages)} '
+          f'(из них живых: {len(active_in_packages)})')
+    print(f'⇒ получат «да»: {len(active_in_packages)}')
+    print(f'⇒ останутся НЕ РЕШЕНО (и будут краснеть): {len(undecided)}')
+    if ghosts:
+        print(f'🔴 в пакете названы, а в своде их НЕТ: {sorted(ghosts)}')
+    if revoked_in_packages:
+        print(f'⛔ в пакете названы СНЯТЫЕ правила: {sorted(revoked_in_packages)}')
     print()
     print('НЕ РЕШЕНО — поимённо, чтобы разбирали по списку, а не по числу:')
     print('─' * 78)
-    for k in sorted(не_решено):
+    for k in sorted(undecided):
         print(f'   ⚪ {k}')
     print('─' * 78)
 
@@ -141,24 +153,24 @@ def main():
     # строках, то есть контракт был бы объявлен и не исполнен — хуже, чем не объявлен.
     # Допустимые значения стережёт инструмент правки правил и общий прогон.
     conn.execute("ALTER TABLE rules ADD COLUMN skill_delivery TEXT")
-    for k in sorted(в_пакетах_живых):
+    for k in sorted(active_in_packages):
         conn.execute("UPDATE rules SET skill_delivery='yes', updated_at=updated_at "
                      "WHERE rule_key=?", (k,))
     fp = record_step(conn, VERSION,
                      "rules: доставка правила до подсказок ролей ПОЛЕМ (yes/no/НЕ РЕШЕНО). "
-                     f"'yes' проставлен {len(в_пакетах_живых)} правилам, уже названным "
+                     f"'yes' проставлен {len(active_in_packages)} правилам, уже названным "
                      "в пакетах (состав взят импортом из сборщика, не копией); остальные "
-                     f"{len(не_решено)} остаются НЕ РЕШЕНЫ и краснеют поимённо. "
+                     f"{len(undecided)} остаются НЕ РЕШЕНЫ и краснеют поимённо. "
                      "Карточка #526, находка COORD 04.09 10:31 UTC")
     conn.commit()
     print(f'\n✅ ВРЕЗАНО. отпечаток схемы: {fp}')
     ok, why = verify(conn)
     print(f'{"✅" if ok else "🔴"} проверка журнала: {why}')
     print('целостность:', conn.execute("PRAGMA integrity_check").fetchone()[0])
-    свод = conn.execute(
+    summary = conn.execute(
         "SELECT COALESCE(skill_delivery,'не решено'), COUNT(*) FROM rules "
         "WHERE status='active' GROUP BY 1 ORDER BY 2 DESC").fetchall()
-    print('контрольное чтение поля:', ' · '.join(f'{v}: {n}' for v, n in свод))
+    print('контрольное чтение поля:', ' · '.join(f'{v}: {n}' for v, n in summary))
 
 
 if __name__ == '__main__':
