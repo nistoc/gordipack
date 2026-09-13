@@ -13,6 +13,7 @@
  "check-copy-asymmetry.py": "ccb7aa909ada",
  "check-errors.py": "58d92e0a446c",
  "check-retired-mechanism.py": "b33055496e4e",
+ "check-rules-mirror.py": "715296a35a7d",
  "dashboard.py": "466f5cfe5bd9",
  "db-q.py": "0db7bbc5b876",
  "dryrun.py": "5adcec321ec1",
@@ -78,7 +79,7 @@
  "rebirth-mark.py": "3b8306a08369",
  "refs_check.py": "85a8e37ddd24",
  "role-brief.py": "ff59f01a959e",
- "role-prompts.py": "846ea004d593",
+ "role-prompts.py": "833935ad424e",
  "role-rights.py": "41613322c242",
  "rule_status.py": "8b6e42b5259b",
  "save-phoenix.py": "eded02026843",
@@ -91,7 +92,7 @@
  "sync_backoff.py": "76e03a58bb50",
  "track.py": "65f393fe747f",
  "unsaved.py": "4947952357ca",
- "update-tools.py": "01dbd596d8bf",
+ "update-tools.py": "b8114e65d7f9",
  "urgency.py": "dadde2b10c2e",
  "write-message.py": "acb7957b4948"
 }

@@ -24,14 +24,58 @@ r"""ГЕНЕРАТОР НАВЫКОВ ИЗ СВОДА ПРАВИЛ: правил
     · ПРОДУКТОВЫЕ правила — про наш код, а не про со-работу.
 Переезжают только ПРОЦЕДУРЫ: «когда делаешь X — вот как», у них есть момент срабатывания.
 
+⚡ СОСТАВ ПАКЕТОВ У ЧУЖОГО КОНТУРА (карточка #604 ①, заявка tapas). У tapas свой свод
+правил — 26 из 58 ключей встроенного PACKAGES там попросту нет, а имена навыков atlas-*
+у него неуместны (это не его слово для себя). Поэтому состав пакетов теперь МОЖЕТ приезжать
+ИЗ КОНТУРА, а не только жить в этом файле:
+    · есть файл `<каталог базы>/skill-packages.json` — состав берётся ИЗ НЕГО (формат — ниже
+      и в --help);
+    · файла нет — берётся встроенный PACKAGES; если в таблице meta базы есть ключ
+      group_name и он не "atlas", префикс "atlas-" в именах встроенного набора заменяется
+      на "<group_name>-".
+Правило, которого в своде нет вовсе, больше не валит сборку целиком: навык собирается
+из того, что нашлось, а отсутствующее названо поимённо. Для контура Atlas (все правила
+на месте, файла состава нет, group_name = "atlas") поведение и вывод НЕ МЕНЯЮТСЯ.
+
 Зовут так:
-    python C:/guts/.atlas/vnext-tools/rules-to-skills.py            # показать, не писать
-    python C:/guts/.atlas/vnext-tools/rules-to-skills.py --write    # собрать навыки
-    python C:/guts/.atlas/vnext-tools/rules-to-skills.py --only atlas-owner-reply --write
+    python <КОНТУР>/vnext-tools/rules-to-skills.py            # показать, не писать
+    python <КОНТУР>/vnext-tools/rules-to-skills.py --write    # собрать навыки
+    python <КОНТУР>/vnext-tools/rules-to-skills.py --only atlas-owner-reply --write
+    python <КОНТУР>/vnext-tools/rules-to-skills.py --db <чужая-база> --strict
+
+ФОРМАТ ФАЙЛА СОСТАВА `skill-packages.json` (ищется РЯДОМ С БАЗОЙ — в каталоге, где лежит
+файл, названный `--db`, или, по умолчанию, рядом с живой базой контура). Тот же словарь,
+что и встроенный PACKAGES ниже по файлу, в JSON:
+
+    {
+      "<имя-навыка>": {
+        "описание": "строка ≤200 знаков — она в контексте роли ВСЕГДА, одна-две строки",
+        "когда": "когда звать этот навык",
+        "правила": ["ключ-правила-1", "ключ-правила-2", "..."]
+      },
+      "...": {"...": "..."}
+    }
+
+⚖️ Ключи словаря ("описание"/"когда"/"правила") ОСТАВЛЕНЫ РУССКИМИ намеренно, не
+переведены вместе с остальным кодом файла: их читает уже применённый шаг схемы
+`.mezosync/scripts/migrations/20260904-rule-skill-delivery.py` (`package['правила']`)
+и он сам правке не подлежит — второй формат ключей разошёлся бы с ним молча. Имя
+навыка (ключ верхнего словаря) — что угодно печатное; префикс "atlas-" тут не
+подставляется автоматически: файл контура называет навыки САМ.
+
+ОТСУТСТВУЮЩИЕ ПРАВИЛА. По умолчанию навык собирается из тех правил пакета, что
+нашлись в своде; отсутствующие называются поимённо строкой «в своде контура нет: …».
+Если у навыка не нашлось НИ ОДНОГО правила — он не собирается вовсе, и это тоже
+названо строкой «навык X не собран: ни одного его правила в своде нет». Правило,
+которое НАШЛОСЬ, но СНЯТО (status != active), — отдельный, более тяжёлый случай:
+навык учил бы отменённой норме как действующей, и сборка отказывает ГРОМКО всегда,
+вне зависимости от --strict. Флаг --strict возвращает исходное поведение целиком:
+отказ на первом же отсутствующем правиле (как было до карточки #604).
 """
 from __future__ import annotations
 
 import argparse
+import json
 import pathlib
 import sqlite3
 import sys
@@ -39,13 +83,17 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402 — пути машины выводятся, не впечатаны (#153)
 
-ОТПЕЧАТОК = "СОБРАНО ИЗ БАЗЫ"
+FOOTPRINT_MARKER = "СОБРАНО ИЗ БАЗЫ"
+PACKAGES_FILE_NAME = "skill-packages.json"
 
-# ── СОСТАВ ПАКЕТОВ ─────────────────────────────────────────────────────────────────
+# ── ВСТРОЕННЫЙ СОСТАВ ПАКЕТОВ ──────────────────────────────────────────────────────
 # Решение о составе живёт ЗДЕСЬ и правится руками — это не данные, а замысел.
 # Описание (`описание`) попадает в контекст роли ВСЕГДА: держим его в две строки.
 # Разрастётся до абзаца — вернётся та же беда меньшего размера, и сторож длины покраснеет.
-ПАКЕТЫ = {
+#
+# ⚖️ Ключи ("описание"/"когда"/"правила") ОСТАВЛЕНЫ РУССКИМИ — см. разбор в шапке файла:
+# их читает уже применённый и неприкасаемый шаг схемы 20260904-rule-skill-delivery.
+PACKAGES = {
     "atlas-owner-reply": {
         "описание": "Зови ПЕРЕД КАЖДЫМ ответом владельцу Atlas: форма отчёта, запрет "
                     "выдуманных слов, перемер посылок и вопросы вариантами.",
@@ -168,102 +216,221 @@ import mezo_paths  # noqa: E402 — пути машины выводятся, н
     },
 }
 
+# ⚖️ СИНОНИМ ДЛЯ ОБРАТНОЙ СОВМЕСТИМОСТИ (карточка #604 ⑤). Шаг схемы
+# `.mezosync/scripts/migrations/20260904-rule-skill-delivery.py` уже применён у потребителей
+# и читает состав ИМПОРТОМ как `mod.ПАКЕТЫ` (кириллическое имя) — сам шаг схемы правке не
+# подлежит. Здесь имя переведено на английский по слову владельца (07.09), а старое имя
+# оставлено псевдонимом на тот же объект: два имени, один словарь, разойтись молча нечему.
+ПАКЕТЫ = PACKAGES
 
-def правила_из_базы(db: pathlib.Path, ключи: list[str]) -> list[dict]:
+
+def read_group_name(db: pathlib.Path) -> str | None:
+    """Имя группы контура (`meta.group_name`) или None — нет ключа/таблицы/значения.
+
+    Тот же защитный приём, что в guard-all.py: своя база читается на чтение, любая беда
+    (таблицы нет, файла нет, база занята) отвечает None, а не падением — отсутствие имени
+    группы законно (контур старше поля, либо это вовсе не контур Atlas).
+    """
+    try:
+        con = sqlite3.connect(f"file:{pathlib.Path(db).resolve().as_posix()}?mode=ro", uri=True)
+        try:
+            row = con.execute("SELECT value FROM meta WHERE key = 'group_name'").fetchone()
+        finally:
+            con.close()
+        return (row[0] if row else "") or None
+    except Exception:                                          # noqa: BLE001
+        return None
+
+
+def packages_file_path(db: pathlib.Path) -> pathlib.Path:
+    """Где искать файл состава — РЯДОМ С БАЗОЙ, а не в фиксированном месте контейнера.
+
+    Так сборщик находит `skill-packages.json` и у живого контура (рядом с живой базой),
+    и у копии базы в песочнице (--db на копию, файл состава рядом с ней) — без отдельного
+    флага на путь к файлу состава.
+    """
+    return pathlib.Path(db).resolve().parent / PACKAGES_FILE_NAME
+
+
+def packages_with_group_prefix(group: str | None) -> dict:
+    """Встроенный PACKAGES, где префикс "atlas-" заменён на "<group>-" — если группа
+    задана и не совпадает с "atlas". Для контура Atlas (group is None или "atlas")
+    возвращает PACKAGES как есть, тем же порядком ключей — вывод не меняется."""
+    if not group or group == "atlas":
+        return PACKAGES
+    renamed = {}
+    for name, package in PACKAGES.items():
+        new_name = f"{group}-{name[len('atlas-'):]}" if name.startswith("atlas-") else name
+        renamed[new_name] = package
+    return renamed
+
+
+def resolve_packages(db: pathlib.Path) -> tuple[dict, str]:
+    """Состав пакетов и текстовое описание источника (для заголовка отчёта).
+
+    Порядок источников (карточка #604 ①): файл контура `<каталог базы>/skill-packages.json`,
+    иначе встроенный PACKAGES (с подстановкой префикса по group_name).
+    """
+    file_path = packages_file_path(db)
+    if file_path.is_file():
+        try:
+            data = json.loads(file_path.read_text(encoding="utf-8"))
+        except Exception as e:                                 # noqa: BLE001
+            sys.exit(f"⛔ НЕ ЗАПУСТИЛСЯ: файл состава {file_path} не прочитан: "
+                     f"{type(e).__name__}: {e}\n   Формат описан в --help этого инструмента.")
+        if not isinstance(data, dict):
+            sys.exit(f"⛔ НЕ ЗАПУСТИЛСЯ: файл состава {file_path} — не словарь навыков "
+                     "(формат описан в --help).")
+        for name, package in data.items():
+            if not isinstance(package, dict) or "правила" not in package:
+                sys.exit(f"⛔ НЕ ЗАПУСТИЛСЯ: навык «{name}» в {file_path} без ключа "
+                         "«правила» (формат описан в --help).")
+            package.setdefault("описание", "")
+            package.setdefault("когда", "")
+        return data, f"файл контура: {file_path}"
+
+    group = read_group_name(db)
+    packages = packages_with_group_prefix(group)
+    source = "встроенный PACKAGES"
+    if group and group != "atlas":
+        source += f" · префикс «{group}-» (meta.group_name = {group!r})"
+    return packages, source
+
+
+def rules_from_db(db: pathlib.Path, keys: list[str], strict: bool) -> tuple[list[dict], list[str]]:
+    """Правила пакета, найденные в своде, и ключи тех, что не нашлись.
+
+    СНЯТОЕ правило (status != active) — ОТКАЗ собрать ВСЕГДА, вне зависимости от --strict:
+    навык учил бы отменённой норме как действующей, это тяжелее просто отставшего состава.
+    Отсутствующее в своде правило (ключа нет вовсе) — по умолчанию собираем из того, что
+    есть, и называем отсутствующее поимённо (карточка #604 ③); --strict возвращает прежнее
+    поведение — отказ на первом же отсутствующем.
+    """
     con = sqlite3.connect(str(db))
-    строки = []
-    for k in ключи:
-        r = con.execute("SELECT rule_key, body, status, COALESCE(updated_at,''), "
-                        "COALESCE(locked_by,'') FROM rules WHERE rule_key = ?", (k,)).fetchone()
-        if r is None:
+    found, missing = [], []
+    for key in keys:
+        row = con.execute(
+            "SELECT rule_key, body, status, COALESCE(updated_at,''), COALESCE(locked_by,'') "
+            "FROM rules WHERE rule_key = ?", (key,)).fetchone()
+        if row is None:
+            if strict:
+                con.close()
+                sys.exit(f"⛔ НЕ ЗАПУСТИЛСЯ: правила «{key}» нет в своде. Это отказ собрать навык,\n"
+                         f"   а не навык без правила: пустое место читалось бы как «правила нет».")
+            missing.append(key)
+            continue
+        if row[2] != "active":
             con.close()
-            sys.exit(f"⛔ НЕ ЗАПУСТИЛСЯ: правила «{k}» нет в своде. Это отказ собрать навык,\n"
-                     f"   а не навык без правила: пустое место читалось бы как «правила нет».")
-        if r[2] != "active":
-            con.close()
-            sys.exit(f"⛔ НЕ ЗАПУСТИЛСЯ: правило «{k}» СНЯТО ({r[2]}). Навык учил бы отменённому —\n"
+            sys.exit(f"⛔ НЕ ЗАПУСТИЛСЯ: правило «{key}» СНЯТО ({row[2]}). Навык учил бы отменённому —\n"
                      f"   ровно тот класс, который контур уже оплачивал.")
-        строки.append({"ключ": r[0], "тело": r[1], "правлено": r[3][:16], "замок": r[4]})
+        found.append({"key": row[0], "body": row[1], "edited_at": row[3][:16], "lock": row[4]})
     con.close()
-    return строки
+    return found, missing
 
 
-def собрать(имя: str, пакет: dict, правила: list[dict]) -> str:
+def build_skill(name: str, package: dict, rules: list[dict]) -> str:
     L = []
     L.append("---")
-    L.append(f"name: {имя}")
-    L.append(f"description: \"{пакет['описание']}\"")
+    L.append(f"name: {name}")
+    L.append(f"description: \"{package['описание']}\"")
     L.append("---")
     L.append("")
-    L.append(f"# {имя}")
+    L.append(f"# {name}")
     L.append("")
     L.append("⚙️ **Файл СОБРАН ИЗ СВОДА ПРАВИЛ** механизмом `rules-to-skills.py`. Правка рукой")
     L.append("будет затёрта следующей сборкой: чтобы изменить норму, меняют ПРАВИЛО в базе")
     L.append("(`set-rule.py`), а навык пересобирают. Иначе появится вторая правда об одном.")
     L.append("")
-    L.append(f"**Когда звать:** {пакет['когда']}")
+    L.append(f"**Когда звать:** {package['когда']}")
     L.append("")
     L.append("⚖️ Навык НЕ отменяет правил и не заменяет проверок: он разворачивает норму")
     L.append("в момент применения. Судьёй остаются механические проверки контура.")
     L.append("")
-    for r in правила:
-        L.append(f"## {r['ключ']}" + (f"  🔒 {r['замок']}" if r["замок"] else ""))
+    for r in rules:
+        L.append(f"## {r['key']}" + (f"  🔒 {r['lock']}" if r["lock"] else ""))
         L.append("")
-        L.append(r["тело"].strip())
+        L.append(r["body"].strip())
         L.append("")
     L.append("---")
     L.append("")
-    L.append(f"<!-- {ОТПЕЧАТОК}: rules-to-skills.py")
+    L.append(f"<!-- {FOOTPRINT_MARKER}: rules-to-skills.py")
     L.append("     Правила и час их последней правки НА МОМЕНТ СБОРКИ. По ним проверка")
     L.append("     guard-skills-fresh.py видит навык, отставший от свода: номер версии")
     L.append("     для этого не годится — он говорит о редакции, а не о свежести копии.")
-    for r in правила:
-        L.append(f"     {r['ключ']} = {r['правлено']}")
+    for r in rules:
+        L.append(f"     {r['key']} = {r['edited_at']}")
     L.append("-->")
     return "\n".join(L) + "\n"
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(formatter_class=argparse.RawDescriptionHelpFormatter,
+                                 epilog=__doc__)
     ap.add_argument("--write", action="store_true", help="записать (без него — только показ)")
     ap.add_argument("--only", help="собрать один навык по имени")
-    ap.add_argument("--db", help="свод, из которого собирать (по умолчанию — база контура)")
+    ap.add_argument("--db", help="свод, из которого собирать (по умолчанию — база контура). "
+                    f"Рядом с ним ищется файл состава {PACKAGES_FILE_NAME} — см. --help")
     ap.add_argument("--out", help="куда класть (по умолчанию — .claude/skills контейнера)")
+    ap.add_argument("--strict", action="store_true",
+                    help="отказ на первом же правиле, которого нет в своде (прежнее "
+                    "поведение); без флага — собираем из того, что нашлось, и называем "
+                    "отсутствующее поимённо")
     a = ap.parse_args()
 
     db = pathlib.Path(a.db) if a.db else mezo_paths.live_db()
-    корень = (pathlib.Path(a.out) if a.out
-              else mezo_paths.container_root() / ".claude" / "skills")
-    имена = [a.only] if a.only else list(ПАКЕТЫ)
-    for имя in имена:
-        if имя not in ПАКЕТЫ:
-            print(f"⛔ НЕ ЗАПУСТИЛСЯ: навыка «{имя}» нет в замысле. Известны: "
-                  f"{', '.join(ПАКЕТЫ)}")
+    root = (pathlib.Path(a.out) if a.out
+            else mezo_paths.container_root() / ".claude" / "skills")
+
+    packages, source = resolve_packages(db)
+    names = [a.only] if a.only else list(packages)
+    for name in names:
+        if name not in packages:
+            print(f"⛔ НЕ ЗАПУСТИЛСЯ: навыка «{name}» нет в замысле. Известны: "
+                  f"{', '.join(packages)}")
             return 2
+
+    # ⚖️ Строка про источник состава печатается ТОЛЬКО когда он не «встроенный PACKAGES
+    # без подстановки» — то есть только когда есть что сказать сверх исходного вывода.
+    # Так вывод для контура Atlas (файла нет, group_name == "atlas") остаётся БАЙТ В БАЙТ
+    # прежним — проверено приёмкой карточки #604 ①.
+    show_source = source != "встроенный PACKAGES"
 
     print("=" * 84)
     print(f"НАВЫКИ ИЗ СВОДА — свод: {db}")
-    print(f"  кладутся в: {корень}")
+    if show_source:
+        print(f"  состав: {source}")
+    print(f"  кладутся в: {root}")
     print("=" * 84)
-    всего = 0
-    for имя in имена:
-        пакет = ПАКЕТЫ[имя]
-        правила = правила_из_базы(db, пакет["правила"])
-        текст = собрать(имя, пакет, правила)
-        знаков_в_правилах = sum(len(r["тело"]) for r in правила)
-        путь = корень / имя / "SKILL.md"
-        print(f"{'✍️ ' if a.write else '👀'} {имя:22} правил {len(правила)} · "
-              f"{знаков_в_правилах} знаков нормы · описание {len(пакет['описание'])} знаков")
-        if len(пакет["описание"]) > 200:
+    built = 0
+    total_chars = 0
+    for name in names:
+        package = packages[name]
+        rules, missing = rules_from_db(db, package["правила"], strict=a.strict)
+        if missing:
+            print(f"   ⚪ {name}: в своде контура нет: {', '.join(missing)}")
+        if not rules:
+            print(f"⚠️ навык {name} не собран: ни одного его правила в своде нет")
+            continue
+        text = build_skill(name, package, rules)
+        rule_chars = sum(len(r["body"]) for r in rules)
+        path = root / name / "SKILL.md"
+        print(f"{'✍️ ' if a.write else '👀'} {name:22} правил {len(rules)} · "
+              f"{rule_chars} знаков нормы · описание {len(package['описание'])} знаков")
+        if len(package["описание"]) > 200:
             print("   ⚠️ ОПИСАНИЕ ДЛИННОЕ: оно лежит в контексте роли ВСЕГДА. "
                   "Абзац здесь возвращает ту же беду меньшего размера.")
         if a.write:
-            путь.parent.mkdir(parents=True, exist_ok=True)
-            путь.write_text(текст, encoding="utf-8")
-        всего += знаков_в_правилах
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+        built += 1
+        total_chars += rule_chars
     print("-" * 84)
-    print(f"навыков {len(имена)} · нормы в них {всего} знаков · "
-          f"{'ЗАПИСАНО' if a.write else 'показ, ничего не записано'}")
+    if built == len(names):
+        print(f"навыков {built} · нормы в них {total_chars} знаков · "
+              f"{'ЗАПИСАНО' if a.write else 'показ, ничего не записано'}")
+    else:
+        print(f"навыков {built} из {len(names)} запрошено · нормы в них {total_chars} знаков · "
+              f"{'ЗАПИСАНО' if a.write else 'показ, ничего не записано'}")
     if a.write:
         print("👉 Проверить свежесть: python "
               f"{pathlib.Path(__file__).resolve().parent}/guard-skills-fresh.py")

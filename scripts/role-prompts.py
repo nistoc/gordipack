@@ -24,6 +24,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from mezo_paths import resolve_db, live_scripts, container_root  # noqa: E402
 
+
+def group_label(conn) -> str:
+    """Имя контура для промпта (карточка #604 ⑤а): meta.group_name живой базы, запасной
+    вариант — имя каталога контейнера без ведущей точки. Раньше здесь стояло впечатанное
+    «Atlas» — верно для этого контура, но переносить его как есть в другой контур значило бы
+    называть роли чужим именем."""
+    row = conn.execute("SELECT value FROM meta WHERE key='group_name'").fetchone()
+    name = (row[0] or "").strip() if row else ""
+    return name or container_root().name.lstrip(".")
+
 S = live_scripts().as_posix()
 # vnext-tools лежит РЯДОМ с .mezosync, не внутри него (раскладка по образцу find-phoenix.py:
 # CONTAINER_ROOT / "vnext-tools" / "…") — вычислено от контейнера, а не литералом машины.
@@ -137,8 +147,8 @@ def mandate_files(role):
     found = []
     for path in paths:
         retired, why = _parse_file(path)
-        found.append({"путь": path.replace("\\", "/"), "снят": retired, "почему": why,
-                        "правлен": os.path.getmtime(path) if os.path.exists(path) else 0})
+        found.append({"path": path.replace("\\", "/"), "retired": retired, "why": why,
+                        "mtime": os.path.getmtime(path) if os.path.exists(path) else 0})
     return found
 
 
@@ -149,15 +159,16 @@ def choose_mandate(found):
     прежде оба выглядели как исправная работа (печаталась заглушка «<путь к наказ-файлу>»).
     """
     report = []
-    alive_entries = [entry for entry in found if entry["снят"] is False]
-    retired_entries = [entry for entry in found if entry["снят"] is True]
-    unreadable_entries = [entry for entry in found if entry["снят"] is None]
+    alive_entries = [entry for entry in found if entry["retired"] is False]
+    retired_entries = [entry for entry in found if entry["retired"] is True]
+    unreadable_entries = [entry for entry in found if entry["retired"] is None]
     if len(found) > 1 or retired_entries or unreadable_entries:
         report.append(f"📁 совпавших каталогов: {len(found)} — показываю ВСЕ, "
                      f"выбор виден строкой ниже")
         for entry in found:
-            marker_icon = "⚰️ СНЯТ" if entry["снят"] else ("⚠️ НЕЧИТАЕМ" if entry["снят"] is None else "✅ живой")
-            report.append(f"   {marker_icon}  {entry['путь']}  ({entry['почему']})")
+            marker_icon = ("⚰️ СНЯТ" if entry["retired"]
+                          else ("⚠️ НЕЧИТАЕМ" if entry["retired"] is None else "✅ живой"))
+            report.append(f"   {marker_icon}  {entry['path']}  ({entry['why']})")
     if not found:
         report.append("⛔ файла-поручения НЕТ НИ ОДНОГО — это ОТКАЗ, а не «пустой наказ». "
                      "Прежде здесь печаталась заглушка, и отсутствие файла было "
@@ -178,13 +189,13 @@ def choose_mandate(found):
         report.append(f"⛔ ЖИВЫХ ФАЙЛОВ БОЛЬШЕ ОДНОГО ({len(alive_entries)}) — выбирать за тебя "
                      f"не буду: у них разное назначение, и машине оно не видно")
         for entry in alive_entries:
-            report.append(f"   · {entry['путь']}")
+            report.append(f"   · {entry['path']}")
         report.append("   👉 назови нужный доводом: --prompt-file <путь>")
         return None, report
     chosen = alive_entries[0]
     if len(found) > 1 or retired_entries or unreadable_entries:
-        report.append(f"👉 ВЫБРАН: {chosen['путь']}")
-    return chosen["путь"], report
+        report.append(f"👉 ВЫБРАН: {chosen['path']}")
+    return chosen["path"], report
 
 
 def main():
@@ -204,6 +215,7 @@ def main():
         sys.exit(f"⛔ ПАРА НЕ СОБРАНА: базы нет ({db}) — это не «пустые промпты»")
     conn = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
     backlog_debt, bloated, cards, rhythm_active = counts(conn, role)
+    group_name = group_label(conn)
     conn.close()
     if a.prompt_file:
         # Названный рукой путь сильнее любого отбора — но он ОБЯЗАН существовать:
@@ -237,6 +249,23 @@ def main():
         print("⚠️ правило sync-alarm-in-chat не активно — блок ритма в промпте открытия "
               "проверь рукой, стандарту не верь")
 
+    # 🪤 КАРТОЧКА #604 ⑤б: «Шаг 4 — ритм» печатается ТОЛЬКО когда правило sync-alarm-in-chat
+    # есть в своде И активно — иначе он зовёт правило, которого промпт открытия не найдёт
+    # (`set-rule.py --show` ответит «правила нет»), и роль получает шаг, исполнить который
+    # нечем. Вместо шага — честная строка: решать заводить ли сверки, зовёт владельца.
+    if rhythm_active:
+        rhythm_block = (
+            "Шаг 4 — ритм (правило свода sync-alarm-in-chat): заведи будильник ВНУТРИ этого чата\n"
+            "   (минуты возьми не :00 и не :30) с промптом «исполни наказ-файл "
+            f"{mandate_file}».\n"
+            "   Период — именное слово владельца твоей роли; без слова — 30 минут. "
+            "Задачу-расписание\n"
+            "   вне чата НЕ заводи. Правило целиком:\n"
+            f"   python {S}/set-rule.py --key sync-alarm-in-chat --show\n")
+    else:
+        rhythm_block = ("ритм: правила sync-alarm-in-chat в своде этого контура нет — "
+                        "спроси владельца, заводить ли сверки\n")
+
     print(f"""═══ ПРОМПТ ЗАКРЫТИЯ (вставить в СТАРЫЙ чат {role}) ═══
 
 Финальное задание этого чата — роль {role} пересоздаётся (слово владельца, порядок
@@ -252,7 +281,7 @@ def main():
 
 ═══ ПРОМПТ ОТКРЫТИЯ (вставить в НОВЫЙ чат {role}) ═══
 
-Ты — роль {role} контура мезосинк Atlas. Чат свежий после пересоздания.
+Ты — роль {role} контура мезосинк {group_name}. Чат свежий после пересоздания.
 Пути АБСОЛЮТНЫЕ, все метки времени UTC с суффиксом «UTC».
 
 Шаг 0: python {S}/guard-all.py
@@ -266,12 +295,7 @@ def main():
 Шаг 3 — лента (долг ~{backlog_debt} записок): читай ЦЕЛИКОМ, подтверждай --ack; длинно —
    сужай ЗАПРОС (--limit порциями), не вывод:
    python {S}/read-messages.py --role {role}
-Шаг 4 — ритм (правило свода sync-alarm-in-chat): заведи будильник ВНУТРИ этого чата
-   (минуты возьми не :00 и не :30) с промптом «исполни наказ-файл {mandate_file}».
-   Период — именное слово владельца твоей роли; без слова — 30 минут. Задачу-расписание
-   вне чата НЕ заводи. Правило целиком:
-   python {S}/set-rule.py --key sync-alarm-in-chat --show
-Шаг 4-бис — адрес сессии, КАЖДОЕ пробуждение (правило rhythm-survives-rebirth п.①: имя
+{rhythm_block}Шаг 4-бис — адрес сессии, КАЖДОЕ пробуждение (правило rhythm-survives-rebirth п.①: имя
    сессии принадлежит процессу, возобновлённый чат получает НОВОЕ — прежняя запись
    реестра указывает в пустоту). Узнай СТОЙКИЙ идентификатор вызовом приложения
    get_session("self") (поле sessionId вида local_…: он переживает возобновление, в
