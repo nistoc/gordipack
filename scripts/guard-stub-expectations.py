@@ -34,7 +34,7 @@ guard-stub-expectations.py — ловит ЗАГЛУШКУ, ОБЕЩАЮЩУЮ �
 печатает отдельным списком «долги со сроком годности»: их читает человек и возражает, если долг
 заведён там, где его быть не должно.
 
-⚠️ ЧЕГО НЕ ЛЕЧИТ ВОВСЕ (TAXO #2476 ④, ING #2479): текст канона через гейт не проходит; и есть
+⚠️ ЧЕГО НЕ ЛЕЧИТ ВОВСЕ (TAXO #2476 ④, ING #2479): текст канона через полный прогон проверок не проходит; и есть
 третий вид — ЧЕСТНО ОПИСАННЫЙ УЩЕРБ (документация не врёт, поведение соответствует, вред есть).
 Последний ловится только вопросом «зачем мы это принимаем, если выбрасываем».
 
@@ -82,7 +82,7 @@ MARK_HONESTY = re.compile(r"HONESTY-GUARD")
 MARK_DEBT = re.compile(r"STUB-EXPECTED:\s*#(\d+)")
 
 
-def _состояние_задачи(номер: str):
+def _task_state(task_id: str):
     """→ ('open'|'closed'|'ghost'|'unknown', пояснение). Метка-долг обязана иметь СРОК.
 
     🩸 ЗАЯВКА @COORD (записка #3768). Шапка этого инструмента сама называет назначение
@@ -108,28 +108,28 @@ def _состояние_задачи(номер: str):
         return "unknown", "базы задач нет под рукой — проверить срок нечем"
     try:
         con = sqlite3.connect(f"file:{Path(db).as_posix()}?mode=ro", uri=True)
-        строка = con.execute("SELECT status FROM backlog WHERE id=?", (int(номер),)).fetchone()
+        row = con.execute("SELECT status FROM backlog WHERE id=?", (int(task_id),)).fetchone()
         con.close()
     except (sqlite3.Error, ValueError, OSError) as e:
         return "unknown", f"спросить базу задач не вышло: {str(e)[:60]}"
-    if строка is None:
-        return "ghost", f"задачи #{номер} в списке задач НЕТ ВОВСЕ"
-    статус = (строка[0] or "").strip().lower()
+    if row is None:
+        return "ghost", f"задачи #{task_id} в списке задач НЕТ ВОВСЕ"
+    status = (row[0] or "").strip().lower()
     # 📏 СПИСКИ ВЗЯТЫ ЗАМЕРОМ ПО БАЗЕ, А НЕ ПРИДУМАНЫ (PROTO 2026-08-24 17:01 UTC):
     #    done 162 · open 62 · awaiting_word 6 · blocked 6 · in_progress 4 · in_review 4 · dropped 4
     #    🩸 Первая редакция этой правки перечисляла closed/cancelled/rejected — статусов,
     #    которых в базе НЕТ ВОВСЕ, и не знала про dropped. То есть проверка срока годности
     #    сама была написана по памяти о чужих системах. Поймано первым же запросом к базе.
-    ЗАКРЫТЫЕ = ("done", "dropped")
-    ЖИВЫЕ = ("open", "in_progress", "in_review", "blocked", "awaiting_word")
-    if статус in ЗАКРЫТЫЕ:
-        return "closed", f"задача #{номер} ЗАКРЫТА ({статус})"
-    if статус in ЖИВЫЕ:
-        return "open", f"задача #{номер} открыта ({статус})"
+    CLOSED_STATUSES = ("done", "dropped")
+    OPEN_STATUSES = ("open", "in_progress", "in_review", "blocked", "awaiting_word")
+    if status in CLOSED_STATUSES:
+        return "closed", f"задача #{task_id} ЗАКРЫТА ({status})"
+    if status in OPEN_STATUSES:
+        return "open", f"задача #{task_id} открыта ({status})"
     # ⚖️ ЧЕТВЁРТЫЙ ИСХОД: статус незнаком. Не «жива» и не «мертва» — НЕ ЗНАЮ.
     #    Отнести незнакомое к закрытым значило бы краснеть на каждом новом статусе;
     #    отнести к живым — молча пропускать просроченное. Оба врут увереннее, чем надо.
-    return "unknown", (f"статус задачи #{номер} незнаком ({статус or 'пусто'}) — "
+    return "unknown", (f"статус задачи #{task_id} незнаком ({status or 'пусто'}) — "
                        f"жива она или нет, сказать не берусь")
 
 CONTEXT = 3
@@ -139,11 +139,11 @@ def verdict_for(lines, i):
     near = "\n".join(lines[max(0, i - CONTEXT): i + CONTEXT + 1])
     if MARK_HONESTY.search(near):
         return "honesty"
-    м = MARK_DEBT.search(near)
-    if м:
-        состояние, _ = _состояние_задачи(м.group(1))
+    mark_match = MARK_DEBT.search(near)
+    if mark_match:
+        state, _ = _task_state(mark_match.group(1))
         return {"open": "debt", "closed": "debt-dead",
-                "ghost": "debt-ghost", "unknown": "debt"}[состояние]
+                "ghost": "debt-ghost", "unknown": "debt"}[state]
     return "UNMARKED"
 
 
@@ -223,8 +223,8 @@ def main():
     #    исхода, а не один: «задача закрыта» говорит о просроченном оправдании,
     #    «задачи нет» — об опечатке или выдумке. Свести их значило бы объявить
     #    несуществующее просроченным.
-    просроченные = [f for f in findings if f[4] == "debt-dead"]
-    призрачные = [f for f in findings if f[4] == "debt-ghost"]
+    overdue = [f for f in findings if f[4] == "debt-dead"]
+    ghosts = [f for f in findings if f[4] == "debt-ghost"]
 
     if args.list:
         for path, ln, kind, text, v in findings:
@@ -242,16 +242,16 @@ def main():
 
     # ⛔ ОПРАВДАНИЕ, ПЕРЕЖИВШЕЕ СВОЮ ПРИЧИНУ, — КРАСНОЕ. Метка объявлена «долгом
     #    со сроком годности»; срок, ничем не обеспеченный, делает её вечной.
-    if просроченные or призрачные:
-        for path, ln, kind, text, v in просроченные:
-            м = MARK_DEBT.search(text) or MARK_DEBT.search("")
-            _, почему = _состояние_задачи(м.group(1)) if м else ("", "задача закрыта")
-            print(f"⛔ ОПРАВДАНИЕ ПЕРЕЖИЛО СВОЮ ПРИЧИНУ: {rel(path)}:{ln} — {почему}, "
+    if overdue or ghosts:
+        for path, ln, kind, text, v in overdue:
+            mark_match = MARK_DEBT.search(text) or MARK_DEBT.search("")
+            _, reason = _task_state(mark_match.group(1)) if mark_match else ("", "задача закрыта")
+            print(f"⛔ ОПРАВДАНИЕ ПЕРЕЖИЛО СВОЮ ПРИЧИНУ: {rel(path)}:{ln} — {reason}, "
                   f"а метка держит заглушку")
-        for path, ln, kind, text, v in призрачные:
-            м = MARK_DEBT.search(text)
+        for path, ln, kind, text, v in ghosts:
+            mark_match = MARK_DEBT.search(text)
             print(f"⛔ МЕТКА ССЫЛАЕТСЯ НА НЕСУЩЕСТВУЮЩУЮ ЗАДАЧУ: {rel(path)}:{ln} — "
-                  f"#{м.group(1) if м else '?'} в бэклоге нет вовсе")
+                  f"#{mark_match.group(1) if mark_match else '?'} в бэклоге нет вовсе")
         print("   👉 Либо снимите заглушку, либо заведите живую задачу и укажите ЕЁ номер.")
         sys.exit(1)
 
