@@ -33,11 +33,17 @@ r"""bite-update-tools-rev.py — приёмка карточки #604 ②③: up
     определённо»; встречный — следующий план ДЕЙСТВИТЕЛЬНО показывает те же «❓»
   ③-1а источник-выгрузка без .git вовсе → «истории у источника нет», а не «нет в истории»
   ③-1б источник с `.git`-ФАЙЛОМ (как у git worktree) → история находится, а не теряется
+  ③-1в источник — подкаталог ДРУГОГО git-репозитория (возврат OPSSRE №2) → «каталог внутри
+    другого репозитория (<корень>)», а не «нет в истории» — `--git-dir` иначе находит ЧУЖОЙ
+    .git выше по дереву и молча ищет не там
   ⑥ КОНТРОЛЬ нарочной поломкой: --rev молча игнорируется — красит РОВНО случаи --rev,
     не трогает случай ③ (он от --rev не зависит)
   ⑦ КОНТРОЛЬ нарочной поломкой: git-детект истории возвращён к `.is_dir()` — красит РОВНО
     ③-1б (там способ проверки и есть предмет разницы) и не трогает ③-1а (там оба способа
     честно отвечают одинаково)
+  ⑧ КОНТРОЛЬ нарочной поломкой (возврат OPSSRE №2): снята ИМЕННО проверка `--show-prefix` —
+    красит РОВНО ③-1в, не трогает ③-1а (git-dir отказывает раньше) и ③-1б (там prefix и
+    так был пуст)
 
 ИСПЫТУЕТСЯ через mezo_target (живой контур или MEZO_SCRIPTS_ROOT — копия для укуса).
 ПАКЕТ — ЛОКАЛЬНАЯ КОПИЯ <ШАБЛОН>, ТОЛЬКО ЧТЕНИЕ: git log/show — команды на
@@ -155,6 +161,28 @@ def make_worktree_like_source(dest: pathlib.Path, rel: str, content: bytes) -> N
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_bytes(content)
     (dest / ".git").write_text(f"gitdir: {PACKAGE_GITDIR}\n", encoding="utf-8")
+
+
+def make_nested_repo_source(outer_repo: pathlib.Path, rel: str, content: bytes) -> pathlib.Path:
+    """Возврат OPSSRE ③-1в: источник — подкаталог ДРУГОГО git-репозитория, НЕ его корень.
+
+    `git init` — В НОВОМ временном каталоге (не в PACKAGE, не рядом): это ЧУЖОЙ репозиторий,
+    существующий только ради этого случая, к пакету отношения не имеющий. Возвращает путь
+    к ВЛОЖЕННОМУ подкаталогу (то, что уходит в --source), а не к корню чужого репозитория.
+
+    ⚖️ ВЫБОР, НАЗВАН ЯВНО (OPSSRE допустил оба: «можно и закоммитить»): содержимое НЕ
+    коммитится. `git rev-parse --show-prefix`/`--show-toplevel` — структурный вопрос («где
+    корень рабочего дерева»), а не вопрос об истории коммитов; он отвечает одинаково что на
+    пустом только что заведённом репозитории, что на репозитории с историей (проверено
+    руками перед правкой: `git init` + вложенный подкаталог без единого коммита уже даёт
+    непустой `--show-prefix`). Коммит здесь ничего не добавил бы к предмету находки.
+    """
+    subprocess.run(["git", "init", "-q", str(outer_repo)], check=True)
+    nested = outer_repo / "nested" / "source"
+    p = nested / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(content)
+    return nested
 
 
 def make_contour(root: pathlib.Path, under_test: pathlib.Path) -> pathlib.Path:
@@ -350,6 +378,26 @@ case("③-1б источник с `.git`-ФАЙЛОМ (как worktree) → ис
      rc2b_wt == 0 and appearance_sig in out2b_wt and "истории у источника нет" not in out2b_wt,
      f"код {rc2b_wt} · ищем «{appearance_sig}»")
 
+# ═══ ③-1в (возврат OPSSRE №2, ГЛАВНЫЙ по этому возврату): источник — подкаталог ДРУГОГО
+# git-репозитория, не его корень. `git rev-parse --git-dir` из подкаталога находит .git ЭТОГО
+# чужого репозитория (идёт вверх по дереву) — прежняя редакция принимала это за историю
+# ПАКЕТА. Обязана сказать «каталог внутри другого репозитория», а НЕ «нет в истории»: второе
+# лгало бы, что смотрели в правильном месте.
+t2c = stand / "t2c"
+db2c_dir = make_contour(t2c, TARGET)
+upd2c = db2c_dir / "scripts" / "update-tools.py"
+outer_repo = stand / "outer-repo"
+nested_src = make_nested_repo_source(outer_repo, "scripts/backlog.py", HEAD_CONTENT)
+(db2c_dir / "scripts" / "backlog.py").write_bytes(OLD_CONTENT)
+drop_fingerprints(db2c_dir / "mezosync.db", "backlog.py")
+rc2c_nested, out2c_nested = run(upd2c, "--source", str(nested_src))
+case("③-1в источник — подкаталог чужого репозитория → «каталог внутри другого репозитория»",
+     rc2c_nested == 0 and "каталог внутри другого репозитория" in out2c_nested
+     and str(outer_repo) in out2c_nested
+     and "в истории пакета такого содержимого нет" not in out2c_nested
+     and "версия пакета от" not in out2c_nested,
+     f"код {rc2c_nested} · назван корень чужого репозитория: {str(outer_repo) in out2c_nested}")
+
 # ═══ ⑥ КОНТРОЛЬ нарочной поломкой: --rev молча игнорируется (rev=a.rev → rev=None)
 # 🩸 БЕЗ ЭТОГО СЛУЧАЯ приёмка могла бы зеленеть по СЛУЧАЙНОЙ причине (например, если бы
 # --rev тихо не долетал до fetch()). Ломаем РОВНО эту строку и смотрим, что покраснеет:
@@ -435,6 +483,68 @@ case("⑦ та же поломка НЕ трогает ③-1а: у обеих п
      rc7b == 0 and case_1a_stayed_green,
      f"код {rc7b} · ответ прежний («истории нет»): {case_1a_stayed_green} — "
      f"назван честно: этот случай поломка НЕ красит, различие способов проверки тут не видно")
+
+# ═══ ⑧ КОНТРОЛЬ нарочной поломкой (возврат OPSSRE №2): убрана ИМЕННО проверка
+# `--show-prefix` внутри git_history_root — `--git-dir` остаётся (③-1б по-прежнему находит
+# worktree), но чужой репозиторий больше не отсекается. Красить ОБЯЗАНА ровно ③-1в
+# (подкаталог чужого репо) и НЕ обязана трогать ③-1а (там `--git-dir` уже отказывает раньше,
+# до show-prefix) и ③-1б (там `--show-prefix` и с проверкой был пуст — снятие проверки
+# для НЕГО ничего не меняет).
+broken3_dir = stand / "broken3"
+broken3_tool = mezo_stand.copy_tool(TARGET, broken3_dir)
+prefix_check_src = broken3_tool.read_text(encoding="utf-8")
+prefix_check_anchor = (
+    "    prefix = subprocess.run([\"git\", \"-C\", str(path), \"rev-parse\", \"--show-prefix\"],\n"
+    "                            capture_output=True, text=True)\n"
+    "    if (prefix.stdout or \"\").strip():\n"
+    "        top = subprocess.run([\"git\", \"-C\", str(path), \"rev-parse\", \"--show-toplevel\"],\n"
+    "                             capture_output=True, text=True)\n"
+    "        outer_root = (top.stdout or \"\").strip() or \"корень не определился\"\n"
+    "        return None, f\"каталог внутри другого репозитория ({outer_root})\"\n"
+    "    return path, \"\"")
+if prefix_check_anchor not in prefix_check_src:
+    sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: блок проверки --show-prefix не найден в испытуемом дословно "
+             "— переписали git_history_root, поломка бьёт мимо")
+broken3_tool.write_text(prefix_check_src.replace(prefix_check_anchor, "    return path, \"\""),
+                        encoding="utf-8")
+
+t2c_broken = stand / "t2c-broken"
+db2c_broken_dir = make_contour(t2c_broken, broken3_tool)
+upd2c_broken = db2c_broken_dir / "scripts" / "update-tools.py"
+outer_repo2 = stand / "outer-repo-2"
+nested_src2 = make_nested_repo_source(outer_repo2, "scripts/backlog.py", HEAD_CONTENT)
+(db2c_broken_dir / "scripts" / "backlog.py").write_bytes(OLD_CONTENT)
+drop_fingerprints(db2c_broken_dir / "mezosync.db", "backlog.py")
+rc8a, out8a = run(upd2c_broken, "--source", str(nested_src2))
+case_1v_turned_red = "каталог внутри другого репозитория" not in out8a
+case("⑧ поломка (сняли --show-prefix) КРАСИТ ровно ③-1в: подкаталог чужого репозитория",
+     rc8a == 0 and case_1v_turned_red,
+     f"код {rc8a} · фраза «каталог внутри другого репозитория» пропала: {case_1v_turned_red}")
+
+t2b_broken3 = stand / "t2b-broken3"
+db2b_broken3_dir = make_contour(t2b_broken3, broken3_tool)
+upd2b_broken3 = db2b_broken3_dir / "scripts" / "update-tools.py"
+worktree_src3 = stand / "worktree-like-source-3"
+make_worktree_like_source(worktree_src3, "scripts/backlog.py", HEAD_CONTENT)
+(db2b_broken3_dir / "scripts" / "backlog.py").write_bytes(OLD_CONTENT)
+drop_fingerprints(db2b_broken3_dir / "mezosync.db", "backlog.py")
+rc8b, out8b = run(upd2b_broken3, "--source", str(worktree_src3))
+case("⑧ та же поломка НЕ трогает ③-1б: там --show-prefix и раньше был пуст",
+     rc8b == 0 and appearance_sig in out8b,
+     f"код {rc8b} · ③-1б обязан остаться зелёным — сняли проверку, которая для него не "
+     f"срабатывала")
+
+t2a_broken3 = stand / "t2a-broken3"
+db2a_broken3_dir = make_contour(t2a_broken3, broken3_tool)
+upd2a_broken3 = db2a_broken3_dir / "scripts" / "update-tools.py"
+dump_src3 = stand / "dump-source-3"
+make_dump_source(dump_src3, "scripts/backlog.py", HEAD_CONTENT)
+(db2a_broken3_dir / "scripts" / "backlog.py").write_bytes(OLD_CONTENT)
+drop_fingerprints(db2a_broken3_dir / "mezosync.db", "backlog.py")
+rc8c, out8c = run(upd2a_broken3, "--source", str(dump_src3))
+case("⑧ та же поломка НЕ трогает ③-1а: `--git-dir` там отказывает раньше show-prefix",
+     rc8c == 0 and "истории у источника нет" in out8c,
+     f"код {rc8c}")
 
 print("---- контроль: рабочая копия пакета не тронута ----")
 pack_after = pack_state()
