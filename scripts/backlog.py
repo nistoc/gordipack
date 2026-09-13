@@ -336,7 +336,7 @@ def cmd_claim(conn, a):
     # (двое на одной карточке иногда законны: сдающий и приёмщик). Живое чужое взятие =
     # последний claim роли без более позднего claim_release, срок которого не истёк;
     # истёкший шаг тихий — иначе роль научится пролистывать.
-    сейчас = conn.execute("SELECT datetime('now')").fetchone()[0]
+    now_text = conn.execute("SELECT datetime('now')").fetchone()[0]
     for who, note_body in conn.execute(
             "SELECT e.actor_role, e.body_md FROM backlog_events e "
             "WHERE e.backlog_id=? AND e.event_type='claim' "
@@ -349,7 +349,7 @@ def cmd_claim(conn, a):
             "          AND UPPER(r.actor_role)=UPPER(e.actor_role) AND r.id>e.id)",
             (a.id, a.actor)):
         m = re.match(r"до (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) UTC", note_body or "")
-        if m and m.group(1) > сейчас:
+        if m and m.group(1) > now_text:
             print(f"⚠️ карточку #{a.id} УЖЕ ДЕРЖИТ {who} — до {m.group(1)[:16]} UTC: "
                   f"«{(note_body or '').split('·', 1)[-1].strip()[:100]}»")
             print("   Двое на одной карточке иногда законны (сдающий и приёмщик), чаще — "
@@ -366,8 +366,8 @@ def cmd_claim(conn, a):
         conn.execute("UPDATE backlog SET status='in_progress', updated_at=datetime('now')"
                      " WHERE id=?", (a.id,))
     conn.commit()
-    чужая = "" if owner.upper() == a.actor.upper() else f" (карточка роли {owner})"
-    print(f"🔧 ВЗЯТО В РАБОТУ #{a.id}{чужая} «{title[:50]}» до {until[:16]} UTC")
+    foreign_mark = "" if owner.upper() == a.actor.upper() else f" (карточка роли {owner})"
+    print(f"🔧 ВЗЯТО В РАБОТУ #{a.id}{foreign_mark} «{title[:50]}» до {until[:16]} UTC")
     print(f"   что делаешь: {a.note}")
     # ═══ Карточка #586: хвост пояснений — через общий помощник mezo_hints (первый показ
     # роли-исполнителю — целиком, дальше строкой-ссылкой; --full — снова целиком). Строки
@@ -484,11 +484,11 @@ OTHER_QUESTIONS = ("прочее", [
 def kind_and_questions(tags_json):
     """Вид работы по тегам карточки → (имя вида, три вопроса разбора)."""
     try:
-        теги = {t.strip().lower() for t in json.loads(tags_json or "[]")}
+        tag_set = {t.strip().lower() for t in json.loads(tags_json or "[]")}
     except Exception:                                  # noqa: BLE001 — кривые теги ≠ отказ
-        теги = set()
-    for ключи, kind_label, questions in QUESTION_KINDS:
-        if теги & ключи:
+        tag_set = set()
+    for kind_keys, kind_label, questions in QUESTION_KINDS:
+        if tag_set & kind_keys:
             return kind_label, questions
     return OTHER_QUESTIONS
 
@@ -624,11 +624,11 @@ def cmd_add(conn, a):
     # ВИДЫ_ВОПРОСОВ/«прочее») — номера карточки, заголовка и прочих переменных частей
     # здесь нет, поэтому отпечаток текста не меняется при каждом добавлении.
     kind_name, questions = kind_and_questions(tags)
-    ТЕКСТ_ВОПРОСОВ = (
+    QUESTIONS_TEXT = (
         f"   💬 разбор замысла — три вопроса к себе (вид: {kind_name}; подсказка, а не запрет):\n"
         + "\n".join(f"      · {question}" for question in questions))
     mezo_hints.подсказка(conn, mezo_hints.кто_читает(a.actor, a.role), "backlog-add-три-вопроса",
-                         ТЕКСТ_ВОПРОСОВ, full=a.full)
+                         QUESTIONS_TEXT, full=a.full)
 
 
 def cmd_criterion(conn, a):
@@ -1045,16 +1045,16 @@ def cmd_status(conn, a):
             # строку дословно, получает отказ «принадлежит роли …». Нашла @OPSSRE (записка #4752 §⑦)
             # на карточке #530: прошла проверку владельца с --foreign, скопировала подсказку — и
             # упала на ней же. Подсказка, ведущая в отказ, хуже отсутствия подсказки.
-            чужая = f" --foreign {owner}" if actor != owner_u else ""
+            foreign_mark = f" --foreign {owner}" if actor != owner_u else ""
             if creator and creator.upper() != actor:
                 print(f"   👉 карточку завела роль {creator} — по обыкновению контура "
                       f"принимает она:")
-                print(f"      backlog.py status {a.id} in_review --actor {a.actor}{чужая} "
+                print(f"      backlog.py status {a.id} in_review --actor {a.actor}{foreign_mark} "
                       f"--reviewer {creator}")
             else:
                 print(f"   👉 карточку ты завела себе — рук ей не назначено ничем. Назови "
                       f"роль ИЛИ правило словами:")
-                print(f'      backlog.py status {a.id} in_review --actor {a.actor}{чужая} '
+                print(f'      backlog.py status {a.id} in_review --actor {a.actor}{foreign_mark} '
                       f'--reviewer "любая, не писавшая правку"')
     elif a.new_status == "in_review":
         print(f"   🫱 приёмщик: {reviewer_name}")
@@ -1064,8 +1064,8 @@ def cmd_status(conn, a):
     # и читатель образца решает, что контур молчит.
     if a.new_status in ("done", "dropped", "failed"):
         try:
-            теги = conn.execute("SELECT tags FROM backlog WHERE id=?", (a.id,)).fetchone()[0]
-            m = re.search(r"gordi-issue #(\d+)", теги or "")
+            tag_set = conn.execute("SELECT tags FROM backlog WHERE id=?", (a.id,)).fetchone()[0]
+            m = re.search(r"gordi-issue #(\d+)", tag_set or "")
             if m:
                 print(f"📮 карточка несёт тег gordi-issue #{m.group(1)} — закрой и issue "
                       f"ссылкой на коммит: gordi-issue.py close --role COORD "
@@ -1319,13 +1319,13 @@ def main():
     # С ПОДСКАЗКОЙ вместо голого «unrecognized arguments». Алиас отклонён
     # КОНФЛИКТОМ СМЫСЛА (--role в add уже занято ВЛАДЕЛЬЦЕМ карточки, а не
     # исполнителем), переименование — ценой переучивания живых вызовов контура.
-    _КОМАНДЫ_ACTOR = {"claim", "status", "comment", "criterion", "edit"}
-    _подкоманда = next((x for x in sys.argv[1:]
+    _ACTOR_COMMANDS = {"claim", "status", "comment", "criterion", "edit"}
+    _subcommand = next((x for x in sys.argv[1:]
                         if not x.startswith("-") and x in
                         {"add", "list", "show", "status", "claim", "comment",
                          "criterion", "edit", "queue"}), None)
-    if _подкоманда in _КОМАНДЫ_ACTOR and "--role" in sys.argv:
-        print(f"⛔ у подкоманды «{_подкоманда}» исполнитель зовётся --actor, не --role.",
+    if _subcommand in _ACTOR_COMMANDS and "--role" in sys.argv:
+        print(f"⛔ у подкоманды «{_subcommand}» исполнитель зовётся --actor, не --role.",
               file=sys.stderr)
         print("   --role живёт у lease.py (объявления о правке) и у add (владелец "
               "карточки).", file=sys.stderr)

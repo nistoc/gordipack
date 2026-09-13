@@ -428,20 +428,20 @@ def check_addressees(conn, to, cc):
             role_registry = {r: "alive" for (r,) in conn.execute("SELECT role FROM roles")}
         except sqlite3.OperationalError:
             return to, cc, to_all, None      # старая база без реестра — сверять нечем
-    живые = {r for r, l in role_registry.items() if l != "closed"} | SPECIAL_ADDRESSEES
+    alive_roles = {r for r, l in role_registry.items() if l != "closed"} | SPECIAL_ADDRESSEES
     closed_set = {r for r, l in role_registry.items() if l == "closed"}
     for r in to + cc:
         if r in closed_set:
             return to, cc, to_all, (
                 f"⛔ ОТКАЗ: роль «{r}» ЗАКРЫТА — её не прочтёт никто и никогда.{NEWLINE}"
-                f"   Живые адресаты: {', '.join(sorted(живые))} + «все» (всем сразу).{NEWLINE}"
+                f"   Живые адресаты: {', '.join(sorted(alive_roles))} + «все» (всем сразу).{NEWLINE}"
                 f"   Записка НЕ записана. Закрытая роль отличается от спящей: спящая"
                 f" проснётся и дочитает, закрытая — нет. Поэтому здесь отказ, а не"
                 f" предупреждение.")
-        if r not in живые:
+        if r not in alive_roles:
             return to, cc, to_all, (
                 f"⛔ ОТКАЗ: имени «{r}» нет в словаре адресатов.{NEWLINE}"
-                f"   Словарь: {', '.join(sorted(живые))} + «все» (всем сразу).{NEWLINE}"
+                f"   Словарь: {', '.join(sorted(alive_roles))} + «все» (всем сразу).{NEWLINE}"
                 f"   Записка НЕ записана. Адресат опечаткой — записка-призрак:"
                 f" отправлена и не дошла никому, а в ленте выглядит адресованной.")
     return to, cc, to_all, None
@@ -873,8 +873,8 @@ def main():
                 "  PRIMARY KEY (file_name, role))")
             # args.reviewed — СПИСОК (накопление повтором флага); каждый элемент может
             # нести несколько имён через запятую — обе формы дают одни и те же жесты.
-            for name in [n.strip() for кусок in args.reviewed
-                         for n in кусок.split(",") if n.strip()]:
+            for name in [n.strip() for piece in args.reviewed
+                         for n in piece.split(",") if n.strip()]:
                 conn.execute(
                     "INSERT OR REPLACE INTO bridge_reviewed (file_name, role, note_id, at)"
                     " VALUES (?, ?, ?, datetime('now'))", (name, args.role, msg_id))
