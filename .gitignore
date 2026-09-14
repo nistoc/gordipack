@@ -2,6 +2,10 @@
 *.db
 *.db-wal
 *.db-shm
+# Исключение — база правил пакета: не рабочая БД, а собранная из истории rules/*.sql
+# (vnext/tools/build-pack-rules-db.py). Её читает rules-from-pack.py контура, который
+# обновляется из пакета и сам истории правил может не иметь. Карточка #608 контура Atlas.
+!rules/pack-rules.db
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
