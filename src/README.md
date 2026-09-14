@@ -55,6 +55,7 @@ dotnet run --project src/Gordi.Periscope.Api -- --db ... --port 5177 --refresh 1
 | `GET /api/overview` | счётчики + версия схемы | снимок |
 | `GET /api/tasks?status=&role=&missingCriterion=` | карточки задач | снимок |
 | `GET /api/tasks/{id}` | карточка + события + проверки + связанные записки | база |
+| `GET /api/tasks/history` | ВСЕ карточки (id/роль/статус/дата заведения) + ВСЕ переходы статуса, без сумм — агрегацию (по дням/ролям/статусам) делает клиент, страница «Динамика задач» | база |
 | `GET /api/messages?limit=&offset=&role=&priority=&search=` | лента страницами | база |
 | `GET /api/messages/{id}` | тело записки целиком | база |
 | `GET /api/writers` | список авторов для фильтра | база |

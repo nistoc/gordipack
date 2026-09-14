@@ -6,15 +6,17 @@ import { SourceBar } from './components/SourceBar';
 import { StatCard } from './components/MeasureValue';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { TasksPage } from './pages/TasksPage';
+import { HistoryPage } from './pages/HistoryPage';
 import { FeedPage } from './pages/FeedPage';
 import { RolesPage } from './pages/RolesPage';
 import { RulesPage } from './pages/RulesPage';
 import { SchemaPage } from './pages/SchemaPage';
 
-type Tab = 'tasks' | 'feed' | 'roles' | 'rules' | 'schema';
+type Tab = 'tasks' | 'history' | 'feed' | 'roles' | 'rules' | 'schema';
 
 const TABS: Array<{ id: Tab; title: string }> = [
   { id: 'tasks', title: 'Задачи' },
+  { id: 'history', title: 'Динамика задач' },
   { id: 'feed', title: 'Лента' },
   { id: 'roles', title: 'Роли' },
   { id: 'rules', title: 'Правила' },
@@ -86,6 +88,7 @@ export default function App() {
       <main>
         <ErrorBoundary key={tab} where={`страница «${TABS.find((t) => t.id === tab)?.title ?? tab}»`}>
           {tab === 'tasks' && <TasksPage overview={overview.data} refreshMs={refreshMs} />}
+          {tab === 'history' && <HistoryPage refreshMs={refreshMs} />}
           {tab === 'feed' && <FeedPage refreshMs={refreshMs} />}
           {tab === 'roles' && <RolesPage overview={overview.data} refreshMs={refreshMs} />}
           {tab === 'rules' && <RulesPage refreshMs={refreshMs} />}

@@ -750,3 +750,25 @@ code { background: var(--surface2); padding: 1px 5px; border-radius: 4px; }
 .smark--done { color: var(--good); }
 .smark--dropped { color: var(--muted); }
 .smark--unknown { color: var(--muted); }
+
+/* ── динамика задач: графики на SVG ──────────────────────────────────────────
+   Своя разметка, БЕЗ библиотеки графиков (слово владельца): цвета берутся из тех
+   же переменных темы, что и весь остальной просмотрщик, — поэтому графики читаются
+   и в светлой, и в тёмной теме без отдельной настройки.
+   ───────────────────────────────────────────────────────────────────────────── */
+.history-summary {
+  margin: 4px 0 10px; padding: 8px 12px; font-size: 0.88rem;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+}
+/* Узкое окно или период в 90 дней — столбцов больше, чем помещается: прокручивается
+   ЭТА обёртка, а не вся страница, — тот же приём, что у таблиц и списков объектов. */
+.history-chart-wrap { overflow-x: auto; margin: 6px 0; }
+.history-svg { display: block; width: 100%; height: auto; min-width: 560px; }
+.history-legend {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  font-size: 0.78rem; color: var(--text); margin: 6px 2px 0;
+}
+.history-legend__swatch {
+  display: inline-block; width: 10px; height: 10px; border-radius: 2px;
+  margin-right: 5px; vertical-align: -1px;
+}

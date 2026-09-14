@@ -204,6 +204,56 @@ public static class MezosyncReader
         return list;
     }
 
+    /// <summary>
+    /// Сырьё для графиков динамики задач: ВСЕ карточки (id/role/status/createdAt)
+    /// и ВСЕ переходы статуса (taskId/at/fromStatus/toStatus). Без сумм — агрегацию
+    /// по дням/ролям/фильтрам делает клиент, иначе каждый новый фильтр требовал бы
+    /// нового запроса к базе.
+    /// ⚠️ Порядок обеих выборок — ORDER BY id, как и у соседних читателей (события
+    ///    задачи, причины dropped): это порядок ВВОДА, и клиент обязан его сохранять,
+    ///    а не пересортировывать по `at` — строки одной секунды иначе могут поменяться
+    ///    местами и исказить «статус на начало/конец дня».
+    /// </summary>
+    public static TaskHistoryDto ReadTaskHistory(SqliteConnection c, SchemaCapabilities s)
+    {
+        if (!s.Has("backlog"))
+            return new TaskHistoryDto(false, "таблицы backlog в этой базе нет — динамику задач посчитать нечем",
+                [], false, null, []);
+
+        var cards = new List<TaskHistoryCardDto>();
+        using (var cmd = c.CreateCommand())
+        {
+            cmd.CommandText = "SELECT id, role, status, created_at FROM backlog ORDER BY id";
+            using var r = cmd.ExecuteReader();
+            var m = Row.Map(r);
+            while (r.Read())
+                cards.Add(new TaskHistoryCardDto(
+                    Row.Num(r, m, "id") ?? 0, Row.Str(r, m, "role"), Row.Str(r, m, "status"),
+                    Row.Str(r, m, "created_at")));
+        }
+
+        if (!s.Has("backlog_events"))
+            return new TaskHistoryDto(true, null, cards, false,
+                "таблицы backlog_events в этой базе нет — история переходов статуса не хранится, " +
+                "посчитать можно только «новых», без «закрыто» и без вида «по статусам»", []);
+
+        var events = new List<TaskHistoryEventDto>();
+        using (var cmd = c.CreateCommand())
+        {
+            cmd.CommandText =
+                "SELECT backlog_id, at, from_status, to_status FROM backlog_events " +
+                "WHERE event_type = 'status_change' ORDER BY id";
+            using var r = cmd.ExecuteReader();
+            var m = Row.Map(r);
+            while (r.Read())
+                events.Add(new TaskHistoryEventDto(
+                    Row.Num(r, m, "backlog_id") ?? 0, Row.Str(r, m, "at"),
+                    Row.Str(r, m, "from_status"), Row.Str(r, m, "to_status")));
+        }
+
+        return new TaskHistoryDto(true, null, cards, true, null, events);
+    }
+
     // Причины устаревания одним запросом на весь список: последний status_change → dropped
     // с непустой запиской побеждает (ORDER BY id — поздние перезаписывают ранние в словаре).
     // Тот же отбор, что у CLI-списка: NULL/пустое тело причиной не считается.

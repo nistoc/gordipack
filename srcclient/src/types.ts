@@ -236,3 +236,37 @@ export interface SchemaReport {
   presentButUnknownToPeriscope: string[];
   note: string;
 }
+
+// ── Динамика задач ───────────────────────────────────────────────────────────
+
+/** Карточка для графиков — минимум полей, агрегация вся на клиенте (см. HistoryPage). */
+export interface TaskHistoryCard {
+  id: number;
+  role: string | null;
+  status: string | null;
+  createdAt: string | null;
+}
+
+/** Переход статуса — минимум полей для подсчёта по дням. */
+export interface TaskHistoryEvent {
+  taskId: number;
+  at: string | null;
+  fromStatus: string | null;
+  toStatus: string | null;
+}
+
+/**
+ * Сырьё для страницы «Динамика задач»: без сумм — их считает клиент под любой набор
+ * фильтров. Поддержка в ДВЕ ступени, как в `TaskHistoryDto` (../src/Model/Contracts.cs):
+ * `supported=false` — таблицы backlog в базе нет вовсе, графиков не будет совсем;
+ * `eventsSupported=false` — карточки есть, а backlog_events нет: «новых» посчитать
+ * можно, «закрыто» и «по статусам» — нет, это НЕ ноль, а «нечем посчитать».
+ */
+export interface TaskHistory {
+  supported: boolean;
+  note: string | null;
+  cards: TaskHistoryCard[];
+  eventsSupported: boolean;
+  eventsNote: string | null;
+  events: TaskHistoryEvent[];
+}

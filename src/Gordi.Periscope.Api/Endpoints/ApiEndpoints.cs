@@ -162,6 +162,20 @@ public static class ApiEndpoints
             return detail is null ? Results.NotFound() : Results.Ok(detail);
         });
 
+        // ── динамика задач ───────────────────────────────────────────────────
+        // Сырьё для графиков «Динамика задач»: карточки + переходы статуса, без
+        // предпосчитанных сумм. Читаем НАПРЯМУЮ (как /tasks/{id} и /messages), а не
+        // из фонового снимка — набор ВСЕХ карточек и событий тяжелее сотен строк
+        // снимка, и держать его в памяти службы ради страницы, которую открывают
+        // не каждую минуту, незачем.
+        api.MapGet("/tasks/history", (SourceRegistry sources, SnapshotStore store) =>
+        {
+            if (sources.ActivePath is null) return NoSnapshot(store);
+            using var c = sources.OpenActive();
+            var caps = SchemaCapabilities.Probe(c);
+            return Results.Ok(MezosyncReader.ReadTaskHistory(c, caps));
+        });
+
         // ── лента ────────────────────────────────────────────────────────────
         api.MapGet("/messages",
             (SourceRegistry sources, SnapshotStore store, IOptions<PeriscopeOptions> opt,

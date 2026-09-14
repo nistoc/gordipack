@@ -280,3 +280,33 @@ public sealed record PeriscopeSnapshot(
 /// <summary>Строка таблицы tracks — как она есть, без счёта задач: счёт делается
 /// в ОДНОМ месте (витрина), иначе два счёта однажды разойдутся молча.</summary>
 public sealed record TrackDeclarationDto(string TrackId, string? Title, string? Status);
+
+// ── Динамика задач (сырые данные для графиков) ──────────────────────────────
+
+/// <summary>Карточка для графиков — только то, что нужно для подсчёта по дням.</summary>
+public sealed record TaskHistoryCardDto(
+    long Id, string? Role, string? Status, string? CreatedAt);
+
+/// <summary>Переход статуса — только то, что нужно для подсчёта по дням.</summary>
+public sealed record TaskHistoryEventDto(
+    long TaskId, string? At, string? FromStatus, string? ToStatus);
+
+/// <summary>
+/// Сырьё для страницы «Динамика задач»: ВСЕ карточки и ВСЕ переходы статуса,
+/// без предпосчитанных сумм — агрегацию (по дням, ролям, статусам, фильтрам)
+/// делает клиент, чтобы любой набор фильтров считался без нового запроса.
+///
+/// Поддержка в ДВЕ ступени, а не одним флагом: карточки читаются из backlog,
+/// переходы — из отдельной таблицы backlog_events, и баз, где есть одно без
+/// другого, достаточно (тот же приём, что у ReadTask/ReadTaskDetail — MissingFeatures).
+/// Supported=false — ноль карточек был бы ложью «задач нет», хотя на деле
+/// их не из чего прочитать; EventsSupported=false — то же самое отдельно
+/// для «закрыто»/«по статусам»: «новых» посчитать можно и без событий.
+/// </summary>
+public sealed record TaskHistoryDto(
+    bool Supported,
+    string? Note,
+    IReadOnlyList<TaskHistoryCardDto> Cards,
+    bool EventsSupported,
+    string? EventsNote,
+    IReadOnlyList<TaskHistoryEventDto> Events);

@@ -1,6 +1,6 @@
 import type {
   Health, Message, MessagePage, Overview, Role, RolesResponse, Rule,
-  SchemaReport, SourceInfo, Task, TaskDetail, TasksGrouped, TracksResponse,
+  SchemaReport, SourceInfo, Task, TaskDetail, TaskHistory, TasksGrouped, TracksResponse,
 } from './types';
 
 /**
@@ -92,6 +92,13 @@ export const api = {
    */
   tasksGrouped: (p: { status?: string; role?: string } = {}) =>
     get<TasksGrouped>('/tasks/grouped', p),
+
+  /**
+   * Сырьё для графиков «Динамика задач»: все карточки + все переходы статуса,
+   * без фильтров и без сумм — агрегацию делает клиент (см. pages/HistoryPage.tsx),
+   * чтобы период/роли/статусы считались заново без нового обращения к сети.
+   */
+  taskHistory: () => get<TaskHistory>('/tasks/history'),
 
   messages: (p: {
     limit?: number; offset?: number; role?: string;
