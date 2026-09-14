@@ -7,6 +7,8 @@
     python <контур>/.mezosync/scripts/update-tools.py --source <путь или URL>   # разово иначе
     python <контур>/.mezosync/scripts/update-tools.py --source <...> --rev <коммит>  # РОВНО эта версия
     python <контур>/.mezosync/scripts/update-tools.py --source <...> --record-source  # ЗАПОМНИТЬ этот источник
+    python <контур>/.mezosync/scripts/update-tools.py --merge <файл>                  # свести опору/вашу правку/пакет
+    python <контур>/.mezosync/scripts/update-tools.py --accept-merge <файл> --apply   # принять черновик сведения
 
 ЗАЧЕМ. Вопрос владельца 2026-08-19 09:22 UTC: «откуда tapas берёт инструментарий? он ведь
 не скачал себе независимый репозиторий, чтобы не зависеть от твоих апгрейдов и чтобы мог
@@ -35,6 +37,16 @@
     файлов. Свой правленый = отличается И от источника, И от отпечатка установки.
   · ⛔ ОТПЕЧАТКОВ НЕТ (контур собран раньше, чем их стали писать) — различить нечем, и это
     ГОВОРИТСЯ ВСЛУХ. Такие файлы не обновляются молча: нужен явный --overwrite-unknown;
+  · ФАЙЛ, ПРАВЛЕННЫЙ У СЕБЯ, ПОЛУЧАЕТ ИСПРАВЛЕНИЯ ПАКЕТА ЧЕРЕЗ СВЕДЕНИЕ (карточка #609).
+    Отпечаток установки (meta.template_files_sha) — это и есть ОПОРА: версия пакета, от
+    которой контур когда-то пошёл. --merge находит ЕЁ ТЕКСТ в истории пакета (по отпечатку,
+    а не по содержимому — см. find_version_by_fingerprint) и сводит три текста (опора · ваш ·
+    пакет) инструментом `git merge-file`. Черновик кладётся РЯДОМ со скриптами, а не поверх
+    живого файла; --accept-merge кладёт его в контур, только если отметок пересечения не
+    осталось, и переносит опору на версию пакета, с которой сводили. Без этого шага список
+    «✋ правлен у тебя» только НАЗЫВАЛ беду («перенеси свою правку сам»), а решить её было
+    нечем — правка пакета, случившаяся ПОСЛЕ отпечатка установки, до контура не доходила
+    никогда.
   · ⛔ без --apply не пишется ничего.
 """
 from __future__ import annotations
@@ -54,8 +66,49 @@ import mezo_paths  # noqa: E402
 
 import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
+HERE = pathlib.Path(__file__).resolve().parent
+# ВОЗВРАТ PROTO (тот же приём, что у rules-from-pack.py, SET_RULE_PY/GORDI_ISSUE_PY): путь —
+# от СВОЕГО расположения, а не впечатан, — иначе подсказка годилась бы только автору файла.
+GORDI_ISSUE_PY = HERE / "gordi-issue.py"
+
 NEWLINE = chr(10)
 UNKNOWN_VERSION = "версия неизвестна"   # заглушка fetch(), когда у источника нет HEAD вовсе
+
+# ВОЗВРАТ PROTO (карточка #609): подписи git merge-file — ОДНА пара констант, а не
+# литералы, разведённые по двум местам (сама команда git merge-file и разбор её вывода).
+# Разведённые литералы уже разошлись бы однажды незаметно — правка одного места не тронула
+# бы другое, и разбор искал бы подпись, которую сама команда больше не печатает.
+MERGE_LABEL_OURS = "ваш текст"
+MERGE_LABEL_THEIRS = "пакет сейчас"
+
+
+def conflict_marker_lines(data: bytes) -> list[bytes]:
+    """Строки данных, у которых пересечение НАЧИНАЕТСЯ или ЗАКАНЧИВАЕТСЯ — то есть строка
+    начинается РОВНО с нашей подписи git merge-file (`<<<<<<< ваш текст` / `>>>>>>> пакет
+    сейчас`), а не где угодно внутри строки.
+
+    ВОЗВРАТ PROTO (карточка #609, главная правка): было `draft_bytes.count(b"<<<<<<< ")`
+    и поиск подстрок `b"<<<<<<< "`/`b"=======\n"`/`b">>>>>>> "` — поиск ПОДСТРОКИ где угодно
+    в тексте. У update-tools.py (и у его же приёмки) эти самые байты стоят в печатаемых
+    строках КАК ТЕКСТ ДЛЯ ЧЕЛОВЕКА («отметки пересечения (<<<<<<< / ======= / >>>>>>>)») —
+    контур, у которого правлен update-tools.py, получил бы от --merge ложные «пересечений: N»
+    и вечный отказ --accept-merge на файле, где пересечений нет вовсе. «=======» отдельно
+    НЕ ищем — частый разделитель обычного текста (границу пересечения метят обе НАШИ подписи,
+    не одинокий разделитель). Обе формы конца строки (CRLF и LF) приводятся ПЕРЕД разбором —
+    та же нормализация, что у same_text/digest везде в инструменте.
+    """
+    ours = f"<<<<<<< {MERGE_LABEL_OURS}".encode("utf-8")
+    theirs = f">>>>>>> {MERGE_LABEL_THEIRS}".encode("utf-8")
+    return [line for line in data.replace(b"\r\n", b"\n").split(b"\n")
+           if line.startswith(ours) or line.startswith(theirs)]
+
+
+def count_conflicts(data: bytes) -> int:
+    """Число пересечений — по строкам НАЧАЛА (у каждого пересечения РОВНО одна строка
+    «<<<<<<< ваш текст»); строка конца («>>>>>>> пакет сейчас») тем же пересечением не
+    считается ещё раз — иначе число выходило бы вдвое больше настоящего."""
+    ours = f"<<<<<<< {MERGE_LABEL_OURS}".encode("utf-8")
+    return sum(1 for line in data.replace(b"\r\n", b"\n").split(b"\n") if line.startswith(ours))
 
 
 def same_text(a: bytes, b: bytes) -> bool:
@@ -126,6 +179,23 @@ def is_shallow_clone(repo: pathlib.Path) -> bool:
     return (r.stdout or "").strip() == "true"
 
 
+def history_repo_for(source: str, src_dir: pathlib.Path) -> tuple[pathlib.Path | None, str]:
+    """Где искать историю пакета — общее место для ОБОИХ потребителей истории (карточка #609):
+    отчёта по «❓» (find_version_span) и поиска опоры для --merge (find_version_by_fingerprint).
+
+    Было раньше только внутри main() и звалось лишь когда есть хоть один «❓»; вынесено сюда
+    без смены поведения — тот же выбор probe_dir (сам --source, если это папка, иначе
+    скачанная копия) и та же дотяжка `--fetch --unshallow`, если клон был мелким (--depth 1).
+    """
+    source_as_dir = pathlib.Path(source)
+    probe_dir = source_as_dir if source_as_dir.is_dir() else src_dir
+    history_repo, reason = git_history_root(probe_dir)
+    if history_repo is not None and is_shallow_clone(history_repo):
+        subprocess.run(["git", "-C", str(history_repo), "fetch", "--unshallow"],
+                       capture_output=True, text=True)
+    return history_repo, reason
+
+
 def find_version_span(repo: pathlib.Path, git_rel: str, target: bytes,
                       anchor_rev: str | None = None) -> dict:
     """Карточка #604 ③-2 (возврат OPSSRE): подпись несёт ДВЕ даты — появления версии И
@@ -177,6 +247,41 @@ def find_version_span(repo: pathlib.Path, git_rel: str, target: bytes,
             return {"found": True, "date": date, "commit": commit_hash[:12],
                     "changed_date": changed[1] if changed else None,
                     "changed_commit": changed[0][:12] if changed else None}
+    return {"found": False}
+
+
+def find_version_by_fingerprint(repo: pathlib.Path, git_rel: str, fingerprint: str,
+                                anchor_rev: str | None = None) -> dict:
+    """ОПОРА файла (карточка #609): версия пакета в истории, чей отпечаток (digest()) равен
+    `fingerprint` — ровно тому, что записан при установке или прошлом сведении
+    (meta.template_files_sha). Найти её ТЕКСТОМ нужно для --merge: опору хранят отпечатком
+    (числом), не байтами, а сводить нужно текст.
+
+    Тот же обход истории пути, что у find_version_span (`git log -- git_rel`, новее→старше,
+    `anchor_rev` не даёт заглянуть ПОСЛЕ взятой версии — тот же смысл, что там), но сравнение
+    ДРУГОЕ: не same_text(target, ...) содержимого целиком, а digest(...) == fingerprint —
+    опору ищем по отпечатку, а не по байтам (их с собой не носим).
+
+    Возвращает {"found": False} — версии с таким отпечатком в просмотренной истории нет
+    (клон может быть неполным, либо отпечаток — вовсе от другого источника);
+    {"found": True, "date", "commit", "text": bytes, "changed": [(commit12, date), ...]} —
+    сама версия (ТЕКСТ, нужен для git merge-file) и коммиты пакета, тронувшие путь ПОСЛЕ
+    неё (новее→старше, в пределах anchor_rev; пустой список = пакет её держит и сейчас).
+    """
+    args = ["git", "-C", str(repo), "log"]
+    if anchor_rev:
+        args.append(anchor_rev)
+    args += ["--format=%H|%as", "--", git_rel]
+    log = subprocess.run(args, capture_output=True, text=True)
+    commits = [tuple(line.split("|", 1)) for line in (log.stdout or "").splitlines()
+              if "|" in line]
+    for i, (commit_hash, date) in enumerate(commits):
+        show = subprocess.run(["git", "-C", str(repo), "show", f"{commit_hash}:{git_rel}"],
+                              capture_output=True)
+        if show.returncode == 0 and digest(show.stdout) == fingerprint:
+            changed = [(h[:12], d) for h, d in commits[:i]]   # новее найденной — их i штук
+            return {"found": True, "date": date, "commit": commit_hash[:12],
+                    "text": show.stdout, "changed": changed}
     return {"found": False}
 
 
@@ -288,6 +393,171 @@ def print_pack_rules_summary(db_path: pathlib.Path, tools_dir: pathlib.Path,
     print(f"сверка правил пакета: rules-from-pack.py отказал (код {r.returncode}) — {reason}")
 
 
+# ── СВЕДЕНИЕ (карточка #609): --merge / --accept-merge ─────────────────────────────────
+# ЗАМЫСЕЛ (тот же, что у правил в карточке #608, rules-from-pack.py --merge/--adopt): три
+# текста, не два. Сравнить «ваш текст» с «текстом пакета» напрямую нельзя — не видно, кто
+# менял. Третья точка — ОПОРА: версия пакета, от которой контур когда-то пошёл. У правил
+# опору хранит отдельный ключ meta (pack_rules_base); у скриптов она УЖЕ есть — это
+# meta.template_files_sha, отпечаток, который update-tools пишет при каждой установке и
+# каждом взятии свежего. Не нужно заводить второе хранилище — нужно только уметь по этому
+# отпечатку найти ТЕКСТ версии в истории пакета (find_version_by_fingerprint выше).
+#
+# ⚖️ ЧЕГО ЭТО НЕ ДЕЛАЕТ, названо прямо (то же «Не входит», что в карточке): --merge не
+# сводит АВТОМАТИЧЕСКИ без роли — при пересечениях черновик несёт отметки, и --accept-merge
+# отказывает, пока они не убраны. Файлам без отпечатка установки («❓») сводить нечем: опору
+# найти нечем, и это говорится прямо, а не молчится (граница названа в самой командной строке).
+
+def merge_work_root(tools: pathlib.Path) -> pathlib.Path:
+    """Где лежат черновики сведения — РЯДОМ со скриптами контура, а не в общем временном
+    месте (mezo_stand.new()): тот каталог убирается по исходу ОДНОГО запуска процесса, а
+    черновик обязан пережить его — между --merge и его разбором ролью и --accept-merge
+    обычно проходит ОТДЕЛЬНЫЙ запуск. Живой файл при этом не трогается — черновик лежит
+    в СВОЕЙ папке, не поверх tools/<rel>."""
+    return tools.parent / "merge-work"
+
+
+def draft_slug(rel: pathlib.Path) -> str:
+    return str(rel).replace(chr(92), "/").replace("/", "__")
+
+
+def draft_paths(tools: pathlib.Path, rel: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
+    d = merge_work_root(tools) / draft_slug(rel)
+    return d / rel.name, d / "meta.json"
+
+
+def cmd_merge(tools: pathlib.Path, src_index: dict, git_rel_of: dict, fingerprints: dict,
+             history_repo: pathlib.Path | None, history_unavailable: str | None,
+             rel_arg: str, rev: str) -> int:
+    """Свести опору · ваш текст · пакет для ОДНОГО файла контура. Живой файл НЕ трогается —
+    только черновик рядом (draft_paths). git merge-file сам сводит непересекающиеся правки;
+    пересечения помечает отметками — их разбирает роль (языковая модель), не этот код."""
+    rel = pathlib.Path(rel_arg)
+    mine = tools / rel
+    if not mine.exists():
+        sys.exit(f"⛔ файла «{rel_arg}» у контура нет — сводить нечего")
+    if rel not in src_index:
+        sys.exit(f"⛔ файла «{rel_arg}» нет в источнике — сводить не с чем")
+    pack_bytes = src_index[rel].read_bytes()
+    mine_bytes = mine.read_bytes()
+    if same_text(mine_bytes, pack_bytes):
+        sys.exit(f"⛔ «{rel_arg}»: ваш текст и текст пакета уже совпадают дословно — "
+                 f"сводить нечего")
+    fp = fingerprints.get(str(rel).replace(chr(92), "/"))
+    if fp is None:
+        sys.exit(f"⛔ опору найти нечем: у «{rel_arg}» нет отпечатка установки — различить, "
+                 f"с какой версии пакета он пошёл, нечем (см. «❓» в обычном прогоне)")
+    if history_repo is None:
+        sys.exit(f"⛔ опору найти нечем: истории пакета нет — {history_unavailable}")
+    git_rel = git_rel_of.get(rel)
+    if not git_rel:
+        sys.exit(f"⛔ опору найти нечем: путь «{rel_arg}» не встретился внутри истории пакета")
+    # 🪤 ВОЗВРАТ OPSSRE №2 — та же граница, что и у bound в main() (см. комментарий там):
+    # rev может прийти ЗАГЛУШКОЙ UNKNOWN_VERSION, и в git log её нельзя отдавать как есть.
+    bound = rev if rev != UNKNOWN_VERSION else None
+    found = find_version_by_fingerprint(history_repo, git_rel, fp, anchor_rev=bound)
+    if not found.get("found"):
+        sys.exit(f"⛔ опору найти нечем: версия с отпечатком установки «{fp}» в истории "
+                 f"пакета не встретилась (клон может быть неполным)")
+    opora_bytes = found["text"]
+
+    draft_path, meta_path = draft_paths(tools, rel)
+    draft_path.parent.mkdir(parents=True, exist_ok=True)
+    # ⚡ ИМЕНА ВРЕМЕННЫХ ФАЙЛОВ — ПО-АНГЛИЙСКИ (слово владельца: код и имена — по-английски;
+    # печатаемый человеку текст — по-русски). Подписи -L у git merge-file ниже ОСТАЮТСЯ
+    # русскими — их читает человек, разбирая черновик, это не имя, а показываемый текст.
+    ours_f = draft_path.parent / "_ours.tmp"
+    base_f = draft_path.parent / "_base.tmp"
+    theirs_f = draft_path.parent / "_theirs.tmp"
+    ours_f.write_bytes(mine_bytes)
+    base_f.write_bytes(opora_bytes)
+    theirs_f.write_bytes(pack_bytes)
+    r = subprocess.run(
+        ["git", "merge-file", "-p",
+         "-L", MERGE_LABEL_OURS,
+         "-L", f"опора (пакет от {found['date']}, коммит {found['commit']})",
+         "-L", MERGE_LABEL_THEIRS, str(ours_f), str(base_f), str(theirs_f)],
+        capture_output=True)
+    for f in (ours_f, base_f, theirs_f):
+        f.unlink(missing_ok=True)
+    if r.returncode < 0:
+        sys.exit(f"⛔ git merge-file не сумел сравнить тексты (код {r.returncode}): "
+                 + (r.stderr or b"").decode("utf-8", "replace").strip()[:400])
+    draft_bytes = r.stdout
+    draft_path.write_bytes(draft_bytes)
+    conflicts = count_conflicts(draft_bytes)
+    meta = {"rel": str(rel).replace(chr(92), "/"), "pack_fingerprint": digest(pack_bytes),
+            "pack_rev_at_merge": rev, "opora_fingerprint": fp,
+            "opora_commit": found["commit"], "opora_date": found["date"]}
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    print(f"опора: версия пакета от {found['date']} (коммит {found['commit']})")
+    print(f"черновик: {draft_path}")
+    print(f"пересечений: {conflicts}")
+    if conflicts:
+        print("⚖️ в черновике остались отметки пересечения (<<<<<<< / ======= / >>>>>>>) — "
+              "их обязана разобрать роль (прогони свои проверки после), затем повтори тем "
+              f"же именем: --accept-merge {rel_arg} --apply")
+    else:
+        print(f"пересечений нет — черновик несёт ОБЕ правки; живой файл НЕ тронут. Принять: "
+              f"--accept-merge {rel_arg} --apply")
+    return 0
+
+
+def cmd_accept_merge(db_path: pathlib.Path, tools: pathlib.Path, rel_arg: str,
+                     apply: bool) -> int:
+    """Принять черновик, оставленный --merge: отказ, если в нём ещё есть отметки
+    пересечения; иначе — живой файл получает черновик, а опора (meta.template_files_sha)
+    переходит на версию пакета, с КОТОРОЙ сводили (сохранена в meta.json рядом с черновиком
+    при самом --merge — не пересчитывается заново, чтобы --accept-merge не зависел от
+    источника и не звал сеть повторно)."""
+    rel = pathlib.Path(rel_arg)
+    draft_path, meta_path = draft_paths(tools, rel)
+    if not draft_path.exists() or not meta_path.exists():
+        sys.exit(f"⛔ черновика для «{rel_arg}» нет — сначала --merge {rel_arg}")
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    draft_bytes = draft_path.read_bytes()
+    if conflict_marker_lines(draft_bytes):
+        sys.exit(f"⛔ в черновике «{draft_path}» остались отметки пересечения — разбери их "
+                 f"и сохрани файл, затем повтори --accept-merge {rel_arg} --apply")
+    if not apply:
+        print(f"[ХОЛОСТОЙ ПРОГОН] принял бы «{rel_arg}»: живой файл получит черновик, опорой "
+              f"станет версия пакета, с которой сводили (отпечаток {meta['pack_fingerprint']}, "
+              f"ревизия пакета при сведении {meta.get('pack_rev_at_merge', '?')}). "
+              f"Для записи — флаг --apply.")
+        return 0
+    mine = tools / rel
+    mine.parent.mkdir(parents=True, exist_ok=True)
+    mine.write_bytes(draft_bytes)
+
+    conn = sqlite3.connect(str(db_path))
+    got = {k: v for k, v in conn.execute("SELECT key, value FROM meta")}
+    fingerprints = json.loads(got.get("template_files_sha") or "{}")
+    fingerprints[meta["rel"]] = meta["pack_fingerprint"]
+    conn.execute("INSERT INTO meta (key, value) VALUES (?, ?) "
+                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                 ("template_files_sha", json.dumps(fingerprints, ensure_ascii=False)))
+    conn.commit()
+    conn.close()
+
+    for p in (draft_path, meta_path):
+        p.unlink(missing_ok=True)
+    try:
+        draft_path.parent.rmdir()
+    except OSError:
+        pass   # не пусто (чужой мусор) или занято — не повод падать на уборке черновика
+
+    print(f"✅ принято: {rel_arg} — опора файла теперь версия пакета, с которой сводили "
+          f"(отпечаток {meta['pack_fingerprint']})")
+    print("   файл по-прежнему отличается от пакета (в нём ваша правка) — следующий обычный "
+          "прогон снова покажет «✋ ПРАВЛЕН У ТЕБЯ», но с отметкой «пакет после опоры не "
+          "менял»; прежняя опора в выводе не встретится.")
+    print(f"👉 если правка контура полезна не только вам — предложи её в пакет: "
+          f"python {GORDI_ISSUE_PY} create --role <координатор> --title \"...\" "
+          f"--body-file <файл с ## ЗАМЕР / ## КЛАСС / ## ПРЕДЛОЖЕНИЕ> --dry-run "
+          f"(форма — как у rules-from-pack.py --propose)")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="забрать свежие инструменты из общего репозитория")
     ap.add_argument("--source", help="путь или URL; по умолчанию — записанный при сборке контура")
@@ -309,13 +579,34 @@ def main() -> int:
                          "уже записан. Без флага источник в meta трогается только при первой "
                          "записи (карточка #604 ②б) — разовый --source в постоянную запись "
                          "не превращается")
+    ap.add_argument("--merge", metavar="ФАЙЛ", default=None,
+                    help="свести опору · ваш текст · текст пакета для файла контура, "
+                         "правленого у себя (карточка #609); черновик — В СТОРОНУ, живой "
+                         "файл не трогается")
+    ap.add_argument("--accept-merge", dest="accept_merge", metavar="ФАЙЛ", default=None,
+                    help="принять черновик --merge (нужен --apply): положить в контур и "
+                         "перенести опору на версию пакета, с которой сводили; отказ, пока "
+                         "в черновике остаются отметки пересечения")
     ap.add_argument("--db", default=None)
     a = ap.parse_args()
+
+    modes = sum(bool(x) for x in (a.record_only, a.merge, a.accept_merge))
+    if modes > 1:
+        sys.exit("⛔ --record-only / --merge / --accept-merge — разные режимы; за один "
+                 "вызов можно попросить только один")
 
     db = a.db or mezo_paths.live_db()
     conn = sqlite3.connect(str(db))
     got = {k: v for k, v in conn.execute("SELECT key, value FROM meta")}
     conn.close()
+
+    if a.accept_merge:
+        # ⚖️ БЕЗ источника и БЕЗ сети: всё нужное (черновик, отпечаток версии пакета,
+        # с которой сводили) уже лежит рядом с черновиком — так --accept-merge не зависит
+        # от доступности источника и не звонит наружу повторно.
+        tools = pathlib.Path(mezo_paths.live_scripts())
+        return cmd_accept_merge(db, tools, a.accept_merge, a.apply)
+
     source = a.source or got.get("template_source")
     if not source:
         sys.exit("⛔ КОНТУР НЕ ЗНАЕТ СВОЕГО ИСТОЧНИКА (meta.template_source пусто). "
@@ -364,11 +655,6 @@ def main() -> int:
         if not src_tools.is_dir():
             sys.exit(f"⛔ в источнике нет каталога scripts: {src_dir}")
 
-        previous_commit = got.get("template_commit", "неизвестна")
-        print(f"источник ... {source}" + (f"  (--rev {a.rev})" if a.rev else ""))
-        print(f"версия ..... было {previous_commit} · стало {rev}")
-        print()
-
         # 🪤 ИСТОЧНИК — ДВА КАТАЛОГА, А НЕ ОДИН. Обновлятор обходил только scripts/, а семь
         # звеньев, которые зовёт общий прогон, лежат в источнике в vnext/prototype/ и при
         # сборке кладутся потребителю РЯДОМ со скриптами. Они не обновлялись НИКОГДА, и
@@ -394,6 +680,17 @@ def main() -> int:
                     out_of_scope.append(rel)    # звена у нас нет: сборка его не клала
 
         fingerprints = json.loads(got.get("template_files_sha") or "{}")
+
+        if a.merge:
+            history_repo, history_unavailable = history_repo_for(source, src_dir)
+            return cmd_merge(tools, src_index, git_rel_of, fingerprints,
+                             history_repo, history_unavailable, a.merge, rev)
+
+        previous_commit = got.get("template_commit", "неизвестна")
+        print(f"источник ... {source}" + (f"  (--rev {a.rev})" if a.rev else ""))
+        print(f"версия ..... было {previous_commit} · стало {rev}")
+        print()
+
         fresh, own_edits, new_files, unknown = [], [], [], []
         for rel, f in sorted(src_index.items()):
             mine = tools / rel
@@ -411,23 +708,32 @@ def main() -> int:
             else:
                 fresh.append(rel)
 
-        for rel in new_files:
-            print(f"   + {str(rel):40} нет у нас — появится")
-        for rel in fresh:
-            print(f"   ≠ {str(rel):40} отличается — обновится")
-        for rel in own_edits:
-            print(f"   ✋ {str(rel):40} ПРАВЛЕН У ТЕБЯ — НЕ трогаем")
-
         # 🪤 КАРТОЧКА #604 ③: у «❓» называем, КОГДА эта версия появилась и когда пакет её
         # сменил — иначе «❓» читается как «не смотрели», а не «застряли месяц назад» (шесть
         # таких файлов у tapas стояли на пакете 20.08 почти месяц, никто не заметил).
-        # История нужна только когда есть хоть один «❓» — иначе это лишний git-вызов впустую.
+        # История нужна только когда есть хоть один «❓» ИЛИ «✋» — иначе это лишний git-вызов
+        # впустую. Карточка #609 расширила условие («✋» тоже нужна опора по отпечатку), но
+        # САМ ПОИСК истории (git_history_root) оставлен ИНЛАЙНОМ, на том же месте и тем же
+        # вызовом, что и был, — не вынесен в history_repo_for(). Причина: прежние приёмки
+        # правят этот код нарочной поломкой ПО ТЕКСТУ (ищут строку дословно) — вынеси её в
+        # отдельную функцию, и их поломка перестала бы находить свою строку, а «не нашлась
+        # строка для поломки» — это отказ приёмки, не число различающих случаев. history_repo_for
+        # ниже используется ТОЛЬКО у --merge — там прежнего текста для сравнения нет.
         # ⚖️ ТРИ РАЗНЫХ ОТВЕТА, и путать их нельзя (возврат OPSSRE ③-1): история НЕ СМОТРЕЛАСЬ
         # (источник не git или worktree распознан неверно) ≠ история ПРОСМОТРЕНА и такого
         # содержимого в ней нет ≠ содержимое найдено — с датой появления и датой смены.
         history: dict = {}
+        history_repo = None
         history_unavailable = None
-        if unknown:
+        # 🪤 ВОЗВРАТ OPSSRE №2: rev может быть ЗАГЛУШКОЙ UNKNOWN_VERSION (у
+        # источника нет HEAD вовсе — см. fetch()). Отданная в git log как есть,
+        # она ломает вызов и подменяет правду «в истории нет» неправдой той же
+        # формы. Выбор — искать БЕЗ ГРАНИЦЫ (anchor_rev=None), а не
+        # отказываться от дат: разбор выбора — в докстроке find_version_span.
+        # Карточка #609: граница ТА ЖЕ САМАЯ, и теперь она общая для «❓» (find_version_span)
+        # и «✋» (find_version_by_fingerprint) — один bound на обоих потребителей истории.
+        bound = rev if rev != UNKNOWN_VERSION else None
+        if unknown or own_edits:
             source_as_dir = pathlib.Path(source)
             probe_dir = source_as_dir if source_as_dir.is_dir() else src_dir
             history_repo, reason = git_history_root(probe_dir)
@@ -438,18 +744,49 @@ def main() -> int:
                                    capture_output=True, text=True)
                 for rel in unknown:
                     git_rel = git_rel_of.get(rel)
-                    # 🪤 ВОЗВРАТ OPSSRE №2: rev может быть ЗАГЛУШКОЙ UNKNOWN_VERSION (у
-                    # источника нет HEAD вовсе — см. fetch()). Отданная в git log как есть,
-                    # она ломает вызов и подменяет правду «в истории нет» неправдой той же
-                    # формы. Выбор — искать БЕЗ ГРАНИЦЫ версии (anchor_rev=None), а не
-                    # отказываться от дат: разбор выбора — в докстроке find_version_span.
-                    bound = rev if rev != UNKNOWN_VERSION else None
                     history[rel] = (find_version_span(history_repo, git_rel,
                                                        (tools / rel).read_bytes(),
                                                        anchor_rev=bound)
                                     if git_rel else {"found": False})
             else:
                 history_unavailable = reason
+
+        # ═══ КАРТОЧКА #609: для «✋» — менял ли пакет файл ПОСЛЕ опоры (отпечатка установки).
+        # Опора уже есть — её ТЕКСТ ищется в истории пакета по отпечатку (не по содержимому,
+        # как у «❓»: у own_edits текущее содержимое НЕ РАВНО ни опоре, ни пакету — это и
+        # значит «правлен у себя», искать нечего им самим).
+        base_status: dict = {}
+        for rel in own_edits:
+            fp = fingerprints.get(str(rel).replace(chr(92), "/"))
+            git_rel = git_rel_of.get(rel)
+            if history_repo is None:
+                base_status[rel] = f"опору найти нечем: истории пакета нет — {history_unavailable}"
+                continue
+            if not git_rel:
+                base_status[rel] = "опору найти нечем: путь не встретился внутри истории пакета"
+                continue
+            found = find_version_by_fingerprint(history_repo, git_rel, fp, anchor_rev=bound)
+            if not found.get("found"):
+                base_status[rel] = ("опору найти нечем: версия с отпечатком установки в "
+                                    "истории пакета не встретилась")
+                continue
+            changed = found["changed"]
+            if changed:
+                shown = ", ".join(f"{h} ({d})" for h, d in changed[:5])
+                more = f" и ещё {len(changed) - 5}" if len(changed) > 5 else ""
+                base_status[rel] = (f"пакет менял этот файл после опоры (от {found['date']}, "
+                                    f"коммит {found['commit']}): да — коммиты {shown}{more}")
+            else:
+                base_status[rel] = (f"пакет после опоры (от {found['date']}, коммит "
+                                    f"{found['commit']}) не менял")
+
+        for rel in new_files:
+            print(f"   + {str(rel):40} нет у нас — появится")
+        for rel in fresh:
+            print(f"   ≠ {str(rel):40} отличается — обновится")
+        for rel in own_edits:
+            print(f"   ✋ {str(rel):40} ПРАВЛЕН У ТЕБЯ — НЕ трогаем")
+            print(f"      {base_status.get(rel, 'опору найти нечем: не проверено')}")
         for rel in unknown:
             if history_unavailable is not None:
                 tail = f" — истории у источника нет — дату назвать нечем ({history_unavailable})"
@@ -471,6 +808,9 @@ def main() -> int:
         if own_edits:
             print(f"✋ Своих правок: {len(own_edits)} — они НЕ будут затёрты. Хочешь взять свежее — "
                   f"перенеси свою правку сам или удали файл.")
+            print("   Или сведи автоматически непересекающиеся места: --merge <файл> положит "
+                  "черновик РЯДОМ (живой файл не тронут); без пересечений — сразу "
+                  "--accept-merge <файл> --apply.")
         if unknown:
             print(f"❓ Отпечатков установки нет у {len(unknown)} файлов: контур собран "
                   f"раньше, чем их стали писать.{NEWLINE}   Различить «правил ты» и «правил "
