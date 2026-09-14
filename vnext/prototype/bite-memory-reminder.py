@@ -12,15 +12,21 @@
 молчал и вёл только к полной перезаписи раздела; короткий честный путь «правок нет» (--confirm,
 карточка #160) не назывался вовсе.
 
+Вторая редакция — записка #5197 (PROTO, по разбору OPSSRE, записка #5196): возраст памяти мерится
+по разделу state, а не по самому свежему разделу. Замер 14.09: у COORD самый свежий раздел — 2,4 ч,
+state — 16 ч и после него 41 записка; запись мелкого раздела глушила напоминание.
+
 Случаи (различающий = прежняя редакция отвечает ИНАЧЕ):
   ① память старше 3 ч → напоминание звучит                                  контроль
   ② в напоминании правда о пороге: запись он НЕ останавливает                РАЗЛИЧАЮЩИЙ
   ③ назван путь «правок нет»: save-phoenix.py рядом с испытуемым, файл есть  РАЗЛИЧАЮЩИЙ
-  ④ совет ИСПОЛНИМ как напечатан: несёт --db песочницы (иначе метил бы       РАЗЛИЧАЮЩИЙ
-     в память рядом со скриптом — у живого это ЖИВАЯ память), отметка
-     ставится, и следующая записка уже без напоминания
+  ④ совет ИСПОЛНИМ как напечатан, БЕЗ подстановок: несёт --db песочницы      РАЗЛИЧАЮЩИЙ
+     (иначе метил бы в память рядом со скриптом — у живого это ЖИВАЯ память)
+     и имя раздела вместо «<раздел>»; отметка ставится, следующая записка
+     уже без напоминания
   ⑤ числа порога в напоминании нет: оно живёт в guard-phoenix-volume.py      контроль
   ⑥ память свежа → напоминание молчит                                        контроль
+  ⑦ state старый, другой раздел свежий → напоминание ЗВУЧИТ и называет state РАЗЛИЧАЮЩИЙ
 
 ⛔ Живой базы не касается: своя песочница; напечатанную команду БЕЗ --db песочницы приёмка не исполняет.
 """
@@ -51,7 +57,7 @@ def case(title, ok, detail, differ=False):
     return ok
 
 
-def build(hours_ago):
+def build(hours_ago, fresh_plan_minutes=None):
     d = mezo_stand.new("bite-reminder-")
     db = d / "s.db"
     con = sqlite3.connect(db)
@@ -75,6 +81,10 @@ def build(hours_ago):
     stamp = f"-{hours_ago} hours"
     con.execute("INSERT INTO phoenix VALUES (?, 'state', 'СОСТОЯНИЕ РОЛИ, записанное давно.',"
                 " datetime('now', ?), datetime('now', ?))", (ROLE, stamp, stamp))
+    if fresh_plan_minutes is not None:
+        fresh = f"-{fresh_plan_minutes} minutes"
+        con.execute("INSERT INTO phoenix VALUES (?, 'plan', 'ПЛАН, записанный только что.',"
+                    " datetime('now', ?), datetime('now', ?))", (ROLE, fresh, fresh))
     con.commit()
     con.close()
     return d, db
@@ -124,8 +134,12 @@ def main() -> int:
         has_db = i + 1 < len(tokens) and Path(tokens[i + 1]).resolve() == db.resolve()
     confirmed = silent_after = False
     detail = "команды в совете нет" if not tokens else "в совете нет --db песочницы — НЕ исполняю"
-    if tokens and has_db:
-        run_tokens = [sys.executable if t == "python" else t.replace("<раздел>", "state") for t in tokens]
+    placeholder = re.search(r"<[^>]+>", cmd_line)
+    if tokens and has_db and placeholder:
+        # подставлять за роль нельзя: она копирует строку как есть — «<раздел>» уйдёт в save-phoenix
+        detail = f"в совете заглушка {placeholder.group(0)} вместо имени раздела — как напечатана не исполнима"
+    elif tokens and has_db:
+        run_tokens = [sys.executable if t == "python" else t for t in tokens]
         r = subprocess.run(run_tokens, capture_output=True, text=True, encoding="utf-8", cwd=d,
                            env=mezo_stand.stand_env(d))
         confirmed = r.returncode == 0 and "ВЗГЛЯД ОТМЕЧЕН" in (r.stdout or "")
@@ -133,8 +147,9 @@ def main() -> int:
         silent_after = "НЕ ПОДТВЕРЖДАЛАСЬ" not in out2
         detail = (f"команда как напечатана: код {r.returncode} · отметка поставлена: {confirmed} · "
                   f"следующая записка без напоминания: {silent_after}")
-    ok &= case("④ совет ИСПОЛНИМ как напечатан: --db песочницы · отметка встала · напоминание стихло",
-               has_db and confirmed and silent_after, detail, differ=True)
+    ok &= case("④ совет ИСПОЛНИМ как напечатан, без подстановок: --db песочницы · имя раздела · "
+               "отметка встала · напоминание стихло",
+               has_db and not placeholder and confirmed and silent_after, detail, differ=True)
 
     numbers = [l.strip() for l in block if re.search(r"\b20[\s ]?000\b", l)]
     ok &= case("⑤ числа порога в напоминании нет — оно живёт в одном месте (контроль)",
@@ -144,6 +159,16 @@ def main() -> int:
     out3, _ = write(d2, db2, "записка при свежей памяти")
     ok &= case("⑥ память свежа → напоминание молчит (контроль)",
                "НЕ ПОДТВЕРЖДАЛАСЬ" not in out3, "признак, который горит всегда, перестаёт значить что-либо")
+
+    # ⑦ случай COORD 14.09: положение дел (state) старое, а мелкий раздел записан только что
+    d3, db3 = build(hours_ago=5, fresh_plan_minutes=10)
+    out5, _ = write(d3, db3, "записка при старом state и только что записанном разделе plan")
+    block5 = reminder_block(out5)
+    by_state = any("по разделу state" in l for l in block5)
+    ok &= case("⑦ state старый, другой раздел свежий → напоминание звучит и называет state",
+               bool(block5) and by_state,
+               f"state 5 ч, plan 10 мин · напоминание {'звучит' if block5 else 'МОЛЧИТ'} · "
+               f"названо, что мерено по state: {by_state}", differ=True)
 
     print()
     print(f"{'✅ НАПОМИНАНИЕ ГОВОРИТ ПРАВДУ' if ok else '🔴 НЕ ПРИНЯТО'} — случаев {CASES}, "

@@ -346,16 +346,31 @@ def _save_phoenix_alongside(args, db_path: Path) -> list:
         con = sqlite3.connect(f"file:{str(db_path).replace(chr(92), '/')}?mode=ro", uri=True)
         cols = {r[1] for r in con.execute("PRAGMA table_info(phoenix)")}
         look = "confirmed_at" if "confirmed_at" in cols else "saved_at"
+        # ⚖️ ВОЗРАСТ ПАМЯТИ — ПО РАЗДЕЛУ state, а не по самому свежему разделу (записка #5197,
+        # PROTO, по разбору OPSSRE, записка #5196). Замер 14.09: у COORD самый свежий раздел
+        # был записан за 2,4 ч до замера, а state — за 16 ч, и после него 41 её записка:
+        # запись любого мелкого раздела глушила напоминание при устаревшем положении дел.
+        # Раздела state нет — меряем по самому свежему, как прежде. Тот же отсчёт у сводки
+        # своих записок при пробуждении (machine_layer.py).
         row = con.execute(
-            f"SELECT MAX(COALESCE({look}, saved_at)) FROM phoenix WHERE role=?",
+            f"SELECT section, COALESCE({look}, saved_at) FROM phoenix WHERE role=? AND section='state'",
             (args.role,)).fetchone()
+        if not row:
+            row = con.execute(
+                f"SELECT section, COALESCE({look}, saved_at) AS seen FROM phoenix WHERE role=? "
+                f"ORDER BY seen DESC LIMIT 1", (args.role,)).fetchone()
         con.close()
-        if not row or not row[0]:
+        if not row or not row[1]:
             return not_saved
+        section, seen = row
         gap = (datetime.now(timezone.utc).replace(tzinfo=None)
-               - datetime.fromisoformat(row[0])).total_seconds() / 3600
+               - datetime.fromisoformat(seen)).total_seconds() / 3600
         if gap > 3:
             print(f"\n⏳ ПАМЯТЬ РОЛИ {args.role} НЕ ПОДТВЕРЖДАЛАСЬ {gap:.0f} ч, а работа идёт.")
+            if section == "state":
+                print("   (возраст — по разделу state, положению дел: запись другого раздела его не обновляет)")
+            else:
+                print(f"   (раздела state нет — возраст по самому свежему разделу, {section})")
             print("   Приложение может закрыться без предупреждения — тогда пропадёт то,")
             print("   чего нет в базе. Сохранить ТЕМ ЖЕ вызовом:")
             print("     write-message.py … --save-state <файл> [--save-plan <файл>]")
@@ -373,7 +388,7 @@ def _save_phoenix_alongside(args, db_path: Path) -> list:
             if Path(db_path).resolve() != (here.parent / "mezosync.db").resolve():
                 confirm += f" --db {Path(db_path).as_posix()}"
             print("   Правок с прошлой записи нет — отметь взгляд, тело не трогая:")
-            print(f"     {confirm} --section <раздел> --confirm")
+            print(f"     {confirm} --section {section} --confirm")
             print("   Порог объёма раздела запись НЕ останавливает — только сообщает о превышении")
             print("   (карточка #478): резать текст или уносить в архив ПЕРЕД записью не нужно.")
     except Exception as exc:  # noqa: BLE001 — подсказка не имеет права ронять запись ноты

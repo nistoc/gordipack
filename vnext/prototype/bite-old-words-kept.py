@@ -220,18 +220,23 @@ def main() -> int:
                    f"записей {report6.kept_records_count} (ждём 1); слово всё равно "
                    f"разобрано: не разобрано {report6.unreviewed} · оставлено {report6.kept}")
 
-        # ⑦ мерка прежняя: отпечаток 4409d115, --short как до правки (кроме живых чисел
+        # ⑦ мерка прежняя: отпечаток признака, --short как до правки (кроме живых чисел
         #    памяти ролей — по слову задания сверяем без них)
+        # ⚰️ Здесь стоял отпечаток 4409d115. 2026-09-14 карточка #611 дала образцам «гейт»
+        #    и «ворота» левую границу (не находить внутри «разворота»/«поворота») — словарь
+        #    сменился НАМЕРЕННО, отпечаток перенесён тем же ходом (PROTO). Замер памяти ролей:
+        #    165 → 164 прежних слова, разница — «ворота» внутри «разворота» в памяти PROTO.
+        MEASURE_FINGERPRINT = "3259d38f"
         expected_tail = ("правило plain-words v6 · слов в признаке 16 · "
-                         "отпечаток признака 4409d115 (цитаты и уроки среди них "
+                         f"отпечаток признака {MEASURE_FINGERPRINT} (цитаты и уроки среди них "
                          "законны — разбор поимённо)")
         r7 = subprocess.run([sys.executable, str(MOW_PATH), "--short"],
                             capture_output=True, text=True, encoding="utf-8", errors="replace")
         out7 = (r7.stdout or "").strip()
         m7 = re.match(r"^прежних слов в памятях: \d+ у \d+ ролей, (.*)$", out7)
         tail7 = m7.group(1) if m7 else out7
-        ok &= case("⑦ мерка прежняя (отпечаток 4409d115) и --short как до правки",
-                   r7.returncode == 0 and "4409d115" in out7 and tail7 == expected_tail,
+        ok &= case(f"⑦ мерка прежняя (отпечаток {MEASURE_FINGERPRINT}) и --short как до правки",
+                   r7.returncode == 0 and MEASURE_FINGERPRINT in out7 and tail7 == expected_tail,
                    f"код {r7.returncode}; хвост строки без чисел памяти ролей: {tail7!r} "
                    f"(ждём {expected_tail!r})")
 

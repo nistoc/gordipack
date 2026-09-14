@@ -500,6 +500,73 @@ def case_c9_reverse_gate(d: pathlib.Path, out_dir: pathlib.Path):
          f"код {code}; сырых CR в файле {cr_in_file}; значение {got!r}", differ=True)
 
 
+# ── С10: подсказка «Дальше» — про фактическую папку выгрузки, не про наш контур ──
+# 🩸 Находка tapas 2026-09-14 11:24 UTC: строка после выгрузки называла atlas.agents-sync.db
+# и наше право отправки «без отдельного слова». У них такого хранилища нет, право отправки
+# поимённое, а инструмент приехал к ним из пакета. Два исхода — папка вне git и папка
+# внутри git-репозитория; в обоих ни имени нашего хранилища, ни пересказа нашего права.
+
+OUR_REPO_NAME = "atlas.agents-sync.db"
+OUR_PUSH_RIGHT = "без отдельного слова"
+
+
+def run_c10(d: pathlib.Path, out_dir: pathlib.Path, tool=TOOL, label="c10"):
+    """→ {исход: (код, строка «Дальше…» или None)} для папки вне git и папки в git."""
+    results = {}
+    plain = d / "plain"
+    db = build_cr_stand(plain)
+    code, output = run_tool(db, plain / "x.dump.sql", "--apply", script=tool)
+    (out_dir / f"{label}-plain-run.txt").write_text(output, encoding="utf-8")
+    results["plain"] = (code, output, plain)
+    repo = d / "repo"
+    repo.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q", str(repo)], capture_output=True, text=True)
+    inner = repo / "dumps"
+    db2 = build_cr_stand(inner)
+    code2, output2 = run_tool(db2, inner / "x.dump.sql", "--apply", script=tool)
+    (out_dir / f"{label}-repo-run.txt").write_text(output2, encoding="utf-8")
+    results["repo"] = (code2, output2, repo)
+    return results
+
+
+def _hint_line(output: str):
+    return next((ln for ln in output.splitlines() if ln.startswith("Дальше:")), None)
+
+
+def case_c10(d: pathlib.Path, out_dir: pathlib.Path):
+    res = run_c10(d, out_dir)
+    code_p, out_p, plain = res["plain"]
+    code_r, out_r, repo = res["repo"]
+    hint_p, hint_r = _hint_line(out_p), _hint_line(out_r)
+    foreign = [h for h in (hint_p, hint_r) if h and (OUR_REPO_NAME in h or OUR_PUSH_RIGHT in h)]
+    plain_ok = (code_p == 0 and hint_p is not None and "не в git-репозитории" in hint_p
+                and str(plain.resolve()) in hint_p)
+    repo_ok = (code_r == 0 and hint_r is not None and str(repo.resolve()) in hint_r
+               and "x.dump.sql" in hint_r and "правилам отправки вашего контура" in hint_r)
+    case("С10 подсказка «Дальше» называет ФАКТИЧЕСКУЮ папку выгрузки: вне git — «не в"
+         " git-репозитории», в git — сам репозиторий; нашего хранилища и нашего права в ней нет",
+         plain_ok and repo_ok and not foreign,
+         f"вне git: код {code_p}, строка {hint_p!r}\n   в git: код {code_r}, строка {hint_r!r}",
+         differ=True)
+
+
+def case_c10_reverse_gate(d: pathlib.Path, out_dir: pathlib.Path):
+    weak = weaken(d, 'print("\\n" + next_step_hint(out))',
+                  'print("\\nДальше: закоммить выгрузку в atlas.agents-sync.db поимённо и отправить"'
+                  ' " (push разрешён без отдельного слова; сверь состав ВЕТКИ перед отправкой)")',
+                  "old-hint")
+    if weak is None:
+        case("П-С10 обратный ход: прежняя строка «Дальше» — случай С10 проваливается", False,
+             "якорь «print(\"\\n\" + next_step_hint(out))» не найден — инструмент поменялся")
+        return
+    res = run_c10(d, out_dir, tool=weak, label="p-c10")
+    hint = _hint_line(res["plain"][1])
+    case("П-С10 обратный ход: прежняя строка «Дальше» снова называет наше хранилище и наше"
+         " право — случай С10 проваливается",
+         hint is not None and OUR_REPO_NAME in hint and OUR_PUSH_RIGHT in hint,
+         f"строка {hint!r}", differ=True)
+
+
 # ── С4: таблица поиска, хранящая текст в себе ───────────────────────────
 
 def run_c4_scenario(d: pathlib.Path, out_dir: pathlib.Path, tool=TOOL, label="С4"):
@@ -1168,6 +1235,11 @@ def main() -> int:
             case_c9(d9, out_dir)
             dp9 = tmp_root / "p-c9"; dp9.mkdir(parents=True, exist_ok=True)
             case_c9_reverse_gate(dp9, out_dir)
+
+            d10 = tmp_root / "c10"; d10.mkdir(parents=True, exist_ok=True)
+            case_c10(d10, out_dir)
+            dp10 = tmp_root / "p-c10"; dp10.mkdir(parents=True, exist_ok=True)
+            case_c10_reverse_gate(dp10, out_dir)
 
             d4 = tmp_root / "c4"; d4.mkdir(parents=True, exist_ok=True)
             case_c4_main(d4, out_dir)
