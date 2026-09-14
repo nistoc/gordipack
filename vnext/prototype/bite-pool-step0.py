@@ -74,7 +74,7 @@ def first_card_line(text):
 stand = mezo_stand.new("pool-step0-")
 db = stand / "mezosync.db"
 live_before = (LIVE_DB.stat().st_size, LIVE_DB.stat().st_mtime_ns)
-shutil.copy(LIVE_DB, db)
+mezo_stand.snapshot_db(LIVE_DB, db)
 
 con = sqlite3.connect(str(db))
 # НОРМАЛИЗАЦИЯ ПЕСОЧНИЦЫ: чужие пулы в паузу, аренды прочь (в копии живёт и моя аренда

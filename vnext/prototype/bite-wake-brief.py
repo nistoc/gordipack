@@ -27,6 +27,7 @@ import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
+import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
 HERE = pathlib.Path(__file__).resolve().parent
 ЧИТАТЕЛЬ = mezo_paths.container_root(__file__) / ".mezosync" / "scripts" / "read-messages.py"
@@ -73,7 +74,7 @@ def main() -> int:
     d = pathlib.Path(tempfile.mkdtemp(prefix="bite-wake-"))
     try:
         db = d / "sand.db"
-        shutil.copy(ЖИВАЯ, db)
+        mezo_stand.snapshot_db(ЖИВАЯ, db)
         роль, долг = с_долгом(db)
         if not роль or долг < 20:
             print(f"⛔ ПРИЁМКА НЕ СОСТОЯЛАСЬ: в копии нет роли с долгом ≥20 (лучшая: "

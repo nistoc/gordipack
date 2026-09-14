@@ -21,6 +21,7 @@ import sys
 import tempfile
 from pathlib import Path
 import mezo_paths  # пути машины выводятся, не впечатаны (#153)
+import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
 GUARD = mezo_paths.live_scripts() / "guard-all.py"
 LIVE = mezo_paths.live_db()
@@ -34,7 +35,7 @@ ok = True
 def run_with_snapshot(line, label):
     """Кладёт строку в слепок КОПИИ базы и возвращает вывод гарда по этой копии."""
     tmp = Path(tempfile.gettempdir()) / f"bite-callform-{label}.db"
-    shutil.copy(LIVE, tmp)
+    mezo_stand.snapshot_db(LIVE, tmp)
     c = sqlite3.connect(tmp)
     c.execute("UPDATE phoenix SET body = body || ? WHERE role='COORD' AND section='state'",
               ("\n" + line + "\n",))

@@ -48,7 +48,7 @@ def main() -> int:
     tmp = mezo_stand.new("bite-urgency-")
     try:
         db = tmp / "copy.db"
-        shutil.copy2(LIVE, db)
+        mezo_stand.snapshot_db(LIVE, db)
         con = sqlite3.connect(db)
 
         # Четыре искусственные записки + ответы к ним. Строим состояние сами,

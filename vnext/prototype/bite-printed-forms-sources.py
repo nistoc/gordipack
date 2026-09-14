@@ -123,7 +123,7 @@ ROOT = sb_scripts.as_posix()
 DEFS = {"s": ROOT}
 KNOWN = {"zzprobe-tool.py"}
 db = stand / "mezosync.db"
-shutil.copy(LIVE_DB, db)
+mezo_stand.snapshot_db(LIVE_DB, db)
 
 # ⓪ нетронутая копия судится ровно как живой свод (тем же словарём и списком имён)
 real_known = {p.name for p in LIVE_SCRIPTS.glob("*.py")}

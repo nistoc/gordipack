@@ -47,7 +47,7 @@ def main() -> int:
         scripts = tmp / "scripts"
         shutil.copytree(live / "scripts", scripts)
         db = tmp / "mezosync.db"
-        shutil.copy(live / "mezosync.db", db)
+        mezo_stand.snapshot_db(live / "mezosync.db", db)
         env = {**os.environ, "MEZO_ROLE": "PROTO", "MEZO_LEASE_TEST": "1"}
 
         def backlog(*args):

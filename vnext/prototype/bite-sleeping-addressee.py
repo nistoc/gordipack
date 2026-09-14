@@ -146,7 +146,7 @@ def main() -> int:
     ok = True
     корень = mezo_stand.new("bite-sleep-")
     db = корень / "sand.db"
-    shutil.copy(ЖИВАЯ, db)
+    mezo_stand.snapshot_db(ЖИВАЯ, db)
     посеять(db)
 
     # ① спящий назван поимённо

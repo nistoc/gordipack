@@ -86,7 +86,7 @@ def main() -> int:
     ok = True
     d = mezo_stand.new("bite-confirm-")
     db = d / "copy.db"
-    shutil.copyfile(LIVE_DB, db)
+    mezo_stand.snapshot_db(LIVE_DB, db)
     body1 = d / "b1.md"
     body1.write_text("тело пробы, редакция один\n" + "x" * 500, encoding="utf-8")
 
@@ -226,7 +226,7 @@ def main() -> int:
     broken_save.write_text(broken_text, encoding="utf-8")
 
     db10 = broken_save_dir / "copy10.db"
-    shutil.copyfile(LIVE_DB, db10)
+    mezo_stand.snapshot_db(LIVE_DB, db10)
     body10 = broken_save_dir / "b10.md"
     body10.write_text("тело пробы поломки ⑩\n" + "w" * 500, encoding="utf-8")
     # ⚠️ КОПИЯ инструмента лежит ВНЕ .mezosync/scripts — по своему расположению она

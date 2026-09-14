@@ -52,7 +52,7 @@ mod = load(GUARD, "gre_live")
 stand = mezo_stand.new("rule-expiry-")
 db = stand / "mezosync.db"
 live_before = (LIVE_DB.stat().st_size, LIVE_DB.stat().st_mtime_ns)
-shutil.copy(LIVE_DB, db)
+mezo_stand.snapshot_db(LIVE_DB, db)
 
 con = sqlite3.connect(str(db))
 cur = con.execute("INSERT INTO backlog (role, title, body_md, status, priority, tags, "

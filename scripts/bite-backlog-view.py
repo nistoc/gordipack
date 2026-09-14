@@ -45,7 +45,7 @@ def check(name, cond, detail=""):
 
 tmp = mezo_stand.new("bite-backlog-view-")
 db = tmp / "mezosync.db"
-shutil.copy2(LIVE, db)
+mezo_stand.snapshot_db(LIVE, db)
 print(f"копия живой базы: {db}\n")
 
 # НОРМАЛИЗАЦИЯ: пулы в паузу. С 27.08 карточки АКТИВНОГО пула стоят первыми (шаг 0

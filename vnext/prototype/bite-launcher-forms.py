@@ -82,7 +82,7 @@ def sandbox():
     scripts = mezo_dir / "scripts"
     shutil.copytree(LIVE_SCRIPTS, scripts)
     db = mezo_dir / "mezosync.db"
-    shutil.copy(LIVE_DB, db)
+    mezo_stand.snapshot_db(LIVE_DB, db)
     return d, scripts, db
 
 

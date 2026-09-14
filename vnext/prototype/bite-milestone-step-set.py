@@ -158,7 +158,7 @@ def sandbox(label, remove_versions=(), remove_steps=(), remove_files=(), seed=()
             p.write_text(t.replace(CHECK_CALL_INTACT, CHECK_CALL_EMPTY, 1), encoding="utf-8", newline="")
 
     db_path = root / "mezosync.db"
-    shutil.copy2(LIVE_DB, db_path)
+    mezo_stand.snapshot_db(LIVE_DB, db_path)
     c = sqlite3.connect(db_path)
     # 🩸 07.09 (объявлена v6): снимая на копии отметку, снимаем и все ПОЗДНЕЙШИЕ — иначе
     # выборка версии считает «сверх отметки» от оставшейся поздней (v6) и отвечает 0,

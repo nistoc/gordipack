@@ -581,7 +581,7 @@ def main() -> int:
 
     stand = mezo_stand.new("bite-memory-search-")
     db = stand / "copy.db"
-    shutil.copy2(LIVE_DB, db)
+    mezo_stand.snapshot_db(LIVE_DB, db)
 
     find_tool_for_v, env_for_v = find_tool_live, None
     find_tool_for_g, env_for_g = find_tool_live, None

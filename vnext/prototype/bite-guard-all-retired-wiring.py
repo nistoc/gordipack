@@ -43,7 +43,7 @@ tmp = mezo_stand.new("wiring-")
 
 # ── ① ПРАВИЛО ИСЧЕЗЛО: набор обязан доработать до конца и назвать отказ отказом
 db1 = tmp / "no-rule.db"
-shutil.copy2(LIVE, db1)
+mezo_stand.snapshot_db(LIVE, db1)
 c = sqlite3.connect(db1)
 c.execute("DELETE FROM rules WHERE rule_key='md-to-sqlite-phased-cutover'")
 c.commit()
@@ -64,7 +64,7 @@ check("① вердиктов много — набор не оборвался"
 # ── ② ПРОГОН ПО КОПИИ ДОЛЖЕН МЕРИТЬ КОПИЮ. Правило переписываем ТОЛЬКО в копии:
 #    если признак читает живую базу, он этой подмены не заметит и промолчит.
 db2 = tmp / "bumped.db"
-shutil.copy2(LIVE, db2)
+mezo_stand.snapshot_db(LIVE, db2)
 c = sqlite3.connect(db2)
 c.execute("UPDATE rules SET version = version + 7 "
           "WHERE rule_key='md-to-sqlite-phased-cutover'")
@@ -77,7 +77,7 @@ check("② прогон по КОПИИ мерит копию, а не живу�
 
 # ── ③ ВСТРЕЧНЫЙ к ②: на нетронутой копии — тихо. Без него ② зеленел бы от общей паники.
 db3 = tmp / "clean.db"
-shutil.copy2(LIVE, db3)
+mezo_stand.snapshot_db(LIVE, db3)
 out3, code3 = run_on(db3)
 check("③ на нетронутой копии признак ЗЕЛЁН (встречный к ②)",
       "источники не учат снятому" in out3 and "УСТАРЕЛ" not in out3,

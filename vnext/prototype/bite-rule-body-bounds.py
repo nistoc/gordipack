@@ -51,6 +51,7 @@ import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402 — пути машины выводятся, не впечатаны
+import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
 КОРЕНЬ = mezo_paths.container_root(__file__)
 БАЗА = КОРЕНЬ / ".mezosync" / "mezosync.db"
@@ -74,7 +75,7 @@ def стенд(вставка: str | None, расхождение: bool = False,
     d = pathlib.Path(tempfile.mkdtemp(prefix="bite-bounds-"))
     try:
         б, ф = d / "mezosync.db", d / "sync.rules.md"
-        shutil.copy(БАЗА, б)
+        mezo_stand.snapshot_db(БАЗА, б)
         if вставка:
             con = sqlite3.connect(б)
             тело = con.execute("SELECT body FROM rules WHERE rule_key=?",

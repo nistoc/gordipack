@@ -38,6 +38,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_target  # noqa: E402 — какую копию испытываем, решается ОДНИМ местом
 import mezo_paths  # пути машины выводятся, не впечатаны (#153)
+import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
 LIVE = mezo_paths.live_db()
 SANDBOX = Path.home() / ".mezosync-sandbox" / "bite-stamp.db"
@@ -47,7 +48,7 @@ ROLE = "PROTO"
 
 def prepare() -> None:
     SANDBOX.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(LIVE, SANDBOX)
+    mezo_stand.snapshot_db(LIVE, SANDBOX)
 
 
 def write_note(body: str, *extra) -> int | None:

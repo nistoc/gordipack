@@ -72,7 +72,7 @@ def main() -> int:
     scripts = контур / "scripts"
     shutil.copytree(LIVE_SCRIPTS, scripts)
     db = контур / "mezosync.db"
-    shutil.copyfile(LIVE_DB, db)
+    mezo_stand.snapshot_db(LIVE_DB, db)
     DOOR = str(scripts / "gordi.py")
     # Изоляция от объявлений, действующих в живом контуре прямо сейчас (см. ту же правку
     # в приёмке объявлений): иначе исход зависит от чужой работы в соседнем окне.

@@ -66,7 +66,7 @@ def main() -> int:
     ok = True
     stand = mezo_stand.new("bite-lease-read-")
     db = stand / "copy.db"
-    shutil.copy2(LIVE_DB, db)
+    mezo_stand.snapshot_db(LIVE_DB, db)
 
     con = sqlite3.connect(db)
     # Копия живой базы несёт и ЖИВЫЕ объявления этого часа (например, объявление самой

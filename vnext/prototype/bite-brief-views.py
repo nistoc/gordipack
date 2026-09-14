@@ -151,7 +151,7 @@ def main() -> int:
 
     стенд = mezo_stand.new("bite-brief-views-")
     db = стенд / "copy.db"
-    shutil.copy2(LIVE_DB, db)
+    mezo_stand.snapshot_db(LIVE_DB, db)
 
     # ═══ ПОДГОТОВКА: 3 стендовые карточки роли PROTO ═══════════════════════════════
     # --track на заведомо НЕ-пуловое значение: если в копии живой базы окажется активный
@@ -299,7 +299,7 @@ def main() -> int:
     # предохранитель, а нужна как СТАБИЛЬНОЕ состояние: между кратким и полным вызовом
     # база не должна сама измениться (в живой она меняется постоянно).
     db_guard = стенд / "guard.db"
-    shutil.copy2(LIVE_DB, db_guard)
+    mezo_stand.snapshot_db(LIVE_DB, db_guard)
 
     def run_guard(tool: str, db_: Path, full: bool, env: dict | None = None) -> tuple[int, str]:
         args = ["--db", str(db_)] + (["--full"] if full else [])

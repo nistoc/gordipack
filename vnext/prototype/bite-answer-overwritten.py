@@ -61,7 +61,7 @@ def make_stand(tmp: pathlib.Path, with_repo=True) -> tuple:
     live = mezo_paths.container_root(__file__) / ".mezosync"
     our_root = tmp / "atlas"
     shutil.copytree(live / "scripts", our_root / ".mezosync" / "scripts")
-    shutil.copy(live / "mezosync.db", our_root / ".mezosync" / "mezosync.db")
+    mezo_stand.snapshot_db(live / "mezosync.db", our_root / ".mezosync" / "mezosync.db")
     archs = our_root / "atlas.archs"
     our_box = archs / ".mezosync" / "bridges" / "atlas-neigh"
     our_box.mkdir(parents=True)

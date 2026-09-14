@@ -79,7 +79,7 @@ def main() -> int:
     ok = True
     stand = mezo_stand.new("bite-focus-")
     db = stand / "copy.db"
-    shutil.copy2(LIVE_DB, db)
+    mezo_stand.snapshot_db(LIVE_DB, db)
     con = sqlite3.connect(db)
     # Направление в копии — ЕДИНСТВЕННОЕ: прочие активные ставятся на паузу.
     con.execute("UPDATE tracks SET status='paused' WHERE status='active' AND track_id<>?",

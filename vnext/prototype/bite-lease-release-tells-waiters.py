@@ -116,7 +116,7 @@ def ожидания(db):
 
 stand = mezo_stand.new("lease-waiters-")
 db = stand / "mezosync.db"
-shutil.copy(LIVE_DB, db)
+mezo_stand.snapshot_db(LIVE_DB, db)
 con = sqlite3.connect(str(db))
 # ⚖️ Живые объявления контура из копии УБИРАЮТСЯ. Иначе приёмка судила бы занятость
 # инструментов в живой базе на момент прогона — то есть честную работу восьми соседей.

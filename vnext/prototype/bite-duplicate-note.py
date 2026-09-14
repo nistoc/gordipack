@@ -56,7 +56,7 @@ def main() -> int:
         scripts = tmp / "scripts"
         shutil.copytree(live / "scripts", scripts)
         db = tmp / "mezosync.db"
-        shutil.copy(live / "mezosync.db", db)
+        mezo_stand.snapshot_db(live / "mezosync.db", db)
 
         one = tmp / "one.md"
         one.write_text("тело записки для приёмки: отправляется дважды" + NL, encoding="utf-8")

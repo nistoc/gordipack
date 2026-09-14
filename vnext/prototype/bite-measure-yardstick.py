@@ -43,7 +43,7 @@ def стенд(tmp: Path, версия, есть_правило: bool = True) ->
     Копия, а не живая база: приёмка, правящая живое, однажды и правит его насовсем.
     """
     db = tmp / f"c{версия}.db"
-    shutil.copyfile(mezo_paths.live_db(), db)
+    mezo_stand.snapshot_db(mezo_paths.live_db(), db)
     con = sqlite3.connect(str(db))
     if есть_правило:
         con.execute("UPDATE rules SET version = ? WHERE rule_key = 'plain-words'", (версия,))

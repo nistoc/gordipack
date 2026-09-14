@@ -71,7 +71,7 @@ def сохранить(db, тело, путь):
 
 stand = mezo_stand.new("phoenix-trunc-")
 db = stand / "mezosync.db"
-shutil.copy(LIVE_DB, db)
+mezo_stand.snapshot_db(LIVE_DB, db)
 con = sqlite3.connect(str(db))
 con.execute("DELETE FROM tool_leases")            # чужая занятость приёмку не красит
 con.execute("INSERT INTO roles (role, lifecycle, zone) VALUES (?,'alive','проба обрезки')",

@@ -48,6 +48,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_target  # noqa: E402 — какую копию испытываем, решается ОДНИМ местом
 import mezo_paths  # пути машины выводятся, не впечатаны (#153)
+import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
 LIVE = mezo_paths.live_db()
 SANDBOX = Path.home() / ".mezosync-sandbox" / "bite-r16.db"
@@ -59,7 +60,7 @@ START_CURSOR = 3069
 def prepare() -> None:
     """Копия живой базы + курсор на известную точку. Живая база НЕ ТРОГАЕТСЯ ВОВСЕ."""
     SANDBOX.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(LIVE, SANDBOX)
+    mezo_stand.snapshot_db(LIVE, SANDBOX)
     con = sqlite3.connect(SANDBOX)
     con.execute("UPDATE read_cursors SET last_read_id=? WHERE reader_role=?",
                 (START_CURSOR, ROLE))

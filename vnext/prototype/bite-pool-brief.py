@@ -65,7 +65,7 @@ def brief(db, role):
 
 stand = mezo_stand.new("pool-brief-")
 db = stand / "mezosync.db"
-shutil.copy(LIVE_DB, db)
+mezo_stand.snapshot_db(LIVE_DB, db)
 con = sqlite3.connect(str(db))
 con.execute("UPDATE tracks SET status='paused' WHERE status='active'")
 con.execute("INSERT INTO tracks (track_id, title, status, skills) VALUES "

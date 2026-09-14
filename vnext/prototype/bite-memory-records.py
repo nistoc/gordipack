@@ -51,6 +51,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 TOOL = HERE / "memory-records.py"
 sys.path.insert(0, str(HERE))
 import mezo_paths  # noqa: E402 — база контура выводится от расположения, не впечатана (перенос в образец 13.09)
+import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
 DB = mezo_paths.live_db(__file__)
 ROLE = "PROTO"
@@ -208,7 +209,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         sandbox = pathlib.Path(tmp)
         db_copy = sandbox / "mezosync.db"
-        shutil.copy2(DB, db_copy)
+        mezo_stand.snapshot_db(DB, db_copy)
         # инструмент и его сосед-резак кладутся РЯДОМ: инструмент импортирует резак
         # от своего расположения, значит в песочнице он возьмёт песочный.
         for filename in ("memory-records.py", "memory-archive.py", "mezo_paths.py"):

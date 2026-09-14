@@ -90,7 +90,7 @@ case("④ писатель не координатор → отказ (кана�
 
 # ⑤⑥ poll на фикстуре + копии базы
 db = stand / "mezosync.db"
-shutil.copy(LIVE_DB, db)
+mezo_stand.snapshot_db(LIVE_DB, db)
 con = sqlite3.connect(str(db))
 con.execute("INSERT INTO backlog (role, title, body_md, status, priority, tags, created_by, "
             "done_when) VALUES ('PROTO','починка по заявке','тело','open','normal',"

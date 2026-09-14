@@ -60,7 +60,7 @@ def reviewed(db, name=FILE):
 
 tmp = mezo_stand.new("bite-bridge-reviewed-")
 db = tmp / "mezosync.db"
-shutil.copy2(LIVE, db)
+mezo_stand.snapshot_db(LIVE, db)
 print(f"копия живой базы: {db}\n")
 
 # ① ВСТРЕЧНЫЙ: имени нет нигде ⇒ разбора нет

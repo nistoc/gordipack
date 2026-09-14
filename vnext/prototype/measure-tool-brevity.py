@@ -181,7 +181,7 @@ def run_one(call: dict, ctx: dict, stand_db: Path) -> dict:
 def make_stand() -> tuple[Path, Path]:
     d = mezo_stand.new("measure-tool-brevity-")
     db = d / "mezosync.db"
-    shutil.copyfile(LIVE_DB, db)
+    mezo_stand.snapshot_db(LIVE_DB, db)
     return d, db
 
 

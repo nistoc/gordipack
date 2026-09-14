@@ -94,7 +94,7 @@ def остаток(out):
 
 stand = mezo_stand.new("waiting-on-you-")
 db = stand / "mezosync.db"
-shutil.copy(LIVE_DB, db)
+mezo_stand.snapshot_db(LIVE_DB, db)
 con = sqlite3.connect(str(db))
 # ⚖️ ZZW — роль-проба, чтобы не судить о механизме по живым данным, которые уедут
 # под руками. ZZQ — роль, которую НЕ НАЗЫВАЕТ НИКТО (случай ③).

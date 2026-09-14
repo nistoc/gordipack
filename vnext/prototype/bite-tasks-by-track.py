@@ -137,7 +137,7 @@ def stop(proc):
 stand_a = mezo_stand.new("tasks-by-track-a-")
 db_a = stand_a / "mezosync.db"
 live_before = (LIVE_DB.stat().st_size, LIVE_DB.stat().st_mtime_ns)
-shutil.copy(LIVE_DB, db_a)
+mezo_stand.snapshot_db(LIVE_DB, db_a)
 stand_before = (db_a.stat().st_size, db_a.stat().st_mtime_ns)
 
 con = sqlite3.connect(str(db_a))
@@ -250,7 +250,7 @@ finally:
 # ── стенд B: подсадка «набор с именем none» ──────────────────────────────────
 stand_b = mezo_stand.new("tasks-by-track-b-")
 db_b = stand_b / "mezosync.db"
-shutil.copy(LIVE_DB, db_b)
+mezo_stand.snapshot_db(LIVE_DB, db_b)
 con = sqlite3.connect(str(db_b))
 con.execute(
     "INSERT INTO backlog (role, title, status, priority, parent_track, created_by, created_at, updated_at) "

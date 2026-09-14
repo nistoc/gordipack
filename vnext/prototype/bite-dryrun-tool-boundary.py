@@ -81,7 +81,7 @@ def замер(db):
 
 stand = mezo_stand.new("dryrun-boundary-")
 db = stand / "mezosync.db"
-shutil.copy(LIVE_DB, db)
+mezo_stand.snapshot_db(LIVE_DB, db)
 con = sqlite3.connect(str(db))
 con.execute("INSERT INTO roles (role, lifecycle, zone) VALUES (?,'alive','проба границы')", (РОЛЬ,))
 con.execute("INSERT INTO phoenix (role, section, body, saved_at) VALUES (?,'state',?,"

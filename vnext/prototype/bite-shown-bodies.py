@@ -53,7 +53,7 @@ def main() -> int:
         scripts = контур / "scripts"
         shutil.copytree(live / "scripts", scripts)
         db = контур / "mezosync.db"
-        shutil.copy(live / "mezosync.db", db)
+        mezo_stand.snapshot_db(live / "mezosync.db", db)
         reader = scripts / "read-messages.py"
         env = {**os.environ, "MEZO_ROLE": "PROTO"}
 

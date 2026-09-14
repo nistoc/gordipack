@@ -32,6 +32,7 @@ import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
+import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
 ПРОВЕРКА = pathlib.Path(__file__).with_name("check-phoenix-invariant.py")
 ИНСТРУМЕНТ = (mezo_paths.container_root(__file__) / ".mezosync" / "scripts"
@@ -51,7 +52,7 @@ def case(title, verdict, detail, differ=False):
 
 def копия(d: pathlib.Path) -> pathlib.Path:
     db = d / "mezosync.db"
-    shutil.copy(БАЗА, db)
+    mezo_stand.snapshot_db(БАЗА, db)
     return db
 
 

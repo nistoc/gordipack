@@ -43,7 +43,7 @@ def build(tmp: pathlib.Path, with_ask: bool, with_answer: bool, with_box: bool):
     live = mezo_paths.container_root(__file__) / ".mezosync"
     ours = tmp / "atlas"
     shutil.copytree(live / "scripts", ours / ".mezosync" / "scripts")
-    shutil.copy(live / "mezosync.db", ours / ".mezosync" / "mezosync.db")
+    mezo_stand.snapshot_db(live / "mezosync.db", ours / ".mezosync" / "mezosync.db")
     ourbox = ours / "atlas.archs" / ".mezosync" / "bridges" / "atlas-neigh"
     ourbox.mkdir(parents=True)
     if with_answer:

@@ -73,7 +73,7 @@ def main() -> int:
     scripts = контур / "scripts"
     shutil.copytree(LIVE_SCRIPTS, scripts)
     db = контур / "mezosync.db"
-    shutil.copyfile(LIVE_DB, db)
+    mezo_stand.snapshot_db(LIVE_DB, db)
     LEASE = str(scripts / "lease.py")
     SAVE = str(scripts / "save-phoenix.py")          # пишущий
     READ = str(scripts / "read-phoenix.py")          # читающий

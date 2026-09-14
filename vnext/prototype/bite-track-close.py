@@ -53,7 +53,7 @@ def run(script, *args, db):
 stand = mezo_stand.new("track-close-")
 db = stand / "mezosync.db"
 live_before = (LIVE_DB.stat().st_size, LIVE_DB.stat().st_mtime_ns)
-shutil.copy(LIVE_DB, db)
+mezo_stand.snapshot_db(LIVE_DB, db)
 con = sqlite3.connect(str(db))
 con.execute("UPDATE tracks SET status='paused' WHERE status='active'")
 try:

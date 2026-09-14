@@ -56,7 +56,7 @@ def prepare():
             raise SystemExit(f"⛔ НЕ ЗАПУСТИЛАСЬ: не найден {p} — приёмке нечего испытывать.")
     tmp = mezo_stand.new("bite-addressee-")
     db = os.path.join(tmp, "copy.db")
-    shutil.copy(LIVE, db)
+    mezo_stand.snapshot_db(LIVE, db)
     r = subprocess.run([sys.executable, MIGRATION, "--db", db],
                        capture_output=True, text=True, encoding="utf-8")
     if r.returncode != 0:

@@ -181,7 +181,7 @@ def main() -> int:
     stand = mezo_stand.new("bite-tool-brevity-")
     db = stand / "copy.db"
     import shutil
-    shutil.copy2(LIVE_DB, db)
+    mezo_stand.snapshot_db(LIVE_DB, db)
 
     # ═══ ⓪ ГЕЙТ: таблица hint_seen в копии есть ═══════════════════════════════════
     conn0 = sqlite3.connect(str(db))

@@ -89,7 +89,7 @@ def поле(db, cid):
 
 stand = mezo_stand.new("reviewer-named-")
 db = stand / "mezosync.db"
-shutil.copy(LIVE_DB, db)
+mezo_stand.snapshot_db(LIVE_DB, db)
 con = sqlite3.connect(str(db))
 for r in (РОЛЬ, ЧУЖАЯ):
     con.execute("INSERT INTO roles (role, lifecycle, zone) VALUES (?,'alive','проба приёмщика')", (r,))

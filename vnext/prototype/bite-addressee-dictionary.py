@@ -38,6 +38,7 @@ import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
+import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
 HERE = pathlib.Path(__file__).resolve().parent
 # ⚡ ПЕРЕНАЦЕЛЕНО НА ЖИВОГО ПИСАТЕЛЯ 2026-08-27 (карточка #258, вторая половина сдана):
@@ -141,7 +142,7 @@ def main() -> int:
     d = pathlib.Path(tempfile.mkdtemp(prefix="bite-addr-"))
     try:
         db = d / "sand.db"
-        shutil.copy(LIVE_DB, db)
+        mezo_stand.snapshot_db(LIVE_DB, db)
         # 🩸 ПОЧИНЕНО 2026-08-27 09:02 UTC (замер @COORD, записка #3926 §③⑥). Прежняя
         # редакция ⑦а НАДЕЯЛАСЬ на состояние живой базы: ждала «склеек до > 0» и
         # «всем ПОСЛЕ = числу нот ALL ДО». Оба ожидания были верны ровно до того часа,
@@ -186,7 +187,7 @@ def main() -> int:
         # держит: прежняя редакция ⑦а сошлась бы и с выключенной пометкой, потому что
         # сравнивала абсолют с абсолютом.
         db2 = d / "sand-reverse.db"
-        shutil.copy(LIVE_DB, db2)
+        mezo_stand.snapshot_db(LIVE_DB, db2)
         seed_rows(db2)
         before2 = measure(db2)
         migration_text = MIGRATION.read_text(encoding="utf-8")
