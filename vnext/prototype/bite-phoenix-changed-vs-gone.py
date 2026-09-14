@@ -46,6 +46,17 @@ mezo_stand.copy_tool — тот же приём, каким соседние п�
     найден», а не гадает по устаревшему месту. На порченой копии ①③
     обязаны стать «пропала», ② обязан остаться «пропала» — поломка
     красит РОВНО случаи «изменена»                                       РАЗЛИЧАЮЩИЙ
+
+🔁 ВОЗВРАТ COORD 2026-09-14 17:50 UTC — её встречный набор нашёл два вида правки,
+уходивших в «пропало»: дописана втрое и вся строка прописными. Добавлено PROTO:
+  ⑦ дописана ВТРОЕ (прежний текст — начало новой строки) → «изменена»    РАЗЛИЧАЮЩИЙ
+  ⑧ вся строка ПРОПИСНЫМИ → «изменена»                                  РАЗЛИЧАЮЩИЙ
+  ⑧-бис ПРОПИСНЫМИ и одно слово заменено (не подстрока — судит
+    похожесть без регистра) → «изменена»                                РАЗЛИЧАЮЩИЙ
+  ⑨ ОБРАТНЫЙ ХОД: признак «прежняя строка целиком в новой» выключен
+    в копии → ⑦ становится «пропала», ⑧ и ① не задеты                    РАЗЛИЧАЮЩИЙ
+  ⑩ ОБРАТНЫЙ ХОД: свёртка регистра выключена в копии → ⑧ и ⑧-бис
+    становятся «пропала», ⑦ и ① не задеты                                РАЗЛИЧАЮЩИЙ
 """
 import importlib.util
 import sys
@@ -163,7 +174,7 @@ ok &= case("⑤ КОНТРОЛЬ похожести: рядом другая Т�
 # сработала. Больше одного совпадения — та же беда с другой стороны:
 # замена задела бы не ту строку, и поломка перестала бы быть ИМЕННО той,
 # что названа.
-ANCHOR_LINE = "match = difflib.get_close_matches(l, new_only, n=1, cutoff=CHANGED_SIMILARITY)"
+ANCHOR_LINE = "match = difflib.get_close_matches(folded, new_folded, n=1, cutoff=CHANGED_SIMILARITY)"
 source_text = TARGET_TOOL.read_text(encoding="utf-8")
 occurrences = source_text.count(ANCHOR_LINE)
 if occurrences != 1:
@@ -194,6 +205,91 @@ else:
                f"③ стало «{'пропала' if broken_3 else 'НЕ сломалось'}» · "
                f"② осталось «{'пропала' if intact_2 else 'СЛОМАЛОСЬ — поломка задела лишнее'}»",
                differ=True)
+
+# ⑦ дописана ВТРОЕ: прежний текст остался началом новой строки (похожесть ≈0,5)
+TRIPLED = (BASE[0] + " — и это правило действует для каждой карточки контура, какой бы"
+           " малой она ни казалась, и для каждого возврата по ней тоже, без исключений")
+new_body7 = "\n".join([TRIPLED] + BASE[1:]) + "\n"
+_, r7 = report(OLD_BODY, new_body7)
+ok &= case("⑦ дописана ВТРОЕ (прежний текст — начало новой строки) → «изменена»",
+           "изменено 1" in r7 and "пропало 0" in r7 and "✂" not in r7,
+           f"длина {len(BASE[0])} → {len(TRIPLED)} знаков; отчёт:"
+           f" {r7.splitlines()[-1].strip() if r7.splitlines() else '(пусто)'}",
+           differ=True)
+
+# ⑧ вся строка ПРОПИСНЫМИ
+new_body8 = "\n".join([BASE[0].upper()] + BASE[1:]) + "\n"
+_, r8 = report(OLD_BODY, new_body8)
+ok &= case("⑧ вся строка ПРОПИСНЫМИ → «изменена»",
+           "изменено 1" in r8 and "пропало 0" in r8 and "✂" not in r8,
+           f"отчёт: {r8.splitlines()[-1].strip() if r8.splitlines() else '(пусто)'}",
+           differ=True)
+
+# ⑧-бис ПРОПИСНЫМИ и одно слово заменено — подстрокой не находится, судит похожесть
+UPPER_EDITED = BASE[0].replace("начала", "старта").upper()
+new_body8b = "\n".join([UPPER_EDITED] + BASE[1:]) + "\n"
+_, r8b = report(OLD_BODY, new_body8b)
+ok &= case("⑧-бис ПРОПИСНЫМИ и одно слово заменено → «изменена» (похожесть без регистра)",
+           "изменено 1" in r8b and "пропало 0" in r8b and "✂" not in r8b,
+           f"отчёт: {r8b.splitlines()[-1].strip() if r8b.splitlines() else '(пусто)'}",
+           differ=True)
+
+
+def broken_copy_of(anchors, label):
+    """Копия испытуемого со СВОЕЙ поломкой (каждый якорь — ровно одно вхождение).
+    → (модуль, None) или (None, текст причины, почему поломка не построена)."""
+    text = TARGET_TOOL.read_text(encoding="utf-8")
+    for old, new in anchors:
+        found = text.count(old)
+        if found != 1:
+            return None, (f"⛔ ЯКОРЬ НЕ НАЙДЕН РОВНО ОДИН РАЗ (найдено {found}): «{old}» — "
+                          "испытуемый менялся, правь якорь приёмки")
+        text = text.replace(old, new, 1)
+    stand = mezo_stand.new(f"phoenix-changed-vs-gone-{label}-")
+    copy = mezo_stand.copy_tool(TARGET_TOOL, stand / label)
+    copy.write_text(text, encoding="utf-8")
+    return load(copy, f"saveph_{label}"), None
+
+
+def verdict(module, old_body, new_body):
+    _, r = report(old_body, new_body, module=module)
+    if "изменено 1" in r and "пропало 0" in r:
+        return "изменена"
+    if "изменено 0" in r and "пропало 1" in r:
+        return "пропала"
+    return "иначе"
+
+
+# ⑨ ОБРАТНЫЙ ХОД: признак «прежняя строка целиком в новой» выключен
+mod9, why9 = broken_copy_of(
+    [("appended = [any(f in n for n in new_folded) for f in folded_gone]",
+      "appended = [False] * len(folded_gone)")], "no-append")
+if mod9 is None:
+    ok &= case("⑨ ОБРАТНЫЙ ХОД: без признака «целиком в новой» ⑦ становится «пропала»",
+               False, why9, differ=True)
+else:
+    v7, v8, v1 = (verdict(mod9, OLD_BODY, new_body7), verdict(mod9, OLD_BODY, new_body8),
+                  verdict(mod9, OLD_BODY, new_body1))
+    ok &= case("⑨ ОБРАТНЫЙ ХОД: без признака «целиком в новой» ⑦ становится «пропала»,"
+               " ⑧ и ① не задеты",
+               v7 == "пропала" and v8 == "изменена" and v1 == "изменена",
+               f"⑦ «{v7}» · ⑧ «{v8}» · ① «{v1}»", differ=True)
+
+# ⑩ ОБРАТНЫЙ ХОД: свёртка регистра выключена
+mod10, why10 = broken_copy_of(
+    [("new_folded = [l.casefold() for l in new_only]", "new_folded = list(new_only)"),
+     ("folded_gone = [l.casefold() for l in gone_l]", "folded_gone = list(gone_l)")],
+    "no-casefold")
+if mod10 is None:
+    ok &= case("⑩ ОБРАТНЫЙ ХОД: без свёртки регистра ⑧ и ⑧-бис становятся «пропала»",
+               False, why10, differ=True)
+else:
+    v8, v8b, v7, v1 = (verdict(mod10, OLD_BODY, new_body8), verdict(mod10, OLD_BODY, new_body8b),
+                       verdict(mod10, OLD_BODY, new_body7), verdict(mod10, OLD_BODY, new_body1))
+    ok &= case("⑩ ОБРАТНЫЙ ХОД: без свёртки регистра ⑧ и ⑧-бис становятся «пропала»,"
+               " ⑦ и ① не задеты",
+               v8 == "пропала" and v8b == "пропала" and v7 == "изменена" and v1 == "изменена",
+               f"⑧ «{v8}» · ⑧-бис «{v8b}» · ⑦ «{v7}» · ① «{v1}»", differ=True)
 
 print()
 print(f"{'✅ МЕРКА «ИЗМЕНЕНА/ПРОПАЛА» ПРИНЯТА' if ok else '🔴 НЕ ПРИНЯТО'} — "

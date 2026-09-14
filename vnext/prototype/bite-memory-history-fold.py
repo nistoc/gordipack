@@ -17,8 +17,20 @@ r"""ПРИЁМКА сворачивания истории версий памя
 Порченая копия кладётся РЯДОМ с оригиналом
 и снимается в finally (копия в стороннем каталоге не запускается — урок TAXO, карточка #545).
 
+🎯 ПОРЧА (--break stale-archive, карточка #628): копия живой базы несёт РЕАЛЬНЫЙ архив роли —
+свёртки save-phoenix.py по счёту версий (rule LIKE 'save-phoenix%') и прежние прогоны самого
+fold (rule regl-538-②) уже унесли часть истории ДО этого опыта. Приёмка считает «archived» ==
+«что унесла ОНА САМА», а для этого чистит архив роли на СВОЕЙ КОПИИ перед опытом (живую база
+не трогает ни байтом — это отдельная копия). Порча снимает эту чистку: архив на копии остаётся
+ЗАСОРЁН прежним содержимым — краснеют ③-в · ③-г · ③-д · ④ · ⑤ (все пять смотрят на архив или
+на историю ЦЕЛИКОМ, а не на то, что унесла ИМЕННО эта свёртка). Живой случай 2026-09-14: у
+PROTO в архиве 73 версии ДО опыта (в т.ч. saved_at всего суточной давности — их унёс СЧЁТ
+save-phoenix.py, не возраст) — приёмка давала 14 из 19 одинаково до и после правки #505,
+потому что беда была не в инструменте и не в снимке WAL, а в состоянии архива роли.
+
     python <КОНТУР>/vnext-tools/bite-memory-history-fold.py
     python <КОНТУР>/vnext-tools/bite-memory-history-fold.py --break rebirth
+    python <КОНТУР>/vnext-tools/bite-memory-history-fold.py --break stale-archive
 """
 from __future__ import annotations
 
@@ -43,6 +55,10 @@ BREAKS = {
     "rebirth": ('            if before and before[-1][0] not in keep:\n',
                 '            if False and before and before[-1][0] not in keep:\n'),
 }
+# ⚡ КАРТОЧКА #628: порча НЕ патчит инструмент (BREAKS — текстовые замены В НЁМ), а снимает
+# собственную чистку приёмки (архив роли на копии перед опытом) — другой механизм порчи,
+# поэтому имя держим ОТДЕЛЬНО от BREAKS, а не третьей записью в том же словаре.
+STALE_ARCHIVE_BREAK = "stale-archive"
 RESULTS = []
 
 
@@ -51,8 +67,10 @@ def case(title, ok, detail=""):
     print(("✅ " if ok else "🔴 ") + title + (f"\n   {detail}" if detail else ""))
 
 
-def run(args, env_role=None, db=None, tool=None):
-    env = dict(os.environ); env.pop("MEZO_ROLE", None)
+def run(args, env_role=None, db=None, tool=None, stand_env=None):
+    # ⚡ КАРТОЧКА #613: база вызывающего (stand_env, если дан) — не os.environ вызывающего
+    # напрямую: испытуемый инструмент не должен подхватить чужой MEZO_CONTAINER.
+    env = dict(stand_env if stand_env is not None else os.environ); env.pop("MEZO_ROLE", None)
     if env_role: env["MEZO_ROLE"] = env_role
     cmd = [sys.executable, "-B", str(tool or TOOL)] + args + (["--db", str(db)] if db else [])
     r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
@@ -72,16 +90,20 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", default=None, help="база-образец; по умолчанию живая (копируется)")
     ap.add_argument("--role", default="PROTO", help="чью историю сворачивать в опыте")
-    ap.add_argument("--break", dest="break_name", choices=sorted(BREAKS), default=None)
+    ap.add_argument("--break", dest="break_name",
+                    choices=sorted(set(BREAKS) | {STALE_ARCHIVE_BREAK}), default=None)
     a = ap.parse_args()
     role = a.role.upper()
     src = pathlib.Path(a.db) if a.db else mezo_paths.live_db()
     tmp = pathlib.Path(tempfile.mkdtemp(prefix="bite-fold-"))
     db = tmp / "copy.db"
     mezo_stand.snapshot_db(src, db)  # карточка #505/#624: согласованная копия, не shutil.copyfile
+    # ⚡ КАРТОЧКА #613: испытуемые (инструмент, шаг схемы, save-phoenix.py в случае ⑧) зовём
+    # средой СТЕНДА, не средой вызывающего — иначе MEZO_CONTAINER вызывающего доедет до них.
+    stand_env = mezo_stand.stand_env(tmp)
     live_fp = file_fingerprint(src)
     tool = TOOL; broken_copy = None
-    if a.break_name:
+    if a.break_name and a.break_name in BREAKS:
         was, became = BREAKS[a.break_name]
         text = TOOL.read_text(encoding="utf-8")
         if was not in text:
@@ -90,10 +112,14 @@ def main() -> int:
         broken_copy.write_text(text.replace(was, became, 1), encoding="utf-8")
         tool = broken_copy
         print(f"⚠️ ПОРЧА «{a.break_name}» ВЗВЕДЕНА — ждём красного в случаях ③ · ③-в · ③-г (одно свойство с двух сторон)\n")
+    elif a.break_name == STALE_ARCHIVE_BREAK:
+        print(f"⚠️ ПОРЧА «{STALE_ARCHIVE_BREAK}» ВЗВЕДЕНА — архив роли на копии НЕ чищен, "
+              f"ждём красного в ③-в · ③-г · ③-д · ④ · ⑤ (архив/история целиком, а не то, "
+              f"что унесла ЭТА свёртка)\n")
     try:
         # шаг схемы на копии
         r = subprocess.run([sys.executable, "-B", str(MIGR), "--db", str(db)], capture_output=True,
-                           text=True, encoding="utf-8", errors="replace")
+                           text=True, encoding="utf-8", errors="replace", env=stand_env)
         conn = sqlite3.connect(str(db))
         tables = {x[0] for x in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         in_journal = conn.execute("SELECT count(*) FROM schema_migrations WHERE version='20260905-phoenix-history-archive'").fetchone()[0]
@@ -108,25 +134,40 @@ def main() -> int:
              n_reb == 18 and conn.execute("SELECT count(DISTINCT role) FROM role_rebirths").fetchone()[0] == 9
              and conn.execute("SELECT count(*) FROM role_rebirths WHERE source NOT LIKE 'transcript:%'").fetchone()[0] == 0,
              f"отметок {n_reb}")
+        # ⚡ КАРТОЧКА #628: копия живой базы несёт РЕАЛЬНЫЙ архив роли (save-phoenix.py —
+        # по счёту версий, прежние прогоны fold — по возрасту): у PROTO 73 версии ДО этого
+        # опыта. «archived» ниже обязан быть тем, что унесла ИМЕННО эта свёртка — чистим
+        # архив роли на СВОЕЙ КОПИИ (живую не трогаем ни байтом, это отдельный файл), тогда
+        # ③-в/③-г/③-д/④/⑤ судят свойство, для которого написаны, а не состояние снимка.
+        # Не отдельный случай (счёт «19 из 19» карточки #628 — про сами свойства свёртки):
+        # печатается фактом, а под порчей --break stale-archive пропускается нарочно.
+        n_stale = conn.execute("SELECT count(*) FROM phoenix_history_archive WHERE role=?", (role,)).fetchone()[0]
+        if a.break_name != STALE_ARCHIVE_BREAK:
+            if n_stale:
+                conn.execute("DELETE FROM phoenix_history_archive WHERE role=?", (role,))
+                conn.commit()
+            print(f"ℹ️ архив роли {role} на КОПИИ очищен перед опытом (было чужого архива: {n_stale})")
+        else:
+            print(f"ℹ️ порча «{STALE_ARCHIVE_BREAK}»: архив роли НЕ чищен (в нём {n_stale} версий чужого архива)")
         history_before = history_snapshot(conn, role)
         threshold = conn.execute("SELECT datetime('now','-7 days')").fetchone()[0]
         rebirth_marks = [r[0] for r in conn.execute("SELECT at FROM role_rebirths WHERE role=? ORDER BY at", (role,))]
         fp_before = file_fingerprint(db)
 
         # ① холостой прогон — ни байта
-        code, output = run(["--role", role, "--dry-run"], db=db, tool=tool)
+        code, output = run(["--role", role, "--dry-run"], db=db, tool=tool, stand_env=stand_env)
         case("① --dry-run считает и не пишет ни байта (отпечаток файла базы совпал)",
              code == 0 and "ВХОЛОСТУЮ" in output and file_fingerprint(db) == fp_before, output.strip().splitlines()[-1] if output.strip() else "")
         # ② чужая рука — отказ, база не тронута
         other_role = "TAXO" if role != "TAXO" else "CORE"
-        code, output = run(["--role", other_role], env_role=role, db=db, tool=tool)
+        code, output = run(["--role", other_role], env_role=role, db=db, tool=tool, stand_env=stand_env)
         case("② чужую историю не сворачивает: отказ кодом 2, база не тронута",
              code == 2 and "ТОЛЬКО СВОЮ" in output and file_fingerprint(db) == fp_before, output.strip().splitlines()[-1])
-        code, output = run(["--role", role], db=db, tool=tool)
+        code, output = run(["--role", role], db=db, tool=tool, stand_env=stand_env)
         case("②-бис без MEZO_ROLE перенос отказан кодом 2", code == 2 and "ЧЬЯ РУКА" in output)
 
         # свёртка своей
-        code, output = run(["--role", role], env_role=role, db=db, tool=tool)
+        code, output = run(["--role", role], env_role=role, db=db, tool=tool, stand_env=stand_env)
         conn = sqlite3.connect(str(db))
         remaining = history_snapshot(conn, role)
         remaining_ids = {r[0] for r in remaining}
@@ -160,22 +201,22 @@ def main() -> int:
              conn.execute("SELECT count(*) FROM audit_log WHERE action='fold_history' AND target=?",
                           (f"phoenix_history.{role}",)).fetchone()[0] == 1)
         # ④ возврат
-        code, output = run(["--role", role, "--unfold"], env_role=role, db=db, tool=tool)
+        code, output = run(["--role", role, "--unfold"], env_role=role, db=db, tool=tool, stand_env=stand_env)
         conn = sqlite3.connect(str(db))
         case("④ --unfold возвращает историю знак в знак под прежними номерами, архив пуст",
              code == 0 and history_snapshot(conn, role) == history_before
              and conn.execute("SELECT count(*) FROM phoenix_history_archive WHERE role=?", (role,)).fetchone()[0] == 0,
              output.strip().splitlines()[-1])
         # ⑤ повторная свёртка после возврата даёт то же множество (идемпотентность правила)
-        code, output = run(["--role", role], env_role=role, db=db, tool=tool)
+        code, output = run(["--role", role], env_role=role, db=db, tool=tool, stand_env=stand_env)
         conn = sqlite3.connect(str(db))
         archived2 = {r[0] for r in conn.execute("SELECT id FROM phoenix_history_archive WHERE role=?", (role,))}
         case("⑤ повторная свёртка уносит то же множество версий", archived2 == {r[0] for r in archived})
-        code, output = run(["--role", role], env_role=role, db=db, tool=tool)
+        code, output = run(["--role", role], env_role=role, db=db, tool=tool, stand_env=stand_env)
         case("⑤-бис третий вызов: «уносить нечего», код 0", code == 0 and "уносить нечего" in output)
         # ⑥ роль без отметок: предупреждение вслух, «перед пересозданием» не хранится
         conn.execute("DELETE FROM role_rebirths WHERE role=?", (role,)); conn.commit()
-        code, output = run(["--role", role, "--dry-run"], db=db, tool=tool)
+        code, output = run(["--role", role, "--dry-run"], db=db, tool=tool, stand_env=stand_env)
         case("⑥ у роли без отметок пересоздания инструмент говорит это вслух", "ОТМЕТОК ПЕРЕСОЗДАНИЯ У РОЛИ НЕТ" in output)
         # ⑧ ЧИСТКА ПРИ СОХРАНЕНИИ — ПЕРЕНОС, НЕ УДАЛЕНИЕ (save-phoenix.py держит 10 + самую длинную
         #    на раздел; до 05.09 лишнее УДАЛЯЛОСЬ: из 2270 сохранений в истории оставалась 441 версия)
@@ -185,7 +226,8 @@ def main() -> int:
         archived_save0 = conn.execute("SELECT count(*) FROM phoenix_history_archive WHERE role=? AND rule LIKE 'save-phoenix%'", (role,)).fetchone()[0]
         body = conn.execute("SELECT body FROM phoenix WHERE role=? AND section='plan'", (role,)).fetchone()[0]
         f = tmp / "body.md"; codes = []
-        env = dict(os.environ); env["MEZO_ROLE"] = role
+        # ⚡ КАРТОЧКА #613: та же среда стенда, что у run() — не os.environ вызывающего.
+        env = dict(stand_env); env["MEZO_ROLE"] = role
         for i in range(13):
             f.write_text(body + f"\n\n<!-- проба приёмки {i}, копия базы -->", encoding="utf-8")
             r = subprocess.run([sys.executable, "-B", str(save), "--role", role, "--section", "plan", "--file", str(f),

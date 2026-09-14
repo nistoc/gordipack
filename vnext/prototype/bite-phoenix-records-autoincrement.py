@@ -17,6 +17,7 @@
   ⑧ ПОРЧА: подменить в копии шага сверку «до сноса» на ложь → шаг обязан ОТКАТИТЬ
      и оставить базу нетронутой (отпечаток тот же, phoenix_records_new не осталась).
 """
+import argparse
 import hashlib
 import io
 import os
@@ -39,6 +40,11 @@ import mezo_stand  # noqa: E402 — карточка #505/#624: согласов
 
 passed: list[str] = []
 failed: list[str] = []
+# ⚡ КАРТОЧКА #613: среда для subprocess.run внутри run() — выставляется main() ДО первого
+# вызова (mezo_stand.stand_env(sandbox)), чтобы испытуемые (STEP/MEMORY_TOOL) не подхватили
+# MEZO_CONTAINER вызывающего. Ни STEP, ни MEMORY_TOOL её не читают (проверено grep'ом по
+# обоим файлам) — переменная здесь для единообразия с остальными приёмками, а не по нужде.
+STAND_ENV: dict | None = None
 
 
 def case(title: str, ok: bool, detail: str = "") -> None:
@@ -50,8 +56,9 @@ def case(title: str, ok: bool, detail: str = "") -> None:
 
 
 def run(*args, env=None):
+    base = dict(STAND_ENV) if STAND_ENV is not None else dict(os.environ)
     p = subprocess.run([sys.executable, *map(str, args)], capture_output=True, text=True,
-                       encoding="utf-8", env=dict(os.environ, PYTHONIOENCODING="utf-8", **(env or {})))
+                       encoding="utf-8", env=dict(base, PYTHONIOENCODING="utf-8", **(env or {})))
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 
@@ -112,23 +119,75 @@ def strip_counter(path) -> None:
     c.close()
 
 
-def id_reuse_experiment(path) -> tuple[int, int]:
-    """Удалить запись с наибольшим номером, вставить новую. Вернуть (удалённый, новый)."""
-    c = sqlite3.connect(path)
-    mx = c.execute("SELECT MAX(id) FROM phoenix_records").fetchone()[0]
-    c.execute("DELETE FROM phoenix_records WHERE id=?", (mx,))
+def _insert_probe(c) -> int:
     cur = c.execute("INSERT INTO phoenix_records (role, section, subject, body, body_chars, created_by) "
                     "VALUES ('ПРОБА', 'state', 'разное', 'подсадка приёмки', 16, 'bite')")
-    new_id = cur.lastrowid
+    return cur.lastrowid
+
+
+def id_reuse_experiment(path, old_check: bool = False) -> tuple[int, int]:
+    """Удалить запись, вставить новую. Вернуть (удалённый, новый).
+
+    ⚡ КАРТОЧКА #631: прежний опыт удалял запись с MAX(id) ХВОСТА, КАКИМ ОН ЗАСТАЛ базу
+    (живой или изготовленной из неё), и ждал ТОТ ЖЕ номер обратно — верно только когда
+    прямо ПЕРЕД удаляемым номером нет пропуска. У живой базы 14.09 хвост 910·911·913
+    (912 выдан и удалён РАНЕЕ, этим опытом никак не тронут): опыт сносил 913, текущий
+    MAX совмещался с 911, и SQLite (без AUTOINCREMENT) выдавал новой записи 912 — номер
+    уже бывший в ходу (беда карточки #532 живая), но НЕ РАВНЫЙ удалённому — старая формула
+    «==» её не видела и приёмка считала «повтора нет» ошибочно.
+    ⇒ ОПЫТ ГОТОВИТ СВОЁ УСЛОВИЕ САМ: две свои пробные записи ПОДРЯД гарантированно смежны
+    (SQLite без AUTOINCREMENT отдаёт «текущий MAX(rowid)+1», а сразу после первой вставки
+    текущий MAX — она сама), и удаление ВТОРОЙ снова совмещает MAX с ПЕРВОЙ — своей же,
+    БЕЗ зависимости от пропусков глубже в хвосте живой базы (проверено случаем ①-бис на
+    копии с нарочно устроенным пропуском вплотную под максимумом — том же классе, что живой).
+
+    old_check — карточка #631③, нарочная поломка: вернуть ПРЕЖНЮЮ (полагающуюся на
+    существующий хвост) формулу, чтобы встречный случай ①-бис на копии с пропуском провалился.
+    """
+    c = sqlite3.connect(path)
+    if old_check:
+        mx = c.execute("SELECT MAX(id) FROM phoenix_records").fetchone()[0]
+        c.execute("DELETE FROM phoenix_records WHERE id=?", (mx,))
+        new_id = _insert_probe(c)
+        c.commit(); c.close()
+        return mx, new_id
+    first_id = _insert_probe(c)
+    second_id = _insert_probe(c)
+    c.execute("DELETE FROM phoenix_records WHERE id=?", (second_id,))
+    new_id = _insert_probe(c)
     c.commit(); c.close()
-    return mx, new_id
+    return second_id, new_id
+
+
+def make_gap_before_max(path) -> None:
+    """Устроить на копии пропуск ВПЛОТНУЮ под максимумом — тот же рисунок хвоста, что
+    у живой базы 14.09 (910 · 911 · 913, 912 выдан и снесён РАНЕЕ). Для встречного случая
+    ①-бис (карточка #631②): вставить две свои записи подряд и снести ПЕРВУЮ — остаётся
+    ВТОРАЯ (новый максимум) с пропуском ровно под ней, независимо от того, что было в
+    хвосте копии ДО этого вызова.
+    """
+    c = sqlite3.connect(path)
+    lower_id = _insert_probe(c)
+    _insert_probe(c)
+    c.execute("DELETE FROM phoenix_records WHERE id=?", (lower_id,))
+    c.commit(); c.close()
 
 
 def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--break", dest="break_name", choices=["old-check"], default=None,
+                    help="нарочная поломка (карточка #631): old-check — вернуть прежнюю "
+                         "формулу опыта id_reuse_experiment (зависит от хвоста живой)")
+    args = ap.parse_args()
+    old_check = args.break_name == "old-check"
+
     print("=" * 88)
     print("ПРИЁМКА шага 20260904-phoenix-records-autoincrement — карточка #532 (причина)")
     print(f"шаг: {STEP}")
     print(f"живая база (только копируется): {LIVE}")
+    if old_check:
+        print("⚠️ ПОРЧА «old-check» ВЗВЕДЕНА — id_reuse_experiment судит по MAX(id) хвоста, "
+              "не по своей паре записей; ждём красного в ①-бис (копия с пропуском)")
     print("=" * 88)
     for f in (STEP, LIVE, MEMORY_TOOL):
         if not f.is_file():
@@ -137,6 +196,8 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         sandbox = pathlib.Path(tmp)
         (sandbox / "scripts").mkdir()
+        global STAND_ENV
+        STAND_ENV = mezo_stand.stand_env(sandbox)          # карточка #613
         # копия базы лежит так, чтобы шаг с --db её нашёл; журнал схемы — рядом со скриптами
         control_copy = sandbox / "control.db"
         step_db = sandbox / "step.db"
@@ -161,6 +222,23 @@ def main() -> int:
         deleted_id, new_id = id_reuse_experiment(control_copy)
         case("① без счётчика: удалённый номер ВЫДАН ЗАНОВО (беда карточки видна опытом)",
                deleted_id == new_id, f"удалён {deleted_id}, новый {new_id} — повтора нет, опыт не различает")
+
+        # ①-бис ВСТРЕЧНЫЙ (карточка #631②③): та же беда, на копии с пропуском ВПЛОТНУЮ
+        # под максимумом — рисунок хвоста живой базы 14.09 (910·911·913). Контроль ①
+        # обязан увидеть беду НЕЗАВИСИМО от того, есть ли такой пропуск: опыт готовит
+        # СВОЮ пару записей и потому не зависит от чужого хвоста (см. id_reuse_experiment).
+        # Под порчей --break old-check (прежняя формула «удалённый == MAX(id) хвоста»)
+        # этот случай обязан провалиться — ровно то, что произошло у COORD 14.09 17:25 UTC.
+        gap_copy = sandbox / "gap.db"
+        mezo_stand.snapshot_db(LIVE, gap_copy)
+        strip_counter(gap_copy)
+        make_gap_before_max(gap_copy)
+        gap_deleted, gap_new = id_reuse_experiment(gap_copy, old_check=old_check)
+        case("①-бис ВСТРЕЧНЫЙ: беда видна и на копии с пропуском вплотную под максимумом "
+               "(рисунок хвоста живой 14.09: 910·911·913)",
+               gap_deleted == gap_new,
+               f"удалён {gap_deleted}, новый {gap_new} — повтора нет, опыт не различает "
+               f"(тот же класс беды, что нашёл COORD 14.09 17:25 UTC на живом хвосте)")
 
         print()
         print("── ②–⑥ ШАГ на копии ──────────────────────────────────────────────────")
@@ -273,6 +351,19 @@ def main() -> int:
     print("   И состояние «до» здесь ИЗГОТОВЛЕНО (случай ⓪), а не застигнуто: после 04.09")
     print("   20:37 UTC живой базы без счётчика нет. Обратная пересборка — мой же код, и")
     print("   если она врёт так же, как шаг, оба зелёные разом. Отдельного судьи у этого нет.")
+    if old_check:
+        # ⚡ КАРТОЧКА #631③: порча «old-check» обязана ровно ①-бис (встречный на копии
+        # с пропуском) — остальные случаи её не видят: ① не различает старую/новую формулу
+        # на СЕГОДНЯШНЕМ хвосте живой (в нём пропуск уже есть — см. беду карточки), а ⑤
+        # защищён AUTOINCREMENT независимо от формулы опыта.
+        expected = {"①-бис ВСТРЕЧНЫЙ: беда видна и на копии с пропуском вплотную под максимумом "
+                   "(рисунок хвоста живой 14.09: 910·911·913)"}
+        if set(failed) == expected:
+            print(f"\n✅ так и надо: под порчей «old-check» провалился ровно {sorted(expected)}")
+            return 0
+        print(f"\n⚠️ ПОРЧА «old-check» ВЗВЕДЕНА, А ПРОВАЛИЛОСЬ НЕ ТО: ждали ровно {sorted(expected)}, "
+              f"получили {sorted(failed)}")
+        return 1
     return 1 if failed else 0
 
 

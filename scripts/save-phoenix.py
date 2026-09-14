@@ -266,20 +266,35 @@ def classify_gone_lines(old_l, new_l_list, gone_l):
     настоящая пропажа пряталась бы за случайным сходством формы. Кандидат
     обязан быть СВЕЖИМ (появившимся или переписанным), а не старым соседом.
 
+    ДВА ПРИЗНАКА «ИЗМЕНЕНА», по порядку (возврат COORD по карточке #616, 2026-09-14,
+    её встречный набор — виды правки, какими роли правят память на деле):
+      ① прежняя строка ЦЕЛИКОМ входит в свежую (без различия регистра) — ДОПИСАНА,
+         хоть вдвое, хоть втрое. Похожесть тут не считается вовсе: у дописанной втрое
+         она около 0,5 и падала ниже порога, хотя прежний текст цел до буквы;
+      ② похожесть по difflib — БЕЗ различия регистра: строка, переписанная целиком
+         прописными (роли так пишут ударное), без свёртки регистра похожа на себя
+         меньше, чем посторонняя тема.
+    Первый признак дёшев (поиск подстроки) и считается всегда; второй — только
+    для оставшихся строк и только под потолком пар.
+
     ⚖️ ПОТОЛОК НЕ ОТКАЗЫВАЕТ В СОХРАНЕНИИ — он отказывает ТОЛЬКО в тонкой мерке:
-    сверх потолка все пропавшие строки считаются «пропала» БЕЗ сравнения — тот же
+    сверх потолка оставшиеся строки считаются «пропала» БЕЗ сравнения — тот же
     исход, что был ДО карточки #616, и об этом ГОВОРИТСЯ (см. loss_report), а не
     молчится. Дорогая мерка не имеет права стать дорогим ОТКАЗОМ ОТ СОХРАНЕНИЯ.
     """
     old_set = set(old_l)
     new_only = [l for l in new_l_list if l not in old_set]
-    if len(gone_l) * len(new_only) > CLASSIFY_PAIR_CEILING:
-        return [], list(gone_l), False
+    new_folded = [l.casefold() for l in new_only]
+    folded_gone = [l.casefold() for l in gone_l]
+    appended = [any(f in n for n in new_folded) for f in folded_gone]
+    classified = appended.count(False) * len(new_only) <= CLASSIFY_PAIR_CEILING
     changed, truly_gone = [], []
-    for l in gone_l:
-        match = difflib.get_close_matches(l, new_only, n=1, cutoff=CHANGED_SIMILARITY)
+    for l, folded, is_appended in zip(gone_l, folded_gone, appended):
+        match = is_appended
+        if not match and classified:
+            match = difflib.get_close_matches(folded, new_folded, n=1, cutoff=CHANGED_SIMILARITY)
         (changed if match else truly_gone).append(l)
-    return changed, truly_gone, True
+    return changed, truly_gone, classified
 
 
 def loss_report(prev_body, body, limit=6):
@@ -502,7 +517,17 @@ def main():
     # Регистр исполнителя — та же нормализация, что у роли (иначе расщепление PROTO/proto).
     actor = args.actor.upper() if args.actor else role
     # Путь к БД — та же нормализация входа, что регистр роли (R15a).
-    args.db = str(resolve_db(args.db, __file__))
+    # ⚡ КАРТОЧКА #629: --dry-run — вызов ЧИТАЮЩИЙ (ничего не пишет: dryrun.connect откатывает).
+    # Прежде readonly не назывался вовсе, и lease.check судил save-phoenix.py по ИМЕНИ файла —
+    # оно не похоже на читающее (нет приставки guard-/check-/read-/bite-/...), поэтому ДАЖЕ
+    # холостой прогон получал отказ ПИШУЩЕГО (код 3) под чужим объявлением о правке, и
+    # lease._remember_wait успевал записать ожидание в живую базу ДО этого отказа — сам
+    # холостой прогон переставал быть холостым для механизма аренды. Живой случай 2026-09-14
+    # 16:58 UTC: PROTO не сняла своё объявление о правке save-phoenix.py, прогнала приёмку
+    # bite-phoenix-service-blocks.py (она зовёт --dry-run от имени STUD/BITE519), и в
+    # tool_lease_waits живой базы осталась запись ожидания от холостого вызова.
+    readonly = True if args.dry_run else None
+    args.db = str(resolve_db(args.db, __file__, readonly=readonly))
 
     if args.confirm and (args.body or args.file):
         print("ERR: --confirm отмечает ВЗГЛЯД и потому НЕ принимает тело. Если правки есть — "

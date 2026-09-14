@@ -38,6 +38,9 @@ import sys
 import tempfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mezo_stand  # noqa: E402 — карточка #629: судим согласованную копию, не живую базу
+
 ROLE = "STUD"
 # 🩸 ЧЕЙ СЛЕД. Все прогоны набора подписываются ОСОБЫМ актором: живую базу пишут девять
 # рук, и «база изменилась» без имени руки ничего не значит — @TAXO поймала это на первом
@@ -126,15 +129,22 @@ def _hour_now(db):
     return hour
 
 
-def run_case(tool, db, text, workdir):
-    """Холостой прогон сохранения. Возвращает (код, весь вывод одной строкой)."""
+def run_case(tool, db, text, workdir, stand_env=None):
+    """Холостой прогон сохранения. Возвращает (код, весь вывод одной строкой).
+
+    ⚡ КАРТОЧКА #613: испытуемый save-phoenix.py зовём со средой СТЕНДА
+    (mezo_stand.stand_env), а не со средой вызывающего — иначе MEZO_CONTAINER
+    вызывающего доедет до испытуемого инструмента (он читает её при проверке
+    объявлений о правке, см. lease.check) и приёмка станет судить чужой контур.
+    """
     f = Path(workdir) / "тело.md"
     f.write_text(text, encoding="utf-8")
     p = subprocess.run(
         [sys.executable, str(tool), "--db", str(db), "--role", ROLE,
          "--section", SECTION, "--file", str(f), "--dry-run", "--allow-shrink",
          "--actor", SUITE_ACTOR],
-        capture_output=True, text=True, encoding="utf-8", errors="replace")
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        env=stand_env)
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 
@@ -206,7 +216,12 @@ def cases(db):
 def main():
     ap = argparse.ArgumentParser(description="Приёмка карточки #519: служебные блоки читалки в памяти")
     ap.add_argument("--tool", "--инструмент", dest="tool", help="путь к save-phoenix.py (по умолчанию — живой)")
-    ap.add_argument("--db", help="путь к базе (по умолчанию — живая)")
+    # ⚡ КАРТОЧКА #629②: живой случай 2026-09-14 — по умолчанию судили ЖИВУЮ базу
+    # (db = tool.parent.parent / "mezosync.db"), и холостой прогон под чужим объявлением
+    # о правке писал ожидание в живую tool_lease_waits. Теперь по умолчанию — СОГЛАСОВАННАЯ
+    # КОПИЯ (mezo_stand.snapshot_db); саму живую судим только по явному --db.
+    ap.add_argument("--db", help="путь к базе (по умолчанию — согласованная КОПИЯ живой; "
+                                  "саму живую — только этим флагом явно)")
     ap.add_argument("--break", dest="corruption", choices=["none"],
                     help="нарочная поломка: none — снять проверку служебных блоков")
     a = ap.parse_args()
@@ -216,11 +231,28 @@ def main():
         here.parent.parent / ".mezosync" / "scripts" / "save-phoenix.py"
     if not tool.exists():
         sys.exit(f"⛔ ОПЫТ НЕ ПОСТАВЛЕН: инструмента нет — {tool}")
-    db = Path(a.db) if a.db else tool.parent.parent / "mezosync.db"
-    if not db.exists():
-        sys.exit(f"⛔ ОПЫТ НЕ ПОСТАВЛЕН: базы нет — {db}")
 
     workdir = tempfile.mkdtemp(prefix="bite519-")
+    # ⚡ КАРТОЧКА #613: испытуемые тянутся к СТЕНДУ, а не к контуру вызывающего — иначе
+    # save-phoenix.py, проверяя объявление о правке (lease.check), подхватит MEZO_CONTAINER
+    # вызывающего и станет судить о живом контуре, даже работая с копией базы.
+    stand_env = mezo_stand.stand_env(workdir)
+
+    if a.db:
+        db = Path(a.db)
+        db_kind = "названа явно --db"
+        if not db.exists():
+            sys.exit(f"⛔ ОПЫТ НЕ ПОСТАВЛЕН: базы нет — {db}")
+    else:
+        live_db = tool.parent.parent / "mezosync.db"
+        if not live_db.exists():
+            sys.exit(f"⛔ ОПЫТ НЕ ПОСТАВЛЕН: живой базы нет — {live_db}")
+        db = Path(workdir) / "mezosync.db"
+        # согласованный снимок (backup(), не shutil.copy) — карточка #505/#624: копирование
+        # ОДНОГО файла живой базы в режиме WAL даёт рваный снимок без свежего хвоста журнала
+        mezo_stand.snapshot_db(live_db, db)
+        db_kind = "согласованная КОПИЯ живой"
+
     runner = Path(workdir) / "save-phoenix.py"
     shutil.copy(tool, runner)
     # модули лежат рядом с инструментом — зовём копию ОТТУДА же, а не из временного места
@@ -244,7 +276,7 @@ def main():
     suite = cases(db)
     passed = failed = skipped = 0
     print("═" * 92)
-    print(f"ПРИЁМКА карточки #519 · инструмент: {runner.name} · база: {db.name}"
+    print(f"ПРИЁМКА карточки #519 · инструмент: {runner.name} · база: {db.name} ({db_kind})"
           + (" · ПОРЧА: проверка снята" if a.corruption else ""))
     print("═" * 92)
 
@@ -253,7 +285,7 @@ def main():
             print(f"  ⚪ {mark} {what}\n       {expect['skipped']}")
             skipped += 1
             continue
-        code, output = run_case(runner, db, text, workdir)
+        code, output = run_case(runner, db, text, workdir, stand_env=stand_env)
         said_reject = "СЛУЖЕБНЫЙ БЛОК ЧИТАЛКИ" in output
         problems = []
         if code != expect["code"]:
