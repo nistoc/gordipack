@@ -74,6 +74,12 @@ GORDI_ISSUE_PY = HERE / "gordi-issue.py"
 NEWLINE = chr(10)
 UNKNOWN_VERSION = "версия неизвестна"   # заглушка fetch(), когда у источника нет HEAD вовсе
 
+# ВОЗВРАТ PROTO (третий возврат, карточка #609): именованные байт-константы для стиля
+# концов строк — та же причина, что у MERGE_LABEL_*: одна константа вместо байт-литерала,
+# повторённого в нескольких местах (line_ending_style/to_lf/from_lf/cmd_merge ниже).
+CRLF = b"\r\n"
+LF = b"\n"
+
 # ВОЗВРАТ PROTO (карточка #609): подписи git merge-file — ОДНА пара констант, а не
 # литералы, разведённые по двум местам (сама команда git merge-file и разбор её вывода).
 # Разведённые литералы уже разошлись бы однажды незаметно — правка одного места не тронула
@@ -118,6 +124,38 @@ def same_text(a: bytes, b: bytes) -> bool:
 
 def digest(data: bytes) -> str:
     return hashlib.sha256(data.replace(b"\r\n", b"\n").rstrip()).hexdigest()[:12]
+
+
+# ВОЗВРАТ PROTO (третий возврат, карточка #609, находка COORD, записка #5232): на Windows
+# (core.autocrlf=true) файл контура и файл пакета НА ДИСКЕ — CRLF, а опора, пришедшая из
+# истории пакета (`git show`), — LF: git сам приводит объекты к LF внутри истории и не
+# трогает рабочее дерево при извлечении текста через `show`. cmd_merge раньше подавал
+# git merge-file СЫРЫЕ байты всех трёх текстов — на CRLF-контуре опора расходилась с ОБЕИМИ
+# сторонами на КАЖДОЙ строке, и «пересечений: 0» превращалось в «пересечений: 3» даже там,
+# где обе правки не пересекались вовсе. same_text/digest выше эту беду не ловят — они только
+# СРАВНИВАЮТ содержимое, а git merge-file сводит СТРОКИ, и ему нужны на входе одинаковые
+# концы строк у всех трёх текстов, а не только равенство пары.
+def line_ending_style(data: bytes) -> bytes:
+    """Стиль концов строк файла — CRLF или LF, большинством голосов по строкам: голого \\r
+    без следующего \\n git не оставляет, поэтому считаем долю CRLF среди ВСЕХ \\n. Файл без
+    единого \\n (или пустой) — LF по умолчанию, менять в нём нечего."""
+    total_lf = data.count(LF)
+    if total_lf == 0:
+        return LF
+    crlf = data.count(CRLF)
+    return CRLF if crlf * 2 >= total_lf else LF
+
+
+def to_lf(data: bytes) -> bytes:
+    """Привести к LF ПЕРЕД git merge-file — тот же приём, что у same_text/digest, но здесь
+    результат идёт НА ВХОД внешней команде, а не в сравнение, поэтому оформлен отдельно."""
+    return data.replace(CRLF, LF)
+
+
+def from_lf(data: bytes, style: bytes) -> bytes:
+    """Обратный ход to_lf: перевести LF-текст (выход git merge-file) в СТИЛЬ ФАЙЛА КОНТУРА —
+    черновик обязан выглядеть так, будто его сохранили тем же редактором, что и весь файл."""
+    return data if style == LF else data.replace(LF, style)
 
 
 def git_history_root(path: pathlib.Path) -> tuple[pathlib.Path | None, str]:
@@ -462,15 +500,27 @@ def cmd_merge(tools: pathlib.Path, src_index: dict, git_rel_of: dict, fingerprin
 
     draft_path, meta_path = draft_paths(tools, rel)
     draft_path.parent.mkdir(parents=True, exist_ok=True)
+    # ВОЗВРАТ PROTO (третий возврат, карточка #609): стиль концов строк — у ФАЙЛА КОНТУРА,
+    # а не у опоры и не у пакета (тот, кто будет читать черновик глазами и редактором,
+    # правит именно файл контура). Все три текста, что видит git merge-file, приводятся
+    # к LF — иначе на CRLF-контуре опора (из истории, LF) расходится с обеими сторонами на
+    # КАЖДОЙ строке, и честные непересекающиеся правки превращаются в ложные пересечения
+    # (находка COORD, записка #5232). Черновик на выходе переводится ОБРАТНО в стиль файла
+    # контура — иначе роль получит черновик, у которого концы строк внезапно сменились без
+    # единой её правки, и следующий git diff будет шуметь по всему файлу.
+    circuit_style = line_ending_style(mine_bytes)
+    circuit_style_name = "CRLF" if circuit_style == CRLF else "LF"
+    print(f"концы строк файла контура: {circuit_style_name} — "
+          "опора/ваш текст/пакет перед сведением приведены к LF, черновик — обратно в этот стиль")
     # ⚡ ИМЕНА ВРЕМЕННЫХ ФАЙЛОВ — ПО-АНГЛИЙСКИ (слово владельца: код и имена — по-английски;
     # печатаемый человеку текст — по-русски). Подписи -L у git merge-file ниже ОСТАЮТСЯ
     # русскими — их читает человек, разбирая черновик, это не имя, а показываемый текст.
     ours_f = draft_path.parent / "_ours.tmp"
     base_f = draft_path.parent / "_base.tmp"
     theirs_f = draft_path.parent / "_theirs.tmp"
-    ours_f.write_bytes(mine_bytes)
-    base_f.write_bytes(opora_bytes)
-    theirs_f.write_bytes(pack_bytes)
+    ours_f.write_bytes(to_lf(mine_bytes))
+    base_f.write_bytes(to_lf(opora_bytes))
+    theirs_f.write_bytes(to_lf(pack_bytes))
     r = subprocess.run(
         ["git", "merge-file", "-p",
          "-L", MERGE_LABEL_OURS,
@@ -482,7 +532,7 @@ def cmd_merge(tools: pathlib.Path, src_index: dict, git_rel_of: dict, fingerprin
     if r.returncode < 0:
         sys.exit(f"⛔ git merge-file не сумел сравнить тексты (код {r.returncode}): "
                  + (r.stderr or b"").decode("utf-8", "replace").strip()[:400])
-    draft_bytes = r.stdout
+    draft_bytes = from_lf(r.stdout, circuit_style)
     draft_path.write_bytes(draft_bytes)
     conflicts = count_conflicts(draft_bytes)
     meta = {"rel": str(rel).replace(chr(92), "/"), "pack_fingerprint": digest(pack_bytes),

@@ -311,6 +311,69 @@ OWN_E = (RUN_NONCE + MARK_OURS_LINE + MARK_THEIRS_LINE + b"line_own EDITED BY CI
         + b"line_middle unchanged\n" + b"line_pack original\n")
 FP_E = digest(OPORA_E)
 
+# ВОЗВРАТ PROTO (третий возврат, карточка #609, находка COORD, записка #5232): CRLF-СЛУЧАИ.
+# На Windows (core.autocrlf=true) файл контура и файл пакета НА ДИСКЕ — CRLF, а опора,
+# пришедшая из истории пакета (git show), — LF: история хранит объекты LF, автокрлф
+# трогает только рабочее дерево при извлечении. Коммитим в СВОЙ клон, как всегда, LF-байтами
+# (так живёт история) — а ПОСЛЕ коммита переписываем файл ПАКЕТА НА ДИСКЕ клона CRLF-байтами,
+# БЕЗ нового коммита: рабочее дерево расходится с историей ровно как у настоящего
+# autocrlf-чекаута. Файл КОНТУРА (seed лёгкого контура) тоже пишем CRLF напрямую — этот
+# путь вообще не коммитится, круга «история/диск» у него нет.
+def crlf(data: bytes) -> bytes:
+    return data.replace(b"\n", b"\r\n")
+
+
+def is_crlf(data: bytes) -> bool:
+    """Практическая проверка «весь файл CRLF»: у КАЖДОГО \\n есть свой \\r перед ним, и
+    одиноких \\r (вне пары) нет — ровно то, что оставляет запись crlf() выше."""
+    return b"\n" in data and data.count(b"\r") == data.count(b"\n") == data.count(b"\r\n")
+
+
+def is_lf(data: bytes) -> bool:
+    return b"\r" not in data
+
+
+# ⑥ / ⑥-встречный — merge-I.py: как merge-A.py (случаи ①/②), но CRLF на диске
+OPORA_I = L1 + L2 + L3
+OPORA_I_COMMIT = add_pack_commit("scripts/merge-I.py", OPORA_I, "bite609: opora merge-I.py")
+PACK_I_NOW = L1 + L2 + b"line3 CHANGED BY PACK (case I)\n"
+PACK_I_COMMIT = add_pack_commit("scripts/merge-I.py", PACK_I_NOW, "bite609: pack changes L3 (case I)")
+(PACKAGE / "scripts" / "merge-I.py").write_bytes(crlf(PACK_I_NOW))   # диск CRLF, история осталась LF
+OWN_I = crlf(RUN_NONCE + b"line1 EDITED BY CIRCUIT (case I)\n" + L2 + L3)   # файл контура — CRLF на диске
+FP_I = digest(OPORA_I)
+
+# ⑥-встречный (контроль) — merge-J.py: та же форма, ПОЛНОСТЬЮ на LF (ни одного CRLF) —
+# доказывает, что находка именно про CRLF, а не про что-то постороннее в новом коде.
+OPORA_J = L1 + L2 + L3
+OPORA_J_COMMIT = add_pack_commit("scripts/merge-J.py", OPORA_J, "bite609: opora merge-J.py")
+PACK_J_NOW = L1 + L2 + b"line3 CHANGED BY PACK (case J)\n"
+PACK_J_COMMIT = add_pack_commit("scripts/merge-J.py", PACK_J_NOW, "bite609: pack changes L3 (case J)")
+OWN_J = RUN_NONCE + b"line1 EDITED BY CIRCUIT (case J)\n" + L2 + L3
+FP_J = digest(OPORA_J)
+
+# ⑦ — merge-K.py: CRLF на диске, ОБЕ стороны меняют L2 ПО-РАЗНОМУ — настоящее пересечение
+# обязано остаться честным пересечением и на CRLF (не 0 и не «потерялось молча»).
+OPORA_K = L1 + L2 + L3
+OPORA_K_COMMIT = add_pack_commit("scripts/merge-K.py", OPORA_K, "bite609: opora merge-K.py")
+PACK_K_NOW = L1 + b"line2 CHANGED BY PACK (case K)\n" + L3
+PACK_K_COMMIT = add_pack_commit("scripts/merge-K.py", PACK_K_NOW, "bite609: pack changes L2 (case K)")
+(PACKAGE / "scripts" / "merge-K.py").write_bytes(crlf(PACK_K_NOW))
+OWN_K = crlf(L1 + b"line2 EDITED BY CIRCUIT (case K)\n" + L3)
+FP_K = digest(OPORA_K)
+
+# ⑥-смешанный — merge-L.py (решающий прогон PROTO, третий возврат карточки #609): файл КОНТУРА
+# на LF, файл ПАКЕТА на диске CRLF (история LF). В ⑥/⑦ обе стороны CRLF, в ⑥-встречном обе LF —
+# ни один из них не отличает «стиль черновика взят у файла контура» от «взят у пакета» или
+# «CRLF, если он есть хоть у кого-то». Требование «черновик — в стиле файла контура» получает
+# здесь свой встречный случай: живые файлы контура бывают и LF, а рабочее дерево пакета — CRLF.
+OPORA_L = L1 + L2 + L3
+OPORA_L_COMMIT = add_pack_commit("scripts/merge-L.py", OPORA_L, "bite609: opora merge-L.py")
+PACK_L_NOW = L1 + L2 + b"line3 CHANGED BY PACK (case L)\n"
+PACK_L_COMMIT = add_pack_commit("scripts/merge-L.py", PACK_L_NOW, "bite609: pack changes L3 (case L)")
+(PACKAGE / "scripts" / "merge-L.py").write_bytes(crlf(PACK_L_NOW))   # пакет на диске CRLF
+OWN_L = RUN_NONCE + b"line1 EDITED BY CIRCUIT (case L)\n" + L2 + L3   # файл контура — LF
+FP_L = digest(OPORA_L)
+
 PACK_READY_STATE = pack_state()   # с этой точки update-tools.py САМ пакет больше не меняет
 
 
@@ -609,6 +672,145 @@ case("⑤ ПОЛОМКА №2 (--accept-merge без обновления опо
     rc_c3 == 0 and live_c2_after != OWN_C   # черновик всё же положен в живой файл
     and fp_c2_after == FP_C,                # а опора осталась СТАРОЙ — поломка сработала
     f"код {rc_c3} · опора: было {FP_C} · стало {fp_c2_after} (ждём БЕЗ изменения — поломка)")
+
+
+# ═══ ВОЗВРАТ PROTO (третий возврат, карточка #609): ⑥ CRLF — файл контура и файл пакета
+#     НА ДИСКЕ CRLF, опора из истории LF (находка COORD, записка #5232). Проверяем ДВЕ вещи
+#     на одной фикстуре: (а) обычный прогон без --merge по-прежнему верно печатает «✋ …
+#     пакет менял этот файл после опоры: да» (item 2 третьего возврата — digest и поиск
+#     опоры по отпечатку уже нормализуют, здесь это ПРОВЕРЕНО, а не предположено заранее);
+#     (б) --merge на CRLF даёт «пересечений: 0» (была бы 1–3 без приведения к LF), черновик
+#     несёт ОБЕ правки и сам в стиле CRLF, как у файла контура ════
+
+root_i, scripts_i, db_i = make_light_circuit(
+    "case-I", {"merge-I.py": OWN_I}, {"merge-I.py": FP_I})
+rc_i0, out_i0 = run(scripts_i, "--source", str(PACKAGE), "--db", str(db_i))
+case("⑥ (item 2) на CRLF «✋» печатает «пакет менял этот файл после опоры: да» — digest "
+    "и поиск опоры по отпечатку уже нормализуют концы строк, здесь это ПРОВЕРЕНО",
+    rc_i0 == 0 and "✋" in out_i0 and "merge-I.py" in out_i0
+    and "пакет менял этот файл после опоры" in out_i0 and ": да" in out_i0
+    and PACK_I_COMMIT in out_i0,
+    f"код {rc_i0} · ищем коммит {PACK_I_COMMIT} рядом с «: да»")
+
+root_i2, scripts_i2, db_i2 = make_light_circuit(
+    "case-I-merge", {"merge-I.py": OWN_I}, {"merge-I.py": FP_I})
+rc_i1, out_i1 = run(scripts_i2, "--merge", "merge-I.py", "--source", str(PACKAGE), "--db", str(db_i2))
+draft_i_lines = [ln for ln in out_i1.splitlines() if ln.startswith("черновик: ")]
+draft_i = Path(draft_i_lines[0].split("черновик: ", 1)[1].strip()) if draft_i_lines else None
+draft_i_bytes = draft_i.read_bytes() if draft_i and draft_i.exists() else b""
+case("⑥ CRLF, непересекающиеся правки: «пересечений: 0» (была бы 1–3 без приведения к LF "
+    "перед git merge-file — находка COORD, записка #5232)",
+    rc_i1 == 0 and "пересечений: 0" in out_i1, f"код {rc_i1}")
+case("⑥ черновик несёт ОБЕ правки и сам в стиле CRLF, как у файла контура",
+    b"EDITED BY CIRCUIT" in draft_i_bytes and b"CHANGED BY PACK" in draft_i_bytes
+    and is_crlf(draft_i_bytes),
+    f"черновик: {draft_i} · CRLF: {is_crlf(draft_i_bytes)}")
+
+rc_i2, out_i2 = run(scripts_i2, "--accept-merge", "merge-I.py", "--db", str(db_i2), "--apply")
+live_i_after = (scripts_i2 / "merge-I.py").read_bytes()
+case("⑥ после --accept-merge --apply живой файл принят и остался CRLF",
+    rc_i2 == 0 and "✅ принято" in out_i2 and is_crlf(live_i_after),
+    f"код {rc_i2} · CRLF: {is_crlf(live_i_after)}")
+
+
+# ═══ ⑥-встречный: тот же случай ПОЛНОСТЬЮ НА LF (ни одного CRLF) — доказывает, что находка
+#     COORD именно про CRLF, а не про что-то постороннее в новом коде ════
+
+root_j, scripts_j, db_j = make_light_circuit(
+    "case-J-merge", {"merge-J.py": OWN_J}, {"merge-J.py": FP_J})
+rc_j1, out_j1 = run(scripts_j, "--merge", "merge-J.py", "--source", str(PACKAGE), "--db", str(db_j))
+case("⑥-встречный: тот же случай на LF — «пересечений: 0», как и раньше (находка COORD "
+    "не задевает уже исправный путь)",
+    rc_j1 == 0 and "пересечений: 0" in out_j1, f"код {rc_j1}")
+
+
+# ═══ ⑥-смешанный: контур LF, пакет на диске CRLF — черновик обязан быть в стиле КОНТУРА (LF).
+#     Встречный случай к требованию «стиль — у файла контура, а не у пакета» (решающий прогон
+#     PROTO: в ⑥/⑦ обе стороны одного стиля, и взятие стиля у пакета там неотличимо) ════
+
+root_l, scripts_l, db_l = make_light_circuit(
+    "case-L-merge", {"merge-L.py": OWN_L}, {"merge-L.py": FP_L})
+rc_l1, out_l1 = run(scripts_l, "--merge", "merge-L.py", "--source", str(PACKAGE), "--db", str(db_l))
+draft_l_lines = [ln for ln in out_l1.splitlines() if ln.startswith("черновик: ")]
+draft_l = Path(draft_l_lines[0].split("черновик: ", 1)[1].strip()) if draft_l_lines else None
+draft_l_bytes = draft_l.read_bytes() if draft_l and draft_l.exists() else b""
+case("⑥-смешанный: контур LF, пакет на диске CRLF — «пересечений: 0», черновик несёт обе "
+    "правки и сам в стиле ФАЙЛА КОНТУРА (LF), а не пакета",
+    rc_l1 == 0 and "пересечений: 0" in out_l1
+    and b"EDITED BY CIRCUIT" in draft_l_bytes and b"CHANGED BY PACK" in draft_l_bytes
+    and is_lf(draft_l_bytes),
+    f"код {rc_l1} · LF: {is_lf(draft_l_bytes)}")
+
+
+# ═══ ⑦ CRLF, ПЕРЕСЕКАЮЩИЕСЯ правки: настоящее пересечение остаётся честным пересечением и
+#     на CRLF — подсчёт пересечений и поиск отметок (item 1) верны на CRLF-черновике, не
+#     только на LF ════
+
+root_k, scripts_k, db_k = make_light_circuit(
+    "case-K-merge", {"merge-K.py": OWN_K}, {"merge-K.py": FP_K})
+rc_k1, out_k1 = run(scripts_k, "--merge", "merge-K.py", "--source", str(PACKAGE), "--db", str(db_k))
+draft_k_lines = [ln for ln in out_k1.splitlines() if ln.startswith("черновик: ")]
+draft_k = Path(draft_k_lines[0].split("черновик: ", 1)[1].strip()) if draft_k_lines else None
+draft_k_bytes = draft_k.read_bytes() if draft_k and draft_k.exists() else b""
+case("⑦ CRLF, пересекающиеся правки: пересечение остаётся честным (не 0), черновик несёт "
+    "отметки, черновик сам в стиле CRLF",
+    rc_k1 == 0 and "пересечений: 0" not in out_k1
+    and b"<<<<<<< " in draft_k_bytes and b">>>>>>> " in draft_k_bytes
+    and is_crlf(draft_k_bytes),
+    f"код {rc_k1} · CRLF: {is_crlf(draft_k_bytes)}")
+
+rc_k2, out_k2 = run(scripts_k, "--accept-merge", "merge-K.py", "--db", str(db_k), "--apply")
+case("⑦ --accept-merge ОТКАЗЫВАЕТ на CRLF-черновике, пока отметки не убраны — поиск "
+    "отметок (conflict_marker_lines) верен и на CRLF, не только на LF",
+    rc_k2 != 0, f"код {rc_k2} (ждём отказ)")
+
+
+# ── ПОЛОМКА (третий возврат, item 4): убрать приведение к LF перед git merge-file — красит
+# РОВНО новый случай ⑥ (CRLF, непересекающиеся правки: «пересечений: 0» перестаёт быть
+# верным); ⑥-встречный (весь на LF, приводить нечего) и ⑦ (и так ожидает пересечение —
+# поломка не меняет вердикт «не 0») остаются как были.
+brokenCRLF_dir = STAND / "brokenCRLF"
+brokenCRLF_tool = mezo_stand.copy_tool(TARGET, brokenCRLF_dir)
+srcCRLF = brokenCRLF_tool.read_text(encoding="utf-8")
+anchorCRLF1 = ('    ours_f.write_bytes(to_lf(mine_bytes))\n'
+              '    base_f.write_bytes(to_lf(opora_bytes))\n'
+              '    theirs_f.write_bytes(to_lf(pack_bytes))\n')
+anchorCRLF2 = '    draft_bytes = from_lf(r.stdout, circuit_style)\n'
+if srcCRLF.count(anchorCRLF1) != 1 or srcCRLF.count(anchorCRLF2) != 1:
+    sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: блок приведения к LF в cmd_merge не найден дословно — "
+             "испытуемое изменилось, поломка CRLF бьёт мимо")
+brokenCRLF_text = (srcCRLF
+    .replace(anchorCRLF1,
+             '    ours_f.write_bytes(mine_bytes)  # ПОЛОМКА карточки #609 (третий возврат)\n'
+             '    base_f.write_bytes(opora_bytes)  # приведение к LF снято\n'
+             '    theirs_f.write_bytes(pack_bytes)\n')
+    .replace(anchorCRLF2,
+             '    draft_bytes = r.stdout  # ПОЛОМКА карточки #609: обратный перевод в стиль контура снят\n'))
+brokenCRLF_tool.write_text(brokenCRLF_text, encoding="utf-8")
+
+root_ic, scripts_ic, db_ic = make_light_circuit(
+    "case-I-poisonCRLF", {"merge-I.py": OWN_I}, {"merge-I.py": FP_I})
+mezo_stand.copy_tool(brokenCRLF_tool, scripts_ic)
+rc_ic, out_ic = run(scripts_ic, "--merge", "merge-I.py", "--source", str(PACKAGE), "--db", str(db_ic))
+case("ПОЛОМКА CRLF (приведение к LF снято) КРАСИТ ровно случай ⑥: ложные «пересечений: N» "
+    "возвращаются на CRLF-файле с непересекающимися правками",
+    rc_ic == 0 and "пересечений: 0" not in out_ic, f"код {rc_ic}")
+
+root_jc, scripts_jc, db_jc = make_light_circuit(
+    "case-J-poisonCRLF", {"merge-J.py": OWN_J}, {"merge-J.py": FP_J})
+mezo_stand.copy_tool(brokenCRLF_tool, scripts_jc)
+rc_jc, out_jc = run(scripts_jc, "--merge", "merge-J.py", "--source", str(PACKAGE), "--db", str(db_jc))
+case("ПОЛОМКА CRLF не трогает ⑥-встречный: весь файл на LF, приводить нечего — "
+    "«пересечений: 0» остаётся верным даже с поломкой",
+    rc_jc == 0 and "пересечений: 0" in out_jc, f"код {rc_jc}")
+
+root_kc, scripts_kc, db_kc = make_light_circuit(
+    "case-K-poisonCRLF", {"merge-K.py": OWN_K}, {"merge-K.py": FP_K})
+mezo_stand.copy_tool(brokenCRLF_tool, scripts_kc)
+rc_kc, out_kc = run(scripts_kc, "--merge", "merge-K.py", "--source", str(PACKAGE), "--db", str(db_kc))
+case("ПОЛОМКА CRLF не меняет вердикт ⑦: там и так ждём честное пересечение (не 0) — "
+    "поломка не превращает верный отказ в ложный успех",
+    rc_kc == 0 and "пересечений: 0" not in out_kc, f"код {rc_kc}")
 
 
 print()
