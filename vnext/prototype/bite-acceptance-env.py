@@ -35,6 +35,14 @@
   Случаи ①–⑤ и Р1 судят РАЗБОР, а не реестр, — поэтому зовут проверку с --no-debt-list:
   без реестра по умолчанию она теперь не провалилась бы.
 
+Интерпретатор в переменной (возврат COORD по карточке #613, записка #5267):
+  к) PY = sys.executable → subprocess.run([PY, TOOL, …]) ........ НАХОДКА              РАЗЛИЧАЮЩИЙ
+  л) cmd = [sys.executable, TOOL, …] → subprocess.run(cmd) ...... НАХОДКА              РАЗЛИЧАЮЩИЙ
+  м) своя обёртка run(cmd, d) с env стенда внутри, снаружи cmd с интерпретатором — НЕ находка
+  Поломки (в копии проверки), у каждой приманки своя: «имя внутри списка не прослеживается»
+  — (к) пропадает, (л) остаётся; «голое имя-аргумент не прослеживается» — (л) пропадает,
+  (к) остаётся; «обёртка run(…) прослеживается как subprocess» — (м) становится находкой.
+
 Своя песочница: копия check-acceptance-env.py + синтетический стенд. Живой контур
 не трогает — все файлы синтетические, живая база не открывается вовсе.
 """
@@ -118,6 +126,42 @@ def call():
     subprocess.run([sys.executable, TOOL, "--x"], capture_output=True)
 '''
 
+# ── синтетика случаев (к)(л)(м): интерпретатор в переменной (возврат COORD, записка #5267) ──
+BITE_CASE9_PY_VAR = '''import subprocess, sys
+from pathlib import Path
+TOOL = str(Path(__file__).resolve().parent / "fake-container-tool.py")
+PY = sys.executable
+
+
+def call():
+    subprocess.run([PY, TOOL, "--db", "x"], capture_output=True)
+'''
+
+BITE_CASE10_CMD_VAR = '''import subprocess, sys
+from pathlib import Path
+TOOL = str(Path(__file__).resolve().parent / "fake-container-tool.py")
+
+
+def call():
+    cmd = [sys.executable, TOOL, "--db", "x"]
+    subprocess.run(cmd, capture_output=True)
+'''
+
+BITE_CASE11_WRAPPER = '''import subprocess, sys
+from pathlib import Path
+import mezo_stand
+TOOL = str(Path(__file__).resolve().parent / "fake-container-tool.py")
+
+
+def run(cmd, d):
+    return subprocess.run(cmd, capture_output=True, env=mezo_stand.stand_env(d))
+
+
+def call(d):
+    cmd = [sys.executable, TOOL, "--db", "x"]
+    run(cmd, d)
+'''
+
 # ── синтетика случаев (а)-(г): реестр известного долга ──────────────────────────────
 BITE_CASE6_RECORDED = '''import subprocess, sys
 from pathlib import Path
@@ -181,6 +225,9 @@ def build_stand(checker_source: str):
     (vt / "bite-case3-leak-dict.py").write_text(BITE_CASE3_LEAK_DICT, encoding="utf-8")
     (vt / "bite-case4-excused.py").write_text(BITE_CASE4_EXCUSED, encoding="utf-8")
     (vt / "bite-case5-indifferent.py").write_text(BITE_CASE5_INDIFFERENT, encoding="utf-8")
+    (vt / "bite-case9-py-var.py").write_text(BITE_CASE9_PY_VAR, encoding="utf-8")
+    (vt / "bite-case10-cmd-var.py").write_text(BITE_CASE10_CMD_VAR, encoding="utf-8")
+    (vt / "bite-case11-wrapper.py").write_text(BITE_CASE11_WRAPPER, encoding="utf-8")
     return d
 
 
@@ -267,6 +314,37 @@ def main() -> int:
     ok &= case("итог: exit-код совпадает с наличием непрощённых находок",
                (rc != 0) == bool(data.get("findings")),
                f"rc={rc}, findings={len(data.get('findings', []))}")
+
+    # ── (к)(л)(м) интерпретатор в переменной ─────────────────────────────────────────
+    ok &= case("(к) PY = sys.executable → subprocess.run([PY, TOOL, …]) — НАХОДКА",
+               "bite-case9-py-var.py" in found, f"находки: {sorted(found)}", differ=True)
+    ok &= case("(л) cmd = [sys.executable, TOOL, …] → subprocess.run(cmd) — НАХОДКА",
+               "bite-case10-cmd-var.py" in found, f"находки: {sorted(found)}", differ=True)
+    ok &= case("(м) своя обёртка run(cmd, d) с env стенда внутри — НЕ находка (не считать дважды)",
+               "bite-case11-wrapper.py" not in found, f"находки: {sorted(found)}", differ=True)
+    anchor_frontier = "    frontier = bare + nested"
+    anchor_wrapper = "    if not isinstance(call.func, ast.Attribute):\n        return False"
+    for anchor_text, label in ((anchor_frontier, "прослеживание имён"), (anchor_wrapper, "обёртки")):
+        if real_source.count(anchor_text) != 1:
+            raise SystemExit(f"ПРИЁМКА НЕ СОСТОЯЛАСЬ: якорь «{label}» найден {real_source.count(anchor_text)} раз")
+    broken_k = build_stand(real_source.replace(
+        anchor_frontier, "    frontier = bare  # ПОЛОМКА (к): имя внутри списка не прослеживается"))
+    found_k = names(run_checker(broken_k, "--no-debt-list")[0].get("findings", []))
+    ok &= case("(к) поломка «имя внутри списка не прослеживается»: (к) пропадает, (л) остаётся",
+               "bite-case9-py-var.py" not in found_k and "bite-case10-cmd-var.py" in found_k,
+               f"находки на копии: {sorted(found_k)}", differ=True)
+    broken_l = build_stand(real_source.replace(
+        anchor_frontier, "    frontier = nested  # ПОЛОМКА (л): голое имя-аргумент не прослеживается"))
+    found_l = names(run_checker(broken_l, "--no-debt-list")[0].get("findings", []))
+    ok &= case("(л) поломка «голое имя-аргумент не прослеживается»: (л) пропадает, (к) остаётся",
+               "bite-case10-cmd-var.py" not in found_l and "bite-case9-py-var.py" in found_l,
+               f"находки на копии: {sorted(found_l)}", differ=True)
+    broken_m = build_stand(real_source.replace(
+        anchor_wrapper, "    if False:  # ПОЛОМКА (м): обёртка прослеживается как subprocess\n        return False"))
+    found_m = names(run_checker(broken_m, "--no-debt-list")[0].get("findings", []))
+    ok &= case("(м) поломка «обёртка прослеживается как subprocess»: (м) становится находкой",
+               "bite-case11-wrapper.py" in found_m,
+               f"находки на копии: {sorted(found_m)}", differ=True)
 
     # ── Р1 обратный ход: строка-разрешение ОСЛЕПЛЕНА в КОПИИ проверки ──────────────
     anchor = "m = ALLOW_RE.search(line_text)"

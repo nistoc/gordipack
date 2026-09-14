@@ -320,7 +320,9 @@ FP_E = digest(OPORA_E)
 # autocrlf-чекаута. Файл КОНТУРА (seed лёгкого контура) тоже пишем CRLF напрямую — этот
 # путь вообще не коммитится, круга «история/диск» у него нет.
 def crlf(data: bytes) -> bytes:
-    return data.replace(b"\n", b"\r\n")
+    # карточка #626: своя crlf() заменена общим mezo_stand.crlf_twin — приёмка больше
+    # не строит чужую форму своей рукой, берёт ту же, что и остальные приёмки контура.
+    return mezo_stand.crlf_twin(data.decode("utf-8")).encode("utf-8")
 
 
 def is_crlf(data: bytes) -> bool:

@@ -13,7 +13,8 @@ MEZO_CONTAINER указывает на другой (живой) контур, �
 приёмки с MEZO_CONTAINER живого записала meta Atlas.
 
 ЧТО ЛОВИТ. Вызов subprocess.run/Popen/check_output/call/check_call с sys.executable
-внутри bite-*.py (vnext-tools и .mezosync/scripts), БЕЗ env=, закреплённого за стендом
+(прямо в вызове или в переменной: PY = sys.executable · cmd = [sys.executable, …] —
+до трёх звеньев присваиваний) внутри bite-*.py (vnext-tools и .mezosync/scripts), БЕЗ env=, закреплённого за стендом
 (env=mezo_stand.stand_env(<корень стенда>) — прямо на месте вызова, через переменную
 или через .update()/.pop() поверх неё), — если хотя бы ОДИН .py-литерал во ВСЁМ файле
 приёмки называет инструмент, который читает MEZO_CONTAINER (прямо словом в тексте, или
@@ -55,6 +56,12 @@ MEZO_CONTAINER указывает на другой (живой) контур, �
 mezo_*), через «+», как раньше. Цена упрощения ③: два разных инструмента в одном файле
 дадут ОДИН склеенный ключ — замер 2026-09-14 (разбор всех 210 вызовов при заведении
 реестра) такого почти не встретил.
+Цели-МИГРАЦИИ (.mezosync/scripts/migrations) в словарь «читает ли контур» НЕ входят:
+приёмка, зовущая только миграцию, не сканируется вовсе (разряд «проверить» реестра).
+Замер 2026-09-14: 11 из 34 миграций читают контур; включение их в словарь меняет ключи
+у записей долга и требует переразбора — отдельной работой, не молча.
+Интерпретатор, пришедший ПАРАМЕТРОМ функции (def run(cmd): subprocess.run(cmd)),
+не прослеживается: судится место, где список собран, если оно само — вызов subprocess.
 
     python check-acceptance-env.py [--json] [--debt-list ПУТЬ] [--no-debt-list]
 exit 0 — новых находок нет (либо всё разрешено/учтено долгом, либо реестра рядом нет —
@@ -84,6 +91,60 @@ def has_sys_executable(node: ast.AST) -> bool:
         if (isinstance(n, ast.Attribute) and n.attr == "executable"
                 and isinstance(n.value, ast.Name) and n.value.id == "sys"):
             return True
+    return False
+
+
+def assigned_values(name: str, pools: list) -> list:
+    """Правые части присваиваний имени `name` в данных наборах операторов."""
+    values = []
+    for stmts in pools:
+        for stmt in stmts:
+            if isinstance(stmt, ast.Assign) and any(
+                    isinstance(t, ast.Name) and t.id == name for t in stmt.targets):
+                values.append(stmt.value)
+            elif (isinstance(stmt, ast.AnnAssign) and stmt.value is not None
+                    and isinstance(stmt.target, ast.Name) and stmt.target.id == name):
+                values.append(stmt.value)
+    return values
+
+
+def runs_interpreter(call: ast.Call, scopes: list, module_stmts: list) -> bool:
+    """Вызов запускает интерпретатор: sys.executable прямо в вызове ЛИБО в переменной,
+    попавшей в его аргументы (PY = sys.executable · cmd = [sys.executable, …]).
+
+    ⚡ ВОЗВРАТ COORD по карточке #613 (записка #5267): проверка узнавала вызов только
+    по «sys.executable» ВНУТРИ него — и 4 места в 3 живых приёмках были невидимы, два
+    из них звали write-message.py без среды стенда. Прослеживание — тем же приёмом,
+    что у env= и имени цели: по присваиваниям своей области и модуля, до трёх звеньев
+    (PY → cmd → вызов). Две формы имени в аргументах разобраны ПОРОЗНЬ — у каждой
+    свой случай приёмки и своя нарочная поломка.
+
+    Прослеживается только вызов вида `subprocess.X(...)`: голое `run(...)` в приёмке —
+    почти всегда её собственная обёртка, и её внутренний subprocess-вызов судится сам
+    (без этого одна и та же дыра считалась бы дважды — замер 14.09: 5 лишних из 18)."""
+    if has_sys_executable(call):
+        return True
+    if not isinstance(call.func, ast.Attribute):
+        return False
+    scope = enclosing_scope(call, scopes)
+    pools = ([scope[1]] if scope else []) + [module_stmts]
+    args = list(call.args) + [kw.value for kw in call.keywords if kw.arg == "args"]
+    bare = [a.id for a in args if isinstance(a, ast.Name)]                 # subprocess.run(cmd)
+    nested = [n.id for a in args if not isinstance(a, ast.Name)
+              for n in ast.walk(a) if isinstance(n, ast.Name)]             # [PY, TOOL, …]
+    frontier = bare + nested
+    seen = set()
+    for _link in range(3):
+        next_names = []
+        for name in frontier:
+            if name in seen:
+                continue
+            seen.add(name)
+            for value in assigned_values(name, pools):
+                if has_sys_executable(value):
+                    return True
+                next_names += [n.id for n in ast.walk(value) if isinstance(n, ast.Name)]
+        frontier = next_names
     return False
 
 
@@ -280,7 +341,7 @@ def scan_dir(root: Path, container: Path, tool_reads: dict):
                 name = func.attr
             elif isinstance(func, ast.Name) and func.id in SUBPROCESS_FUNCS:
                 name = func.id
-            if name is None or not has_sys_executable(node):
+            if name is None or not runs_interpreter(node, scopes, module_stmts):
                 continue
             if env_is_pinned(node, scopes):
                 continue

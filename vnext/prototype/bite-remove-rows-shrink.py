@@ -49,6 +49,12 @@ check_row_shrink в backup-db.py): ручное снятие строк из о�
      «журнал называет больше», а не «часть снята без следа»
   19 обратный ход: ветка «называет больше» выключена → случай 18 ПРОВАЛИВАЕТСЯ   РАЗЛИЧАЮЩИЙ
      Случаи 13–19 — замечания OPSSRE Н1 и Н2 по приёмке карточки #612.
+  20 число в чужой записи в --where («0x3», «3e0») — отказ, ничего не снято         РАЗЛИЧАЮЩИЙ
+  21 имя колонки в двойных кавычках — отказ с подсказкой «имя без кавычек»        РАЗЛИЧАЮЩИЙ
+  22 обратный ход: прежний образец числа (\b\d+(?:\.\d+)?\b) → случай 20           РАЗЛИЧАЮЩИЙ
+     ПРОВАЛИВАЕТСЯ («0x3» проходит, строки сняты). Случаи 20–22 — границы OPSSRE Н3, Н5.
+     Граница Н4 («все, кроме одной» снимается без --all-rows) названа, не закрыта:
+     защита — только от условия под ВСЕ строки.
 
 ⛔ Живой базы не касается: каждый случай строит СВОЙ стенд; испытуемые remove-rows.py и
    backup-db.py — из .mezosync/scripts контура, найденного mezo_paths.container_root
@@ -539,6 +545,48 @@ def main() -> int:
                        " снова «часть снята без следа»",
                        "журнал называет больше" not in output19 and "без следа" in output19,
                        f"код {code19}", differ=True)
+
+        # ── 20: число в чужой записи — отказ до записи (граница OPSSRE Н3) ──
+        d20 = pathlib.Path(tempfile.mkdtemp(prefix="bite-rr-20-")); cleanup_dirs.append(d20)
+        db20 = build_stand(d20)
+        before20 = table_counts(db20, ["bridge_reviewed", "audit_log"])
+        code20a, output20a = run_remove(db20, "bridge_reviewed", "message_id < 0x3", [], "COORD",
+                                        "испытание: число шестнадцатеричной записью", "--apply")
+        code20b, output20b = run_remove(db20, "bridge_reviewed", "message_id < 3e0", [], "COORD",
+                                        "испытание: число с порядком", "--apply")
+        after20 = table_counts(db20, ["bridge_reviewed", "audit_log"])
+        ok &= case("20 число в чужой записи в --where («0x3», «3e0») — отказ, ничего не снято",
+                   code20a != 0 and code20b != 0 and before20 == after20
+                   and "плейсхолдер" in output20a and "плейсхолдер" in output20b,
+                   f"коды {code20a}, {code20b}; было {before20}, стало {after20}", differ=True)
+
+        # ── 21: имя колонки в двойных кавычках — отказ с подсказкой (граница OPSSRE Н5) ──
+        code21, output21 = run_remove(db20, "bridge_reviewed", '"message_id" < ?', [3], "COORD",
+                                      "испытание: имя в кавычках", "--apply")
+        after21 = table_counts(db20, ["bridge_reviewed", "audit_log"])
+        ok &= case("21 имя колонки в двойных кавычках — отказ с подсказкой «имя без кавычек»",
+                   code21 != 0 and after21 == before20 and "без кавычек" in output21,
+                   f"код {code21}; стало {after21}", differ=True)
+
+        # ── 22: ОБРАТНЫЙ ХОД — прежний образец числа → случай 20 проваливается ──
+        d22 = pathlib.Path(tempfile.mkdtemp(prefix="bite-rr-22-")); cleanup_dirs.append(d22)
+        weak22 = weaken_remove_tool(d22, 'LITERAL_IN_WHERE = re.compile(r"""[\'"]|\\b\\d[\\w.]*""")',
+                                    'LITERAL_IN_WHERE = re.compile(r"""[\'"]|\\b\\d+(?:\\.\\d+)?\\b""")'
+                                    '  # П-Н3: прежний образец числа')
+        if weak22 is None:
+            ok &= case("22 ОБРАТНЫЙ ХОД: прежний образец числа", False,
+                       "⛔ НЕ ЗАПУСТИЛАСЬ: якорь LITERAL_IN_WHERE не найден — remove-rows.py менялся,"
+                       " правь приёмку")
+        else:
+            d22b = pathlib.Path(tempfile.mkdtemp(prefix="bite-rr-22b-")); cleanup_dirs.append(d22b)
+            db22 = build_stand(d22b)
+            code22, output22 = run_remove(db22, "bridge_reviewed", "message_id < 0x3", [], "COORD",
+                                          "испытание поломки Н3", "--apply", script=weak22)
+            after22 = table_counts(db22, ["bridge_reviewed", "audit_log"])
+            ok &= case("22 ОБРАТНЫЙ ХОД: прежний образец числа — случай 20 ПРОВАЛИВАЕТСЯ,"
+                       " «0x3» проходит и строки сняты",
+                       after22["bridge_reviewed"] == 5,
+                       f"код {code22}; стало {after22}", differ=True)
     finally:
         for d in cleanup_dirs:
             shutil.rmtree(d, ignore_errors=True)

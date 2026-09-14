@@ -222,35 +222,68 @@ def main() -> int:
         #    на раздел; до 05.09 лишнее УДАЛЯЛОСЬ: из 2270 сохранений в истории оставалась 441 версия)
         save = mezo_paths.live_scripts() / "save-phoenix.py"
         conn = sqlite3.connect(str(db))
-        total0 = conn.execute("SELECT (SELECT count(*) FROM phoenix_history)+(SELECT count(*) FROM phoenix_history_archive)").fetchone()[0]
-        archived_save0 = conn.execute("SELECT count(*) FROM phoenix_history_archive WHERE role=? AND rule LIKE 'save-phoenix%'", (role,)).fetchone()[0]
-        body = conn.execute("SELECT body FROM phoenix WHERE role=? AND section='plan'", (role,)).fetchone()[0]
-        f = tmp / "body.md"; codes = []
-        # ⚡ КАРТОЧКА #613: та же среда стенда, что у run() — не os.environ вызывающего.
-        env = dict(stand_env); env["MEZO_ROLE"] = role
-        for i in range(13):
-            f.write_text(body + f"\n\n<!-- проба приёмки {i}, копия базы -->", encoding="utf-8")
-            r = subprocess.run([sys.executable, "-B", str(save), "--role", role, "--section", "plan", "--file", str(f),
-                                "--db", str(db)], capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
-            codes.append(r.returncode)
-        conn = sqlite3.connect(str(db))
-        total1 = conn.execute("SELECT (SELECT count(*) FROM phoenix_history)+(SELECT count(*) FROM phoenix_history_archive)").fetchone()[0]
-        in_history = {r[0] for r in conn.execute("SELECT id FROM phoenix_history WHERE role=? AND section='plan'", (role,))}
-        from_save = conn.execute("SELECT count(*) FROM phoenix_history_archive WHERE role=? AND rule LIKE 'save-phoenix%'", (role,)).fetchone()[0] - archived_save0
-        # правило сохранения: 10 ПОСЛЕДНИХ по номеру + САМАЯ ДЛИННАЯ из всех (история ∪ архив) —
-        # их и только их ждём в истории; 11 это или 10 — зависит от того, попала ли длинная в последние
-        # ⚖️ считаем только то, что видело САМО сохранение: строки истории и то, что ОНО унесло;
-        #    унесённое свёрткой (rule regl-538) сохранению не видно и в «самой длинной» не участвует
-        union_save = conn.execute(
-            "SELECT id, body_chars FROM phoenix_history WHERE role=? AND section='plan' UNION ALL "
-            "SELECT id, body_chars FROM phoenix_history_archive WHERE role=? AND section='plan' "
-            "AND rule LIKE 'save-phoenix%'", (role, role)).fetchall()
-        latest10 = {i for i, _ in sorted(union_save, key=lambda x: -x[0])[:10]}
-        longest = max(union_save, key=lambda x: (x[1], x[0]))[0]
-        expected = latest10 | {longest}
-        case("⑧ 13 сохранений раздела: в истории ровно 10 последних + самая длинная, лишнее ПЕРЕНЕСЕНО, потерь ноль",
-             all(k == 0 for k in codes) and in_history == expected and total1 == total0 + 13 and from_save > 0,
-             f"коды {set(codes)} · в истории {len(in_history)} (ждали {len(expected)}) · всего было {total0} стало {total1} · перенесено save-phoenix {from_save}")
+        # ⚡ КАРТОЧКА #628: в свежем контуре у роли может не быть раздела plan (а то и вовсе ни
+        # одного раздела) — .fetchone()[0] на пустом результате давал TypeError. Раздел для
+        # случая выбираем ДО замера total0/archived_save0, чтобы возможный засев вошёл в базовый
+        # отсчёт, а не в «13» сохранений цикла ниже.
+        section = "plan"
+        row = conn.execute("SELECT body FROM phoenix WHERE role=? AND section='plan'", (role,)).fetchone()
+        if row is not None:
+            body = row[0]
+        else:
+            other = conn.execute("SELECT section, body FROM phoenix WHERE role=? ORDER BY section LIMIT 1",
+                                 (role,)).fetchone()
+            if other is not None:
+                section, body = other
+                print(f"ℹ️ ⑧: у роли {role} в копии базы нет раздела plan — веду случай на разделе {section!r}")
+            else:
+                seed = tmp / "seed-8.md"
+                seed.write_text(f"# {role}\n\nсемя случая ⑧: у роли в копии базы не было ни одного раздела.\n",
+                                encoding="utf-8")
+                env_seed = dict(stand_env); env_seed["MEZO_ROLE"] = role
+                rseed = subprocess.run([sys.executable, "-B", str(save), "--role", role, "--section", section,
+                                        "--file", str(seed), "--db", str(db)], capture_output=True, text=True,
+                                        encoding="utf-8", errors="replace", env=env_seed)
+                conn = sqlite3.connect(str(db))
+                row = conn.execute("SELECT body FROM phoenix WHERE role=? AND section=?", (role, section)).fetchone()
+                if rseed.returncode == 0 and row is not None:
+                    body = row[0]
+                    print(f"ℹ️ ⑧: у роли {role} в копии базы не было ни одного раздела — засеян {section!r} "
+                          f"первым сохранением (код {rseed.returncode})")
+                else:
+                    body = None
+        if body is None:
+            print(f"⚪ ⑧ пропущен: у роли {role} в копии базы нет ни одного раздела — переносить нечего")
+            RESULTS.append(False)
+        else:
+            total0 = conn.execute("SELECT (SELECT count(*) FROM phoenix_history)+(SELECT count(*) FROM phoenix_history_archive)").fetchone()[0]
+            archived_save0 = conn.execute("SELECT count(*) FROM phoenix_history_archive WHERE role=? AND rule LIKE 'save-phoenix%'", (role,)).fetchone()[0]
+            f = tmp / "body.md"; codes = []
+            # ⚡ КАРТОЧКА #613: та же среда стенда, что у run() — не os.environ вызывающего.
+            env = dict(stand_env); env["MEZO_ROLE"] = role
+            for i in range(13):
+                f.write_text(body + f"\n\n<!-- проба приёмки {i}, копия базы -->", encoding="utf-8")
+                r = subprocess.run([sys.executable, "-B", str(save), "--role", role, "--section", section, "--file", str(f),
+                                    "--db", str(db)], capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
+                codes.append(r.returncode)
+            conn = sqlite3.connect(str(db))
+            total1 = conn.execute("SELECT (SELECT count(*) FROM phoenix_history)+(SELECT count(*) FROM phoenix_history_archive)").fetchone()[0]
+            in_history = {r[0] for r in conn.execute("SELECT id FROM phoenix_history WHERE role=? AND section=?", (role, section))}
+            from_save = conn.execute("SELECT count(*) FROM phoenix_history_archive WHERE role=? AND rule LIKE 'save-phoenix%'", (role,)).fetchone()[0] - archived_save0
+            # правило сохранения: 10 ПОСЛЕДНИХ по номеру + САМАЯ ДЛИННАЯ из всех (история ∪ архив) —
+            # их и только их ждём в истории; 11 это или 10 — зависит от того, попала ли длинная в последние
+            # ⚖️ считаем только то, что видело САМО сохранение: строки истории и то, что ОНО унесло;
+            #    унесённое свёрткой (rule regl-538) сохранению не видно и в «самой длинной» не участвует
+            union_save = conn.execute(
+                "SELECT id, body_chars FROM phoenix_history WHERE role=? AND section=? UNION ALL "
+                "SELECT id, body_chars FROM phoenix_history_archive WHERE role=? AND section=? "
+                "AND rule LIKE 'save-phoenix%'", (role, section, role, section)).fetchall()
+            latest10 = {i for i, _ in sorted(union_save, key=lambda x: -x[0])[:10]}
+            longest = max(union_save, key=lambda x: (x[1], x[0]))[0]
+            expected = latest10 | {longest}
+            case("⑧ 13 сохранений раздела: в истории ровно 10 последних + самая длинная, лишнее ПЕРЕНЕСЕНО, потерь ноль",
+                 all(k == 0 for k in codes) and in_history == expected and total1 == total0 + 13 and from_save > 0,
+                 f"раздел {section!r} · коды {set(codes)} · в истории {len(in_history)} (ждали {len(expected)}) · всего было {total0} стало {total1} · перенесено save-phoenix {from_save}")
         case("⑦ живая база не тронута приёмкой (отпечаток файла совпал)", file_fingerprint(src) == live_fp)
     finally:
         if broken_copy and broken_copy.exists(): broken_copy.unlink()
