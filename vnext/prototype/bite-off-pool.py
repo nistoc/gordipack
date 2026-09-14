@@ -17,7 +17,6 @@ bite-off-pool.py — приёмка П① пула (план «Роли не з�
   ⑧ контроль: живая база прогоном не изменилась
 """
 import os
-import shutil
 import sqlite3
 import subprocess
 import sys
@@ -43,7 +42,25 @@ def case(name, cond, detail=""):
 
 
 def run(script, *args, db):
-    env = dict(os.environ, PYTHONIOENCODING="utf-8")
+    # ВОЗВРАТ (14.09, проверяющий на g4): `dict(os.environ, ...)` пропускал среду
+    # ВЫЗЫВАЮЩЕГО как есть — ДВЕ беды разом.
+    #   ⛔ ОПАСНО: если у вызывающего задан MEZO_CONTAINER ЖИВОГО контура, копия
+    #     инструмента внутри стенда (случай ⑦, weak/) унаследовала бы ЕГО и могла
+    #     принять себя за живой контур — стенд обязан быть заперт в СЕБЕ.
+    #   ⛔ ЛОМАЕТСЯ: если у вызывающего MEZO_CONTAINER вовсе НЕ задан (обычная среда
+    #     роли — контейнер находится маркером `.mezosync/mezosync.db` вверх по дереву
+    #     или файлом local.paths, а не переменной), копия backlog.py в случае ⑦ лежит
+    #     ВНЕ контейнера — в системном temp — и не находит ни маркера, ни local.paths:
+    #     mezo_paths.container_root() падает SystemExit'ом ДО патченной строки ANCHOR.
+    #     ⑦ путает эту чужую поломку со своей и молчит о снятых воротах — ту же беду
+    #     словами по коду нашёл проверяющий (`os.environ` «как есть»).
+    #   Лечится ЗАКРЕПЛЕНИЕМ контейнера ЗА СТЕНДОМ — готовым помощником
+    #     mezo_stand.stand_env(stand): ставит MEZO_CONTAINER=str(stand) ЯВНО. При
+    #     заданной переменной container_root() возвращает её БЕЗ проверки маркера
+    #     (ветка env, mezo_paths.py) — падать нечему; а путь стенда никогда не
+    #     совпадёт с живым контуром, поэтому lease.check() (сравнивает db с
+    #     mezo_paths.live_db()) не спутает копию с живой базой и не станет её судить.
+    env = mezo_stand.stand_env(stand, PYTHONIOENCODING="utf-8")
     p = subprocess.run([sys.executable, str(script), "--db", str(db), *args],
                        capture_output=True, text=True, encoding="utf-8",
                        errors="replace", env=env)
@@ -112,20 +129,32 @@ _, out6 = run(BK, "list", "--role", "ZZR", db=db)
 case("⑥ открытый list замороженную НЕ несёт", f"#{zzid} " not in out6)
 
 # ⑦ обратный ход: ворота сняты в копии
+# ПРИЧИНА ПЕРЕМЕРЕНА ПО КОДУ (не прежняя догадка «копии не хватает файла» — та была
+# верна классом, но не названа строкой): ручной список из пяти имён ниже НЕ входил
+# в транзитивных соседей backlog.py. backlog.py строка 52 — `import mezo_hints`
+# — БЕЗУСЛОВНЫЙ (не в try/except, в отличие от `local_time` и `import lease` внутри
+# mezo_paths.resolve_db, которые поломку соседа переживают). Файла mezo_hints.py
+# в списке не было ⇒ копия падала ИМПОРТОМ РАНЬШЕ, чем доходила до строки ANCHOR:
+# `ModuleNotFoundError: No module named 'mezo_hints'` (перемерено прямым импортом
+# копии 14.09). ⑦ поэтому не судил снятое условие вовсе — молчал о падении импорта:
+# rc7=1, а «УСЛОВИЯ РАЗМОРОЗКИ» отсутствовало в выводе НЕ ПОТОМУ, что ворота
+# обойдены, а потому, что до них не дошло. Чинится копированием ЧЕРЕЗ
+# mezo_stand.copy_tool (карточка #572): она берёт соседей ТРАНЗИТИВНО замером
+# (ast.walk по import/from-import), а не именами руками — тем самым классом
+# «поодиночке не работают 43 из 60 в .mezosync/scripts», который этот помощник
+# и закрывает.
 weak = stand / "weak"
-weak.mkdir()
-for name in ("backlog.py", "mezo_paths.py", "dryrun.py", "refs_check.py", "backlog_view.py"):
-    shutil.copy(SCRIPTS / name, weak / name)
-src = (weak / "backlog.py").read_text(encoding="utf-8")
+copied_backlog = mezo_stand.copy_tool(BK, weak)
+src = copied_backlog.read_text(encoding="utf-8")
 ANCHOR = 'if a.new_status == "frozen" and not note.strip():'
 if ANCHOR not in src:
     raise SystemExit("ПРИЁМКА НЕ СОСТОЯЛАСЬ: якорь ворот frozen не найден — "
                      "случай ④ мог зеленеть не тем кодом")
-(weak / "backlog.py").write_text(src.replace(ANCHOR, "if False:"), encoding="utf-8")
+copied_backlog.write_text(src.replace(ANCHOR, "if False:"), encoding="utf-8")
 con = sqlite3.connect(str(db))
 zzid2 = con.execute("SELECT id FROM backlog WHERE title='проба в пуле'").fetchone()[0]
 con.close()
-rc7, out7 = run(weak / "backlog.py", "status", str(zzid2), "frozen", "--actor", "ZZR", db=db)
+rc7, out7 = run(copied_backlog, "status", str(zzid2), "frozen", "--actor", "ZZR", db=db)
 case("⑦ обратный ход: проверка условия снята → заморозка без условия ПРОХОДИТ (④ краснеет)",
      rc7 == 0 and "УСЛОВИЯ РАЗМОРОЗКИ" not in out7)
 
