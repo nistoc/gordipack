@@ -361,6 +361,26 @@ case("③ встречный: содержимого нет в истории п
          .splitlines()[-1],
      f"код {rc2}")
 
+# ═══ ③-CRLF КАРТОЧКА #626: тот же опыт, что ③, но УСТАНОВЛЕННЫЙ файл явно лежит в форме
+# CRLF (mezo_stand.crlf_twin) — как он лежит у контура-потребителя после git-чекаута на
+# Windows, а не платформенной случайностью объекта из истории пакета (git-блоб — LF).
+# Дата появления обязана найтись всё равно: сравнение по СОДЕРЖИМОМУ (norm — уже
+# нормализует CRLF→LF), а не по байтам истории.
+t2e = stand / "t2e"
+db2e_dir = make_contour(t2e, TARGET)
+upd2e = db2e_dir / "scripts" / "update-tools.py"
+old_content_crlf = mezo_stand.crlf_twin(OLD_CONTENT.decode("utf-8")).encode("utf-8")
+(db2e_dir / "scripts" / "backlog.py").write_bytes(old_content_crlf)
+(db2e_dir / "scripts" / "write-message.py").write_text(ghost_marker, encoding="utf-8")
+drop_fingerprints(db2e_dir / "mezosync.db", "backlog.py", "write-message.py")
+rc2e, out2e = run(upd2e, "--source", str(PACKAGE))
+installed_is_crlf = old_content_crlf != OLD_CONTENT and b"\r\n" in old_content_crlf
+case("③-CRLF тот же опыт: установленный файл явно в форме CRLF — дата появления версии "
+     "всё равно находится",
+     installed_is_crlf and rc2e == 0 and appearance_sig in out2e
+     and "backlog.py" in out2e.split(appearance_sig)[0].splitlines()[-1],
+     f"код {rc2e} · установленный файл явно в форме CRLF: {installed_is_crlf}")
+
 # ═══ ③-3 (возврат OPSSRE): после --apply без --overwrite-unknown — ПРАВДА, а не обещание
 # «следующий прогон скажет определённо» (он НЕ скажет — отпечаток пишется только взятым
 # файлам, «❓» без него так и останутся «❓»). Тот же t2/db2 — backlog.py и write-message.py

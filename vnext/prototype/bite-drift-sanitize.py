@@ -88,9 +88,11 @@ def main() -> int:
             f"# пример: git -C {container_str}\\beta-repo log\n", encoding="utf-8")
         (tpl / "ghost.py").write_text(
             "# пример: git -C <КОНТУР>\\<репозиторий> log\n", encoding="utf-8")
-        # ⑤ тот же текст, другие окончания строк
-        (rt / "crlf.py").write_bytes(b"x = 1\r\ny = 2\r\n")
-        (tpl / "crlf.py").write_bytes(b"x = 1\ny = 2\n")
+        # ⑤ тот же текст, другие окончания строк (rt — CRLF-двойник образца, через
+        # общий помощник mezo_stand.crlf_twin, карточка #626, а не свой литерал)
+        crlf_case_text = "x = 1\ny = 2\n"
+        (rt / "crlf.py").write_bytes(mezo_stand.crlf_twin(crlf_case_text).encode("utf-8"))
+        (tpl / "crlf.py").write_bytes(crlf_case_text.encode("utf-8"))
 
         env = dict(os.environ, MEZO_CONTAINER=str(container))
         r = subprocess.run(
@@ -123,6 +125,33 @@ def main() -> int:
         ok &= case("⑤ разные окончания строк при том же тексте — не «расходятся»",
                    "crlf.py" not in out.split("РАСХОДЯТСЯ")[-1],
                    "сверка байтов — не сверка содержимого (правило bytes-are-not-content)",
+                   differ=True)
+
+        # ⑤б КАРТОЧКА #626: тот же опыт, что ① (настоящая правка), но ОБА файла явно
+        # лежат в форме CRLF (mezo_stand.crlf_twin), а не платформенной случайностью
+        # write_text — правка обязана остаться «РАСХОДЯТСЯ», даже когда весь мир опыта
+        # в форме Windows-чекаута (встречный к ⑤: там CRLF НЕ создаёт расхождения из
+        # ничего, здесь CRLF не должен ЗАМАЗЫВАТЬ настоящее расхождение).
+        edited_rt_text = "a = 1\nb = 2\n"
+        edited_tpl_text = "a = 1\nb = 3\n"
+        edited_rt_crlf = mezo_stand.crlf_twin(edited_rt_text).encode("utf-8")
+        edited_tpl_crlf = mezo_stand.crlf_twin(edited_tpl_text).encode("utf-8")
+        (rt / "edited-crlf.py").write_bytes(edited_rt_crlf)
+        (tpl / "edited-crlf.py").write_bytes(edited_tpl_crlf)
+
+        env5b = mezo_stand.stand_env(container)  # карточка #613: среда закреплённого стенда
+        r5b = subprocess.run(
+            [sys.executable, str(GUARD_TOOL), "--vnext-runtime", str(rt),
+             "--vnext-template", str(tpl)],
+            capture_output=True, text=True, encoding="utf-8", timeout=300, env=env5b)
+        out5b = (r5b.stdout or "") + (r5b.stderr or "")
+        both_crlf = b"\r\n" in edited_rt_crlf and b"\r\n" in edited_tpl_crlf
+        both_named = "РАСХОДЯТСЯ" in out5b and "edited-crlf.py" in out5b
+        ok &= case("⑤б тот же опыт: правка остаётся «РАСХОДЯТСЯ», даже когда ОБА файла "
+                   "явно в форме CRLF (crlf_twin)",
+                   both_crlf and both_named,
+                   f"фикстуры явно в форме CRLF: {both_crlf} · вывод несёт «РАСХОДЯТСЯ» "
+                   f"и edited-crlf.py: {both_named}",
                    differ=True)
     finally:
         mezo_stand.release(tmp)  # уборка отложена до исхода прогона

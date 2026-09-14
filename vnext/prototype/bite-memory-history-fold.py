@@ -28,9 +28,31 @@ PROTO в архиве 73 версии ДО опыта (в т.ч. saved_at все
 save-phoenix.py, не возраст) — приёмка давала 14 из 19 одинаково до и после правки #505,
 потому что беда была не в инструменте и не в снимке WAL, а в состоянии архива роли.
 
+🎯 ПОСЕВ НЕДОСТАЮЩЕГО МАТЕРИАЛА (карточка #634): в контуре, собранном из пакета, у роли история
+версий памяти бедна — случаи ① · ② · ③-контроль · ③ · ③-е меряют свойства, которым не на чем
+сработать (нечего уносить в архив, не перед чем стоять «последней», у чужой роли ни одной версии
+вообще). Приёмка САМА досевает недостающее в СВОЮ копию — только когда материала не хватает
+(на живой базе материала уже достаточно, посев не срабатывает, строки «засеяно» нет). Роли,
+чьё имя ищет случай ②, — по одной версии через save-phoenix.py (дата не важна, только НЕ ПУСТО).
+Своей роли (--role) — если нечему уехать в архив или не перед чем стоять «последней перед
+пересозданием» — две версии ПРЯМОЙ ВСТАВКОЙ в копию (задним числом через save-phoenix.py не
+встать — он всегда штампует «сейчас»): младшая X2 старше порога и обеих отметок, но новее X1 —
+она становится «последней перед КАЖДОЙ отметкой»; X1 ничем не защищена — уезжает в архив. Отметки
+пересоздания (role_rebirths) НЕ придумываются: если их у роли нет вовсе — случай ③ печатает
+«⚪ ③ не поставлен: …», отдельный счёт, и итог не «ПРИНЯТА», пока счёт больше нуля.
+
+🎯 ПОРЧА (--break seed-off, карточка #634): посев ВЫКЛЮЧЕН — там, где материала не хватало бы,
+он и остаётся пустым. Проваливаются РОВНО случаи, для которых посев был нужен (① · ② ·
+③-контроль · ③-е, и ③, если у роли есть отметки пересоздания — каждый своей проверкой, не общей
+меткой), прочие ведут себя как обычно (в т.ч. случай ⑧, у которого свой отдельный засев на
+save-phoenix.py, не задет — другой материал). Не патчит инструмент memory-history-fold.py (как
+--break rebirth) и не трогает архив-снимок (как --break stale-archive) — отдельный, третий
+механизм порчи.
+
     python <КОНТУР>/vnext-tools/bite-memory-history-fold.py
     python <КОНТУР>/vnext-tools/bite-memory-history-fold.py --break rebirth
     python <КОНТУР>/vnext-tools/bite-memory-history-fold.py --break stale-archive
+    python <КОНТУР>/vnext-tools/bite-memory-history-fold.py --break seed-off
 """
 from __future__ import annotations
 
@@ -59,12 +81,51 @@ BREAKS = {
 # собственную чистку приёмки (архив роли на копии перед опытом) — другой механизм порчи,
 # поэтому имя держим ОТДЕЛЬНО от BREAKS, а не третьей записью в том же словаре.
 STALE_ARCHIVE_BREAK = "stale-archive"
+# ⚡ КАРТОЧКА #634: третий механизм порчи — не патчит инструмент, не трогает архив-снимок,
+# а выключает ПОСЕВ недостающего материала (ниже, блок «ПОСЕВ НЕДОСТАЮЩЕГО МАТЕРИАЛА» в main()).
+SEED_OFF_BREAK = "seed-off"
 RESULTS = []
+NOT_STAGED = []  # карточка #634: случаи, которые честно не поставить (без выдуманных отметок)
 
 
 def case(title, ok, detail=""):
     RESULTS.append(ok)
     print(("✅ " if ok else "🔴 ") + title + (f"\n   {detail}" if detail else ""))
+
+
+def would_archive(history_rows, marks, threshold):
+    """Мимика посчитать() инструмента (memory-history-fold.py) — ТОЛЬКО чтобы решить, хватает
+    ли материала для посева (карточка #634). Проверку случаев это не подменяет: она как и
+    раньше считает по СВОЕЙ копии этой же логики (③-а..③-е ниже) — здесь только предсказание.
+
+    Возвращает (уедет, перед_отметками) — списки строк history_rows тем же порядком полей
+    (id, section, saved_at, body).
+    """
+    by_section = {}
+    for r in history_rows:
+        by_section.setdefault(r[1], []).append(r)
+    kept = set()
+    before_marks = []
+    for _section, vs in by_section.items():
+        vs = sorted(vs, key=lambda r: (r[2], r[0]))
+        kept.add(vs[-1][0])  # последняя вообще
+        for t in marks:
+            before = [v for v in vs if v[2] < t]
+            if before:
+                last = max(before, key=lambda r: (r[2], r[0]))
+                kept.add(last[0])
+                before_marks.append(last)
+    would_leave = [r for r in history_rows if r[2] < threshold and r[0] not in kept]
+    return would_leave, before_marks
+
+
+def pick_section(conn, role, history_rows):
+    """Раздел для посева: раздел САМОЙ НОВОЙ версии роли, если история уже есть; иначе —
+    существующий раздел роли в phoenix; иначе 'identity' (реальное имя раздела схемы)."""
+    if history_rows:
+        return sorted(history_rows, key=lambda r: (r[2], r[0]))[-1][1]
+    row = conn.execute("SELECT section FROM phoenix WHERE role=? ORDER BY section LIMIT 1", (role,)).fetchone()
+    return row[0] if row else "identity"
 
 
 def run(args, env_role=None, db=None, tool=None, stand_env=None):
@@ -91,7 +152,7 @@ def main() -> int:
     ap.add_argument("--db", default=None, help="база-образец; по умолчанию живая (копируется)")
     ap.add_argument("--role", default="PROTO", help="чью историю сворачивать в опыте")
     ap.add_argument("--break", dest="break_name",
-                    choices=sorted(set(BREAKS) | {STALE_ARCHIVE_BREAK}), default=None)
+                    choices=sorted(set(BREAKS) | {STALE_ARCHIVE_BREAK, SEED_OFF_BREAK}), default=None)
     a = ap.parse_args()
     role = a.role.upper()
     src = pathlib.Path(a.db) if a.db else mezo_paths.live_db()
@@ -103,6 +164,8 @@ def main() -> int:
     stand_env = mezo_stand.stand_env(tmp)
     live_fp = file_fingerprint(src)
     tool = TOOL; broken_copy = None
+    save = mezo_paths.live_scripts() / "save-phoenix.py"  # нужен и посеву (ниже), и случаю ⑧
+    seed_enabled = a.break_name != SEED_OFF_BREAK
     if a.break_name and a.break_name in BREAKS:
         was, became = BREAKS[a.break_name]
         text = TOOL.read_text(encoding="utf-8")
@@ -116,6 +179,10 @@ def main() -> int:
         print(f"⚠️ ПОРЧА «{STALE_ARCHIVE_BREAK}» ВЗВЕДЕНА — архив роли на копии НЕ чищен, "
               f"ждём красного в ③-в · ③-г · ③-д · ④ · ⑤ (архив/история целиком, а не то, "
               f"что унесла ЭТА свёртка)\n")
+    elif a.break_name == SEED_OFF_BREAK:
+        print(f"⚠️ ПОРЧА «{SEED_OFF_BREAK}» ВЗВЕДЕНА — посев недостающего материала (карточка #634) "
+              f"ВЫКЛЮЧЕН, ждём провала случаев ① · ② · ③-контроль · ③-е (и ③, если у роли есть "
+              f"отметки пересоздания) — каждый своей проверкой, не общей меткой\n")
     try:
         # шаг схемы на копии
         r = subprocess.run([sys.executable, "-B", str(MIGR), "--db", str(db)], capture_output=True,
@@ -149,8 +216,65 @@ def main() -> int:
             print(f"ℹ️ архив роли {role} на КОПИИ очищен перед опытом (было чужого архива: {n_stale})")
         else:
             print(f"ℹ️ порча «{STALE_ARCHIVE_BREAK}»: архив роли НЕ чищен (в нём {n_stale} версий чужого архива)")
-        history_before = history_snapshot(conn, role)
+
+        # ⚡ КАРТОЧКА #634: ПОСЕВ НЕДОСТАЮЩЕГО МАТЕРИАЛА — ДО history_before/fp_before, чтобы
+        # посеянное вошло в базовый отсчёт (как и очистка архива выше), а не в «то, что сделала
+        # сама свёртка». На живой базе материала уже хватает — ветки ниже не сработают, строки
+        # «засеяно» не будет (проверено прогоном на копии живой базы, PROTO 2026-09-14).
+        other_role = "TAXO" if role != "TAXO" else "CORE"
         threshold = conn.execute("SELECT datetime('now','-7 days')").fetchone()[0]
+        history_now = history_snapshot(conn, role)
+        marks_now = [r[0] for r in conn.execute("SELECT at FROM role_rebirths WHERE role=? ORDER BY at", (role,))]
+        would_leave_now, before_marks_now = would_archive(history_now, marks_now, threshold)
+        role_short = (not would_leave_now) or (marks_now and not before_marks_now)
+        if role_short and seed_enabled:
+            section = pick_section(conn, role, history_now)
+            boundary = min([threshold] + marks_now) if marks_now else threshold
+            x1_at, x2_at = conn.execute("SELECT datetime(?, '-4 days'), datetime(?, '-2 days')",
+                                        (boundary, boundary)).fetchone()
+            body1 = f"# {role}\n\nсемя материала истории (карточка #634), версия X1 — старше порога и " \
+                    f"обеих отметок, ничем не защищена, должна уехать в архив.\n"
+            body2 = f"# {role}\n\nсемя материала истории (карточка #634), версия X2 — старше порога и " \
+                    f"обеих отметок, но новее X1: становится «последней перед КАЖДОЙ отметкой».\n"
+            conn.execute("INSERT INTO phoenix_history(role, section, body, body_chars, saved_at, actor, "
+                        "reason, prev_chars) VALUES (?,?,?,?,?,?,?,?)",
+                        (role, section, body1, len(body1), x1_at, "bite-memory-history-fold", "seed", None))
+            conn.execute("INSERT INTO phoenix_history(role, section, body, body_chars, saved_at, actor, "
+                        "reason, prev_chars) VALUES (?,?,?,?,?,?,?,?)",
+                        (role, section, body2, len(body2), x2_at, "bite-memory-history-fold", "seed", None))
+            conn.commit()
+            print(f"ℹ️ засеяно в копию: роли {role} добавлены 2 версии раздела {section!r} прямой "
+                  f"вставкой — X1 {x1_at}, X2 {x2_at} (обе старше порога {threshold} и всех отметок "
+                  f"пересоздания); в копии не хватало материала для случаев ①/③-контроль/③-е"
+                  + ("/③" if marks_now else ""))
+        elif role_short and not seed_enabled:
+            print(f"⚠️ порча «{SEED_OFF_BREAK}»: посев роли {role} пропущен нарочно — материала "
+                  f"в копии не хватает (уехало бы {len(would_leave_now)}, перед отметками "
+                  f"{len(before_marks_now)})")
+
+        other_has = (conn.execute("SELECT 1 FROM phoenix_history WHERE role=? LIMIT 1", (other_role,)).fetchone()
+                     or conn.execute("SELECT 1 FROM phoenix_history_archive WHERE role=? LIMIT 1",
+                                     (other_role,)).fetchone())
+        if not other_has and seed_enabled:
+            other_section = pick_section(conn, other_role, [])
+            seed_other = tmp / f"seed-{other_role}.md"
+            seed_other.write_text(f"# {other_role}\n\nсемя случая ② (карточка #634): роли нужна хоть "
+                                  f"одна версия истории, чтобы приёмка дошла до проверки «только "
+                                  f"свою» — дата не важна.\n", encoding="utf-8")
+            env_other = dict(stand_env); env_other["MEZO_ROLE"] = other_role
+            rseed_other = subprocess.run([sys.executable, "-B", str(save), "--role", other_role, "--section",
+                                          other_section, "--file", str(seed_other), "--db", str(db)],
+                                         capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                         env=env_other)
+            conn = sqlite3.connect(str(db))
+            print(f"ℹ️ засеяно в копию: роли {other_role} добавлена версия раздела {other_section!r} "
+                  f"через save-phoenix.py (код {rseed_other.returncode}) — в копии не было ни одной "
+                  f"версии этой роли для случая ②")
+        elif not other_has and not seed_enabled:
+            print(f"⚠️ порча «{SEED_OFF_BREAK}»: посев роли {other_role} пропущен нарочно — версий "
+                  f"в копии нет ни одной")
+
+        history_before = history_snapshot(conn, role)
         rebirth_marks = [r[0] for r in conn.execute("SELECT at FROM role_rebirths WHERE role=? ORDER BY at", (role,))]
         fp_before = file_fingerprint(db)
 
@@ -159,7 +283,6 @@ def main() -> int:
         case("① --dry-run считает и не пишет ни байта (отпечаток файла базы совпал)",
              code == 0 and "ВХОЛОСТУЮ" in output and file_fingerprint(db) == fp_before, output.strip().splitlines()[-1] if output.strip() else "")
         # ② чужая рука — отказ, база не тронута
-        other_role = "TAXO" if role != "TAXO" else "CORE"
         code, output = run(["--role", other_role], env_role=role, db=db, tool=tool, stand_env=stand_env)
         case("② чужую историю не сворачивает: отказ кодом 2, база не тронута",
              code == 2 and "ТОЛЬКО СВОЮ" in output and file_fingerprint(db) == fp_before, output.strip().splitlines()[-1])
@@ -187,9 +310,17 @@ def main() -> int:
             for t in rebirth_marks:
                 b = [r for r in vs if r[2] < t]
                 if b: before_marks.append(max(b, key=lambda r: (r[2], r[0])))
-        case(f"③ перед КАЖДОЙ отметкой пересоздания последняя версия на месте ({len(before_marks)} шт.)",
-             bool(before_marks) and all(r[0] in remaining_ids for r in before_marks),
-             "" if all(r[0] in remaining_ids for r in before_marks) else f"унесены: {[r[0] for r in before_marks if r[0] not in remaining_ids]}")
+        if not rebirth_marks:
+            # ⚡ КАРТОЧКА #634: отметки пересоздания (role_rebirths) НЕ выдумываются посевом —
+            # без них «перед КАЖДОЙ отметкой» испытывать не на чем, это не провал инструмента.
+            print(f"⚪ ③ не поставлен: у роли {role} в копии базы нет ни одной отметки "
+                  f"пересоздания (role_rebirths) — подделывать отметку нельзя, «перед каждой» "
+                  f"испытывать не на чем")
+            NOT_STAGED.append("③")
+        else:
+            case(f"③ перед КАЖДОЙ отметкой пересоздания последняя версия на месте ({len(before_marks)} шт.)",
+                 bool(before_marks) and all(r[0] in remaining_ids for r in before_marks),
+                 "" if all(r[0] in remaining_ids for r in before_marks) else f"унесены: {[r[0] for r in before_marks if r[0] not in remaining_ids]}")
         kept = {r[0] for r in young} | {r[0] for r in latest} | {r[0] for r in before_marks}
         case("③-в всё унесённое — старше порога и не из хранимых",
              all(r[2] < threshold and r[0] not in kept for r in archived))
@@ -220,7 +351,7 @@ def main() -> int:
         case("⑥ у роли без отметок пересоздания инструмент говорит это вслух", "ОТМЕТОК ПЕРЕСОЗДАНИЯ У РОЛИ НЕТ" in output)
         # ⑧ ЧИСТКА ПРИ СОХРАНЕНИИ — ПЕРЕНОС, НЕ УДАЛЕНИЕ (save-phoenix.py держит 10 + самую длинную
         #    на раздел; до 05.09 лишнее УДАЛЯЛОСЬ: из 2270 сохранений в истории оставалась 441 версия)
-        save = mezo_paths.live_scripts() / "save-phoenix.py"
+        # (save — уже определён выше, до посева: он нужен и посеву роли other_role, и здесь)
         conn = sqlite3.connect(str(db))
         # ⚡ КАРТОЧКА #628: в свежем контуре у роли может не быть раздела plan (а то и вовсе ни
         # одного раздела) — .fetchone()[0] на пустом результате давал TypeError. Раздел для
@@ -289,10 +420,17 @@ def main() -> int:
         if broken_copy and broken_copy.exists(): broken_copy.unlink()
         shutil.rmtree(tmp, ignore_errors=True)
     n = len(RESULTS); ok = sum(RESULTS)
+    staged_n = len(NOT_STAGED)
     if a.break_name:
         red_count = n - ok
-        print(f"\n{'✅ так и надо' if red_count else '⚠️ ПОРЧА ВЗВЕДЕНА, А ВСЁ ЗЕЛЁНОЕ'}: под порчей красных {red_count} из {n}")
+        print(f"\n{'✅ так и надо' if red_count else '⚠️ ПОРЧА ВЗВЕДЕНА, А ВСЁ ЗЕЛЁНОЕ'}: под порчей красных {red_count} из {n}"
+              + (f" · не поставлено {staged_n} ({', '.join(NOT_STAGED)})" if staged_n else ""))
         return 0 if red_count else 1
+    if staged_n:
+        # ⚡ КАРТОЧКА #634: итог НЕ «ПРИНЯТА», пока хоть один случай честно не поставлен.
+        print(f"\n🔴 НЕ ПРИНЯТА — случаев {n}, пройденных {ok}, НЕ ПОСТАВЛЕНО {staged_n} "
+              f"({', '.join(NOT_STAGED)})")
+        return 1
     print(f"\n{'✅ ПРИНЯТА' if ok == n else '🔴 НЕ ПРИНЯТА'} — случаев {n}, зелёных {ok}")
     return 0 if ok == n else 1
 

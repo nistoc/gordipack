@@ -29,6 +29,7 @@ guard-utc, guard-scripts-drift, гард хронологии — работал
 """
 
 import argparse
+import json
 import os
 import re
 import sqlite3
@@ -194,6 +195,29 @@ def counted(name):
     RESULTS.append((name, True, ""))
 
 
+_FINGERPRINTS_CACHE: dict | None = None
+
+
+def installed_fingerprints() -> dict:
+    """Отпечатки положенного (meta.template_files_sha) — их пишут init-group.py (шаг 7б′) и
+    update-tools.py при каждой установке/каждом взятии свежего: имя файла → отпечаток его
+    СОДЕРЖИМОГО (не байтов). Читается лениво и кэшируется — за один прогон отпечатки не
+    меняются (сам гард только читает, БД открыта mode=ro), а подпроверок без цели не одна.
+    Любая беда чтения (ключа нет, значение не разбирается) отвечает ПУСТЫМ словарём — тем же
+    самым «различить нечем», что печатается вслух у вызывающего, а не трассировкой.
+    """
+    global _FINGERPRINTS_CACHE
+    if _FINGERPRINTS_CACHE is None:
+        try:
+            c = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+            row = c.execute("SELECT value FROM meta WHERE key = 'template_files_sha'").fetchone()
+            c.close()
+            _FINGERPRINTS_CACHE = json.loads(row[0]) if row and row[0] else {}
+        except Exception:                                       # noqa: BLE001
+            _FINGERPRINTS_CACHE = {}
+    return _FINGERPRINTS_CACHE
+
+
 def sub_guard(name, script, skip, *extra, script_path=None):
     """Прогон отдельного гарда подпроцессом.
 
@@ -207,7 +231,30 @@ def sub_guard(name, script, skip, *extra, script_path=None):
     # на этой ловушке гард UTC уже один раз отрапортовал «чисто» сквозь красное.
     target = Path(script_path) if script_path else SCRIPTS / script
     if not target.exists():                      # чужой инструмент мог переехать
-        check(name, False, f"гард не найден: {target}")
+        # 🪤 КАРТОЧКА #638 (слово владельца «B + a»): «гард не найден» одной строкой не
+        # различало «звена у контура НИКОГДА не было — обновление его просто ещё не привезло»
+        # от «звено СТОЯЛО и пропало» — настоящую порчу. Первое известно и чинится своим же
+        # ходом (update-tools.py), второе — провал, как раньше.
+        # ⚖️ РАЗЛИЧИТЕЛЬ — отпечаток установки по ИМЕНИ ФАЙЛА (installed_fingerprints() выше):
+        # имя в отпечатках ⇒ звено когда-то стояло, сейчас его нет ⇒ ПРОПАЛО (провал, код как
+        # был); имени нет, но отпечатки у контура вообще ЕСТЬ ⇒ звено НЕ ПРИЕХАЛО НИКОГДА
+        # (⚠️ предупреждение, код 0, готовая команда докладки). ⛔ ГРАНИЦА, названа не угадана:
+        # у контура нет НИ ОДНОГО отпечатка (собран раньше, чем их стали писать) — различить
+        # нечем, и это провал по-прежнему, а не тихое «не приехало» без основания.
+        fp = installed_fingerprints()
+        key = target.name
+        if key in fp:
+            check(name, False, f"звено ПРОПАЛО: {target} — отпечаток установки у него есть, "
+                                f"на месте его нет")
+        elif fp:
+            check(name, True, "", force_print=True)
+            print(f"   ⚠️ звено не приехало с обновлением: {target} — отпечатка установки "
+                  f"нет, у контура оно не стояло. 👉 докладка: python {SCRIPTS / 'update-tools.py'} "
+                  f"--apply привезёт звено (если пакет его зовёт); либо разово скопируй "
+                  f"{key} из <клон пакета>/vnext/prototype/{key}, когда адрес пакета известен.")
+        else:
+            check(name, False, f"гард не найден: {target} (отпечатков установки у контура "
+                                f"нет ВООБЩЕ — «не приехало» от «пропало» различить нечем)")
         return
     r = subprocess.run([sys.executable, str(target), *extra],
                        capture_output=True, text=True)

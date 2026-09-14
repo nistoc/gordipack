@@ -197,11 +197,46 @@ def main() -> int:
     case("⑤ контроль: в подопытном файле путь БЫЛ",
            had_count >= 3, f"вхождений в источнике {had_count}")
 
+    # ── ⑥ ЧУЖАЯ ФОРМА (карточка #626): источник изначально в CRLF, построенной через
+    #    mezo_stand.crlf_twin — НЕЗАВИСИМО от того, транслирует ли текущая ОС «\n» в
+    #    «\r\n» сама при записи (на Windows write_text() выше это и так делает, и ③г
+    #    отчасти уже проверяет CRLF, но лишь СЛУЧАЙНО для этой машины — на другой ОС
+    #    источник ③г мог бы остаться чистым \n, и находка карточки #576 при переносе
+    #    осталась бы неиспытанной). Тот же признак («копия = источник с заглушками, без
+    #    удвоения \r\n») обязан держаться и когда CRLF пришёл НЕ от ОС, а от байт файла.
+    crlf_text = (
+        f'r"""Зови так: python {CONTAINER}/vnext-tools/мирный_crlf.py --role X"""\n'
+        f'import sys\n'
+        f'print(r"подсказка: смотри {CONTAINER}/vnext-tools рядом")\n'
+        f'sys.exit(0)\n')
+    (source_dir / "мирный_crlf.py").write_bytes(mezo_stand.crlf_twin(crlf_text).encode("utf-8"))
+    crlf_source_bytes = (source_dir / "мирный_crlf.py").read_bytes()
+    # Признак CRLF — часть условия ЭТОГО случая (не отдельный assert: тот прервал бы
+    # прогон трассировкой и отключается под python -O; провал обязан звучать своей
+    # строкой, не мешая прогону случаев после неё).
+    crlf_hits6 = crlf_source_bytes.count(b"\r\n")
+    code7, output7 = transfer(["мирный_crlf.py"], source_dir, template_dir)
+    copy_file2 = template_dir / "мирный_crlf.py"
+    copy_bytes2 = copy_file2.read_bytes() if copy_file2.exists() else b""
+    expected_bytes2 = crlf_source_bytes
+    for real_path, label in drift.PLACEHOLDERS:
+        if real_path:
+            expected_bytes2 = expected_bytes2.replace(real_path.encode("utf-8"), label.encode("utf-8"))
+    bytes_match6 = copy_bytes2 == expected_bytes2
+    case("⑥ источник в CRLF (crlf_twin, не от ОС) — копия = источник с заглушками, без "
+         "удвоения \\r\\n",
+           code7 == 0 and bytes_match6 and crlf_hits6 > 0,
+           (f"стенд несёт CRLF: байтов \\r\\n {crlf_hits6} (crlf_twin); совпало байт в байт"
+            if bytes_match6 and crlf_hits6 > 0
+            else f"код {code7}; стенд несёт CRLF: байтов \\r\\n {crlf_hits6} (crlf_twin); "
+                 f"удвоенных концов строк {copy_bytes2.count(bytes([13, 13, 10]))}"))
+
     shutil.rmtree(stand, ignore_errors=True)
     red_cases = [item for item, ok, _ in results if not ok]
     print("")
     print("=" * 78)
-    print(f"РАЗЛИЧАЮЩИХ СЛУЧАЕВ {len(results)}, из них ВСТРЕЧНЫХ 2 (③б и ⑤); ③г добавлен по находке @COORD")
+    print(f"РАЗЛИЧАЮЩИХ СЛУЧАЕВ {len(results)}, из них ВСТРЕЧНЫХ 2 (③б и ⑤); ③г добавлен по "
+          f"находке @COORD; ⑥ добавлен по карточке #626 (CRLF платформонезависимо)")
     print("⚖️ Доказательство порчей — отдельным прогоном рядом: отключение обезличивания")
     print("   роняет ① и ②, «безопасно везде» роняет ③, «каталог не проверяем» роняет ③в.")
     print("   Порча живёт рядом с оригиналом, а не внутри приёмки: иначе приёмка судила бы себя.")

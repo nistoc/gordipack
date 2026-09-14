@@ -23,7 +23,7 @@
  "find-phoenix.py": "0f1f20827367",
  "gordi-issue.py": "f398ef94e30a",
  "gordi.py": "4effcc470d4b",
- "guard-all.py": "d9e0eac5dbc6",
+ "guard-all.py": "4f89cfce1534",
  "guard-command-targets.py": "f79de1c66fab",
  "guard-cursor-segments.py": "c7d168018f9d",
  "guard-scripts-drift.py": "0b73c1146cfe",
@@ -78,7 +78,7 @@
  "read-phoenix.py": "fe91ab100ad1",
  "rebirth-mark.py": "3b8306a08369",
  "refs_check.py": "0618ebd47e39",
- "remove-rows.py": "678aed815aa3",
+ "remove-rows.py": "26642dd011a9",
  "role-brief.py": "ff59f01a959e",
  "role-prompts.py": "7dba8e69bb7e",
  "role-rights.py": "41613322c242",
@@ -94,7 +94,7 @@
  "sync_backoff.py": "76e03a58bb50",
  "track.py": "ca68bdf94a87",
  "unsaved.py": "06abe79f0c94",
- "update-tools.py": "e9c3367b7cfe",
+ "update-tools.py": "50b39b92c8d8",
  "urgency.py": "dadde2b10c2e",
  "write-message.py": "9fbd4888ec17"
 }

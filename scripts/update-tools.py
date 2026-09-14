@@ -56,6 +56,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -124,6 +125,43 @@ def same_text(a: bytes, b: bytes) -> bool:
 
 def digest(data: bytes) -> str:
     return hashlib.sha256(data.replace(b"\r\n", b"\n").rstrip()).hexdigest()[:12]
+
+
+# 🪤 КАРТОЧКА #637 (находка COORD, записка #5275): guard-all.py пакета зовёт новое звено
+# (check-acceptance-env.py) из vnext/prototype, а обновлятор клал в «вне обновления» ЛЮБОЕ
+# звено источника, которого у контура ещё нет, — даже то самое, которое зовут свежие scripts/.
+# Итог: обновившийся контур получает общий прогон, немой на «гард не найден», а прогон
+# читается как готовый. ⚖️ БЛИЗНЕЦ init-group.py 7б — меняешь правило в одном месте, правь
+# во втором: то же замыкание (что зовут scripts/*.py и scripts/migrations/*.py транзитивно
+# через тела звеньев vnext/prototype), но здесь оно СЧИТАЕТСЯ по scripts/ ИСТОЧНИКА
+# (src_dir), а не по каталогу контура, — и не пишет файлы сама, только называет множество
+# имён: класть их (и снимать отпечаток) решает уже общий ход main().
+def closure_of_prototype_links(scripts_dir: pathlib.Path, proto_dir: pathlib.Path) -> set[str]:
+    """Имена файлов `proto_dir` (vnext/prototype источника), которые транзитивно зовут
+    `scripts_dir`/*.py и `scripts_dir`/migrations/*.py — ровно то же правило замыкания, что
+    кладёт звенья свежему контуру (init-group.py, шаг 7б): сперва котировки `"имя.py"` в телах
+    скриптов, затем — по телам самих звеньев вглубь, котировки `"имя.py"` И строчные `import x`.
+    Звено, которого нет в `proto_dir`, закрывает свою ветку (сборке нечем его продолжить)."""
+    want: set[str] = set()
+    for s in [*scripts_dir.glob("*.py"), *scripts_dir.glob("migrations/*.py")]:
+        want |= set(re.findall(r'"([a-z0-9_.-]+\.py)"',
+                               s.read_text(encoding="utf-8", errors="replace")))
+    seen: set[str] = set()
+    closure: set[str] = set()
+    while want:
+        name = want.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        src = proto_dir / name
+        if not src.exists():
+            continue
+        closure.add(name)
+        body = src.read_text(encoding="utf-8", errors="replace")
+        want |= set(re.findall(r'"([a-z0-9_.-]+\.py)"', body))
+        want |= {m + ".py" for m in re.findall(r"^\s*import\s+([a-z_][a-z0-9_]*)",
+                                               body, re.M)}
+    return closure
 
 
 # ВОЗВРАТ PROTO (третий возврат, карточка #609, находка COORD, записка #5232): на Windows
@@ -719,6 +757,12 @@ def main() -> int:
         linked_dir = src_dir / "vnext" / "prototype"
         out_of_scope = []
         if linked_dir.is_dir():
+            # 🪤 КАРТОЧКА #637: «звена у нас нет» раньше значило ОДНО — «сборка его не клала»,
+            # и не различало «сборка положила бы его СЕЙЧАС, зови мы сборку заново» (звено из
+            # замыкания новых scripts/) от «сборка его не зовёт вовсе» (правда не звана никем).
+            # Первое — не «вне обновления», это ДОЛГ обновления: контур, собранный ДО того как
+            # звено стало зваться, без него не соберётся заново сам. Замыкание см. выше.
+            closure = closure_of_prototype_links(src_tools, linked_dir)
             for f in sorted(linked_dir.glob("*.py")):
                 rel = pathlib.Path(f.name)
                 if rel in src_index:
@@ -726,8 +770,11 @@ def main() -> int:
                 if (tools / rel).exists():
                     src_index[rel] = f          # звено уже стои́т у нас — обновляем его
                     git_rel_of[rel] = "vnext/prototype/" + f.name
+                elif f.name in closure:
+                    src_index[rel] = f          # звено из замыкания источника — появится (+)
+                    git_rel_of[rel] = "vnext/prototype/" + f.name
                 else:
-                    out_of_scope.append(rel)    # звена у нас нет: сборка его не клала
+                    out_of_scope.append(rel)    # звена у нас нет, и звено его не зовёт вовсе
 
         fingerprints = json.loads(got.get("template_files_sha") or "{}")
 
@@ -870,8 +917,9 @@ def main() -> int:
         if out_of_scope:
             print(f"ℹ️ Вне обновления: {len(out_of_scope)} звеньев источника, которых у тебя нет "
                   f"({', '.join(str(x) for x in out_of_scope[:4])}"
-                  f"{'…' if len(out_of_scope) > 4 else ''}).{NEWLINE}   Их кладёт сборка контура "
-                  f"по тому, что зовут скрипты, — обновление их не приносит и не выдумывает.")
+                  f"{'…' if len(out_of_scope) > 4 else ''}).{NEWLINE}   Их не зовёт ни один скрипт "
+                  f"источника — сборка их не кладёт, обновление не приносит и не выдумывает "
+                  f"(звенья, которые скрипты зовут, приезжают строкой «+»).")
 
         # 🪤 КАРТОЧКА #604 ②б: --source НА ОДИН РАЗ НЕ СТАНОВИТСЯ ЗАПИСЬЮ МОЛЧА. Источник
         # в meta трогается только когда он ещё пуст (первая запись) или по явному

@@ -17,10 +17,13 @@ r"""bite-check-rules-mirror.py — приёмка разбора ЗАМКА в �
   ② ГЛАВНЫЙ: датированный замок «owner-2026-07-29» — распознаётся, файл СОШЁЛСЯ с базой
   ③ ВСТРЕЧНЫЙ к ②: датированный замок с ИЗМЕНЁННЫМ телом — расхождение по-прежнему ловится
      (правка не превратила разбор в «всегда зелёно», замок читается, тело всё ещё сверяется)
+  ④ ЧУЖАЯ ФОРМА (карточка #626): то же, что ②, но файл-зеркало записан построчно
+     Windows-концами (CRLF, через mezo_stand.crlf_twin) — распознаётся и сходится так же
 
 НАРОЧНАЯ ПОЛОМКА (--porcha revert-to-\\w): образец возвращён к `🔒(\\w+)` — ждём красным
-РОВНО ②③ (датированный замок снова не распознаётся, правило «пропадает» из файла); ①
-остаётся зелёным — обычный замок «coord» распознаётся и старым образцом тоже.
+РОВНО ②③④ (датированный замок снова не распознаётся, правило «пропадает» из файла,
+CRLF тут ни при чём); ① остаётся зелёным — обычный замок «coord» распознаётся и старым
+образцом тоже.
 
 ⛔ Живой базы не касается: своя временная БД (только колонки rule_key/body/version,
 которых from_db() и просит) и свой временный файл-зеркало.
@@ -37,6 +40,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
+import mezo_stand  # noqa: E402
 
 CASES = DIFFER = PASSED = 0
 
@@ -61,12 +65,21 @@ def build_db(path: Path, rules: dict):
     con.close()
 
 
-def write_mirror(path: Path, entries: list):
-    """entries: [(key, lock, ver, body)] — форма заголовка ТА ЖЕ, что печатает export-rules.py."""
+def write_mirror(path: Path, entries: list, crlf: bool = False):
+    """entries: [(key, lock, ver, body)] — форма заголовка ТА ЖЕ, что печатает export-rules.py.
+
+    crlf=True — чужая форма (случай ④, карточка #626): пишем БАЙТАМИ с Windows-концами
+    строк через mezo_stand.crlf_twin, а не текстовым режимом записи (тот же приём, что
+    у write_mirror в bite-rules-mirror-search.py, испытывающей соседний путь того же
+    инструмента)."""
     parts = []
     for key, lock, ver, body in entries:
         parts.append(f"### `{key}` 🔒{lock} v{ver}\n\n{body.strip()}\n")
-    path.write_text("\n".join(parts), encoding="utf-8")
+    text = "\n".join(parts)
+    if crlf:
+        path.write_bytes(mezo_stand.crlf_twin(text).encode("utf-8"))
+    else:
+        path.write_text(text, encoding="utf-8")
 
 
 def call_tool(tool: Path, db: Path, mirror_file: Path):
@@ -124,8 +137,9 @@ def run_cases(live_tool: Path, porcha) -> None:
             assert text.count(old) == 1, f"поломка НЕ ЛЕГЛА: найдено {text.count(old)}"
             tool.write_text(text.replace(old, new), encoding="utf-8")
             print("🧪 НАРОЧНАЯ ПОЛОМКА «revert-to-\\w»: образец замка возвращён к 🔒(\\w+). "
-                  "Ждём красным РОВНО ②③ (датированный замок вновь не распознаётся); "
-                  "① цел (замок «coord» — обычные буквы, \\w его и так брал)\n")
+                  "Ждём красным РОВНО ②③④ (датированный замок вновь не распознаётся, "
+                  "CRLF тут ни при чём); ① цел (замок «coord» — обычные буквы, \\w его и "
+                  "так брал)\n")
 
         # ① ВСТРЕЧНЫЙ/контроль: обычный замок «coord»
         db1 = stand / "s1.db"
@@ -161,6 +175,26 @@ def run_cases(live_tool: Path, porcha) -> None:
              "ловится (правка не превратила разбор в «всегда зелено»)",
              code3 == 1 and "ВЕРСИИ РАВНЫ, А ТЕКСТ РАЗНЫЙ" in out3,
              f"код {code3}", differ=True)
+
+        # ④ ЧУЖАЯ ФОРМА (карточка #626, ПРОБЕЛ до этой правки — своего CRLF-случая не
+        # было): тот же датированный замок, что и ②, но файл-зеркало записан построчно
+        # Windows-концами (CRLF) через mezo_stand.crlf_twin. from_file() в живом
+        # check-rules-mirror.py читает файл path.read_text() (текстовый режим,
+        # universal newlines) — CRLF обязан свестись сам, разбор обязан сойтись как и
+        # без CRLF. Признак CRLF — часть условия ЭТОГО случая (не отдельный assert: тот
+        # прервал бы прогон трассировкой и отключается под python -O) — иначе поломка
+        # crlf_twin осталась бы незамеченной этим случаем.
+        db4 = stand / "s4.db"
+        build_db(db4, {"test-dated-crlf": ("тело правила с датированным замком, CRLF-зеркало", 1)})
+        mirror4 = stand / "m4.md"
+        write_mirror(mirror4, [("test-dated-crlf", "owner-2026-07-29", 1,
+                                "тело правила с датированным замком, CRLF-зеркало")],
+                     crlf=True)
+        crlf_hits4 = mirror4.read_bytes().count(b"\r\n")
+        code4, out4 = call_tool(tool, db4, mirror4)
+        case("④ ЧУЖАЯ ФОРМА: датированный замок, файл-зеркало в CRLF — распознаётся и сходится",
+             code4 == 0 and "сошл" in out4.lower() and "НЕТ В ФАЙЛЕ" not in out4 and crlf_hits4 > 0,
+             f"код {code4}; стенд несёт CRLF: байтов \\r\\n {crlf_hits4} (crlf_twin)")
     finally:
         shutil.rmtree(stand, ignore_errors=True)
 

@@ -160,6 +160,35 @@ def main() -> int:
                    untouched and "Отпечатков установки нет" in (p.stdout or ""),
                    "молчаливое обновление здесь неотличимо от затирания чужой правки; "
                    "цена названа ДО действия и требует явного согласия", differ=True)
+
+        # ⑨ КАРТОЧКА #626: тот же опыт, что ④⑤ (файл отстал → --apply его обновляет), но
+        # СОДЕРЖИМОЕ отставшего файла явно построено mezo_stand.crlf_twin (форма CRLF —
+        # как у контура-потребителя после git-чекаута на Windows), а не платформенной
+        # случайностью write_text. Отпечаток установки считается тем же приёмом, что и
+        # make_stale() (CRLF→LF перед sha256) — форма файла не мешает его узнать своим.
+        victim2 = tmp / ".mezosync" / "scripts" / "atomic-install.py"
+        stale_text = "# устаревшая копия (CRLF)" + NL
+        stale_bytes = mezo_stand.crlf_twin(stale_text).encode("utf-8")
+        victim2.write_bytes(stale_bytes)
+        con9 = sqlite3.connect(db)
+        stamps9 = json.loads(dict(con9.execute("SELECT key, value FROM meta"))
+                             .get("template_files_sha") or "{}")
+        stamps9[victim2.name] = hashlib.sha256(
+            victim2.read_bytes().replace(b"\r\n", b"\n").rstrip()).hexdigest()[:12]
+        con9.execute("INSERT INTO meta (key, value) VALUES ('template_files_sha', ?) "
+                     "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                     (json.dumps(stamps9, ensure_ascii=False),))
+        con9.commit()
+        con9.close()
+        p9 = subprocess.run([sys.executable, str(upd), "--apply"], capture_output=True,
+                            text=True, encoding="utf-8", timeout=300, env=env)
+        fixture_is_crlf = b"\r\n" in stale_bytes
+        restored9 = "устаревшая копия" not in victim2.read_text(encoding="utf-8")
+        ok &= case("⑨ тот же опыт (④⑤): отставший файл явно в форме CRLF — --apply "
+                   "обновляет его тоже",
+                   fixture_is_crlf and restored9 and "Забрано" in (p9.stdout or ""),
+                   f"фикстура явно в форме CRLF: {fixture_is_crlf} · заменена после --apply: "
+                   f"{restored9}", differ=True)
     finally:
         mezo_stand.release(tmp)  # уборка отложена до исхода прогона
 

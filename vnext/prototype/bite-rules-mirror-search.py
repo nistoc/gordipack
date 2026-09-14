@@ -80,6 +80,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
+import mezo_stand  # noqa: E402
 
 CASES = DIFFER = PASSED = 0
 
@@ -107,7 +108,8 @@ def build_db(path: Path, rules: dict) -> None:
 def write_mirror(path: Path, entries: list, crlf: bool = False) -> None:
     """entries: [(key, lock, ver, body)] — форма заголовка ТА ЖЕ, что печатает export-rules.py.
 
-    crlf=True — чужая форма (случай ⑤): пишем БАЙТАМИ с Windows-концами строк (\\r\\n),
+    crlf=True — чужая форма (случай ⑤): пишем БАЙТАМИ с Windows-концами строк через
+    mezo_stand.crlf_twin (карточка #626) — общий приём вместо самодельного .replace(),
     а не полагаемся на текстовый режим (который сам привёл бы \\n к \\r\\n на записи —
     здесь нужен именно ПРОВЕРЯЕМЫЙ файл, а не то, что удобно писателю)."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -116,7 +118,7 @@ def write_mirror(path: Path, entries: list, crlf: bool = False) -> None:
         parts.append(f"### `{key}` 🔒{lock} v{ver}\n\n{body.strip()}\n")
     text = "\n".join(parts)
     if crlf:
-        path.write_bytes(text.replace("\n", "\r\n").encode("utf-8"))
+        path.write_bytes(mezo_stand.crlf_twin(text).encode("utf-8"))
     else:
         path.write_text(text, encoding="utf-8")
 
@@ -265,11 +267,14 @@ def run_cases(live_tool: Path, porcha) -> None:
         mirror5 = root5 / ".mezosync" / "generated" / "sync.rules.md"
         write_mirror(mirror5, [("test-crlf", "coord", 1, "тело правила с CRLF-зеркалом")],
                      crlf=True)
-        assert b"\r\n" in mirror5.read_bytes(), "стенд ⑤ обязан нести реальный CRLF"
+        # Признак CRLF — часть условия ЭТОГО случая (карточка #626: не отдельный assert —
+        # тот прервал бы прогон трассировкой и отключается под python -O; провал обязан
+        # звучать своей строкой и не мешать прогону остальных случаев).
+        crlf_hits5 = mirror5.read_bytes().count(b"\r\n")
         code5, out5 = call_tool(tool, db5)
         case("⑤ ЧУЖАЯ ФОРМА: раскладка пакета, файл-зеркало в CRLF — тоже находит и сходится",
-             code5 == 0 and "сошл" in out5.lower(),
-             f"код {code5}")
+             code5 == 0 and "сошл" in out5.lower() and crlf_hits5 > 0,
+             f"код {code5}; стенд несёт CRLF: байтов \\r\\n {crlf_hits5} (crlf_twin)")
 
         # ── ⑥ ЗАМЕЧАНИЕ COORD (карточка #618, повторная приёмка): файл-зеркало есть в
         # ОБЕИХ раскладках, второй (пакет) ОТЛИЧАЕТСЯ от выбранного (Atlas) — строка

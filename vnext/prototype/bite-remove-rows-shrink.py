@@ -331,17 +331,24 @@ def main() -> int:
                    " НОВУЮ убыль дважды", differ=True)
 
         # ── 8: прежняя выгрузка в CRLF (Windows) — час/счётчики читаются как обычно ──
+        # Форма строится через mezo_stand.crlf_twin (карточка #626) — общий приём вместо
+        # самодельного .replace(b"\n", b"\r\n"). Признак CRLF — часть условия ЭТОГО же
+        # случая (не отдельный assert: тот прервал бы прогон трассировкой, отключается
+        # под python -O и не даёт увидеть случаи 9–23 в том же прогоне) — иначе поломка
+        # crlf_twin осталась бы незамеченной этим случаем.
         d8, db8, out8 = fresh_stand("bite-rr-8-")
         cleanup_dirs.append(d8)
         raw8 = out8.read_bytes()
-        out8.write_bytes(raw8.replace(b"\n", b"\r\n"))
+        out8.write_bytes(mezo_stand.crlf_twin(raw8.decode("utf-8")).encode("utf-8"))
+        crlf_hits8 = out8.read_bytes().count(b"\r\n")
         c8r, o8r = run_remove(db8, "bridge_reviewed", "message_id < ?", [3], "COORD",
                               "слово владельца — проверка формы CRLF", "--apply")
         must(c8r, o8r, "снятие для случая 8")
         code8, output8 = run_backup(db8, out8, "--apply")
         ok &= case("8 прежняя выгрузка в CRLF (Windows) — час читается, названная убыль признана",
-                   code8 == 0 and "убыль названа журналом" in output8,
-                   f"код {code8}", differ=True)
+                   code8 == 0 and "убыль названа журналом" in output8 and crlf_hits8 > 0,
+                   f"код {code8}; стенд несёт CRLF: байтов \\r\\n {crlf_hits8} (crlf_twin)",
+                   differ=True)
 
         # ── 9: ОБРАТНЫЙ ХОД — сверка с журналом отключена → случай 4 ПРОВАЛИВАЕТСЯ ──
         d9 = pathlib.Path(tempfile.mkdtemp(prefix="bite-rr-9-")); cleanup_dirs.append(d9)
