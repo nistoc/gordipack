@@ -271,6 +271,12 @@ def check_row_shrink(previous: dict, counts: dict, search_related_names: set = f
                 if named and named == (was - now):
                     explanations.append(
                         f"{t} −{was - now} — убыль названа журналом: " + "; ".join(notes))
+                elif named and named > (was - now):
+                    # Замечание OPSSRE Н1 (приёмка карточки #612, 2026-09-14): журнал называет
+                    # БОЛЬШЕ, чем убыло (сняли 7, 4 вставили обратно). Тревога верна — счёт не
+                    # сходится, — но прежний текст «часть снята без следа» говорил обратное.
+                    alerts.append(f"{t} −{was - now} строк, а журнал называет больше — {named}:"
+                                  f" часть снятого вернули или добавили новые строки, сверь по журналу")
                 elif named:
                     alerts.append(f"{t} −{was - now} строк, журналом названо лишь {named} —"
                                   f" с убылью не сходится, часть снята без следа")

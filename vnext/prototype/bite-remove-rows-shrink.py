@@ -39,6 +39,16 @@ check_row_shrink в backup-db.py): ручное снятие строк из о�
   12 обратный ход: снятие сохраняется ОТДЕЛЬНОЙ транзакцией до записи журнала      РАЗЛИЧАЮЩИЙ
      (нарочная поломка) → случай 11 ПРОВАЛИВАЕТСЯ (строки сняты, следа нет).
      Добавлено PROTO 2026-09-14: чужая поломка «две транзакции» проходила все 10.
+  13 значение текстом в --where («message_id < 3») — отказ до записи              РАЗЛИЧАЮЩИЙ
+  14 условие под ВСЕ строки таблицы без --all-rows — отказ, строки на месте;      РАЗЛИЧАЮЩИЙ
+     показ без --apply предупреждает отдельной строкой, последняя строка прежняя
+  15 то же условие с --all-rows — снимает все строки, одна запись журнала         РАЗЛИЧАЮЩИЙ
+  16 обратный ход: проверка значения текстом выключена → случай 13 ПРОВАЛИВАЕТСЯ   РАЗЛИЧАЮЩИЙ
+  17 обратный ход: проверка «все строки» выключена → случай 14 ПРОВАЛИВАЕТСЯ       РАЗЛИЧАЮЩИЙ
+  18 журнал называет БОЛЬШЕ, чем убыло (сняли 7, 4 вернули) → тревога словами    РАЗЛИЧАЮЩИЙ
+     «журнал называет больше», а не «часть снята без следа»
+  19 обратный ход: ветка «называет больше» выключена → случай 18 ПРОВАЛИВАЕТСЯ   РАЗЛИЧАЮЩИЙ
+     Случаи 13–19 — замечания OPSSRE Н1 и Н2 по приёмке карточки #612.
 
 ⛔ Живой базы не касается: каждый случай строит СВОЙ стенд; испытуемые remove-rows.py и
    backup-db.py — из .mezosync/scripts контура, найденного mezo_paths.container_root
@@ -412,6 +422,123 @@ def main() -> int:
                        and after12["audit_log"] == before12["audit_log"],
                        f"код {code12}; было {before12}, стало {after12} — ослабленная копия"
                        " теряет след, как и требует поломка", differ=True)
+
+        # ── 13: значение текстом в --where — отказ до записи ──
+        d13 = pathlib.Path(tempfile.mkdtemp(prefix="bite-rr-13-")); cleanup_dirs.append(d13)
+        db13 = build_stand(d13)
+        before13 = table_counts(db13, ["bridge_reviewed", "audit_log"])
+        code13, output13 = run_remove(db13, "bridge_reviewed", "message_id < 3", [], "COORD",
+                                      "испытание: значение текстом", "--apply")
+        after13 = table_counts(db13, ["bridge_reviewed", "audit_log"])
+        ok &= case("13 значение текстом в --where («message_id < 3») — отказ, ничего не снято",
+                   code13 != 0 and before13 == after13 and "плейсхолдер" in output13,
+                   f"код {code13}; было {before13}, стало {after13}", differ=True)
+
+        # ── 14: условие под ВСЕ строки без --all-rows — отказ; показ предупреждает ──
+        d14 = pathlib.Path(tempfile.mkdtemp(prefix="bite-rr-14-")); cleanup_dirs.append(d14)
+        db14 = build_stand(d14)
+        before14 = table_counts(db14, ["bridge_reviewed", "audit_log"])
+        code14p, output14p = run_remove(db14, "bridge_reviewed", "message_id >= ?", [0], "COORD",
+                                        "испытание: все строки, показ")
+        code14, output14 = run_remove(db14, "bridge_reviewed", "message_id >= ?", [0], "COORD",
+                                      "испытание: все строки", "--apply")
+        after14 = table_counts(db14, ["bridge_reviewed", "audit_log"])
+        last14p = output14p.strip().splitlines()[-1] if output14p.strip() else ""
+        ok &= case("14 условие под ВСЕ строки без --all-rows — отказ, строки на месте; показ"
+                   " предупреждает, последняя строка показа прежняя",
+                   code14 != 0 and before14 == after14 and "--all-rows" in output14
+                   and code14p == 0 and "ВСЕ 8 строк" in output14p
+                   and "для снятия добавь --apply" in last14p,
+                   f"код {code14}; было {before14}, стало {after14}; показ: код {code14p},"
+                   f" последняя строка {last14p!r}", differ=True)
+
+        # ── 15: то же условие с --all-rows — снимает все, одна запись журнала ──
+        code15, output15 = run_remove(db14, "bridge_reviewed", "message_id >= ?", [0], "COORD",
+                                      "испытание: все строки по явному флагу", "--apply",
+                                      "--all-rows")
+        after15 = table_counts(db14, ["bridge_reviewed", "audit_log"])
+        ok &= case("15 то же условие с --all-rows — снято 8, запись журнала одна",
+                   code15 == 0 and after15["bridge_reviewed"] == 0
+                   and after15["audit_log"] == before14["audit_log"] + 1,
+                   f"код {code15}; стало {after15}", differ=True)
+
+        # ── 16: ОБРАТНЫЙ ХОД — проверка значения текстом выключена → случай 13 проваливается ──
+        d16 = pathlib.Path(tempfile.mkdtemp(prefix="bite-rr-16-")); cleanup_dirs.append(d16)
+        weak16 = weaken_remove_tool(d16, "    if LITERAL_IN_WHERE.search(where):",
+                                    "    if False:  # П-Н2: проверка значения текстом выключена")
+        if weak16 is None:
+            ok &= case("16 ОБРАТНЫЙ ХОД: без проверки значения текстом", False,
+                       "⛔ НЕ ЗАПУСТИЛАСЬ: якорь LITERAL_IN_WHERE не найден — remove-rows.py менялся,"
+                       " правь приёмку")
+        else:
+            d16b = pathlib.Path(tempfile.mkdtemp(prefix="bite-rr-16b-")); cleanup_dirs.append(d16b)
+            db16 = build_stand(d16b)
+            code16, output16 = run_remove(db16, "bridge_reviewed", "message_id < 3", [], "COORD",
+                                          "испытание поломки Н2", "--apply", script=weak16)
+            after16 = table_counts(db16, ["bridge_reviewed", "audit_log"])
+            ok &= case("16 ОБРАТНЫЙ ХОД: без проверки значения текстом случай 13 ПРОВАЛИВАЕТСЯ —"
+                       " строки сняты",
+                       after16["bridge_reviewed"] == 5,
+                       f"код {code16}; стало {after16}", differ=True)
+
+        # ── 17: ОБРАТНЫЙ ХОД — проверка «все строки» выключена → случай 14 проваливается ──
+        d17 = pathlib.Path(tempfile.mkdtemp(prefix="bite-rr-17-")); cleanup_dirs.append(d17)
+        weak17 = weaken_remove_tool(d17, "    if len(old_rows) == total and not allow_all_rows:",
+                                    "    if False:  # П-Н2: проверка «все строки» выключена")
+        if weak17 is None:
+            ok &= case("17 ОБРАТНЫЙ ХОД: без проверки «все строки»", False,
+                       "⛔ НЕ ЗАПУСТИЛАСЬ: якорь allow_all_rows не найден — remove-rows.py менялся,"
+                       " правь приёмку")
+        else:
+            d17b = pathlib.Path(tempfile.mkdtemp(prefix="bite-rr-17b-")); cleanup_dirs.append(d17b)
+            db17 = build_stand(d17b)
+            code17, output17 = run_remove(db17, "bridge_reviewed", "message_id >= ?", [0], "COORD",
+                                          "испытание поломки Н2", "--apply", script=weak17)
+            after17 = table_counts(db17, ["bridge_reviewed", "audit_log"])
+            ok &= case("17 ОБРАТНЫЙ ХОД: без проверки «все строки» случай 14 ПРОВАЛИВАЕТСЯ —"
+                       " снята вся таблица",
+                       after17["bridge_reviewed"] == 0,
+                       f"код {code17}; стало {after17}", differ=True)
+
+        # ── 18: журнал называет БОЛЬШЕ, чем убыло — тревога своими словами ──
+        d18, db18, out18 = fresh_stand("bite-rr-18-")
+        cleanup_dirs.append(d18)
+        c18r, o18r = run_remove(db18, "bridge_reviewed", "message_id < ?", [7], "COORD",
+                                "слово владельца — снять семь", "--apply")
+        must(c18r, o18r, "снятие для случая 18")
+        con18 = sqlite3.connect(db18)
+        con18.executemany("INSERT INTO bridge_reviewed (message_id, reviewed_by) VALUES (?, ?)",
+                          [(100 + i, "COORD") for i in range(4)])   # четыре вернули обратно
+        con18.commit(); con18.close()
+        code18, output18 = run_backup(db18, out18, "--apply")
+        ok &= case("18 журнал называет БОЛЬШЕ, чем убыло (сняли 7, вернули 4) → тревога"
+                   " «журнал называет больше», не «часть снята без следа»",
+                   code18 == 1 and "bridge_reviewed −3" in output18
+                   and "журнал называет больше" in output18 and "без следа" not in output18,
+                   f"код {code18}", differ=True)
+
+        # ── 19: ОБРАТНЫЙ ХОД — ветка «называет больше» выключена → случай 18 проваливается ──
+        d19 = pathlib.Path(tempfile.mkdtemp(prefix="bite-rr-19-")); cleanup_dirs.append(d19)
+        weak19 = weaken(d19, "                elif named and named > (was - now):",
+                        "                elif False:  # П-Н1: ветка «называет больше» выключена")
+        if weak19 is None:
+            ok &= case("19 ОБРАТНЫЙ ХОД: без ветки «называет больше»", False,
+                       "⛔ НЕ ЗАПУСТИЛАСЬ: якорь ветки не найден — backup-db.py менялся, правь приёмку")
+        else:
+            d19b, db19, out19 = fresh_stand("bite-rr-19b-")
+            cleanup_dirs.append(d19b)
+            c19r, o19r = run_remove(db19, "bridge_reviewed", "message_id < ?", [7], "COORD",
+                                    "слово владельца — снять семь", "--apply")
+            must(c19r, o19r, "снятие для случая 19")
+            con19 = sqlite3.connect(db19)
+            con19.executemany("INSERT INTO bridge_reviewed (message_id, reviewed_by) VALUES (?, ?)",
+                              [(100 + i, "COORD") for i in range(4)])
+            con19.commit(); con19.close()
+            code19, output19 = run_backup(db19, out19, "--apply", script=weak19)
+            ok &= case("19 ОБРАТНЫЙ ХОД: без ветки «называет больше» случай 18 ПРОВАЛИВАЕТСЯ —"
+                       " снова «часть снята без следа»",
+                       "журнал называет больше" not in output19 and "без следа" in output19,
+                       f"код {code19}", differ=True)
     finally:
         for d in cleanup_dirs:
             shutil.rmtree(d, ignore_errors=True)
