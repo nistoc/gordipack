@@ -29,6 +29,11 @@ r"""ПРИЁМКА гарда убыли дампа в backup-db.py — карт
 ⛔ Живой базы и живого дампа не касается: каждый случай строит СВОЙ стенд.
 ⚠️ В стенде НИКАКИХ RANDOMBLOB: случайные байты в TEXT-колонке валят iterdump
    битым UTF-8 — приёмка краснела бы на смерти СТЕНДА, а не на предмете.
+
+🩸 КАРТОЧКА #610 (2026-09-14): имена в backup-db.py переведены на английский
+(тревоги→alerts, прежние_счётчики→previous_counts и т. п.) — тем же ходом переведены
+и здесь. Смысл случаев ⑨/⑩ не изменился, изменился только якорь-строка (она ищет
+английское имя переменной в тексте гарда, а не русское).
 """
 from __future__ import annotations
 
@@ -42,8 +47,8 @@ import tempfile
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
 
-СКРИПТЫ = mezo_paths.container_root(__file__) / ".mezosync" / "scripts"
-ГАРД = СКРИПТЫ / "backup-db.py"
+SCRIPTS = mezo_paths.container_root(__file__) / ".mezosync" / "scripts"
+TOOL = SCRIPTS / "backup-db.py"
 CASES = DIFFER = 0
 
 
@@ -56,7 +61,7 @@ def case(title, verdict, detail, differ=False):
     return verdict
 
 
-def стенд(d: pathlib.Path) -> pathlib.Path:
+def build_stand(d: pathlib.Path) -> pathlib.Path:
     """Мини-база с теми таблицами, чья убыль различается по-разному."""
     db = d / "stand.db"
     con = sqlite3.connect(db)
@@ -78,22 +83,22 @@ def стенд(d: pathlib.Path) -> pathlib.Path:
     return db
 
 
-def прогон(db, out, *флаги, скрипт=ГАРД):
-    r = subprocess.run([sys.executable, str(скрипт), "--db", str(db),
-                        "--out", str(out), *флаги],
+def run_tool(db, out, *flags, script=TOOL):
+    r = subprocess.run([sys.executable, str(script), "--db", str(db),
+                        "--out", str(out), *flags],
                        capture_output=True, text=True, encoding="utf-8",
                        errors="replace", timeout=300)
     return r.returncode, (r.stdout or "") + (r.stderr or "")
 
 
-def свежий(pref: str):
+def fresh_stand(pref: str):
     """Каждому случаю — свой стенд со снятым базовым дампом."""
     d = pathlib.Path(tempfile.mkdtemp(prefix=pref))
-    db = стенд(d)
+    db = build_stand(d)
     out = d / "stand.sql"
-    код, вывод = прогон(db, out, "--apply")
-    if код != 0:
-        sys.exit(f"⛔ НЕ ЗАПУСТИЛАСЬ: базовый дамп стенда не снялся (код {код})\n{вывод}")
+    code, output = run_tool(db, out, "--apply")
+    if code != 0:
+        sys.exit(f"⛔ НЕ ЗАПУСТИЛАСЬ: базовый дамп стенда не снялся (код {code})\n{output}")
     return d, db, out
 
 
@@ -105,147 +110,147 @@ def sql(db, *stmts):
     con.close()
 
 
-def ослабленная(d: pathlib.Path, якорь: str, замена: str) -> pathlib.Path:
+def weaken(d: pathlib.Path, anchor: str, replacement: str) -> pathlib.Path:
     """Копия гарда с ослабленной веткой; None-эквивалент — пустой путь при ненайденном якоре."""
-    цел = ГАРД.read_text(encoding="utf-8")
-    поломка = цел.replace(якорь, замена, 1)
-    if поломка == цел:
+    original = TOOL.read_text(encoding="utf-8")
+    broken = original.replace(anchor, replacement, 1)
+    if broken == original:
         return None
-    слаб = d / "прежний.py"
-    слаб.write_text(поломка, encoding="utf-8")
-    shutil.copy(СКРИПТЫ / "mezo_paths.py", d / "mezo_paths.py")
-    return слаб
+    weak_path = d / "prior.py"
+    weak_path.write_text(broken, encoding="utf-8")
+    shutil.copy(SCRIPTS / "mezo_paths.py", d / "mezo_paths.py")
+    return weak_path
 
 
 def main() -> int:
     ok = True
-    мусор = []
+    cleanup_dirs = []
     try:
         # ① КОНТРОЛЬ: рост — молчит.
-        d, db, out = свежий("bite-shrink-1-")
-        мусор.append(d)
+        d, db, out = fresh_stand("bite-shrink-1-")
+        cleanup_dirs.append(d)
         sql(db, "INSERT INTO messages (body) VALUES ('новая записка без случайных байт')")
-        код, вывод = прогон(db, out)
+        code, output = run_tool(db, out)
         ok &= case("① КОНТРОЛЬ: база выросла — молчит, код 0",
-                   код == 0 and "🔴" not in вывод and "⚠" not in вывод,
-                   f"код {код}; красное здесь = вечно-красное, ему перестают верить",
+                   code == 0 and "🔴" not in output and "⚠" not in output,
+                   f"код {code}; красное здесь = вечно-красное, ему перестают верить",
                    differ=True)
 
         # ② ЗАКОННАЯ убыль — чистка истории. Прогон №1 критерия карточки.
-        d, db, out = свежий("bite-shrink-2-")
-        мусор.append(d)
+        d, db, out = fresh_stand("bite-shrink-2-")
+        cleanup_dirs.append(d)
         sql(db, "DELETE FROM phoenix_history WHERE id <= 8",
             "DELETE FROM read_batches WHERE id <= 3")
-        код, вывод = прогон(db, out)
+        code, output = run_tool(db, out)
         ok &= case("② законная убыль (чистка) → «ЗАКОННО», без тревоги, код 0",
-                   код == 0 and "ЗАКОННО" in вывод and "🔴" not in вывод
-                   and "phoenix_history" in вывод,
-                   f"код {код}; прежний гард кричал бы здесь на исправной работе —"
+                   code == 0 and "ЗАКОННО" in output and "🔴" not in output
+                   and "phoenix_history" in output,
+                   f"код {code}; прежний гард кричал бы здесь на исправной работе —"
                    " ради этого случая карточка и заведена", differ=True)
 
         # ③ ПОДОЗРИТЕЛЬНАЯ убыль — messages худеет без переезда. Прогон №2 критерия.
-        d3, db3, out3 = свежий("bite-shrink-3-")
-        мусор.append(d3)
+        d3, db3, out3 = fresh_stand("bite-shrink-3-")
+        cleanup_dirs.append(d3)
         sql(db3, "DELETE FROM messages WHERE id <= 10")
-        код3, вывод3 = прогон(db3, out3)
+        code3, output3 = run_tool(db3, out3)
         ok &= case("③ подозрительная убыль (messages без переезда) → 🔴, код 1",
-                   код3 == 1 and "🔴" in вывод3 and "messages −10" in вывод3
-                   and "НЕ объяснено" in вывод3,
-                   f"код {код3}; тревога называет таблицу и число, а не «что-то усохло»",
+                   code3 == 1 and "🔴" in output3 and "messages −10" in output3
+                   and "НЕ объяснено" in output3,
+                   f"код {code3}; тревога называет таблицу и число, а не «что-то усохло»",
                    differ=True)
 
         # ④ переезд messages → messages_history — закон.
-        d, db, out = свежий("bite-shrink-4-")
-        мусор.append(d)
+        d, db, out = fresh_stand("bite-shrink-4-")
+        cleanup_dirs.append(d)
         sql(db, "INSERT INTO messages_history (body) SELECT body FROM messages WHERE id <= 10",
             "DELETE FROM messages WHERE id <= 10")
-        код, вывод = прогон(db, out)
+        code, output = run_tool(db, out)
         ok &= case("④ переезд messages → messages_history — без тревоги, код 0",
-                   код == 0 and "🔴" not in вывод,
-                   f"код {код}; сумма сохранилась — split-history-table работает именно так",
+                   code == 0 and "🔴" not in output,
+                   f"код {code}; сумма сохранилась — split-history-table работает именно так",
                    differ=True)
 
         # ⑤ таблица исчезла — отдельное слово.
-        d, db, out = свежий("bite-shrink-5-")
-        мусор.append(d)
+        d, db, out = fresh_stand("bite-shrink-5-")
+        cleanup_dirs.append(d)
         sql(db, "DROP TABLE rules")
-        код, вывод = прогон(db, out)
+        code, output = run_tool(db, out)
         ok &= case("⑤ таблица ИСЧЕЗЛА → 🔴 отдельным словом, код 1",
-                   код == 1 and "ИСЧЕЗЛА" in вывод and "rules" in вывод,
-                   f"код {код}; «минус все строки» и «таблицы нет» — разные беды", differ=True)
+                   code == 1 and "ИСЧЕЗЛА" in output and "rules" in output,
+                   f"код {code}; «минус все строки» и «таблицы нет» — разные беды", differ=True)
 
         # ⑥ МАСКИРОВКА РОСТОМ: строки пропали, байты выросли — всё равно тревога.
-        d, db, out = свежий("bite-shrink-6-")
-        мусор.append(d)
+        d, db, out = fresh_stand("bite-shrink-6-")
+        cleanup_dirs.append(d)
         sql(db, "DELETE FROM messages WHERE id <= 10",
             "INSERT INTO rules VALUES ('жир', '" + "Ж" * 20000 + "')")
-        код, вывод = прогон(db, out)
+        code, output = run_tool(db, out)
         ok &= case("⑥ строки пропали, а дамп в байтах ВЫРОС → всё равно 🔴, код 1",
-                   код == 1 and "messages −10" in вывод and "+" in вывод,
-                   f"код {код}; байтовый гард здесь молчал — рост соседа маскировал потерю."
+                   code == 1 and "messages −10" in output and "+" in output,
+                   f"код {code}; байтовый гард здесь молчал — рост соседа маскировал потерю."
                    " Сверка строк видит", differ=True)
 
         # ⑦ убыль в ОБЫЧНОЙ таблице — общая ветка тревоги, своим случаем.
-        d7, db7, out7 = свежий("bite-shrink-7-")
-        мусор.append(d7)
+        d7, db7, out7 = fresh_stand("bite-shrink-7-")
+        cleanup_dirs.append(d7)
         sql(db7, "DELETE FROM rules WHERE k IN ('ключ0','ключ1')")
-        код7, вывод7 = прогон(db7, out7)
+        code7, output7 = run_tool(db7, out7)
         ok &= case("⑦ убыль в обычной таблице (rules) → 🔴 «удалять никто не должен», код 1",
-                   код7 == 1 and "rules −2" in вывод7 and "никто не должен" in вывод7,
-                   f"код {код7}; у этой ветки не было своего случая — обратный ход ⑩"
+                   code7 == 1 and "rules −2" in output7 and "никто не должен" in output7,
+                   f"код {code7}; у этой ветки не было своего случая — обратный ход ⑩"
                    " без него мерил бы пустоту", differ=True)
 
         # ⑧ шапки нет — «сверить нечем», не молчание и не тревога.
-        d, db, out = свежий("bite-shrink-8-")
-        мусор.append(d)
-        текст = out.read_text(encoding="utf-8").splitlines()
-        out.write_text("\n".join(l for l in текст
+        d, db, out = fresh_stand("bite-shrink-8-")
+        cleanup_dirs.append(d)
+        text = out.read_text(encoding="utf-8").splitlines()
+        out.write_text("\n".join(l for l in text
                                  if not l.startswith("-- строк по таблицам:")) + "\n",
                        encoding="utf-8", newline="\n")
         sql(db, "DELETE FROM phoenix_history WHERE id <= 8")
-        код, вывод = прогон(db, out)
+        code, output = run_tool(db, out)
         ok &= case("⑧ шапки счётчиков нет → ⚠ «сверить нечем», код 0",
-                   код == 0 and "нечем" in вывод,
-                   f"код {код}; отказ мерить назван вслух — молчание читалось бы как"
+                   code == 0 and "нечем" in output,
+                   f"код {code}; отказ мерить назван вслух — молчание читалось бы как"
                    " «всё хорошо»", differ=True)
 
         # ⑨ ОБРАТНЫЙ ХОД ветки messages: ослаблена → случай ③ зеленеет у сломанной.
         d9 = pathlib.Path(tempfile.mkdtemp(prefix="bite-shrink-9-"))
-        мусор.append(d9)
-        слаб9 = ослабленная(
+        cleanup_dirs.append(d9)
+        weak9 = weaken(
             d9,
-            'тревоги.append(f"messages −{was - now}, а messages_history выросла лишь"',
+            'alerts.append(f"messages −{was - now}, а messages_history выросла лишь"',
             '_ = (f"messages −{was - now}, а messages_history выросла лишь"')
-        if слаб9 is None:
+        if weak9 is None:
             ok &= case("⑨ ОБРАТНЫЙ ХОД ветки messages", False,
                        "⛔ НЕ ЗАПУСТИЛСЯ: якоря ветки messages в гарде нет — он менялся,"
                        " правь приёмку")
         else:
-            код9, _ = прогон(db3, out3, скрипт=слаб9)   # состояние случая ③
+            code9, _ = run_tool(db3, out3, script=weak9)   # состояние случая ③
             ok &= case("⑨ ОБРАТНЫЙ ХОД ветки messages — случай ③ ЗЕЛЕНЕЕТ у сломанной",
-                       код9 == 0 and код3 == 1,
-                       f"слабая {код9} против настоящей {код3} — ловит именно ветка"
+                       code9 == 0 and code3 == 1,
+                       f"слабая {code9} против настоящей {code3} — ловит именно ветка"
                        " messages, а не что-то рядом", differ=True)
 
         # ⑩ ОБРАТНЫЙ ХОД общей ветки: ослаблена → случай ⑦ зеленеет у сломанной.
         d10 = pathlib.Path(tempfile.mkdtemp(prefix="bite-shrink-10-"))
-        мусор.append(d10)
-        слаб10 = ослабленная(
+        cleanup_dirs.append(d10)
+        weak10 = weaken(
             d10,
-            'тревоги.append(f"{t} −{was - now} строк — удалять из неё никто не должен")',
+            'alerts.append(f"{t} −{was - now} строк — удалять из неё никто не должен")',
             'pass')
-        if слаб10 is None:
+        if weak10 is None:
             ok &= case("⑩ ОБРАТНЫЙ ХОД общей ветки", False,
                        "⛔ НЕ ЗАПУСТИЛСЯ: якоря общей ветки в гарде нет — он менялся,"
                        " правь приёмку")
         else:
-            код10, _ = прогон(db7, out7, скрипт=слаб10)   # состояние случая ⑦
+            code10, _ = run_tool(db7, out7, script=weak10)   # состояние случая ⑦
             ok &= case("⑩ ОБРАТНЫЙ ХОД общей ветки — случай ⑦ ЗЕЛЕНЕЕТ у сломанной",
-                       код10 == 0 and код7 == 1,
-                       f"слабая {код10} против настоящей {код7} — ловит именно общая"
+                       code10 == 0 and code7 == 1,
+                       f"слабая {code10} против настоящей {code7} — ловит именно общая"
                        " ветка", differ=True)
     finally:
-        for d in мусор:
+        for d in cleanup_dirs:
             shutil.rmtree(d, ignore_errors=True)
 
     print()

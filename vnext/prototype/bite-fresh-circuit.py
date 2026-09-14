@@ -18,6 +18,46 @@ r"""ПРИЁМКА СБОРКИ КОНТУРА ИЗ ШАБЛОНА (карточ
 
 ⛔ Живой базы не касается: собирает контур во временном каталоге.
 ⛔ Число случаев печатает прогон.
+
+СЛУЧАИ ⑪/⑫ (карточка #608, шаг 3, добавлены позже; ⑪б и «ВСЕ СЕМЬ» — возврат PROTO):
+контур, собранный С ДОМЕНОМ (data-platform) из пакета, несущего базу правил
+(rules/pack-rules.db), сразу получает опору правил пакета в meta.pack_rules_base и записывает
+meta.pack_rule_sets ("universal" + взятый домен), а rules-from-pack.py --summary в нём тут же
+показывает ВСЕ СЕМЬ чисел нулями — не три. Возврат PROTO: доменная сборка ловила «новых 3 ·
+опоры нет 3» вместо нуля, потому что инструмент сравнивал контур со ВСЕМИ наборами пакета
+(включая невзятый frontend-spa), а перекрытое доменом universal-описание читал как расхождение.
+Повторный возврат PROTO (то же число дня): строка «снято» разведена по сторонам — «снято в
+пакете» (removed) и «снято у вас» (retired-here — контур сам отключил правило); у
+свежесобранного контура нечему быть снятым ни с одной стороны, оттого чисел семь, а не шесть.
+Настоящий клон пакета сейчас без базы правил (её кладёт PROTO отдельно) — для своей проверки
+случай строит ВРЕМЕННУЮ копию пакета и собирает её же строителем базу через --out (клон пакета
+при этом НЕ открывается на запись ни разу). Если строитель базы сейчас не работает (его
+дорабатывают) — случай печатает «неприменим: в пакете нет базы правил» и не красит остальную
+приёмку. Делается ПОСЛЕДНИМ.
+
+СЛУЧАИ ⑬/⑭ (карточка #608, повторная приёмка Н1, возврат PROTO 2026-09-14 10:08 UTC):
+⑬ — init-group.py с ОТНОСИТЕЛЬНЫМ --path (процесс запущен с рабочим каталогом-РОДИТЕЛЕМ
+стенда, --path — только имя подкаталога) всё равно записывает опору правил пакета и
+meta.pack_rule_sets, а последней строкой идёт «🎉», а не «готово» поверх непойманного отказа.
+Прежде относительный путь уезжал В rules-from-pack.py НОВОГО (ещё не собранного) контура как
+есть, а тот резолвит относительный --db от СВОЕГО корня — путь удваивался, опора не находила
+базу. Поломка ⑬ — копия init-group.py БЕЗ резолва --path — живёт РЯДОМ (своим именем файла)
+внутри копии пакета, а не поверх него: случаю ⑪ ниже ещё нужен целый init-group.py.
+⑭ — если за прогон был хоть один ⛔ (соответствующий шаг — не fatal, сборка не падает),
+голосом итога идёт «⚠️ … с отказами», а не «🎉»; код выхода сборки при этом НЕ меняется.
+Отказ наводится порчей КОПИИ export-rules.py (зеркало правил, шаг 7в) во ВТОРОЙ временной
+копии пакета, отдельной от той, что несёт ⑪/⑫/⑬ (своя копия, чтобы порча зеркала не
+красила чужие случаи). Поломка ⑭ — условие «🎉 только без ⛔» отключено в копии
+init-group.py, тоже своим именем файла рядом.
+
+СЛУЧАЙ ⑮ (карточка #608, доводка по Н1, возврат PROTO 2026-09-14 10:41 UTC): отказ
+rules-from-pack.py КОДОМ на шаге опоры (7б″) раньше шёл МИМО soft_failures — печаталась
+строка «⚠️ опора правил пакета: … отказал», а голосом итога всё равно ехала «🎉»; вдобавок,
+пока голос итога чинили первый раз, ветка «⚠️ … с отказами» обрывала функцию сразу за собой
+и роль теряла подсказки «ПРОВЕРЬ ЗАПУСКОМ»/«следующий шаг» — эта доводка проверяет ОБЕ
+починки разом: голос итога честен, а подсказки печатаются при любом исходе. ТРЕТЬЯ временная
+копия пакета — export-rules.py в ней цел, портится только rules-from-pack.py. Поломка ⑮ —
+soft_failures.append у отказа опоры снят обратно.
 """
 import sys
 from pathlib import Path
@@ -26,6 +66,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_paths  # пути машины ВЫВОДЯТСЯ, не впечатаны (карточка #208)
 import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
 
+import json
 import os
 import shutil
 import subprocess
@@ -55,6 +96,45 @@ def case(title, verdict, detail, differ=False):
     print(f"{'✅' if verdict else '🔴'} {title}")
     print(f"   {detail}")
     return verdict
+
+
+def build_pack_copy_with_rules_db(dest: pathlib.Path) -> tuple[bool, str]:
+    """Временная копия пакета (карточка #608, шаг 3) — С БАЗОЙ ПРАВИЛ, даже когда её нет
+    в самом клоне (сейчас нет — её кладёт PROTO отдельным ходом; см. отчёт задачи).
+
+    ЗАЧЕМ КОПИЯ, А НЕ ПРЯМО PACK: писать rules/pack-rules.db прямо в клон запрещено
+    («rules/pack-rules.db в клоне не создавать») — сборщик пишет ТОЛЬКО в dest (--out),
+    а в PACK ходит ИСКЛЮЧИТЕЛЬНО на чтение (git log/show для истории правил). rules-from-
+    pack.py и init-group.py в самом PACK — ещё БЕЗ переезда шага 3 (эта поставка его
+    отдельно не переносит, см. «ЧЕГО НЕ ДЕЛАТЬ» задачи) — поэтому копия получает СВЕЖИЕ
+    копии обоих ОТСЮДА (mezo_paths.live_scripts()), иначе она проверяла бы вчерашнее.
+
+    Возвращает (True, "") при успехе; (False, причина) — сборщик базы правил (в разработке
+    параллельно, карточка #608) не смог собрать — это НЕ повод чинить его отсюда.
+    """
+    builder = PACK / "vnext" / "tools" / "build-pack-rules-db.py"
+    if not builder.exists():
+        return False, f"в пакете нет сборщика базы правил ({builder})"
+    for name in ("rules", "schema", "scripts", "templates", "vnext"):
+        src = PACK / name
+        if src.is_dir():
+            shutil.copytree(src, dest / name,
+                            ignore=shutil.ignore_patterns("__pycache__", "pack-rules.db"))
+    if not (dest / "scripts").is_dir():
+        return False, "у пакета нет scripts/ — копировать нечего"
+    live_scripts = mezo_paths.live_scripts()
+    for tool_name in ("rules-from-pack.py", "init-group.py"):
+        live_tool = live_scripts / tool_name
+        if live_tool.exists():
+            shutil.copy2(live_tool, dest / "scripts" / tool_name)
+    r = subprocess.run(
+        [sys.executable, str(builder), "--pack-root", str(PACK), "--out",
+         str(dest / "rules" / "pack-rules.db")],
+        capture_output=True, text=True, encoding="utf-8", timeout=300)
+    if r.returncode != 0:
+        reason = ((r.stderr or "") + (r.stdout or "")).strip().splitlines()
+        return False, (reason[-1] if reason else f"код {r.returncode}, без сообщения")
+    return True, ""
 
 
 def main() -> int:
@@ -169,6 +249,312 @@ def main() -> int:
                    "НЕПРИМЕНИМА" in rmout,
                    "строка есть — запись судилась и назвала исход; нет строки = пропуск"
                    " неотличим от проверки", differ=True)
+
+        # ═══ НОВЫЙ СЛУЧАЙ (карточка #608, шаг 3): у контура, собранного С НУЛЯ, опора
+        # правил пакета есть СРАЗУ, без отдельной команды. Сборка берёт ПАКЕТ (не живой
+        # контур), а у настоящего клона пакета сейчас НЕТ rules/pack-rules.db (её положит
+        # PROTO отдельным ходом) — для СВОЕЙ проверки строится ВРЕМЕННАЯ копия пакета с
+        # базой, собранной её строителем (build-pack-rules-db.py, --out ТОЛЬКО в копию —
+        # клон пакета на запись не открывается ни разу). ДЕЛАЕТСЯ ПОСЛЕДНИМ: если строитель
+        # базы (в разработке параллельно) сейчас не работает — случай говорит «неприменим:
+        # в пакете нет базы правил» и НЕ красит остальную приёмку (не участвует в счёте).
+        pack_copy = tmp / "pack-with-rules-db"
+        pack_copy.mkdir()
+        built, why = build_pack_copy_with_rules_db(pack_copy)
+        if not built:
+            print(f"➖ неприменим: в пакете нет базы правил ({why}) — карточка #608 шаг 3 "
+                  f"этим прогоном не проверена, остальные случаи этой приёмки не задеты")
+        else:
+            # ⚖️ ВОЗВРАТ PROTO: сборка идёт С ДОМЕНОМ (data-platform) — именно на доменной
+            # сборке нашёлся шум («новых 3 · опоры нет 3» вместо нуля), потому что инструмент
+            # сравнивал контур со ВСЕМИ наборами пакета, а контур взял только часть.
+            mez2 = tmp / ".mezosync-608"
+            r11 = subprocess.run(
+                [sys.executable, str(pack_copy / "scripts" / "init-group.py"),
+                 "--name", "bite608", "--path", str(mez2), "--domain", "data-platform",
+                 "--roles", "coord"],
+                capture_output=True, text=True, encoding="utf-8", timeout=300, env=env)
+            out11 = (r11.stdout or "") + (r11.stderr or "")
+            con608 = sqlite3.connect(str(mez2 / "mezosync.db")) if (mez2 / "mezosync.db").exists() \
+                else None
+            base_map, rule_sets_recorded = {}, None
+            if con608 is not None:
+                row = con608.execute(
+                    "SELECT value FROM meta WHERE key='pack_rules_base'").fetchone()
+                row_sets = con608.execute(
+                    "SELECT value FROM meta WHERE key='pack_rule_sets'").fetchone()
+                con608.close()
+                base_map = json.loads(row[0]) if row and row[0] else {}
+                rule_sets_recorded = json.loads(row_sets[0]) if row_sets and row_sets[0] else None
+            ok &= case("⑪а у контура, собранного с нуля из пакета с базой правил, опора уже "
+                      "записана в meta.pack_rules_base",
+                      r11.returncode == 0 and len(base_map) > 0,
+                      f"код сборки {r11.returncode}; записей опоры {len(base_map)} (ждём > 0)"
+                      + ("" if r11.returncode == 0 else f"\n   {out11[-400:]}"), differ=True)
+            ok &= case("⑪б контур записал meta.pack_rule_sets — universal И взятый домен",
+                      rule_sets_recorded == ["universal", "data-platform"],
+                      f"записано: {rule_sets_recorded} (ждём ['universal', 'data-platform'])",
+                      differ=True)
+
+            r12 = subprocess.run(
+                [sys.executable, str(mez2 / "scripts" / "rules-from-pack.py"),
+                 "--db", str(mez2 / "mezosync.db"), "--source", str(pack_copy), "--summary"],
+                capture_output=True, text=True, encoding="utf-8", timeout=120, env=env)
+            out12 = (r12.stdout or "") + (r12.stderr or "")
+            # ⚖️ ВОЗВРАТ PROTO: ждём ВСЕ СЕМЬ чисел строки нулями, а не три — «новых» и
+            # «опоры нет» тоже обязаны быть 0 (до правки на доменной сборке было «новых 3 ·
+            # опоры нет 3»: чужой набор пакета и перекрытое universal-описание давали шум).
+            # ⚖️ ПОВТОРНЫЙ ВОЗВРАТ PROTO: «снято» разведено по сторонам — «снято в пакете» и
+            # «снято у вас» (retired-here: контур сам отключил правило) — оба тоже 0 у
+            # свежесобранного контура, там нечему быть снятым ни с чьей стороны.
+            ok &= case("⑫ rules-from-pack.py --summary в новом контуре: с пакетом, от "
+                      "которого контур только что пошёл, расхождений нет — ВСЕ СЕМЬ чисел 0",
+                      r12.returncode == 0 and "новых 0" in out12 and "изменено в пакете 0" in out12
+                      and "уточнено у вас 0" in out12 and "с обеих сторон 0" in out12
+                      and "опоры нет 0" in out12 and "снято в пакете 0" in out12
+                      and "снято у вас 0" in out12,
+                      f"код {r12.returncode}; строка: {out12.strip()[:220]}", differ=True)
+
+            # ═══ НОВЫЙ СЛУЧАЙ ⑬ (карточка #608, повторная приёмка Н1, возврат PROTO
+            # 2026-09-14 10:08 UTC): init-group.py с ОТНОСИТЕЛЬНЫМ --path — процесс запущен
+            # с рабочим каталогом-РОДИТЕЛЕМ стенда (cwd), а --path — только имя подкаталога,
+            # а не полный путь. Прежде относительный путь уезжал В rules-from-pack.py НОВОГО
+            # (ещё не собранного) контура как есть, а тот резолвит относительный --db от
+            # СВОЕГО корня — путь удваивался (…\m2\.mezosync\m2\.mezosync\mezosync.db), опора
+            # не находила базу. Ждём: опора записана, meta.pack_rule_sets есть, последняя
+            # строка — «🎉», а во всём выводе НЕТ ни одного ⛔.
+            n1_parent = tmp / "n1-rel-parent"
+            n1_parent.mkdir()
+            n1_rel_name = ".mezosync-608-rel"
+            r14 = subprocess.run(
+                [sys.executable, str(pack_copy / "scripts" / "init-group.py"),
+                 "--name", "bite608rel", "--path", n1_rel_name, "--domain", "data-platform",
+                 "--roles", "coord"],
+                capture_output=True, text=True, encoding="utf-8", timeout=300, env=env,
+                cwd=str(n1_parent))
+            out14 = (r14.stdout or "") + (r14.stderr or "")
+            mez4 = n1_parent / n1_rel_name
+            base_map4, rule_sets4 = {}, None
+            if (mez4 / "mezosync.db").exists():
+                con4 = sqlite3.connect(str(mez4 / "mezosync.db"))
+                row4 = con4.execute(
+                    "SELECT value FROM meta WHERE key='pack_rules_base'").fetchone()
+                row4s = con4.execute(
+                    "SELECT value FROM meta WHERE key='pack_rule_sets'").fetchone()
+                con4.close()
+                base_map4 = json.loads(row4[0]) if row4 and row4[0] else {}
+                rule_sets4 = json.loads(row4s[0]) if row4s and row4s[0] else None
+            ok &= case("⑬а init-group.py с ОТНОСИТЕЛЬНЫМ --path (запуск из каталога-родителя "
+                      "стенда) всё равно записывает опору правил пакета и meta.pack_rule_sets",
+                      r14.returncode == 0 and len(base_map4) > 0
+                      and rule_sets4 == ["universal", "data-platform"],
+                      f"код {r14.returncode}; опоры {len(base_map4)} (ждём > 0); "
+                      f"pack_rule_sets {rule_sets4} (ждём ['universal', 'data-platform'])"
+                      + ("" if r14.returncode == 0 else f"\n   {out14[-400:]}"), differ=True)
+            # ⚖️ «Последняя строка» у PROTO — про ИСХОД (какой из двух взаимоисключающих
+            # голосов, «🎉» или «⚠️ … с отказами», прозвучал последним про итог сборки), а
+            # не про физически последний байт stdout: «🎉» сама не последняя строка вывода —
+            # следом идут подсказки «⚖️ ПРОВЕРЬ ЗАПУСКОМ»/«Следующий шаг» (та же схема, что
+            # проверяет случай ⑭ ниже для ветки с отказом, где после «⚠️ …» уже ничего нет,
+            # потому что она заканчивается return). Здесь ⛔ нет ни одного — значит, голос
+            # «🎉» обязан прозвучать, а «⚠️ … с отказами» — нет.
+            ok &= case("⑬б при относительном --path и без ⛔ голос про исход — «🎉», а не "
+                      "«⚠️ … с отказами» поверх непойманного отказа",
+                      "⛔" not in out14 and "🎉 Группа" in out14
+                      and "собрана с отказами" not in out14,
+                      f"⛔ в выводе: {'⛔' in out14}; «🎉 Группа» в выводе: "
+                      f"{'🎉 Группа' in out14}; «с отказами» в выводе: "
+                      f"{'собрана с отказами' in out14}", differ=True)
+
+            # ═══ НОВЫЙ СЛУЧАЙ ⑭ (карточка #608, повторная приёмка Н1, п.2 возврата PROTO):
+            # если за прогон был хоть один ⛔ (сейчас единственный НЕ fatal такой источник —
+            # незакончившееся зеркало правил, шаг 7в), последней строкой идёт честное «⚠️ …
+            # с отказами», а не «🎉» поверх него; код выхода НЕ меняется (сборка не падает).
+            # Отказ наводится порчей КОПИИ export-rules.py — во ВТОРОЙ временной копии пакета
+            # (своя копия, чтобы порча зеркала не задела случаи ⑪/⑫/⑬ выше).
+            pack_soft = tmp / "pack-softfail"
+            shutil.copytree(pack_copy, pack_soft, ignore=shutil.ignore_patterns("__pycache__"))
+            (pack_soft / "scripts" / "export-rules.py").write_text(
+                "import sys\n"
+                "sys.exit('⛔ ПОЛОМКА (карточка #608, повторная приёмка Н1, п.2): "
+                "export-rules.py нарочно отказывает — проверяем условие «🎉»/«с отказами»')\n",
+                encoding="utf-8")
+            mez6 = tmp / ".mezosync-608-soft"
+            r16 = subprocess.run(
+                [sys.executable, str(pack_soft / "scripts" / "init-group.py"),
+                 "--name", "bite608soft", "--path", str(mez6), "--roles", "coord"],
+                capture_output=True, text=True, encoding="utf-8", timeout=300, env=env)
+            out16 = (r16.stdout or "") + (r16.stderr or "")
+            # ВОЗВРАТ PROTO (карточка #608, доводка по Н1, 10:41 UTC): голос итога — «⚠️ …
+            # с отказами» вместо «🎉» — но подсказки после него («ПРОВЕРЬ ЗАПУСКОМ» и
+            # далее) печатаются в ОБОИХ исходах, поэтому «⚠️ …» — не физически последняя
+            # строка вывода; меняется только ПЕРВАЯ строка итога.
+            ok &= case("⑭ отказ шага (зеркало правил) не меняет код сборки; голос итога — "
+                      "«⚠️ … с отказами», а не «🎉», но подсказки «ПРОВЕРЬ ЗАПУСКОМ» всё равно "
+                      "в выводе",
+                      r16.returncode == 0 and "⛔ Зеркало правил" in out16
+                      and "🎉" not in out16 and "собрана с отказами" in out16
+                      and "ПРОВЕРЬ ЗАПУСКОМ" in out16,
+                      f"код {r16.returncode} (ждём 0 — отказ не fatal); «с отказами» в выводе: "
+                      f"{'собрана с отказами' in out16}; подсказка в выводе: "
+                      f"{'ПРОВЕРЬ ЗАПУСКОМ' in out16}", differ=True)
+
+            # ── КОНТРОЛЬ ⑬ нарочной поломкой: копия init-group.py БЕЗ .resolve() у --path —
+            # тот самый прежний код, что и дал баг Н1. Живёт РЯДОМ своим именем файла внутри
+            # pack_copy/scripts/ (не поверх init-group.py — он ещё целиком нужен случаю ⑪
+            # ниже), чтобы SCRIPT_DIR/REPO_ROOT остались верны и падение было по СВОЕЙ причине
+            # (удвоенный путь), а не по «не нашёл соседний schema/».
+            n1_src = (pack_copy / "scripts" / "init-group.py").read_text(encoding="utf-8")
+            n1_anchor = "Path(args.path).resolve()"
+            if n1_src.count(n1_anchor) != 1:
+                sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: строка резолва --path не найдена дословно в "
+                         "init-group.py — испытуемое изменилось, поломка ⑬ бьёт мимо")
+            n1_poisoned = pack_copy / "scripts" / "init-group-no-resolve.py"
+            n1_poisoned.write_text(n1_src.replace(n1_anchor, "Path(args.path)"),
+                                   encoding="utf-8")
+            n1_parent2 = tmp / "n1-rel-parent-poison"
+            n1_parent2.mkdir()
+            n1_rel_name2 = ".mezosync-608-rel-poison"
+            r15 = subprocess.run(
+                [sys.executable, str(n1_poisoned), "--name", "bite608relpoison", "--path",
+                 n1_rel_name2, "--domain", "data-platform", "--roles", "coord"],
+                capture_output=True, text=True, encoding="utf-8", timeout=300, env=env,
+                cwd=str(n1_parent2))
+            mez5 = n1_parent2 / n1_rel_name2
+            base_map5 = {}
+            if (mez5 / "mezosync.db").exists():
+                con5 = sqlite3.connect(str(mez5 / "mezosync.db"))
+                row5 = con5.execute(
+                    "SELECT value FROM meta WHERE key='pack_rules_base'").fetchone()
+                con5.close()
+                base_map5 = json.loads(row5[0]) if row5 and row5[0] else {}
+            ok &= case("⑬ ПОЛОМКА (init-group.py без .resolve() у --path) КРАСИТ случай ⑬ — "
+                      "опора не записана при относительном --path",
+                      len(base_map5) == 0,
+                      f"записей опоры {len(base_map5)} (ждём 0 — воспроизведён баг Н1)",
+                      differ=True)
+
+            # ── КОНТРОЛЬ ⑭ нарочной поломкой: условие «🎉 только без ⛔» отключено обратно
+            # (условие всегда ложно) — «🎉» обязана появиться ДАЖЕ поверх непустого
+            # soft_failures. Копия init-group.py живёт своим именем файла РЯДОМ внутри
+            # pack_soft/scripts/ (export-rules.py в этой копии уже испорчен выше).
+            gate_src = (pack_soft / "scripts" / "init-group.py").read_text(encoding="utf-8")
+            gate_anchor = "if soft_failures:"
+            if gate_src.count(gate_anchor) != 1:
+                sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: строка условия «if soft_failures:» не найдена "
+                         "дословно в init-group.py — испытуемое изменилось, поломка ⑭ бьёт мимо")
+            gate_poisoned = pack_soft / "scripts" / "init-group-no-gate.py"
+            gate_poisoned.write_text(gate_src.replace(gate_anchor, "if False:"),
+                                     encoding="utf-8")
+            mez7 = tmp / ".mezosync-608-soft-poison"
+            r17 = subprocess.run(
+                [sys.executable, str(gate_poisoned), "--name", "bite608softpoison", "--path",
+                 str(mez7), "--roles", "coord"],
+                capture_output=True, text=True, encoding="utf-8", timeout=300, env=env)
+            out17 = (r17.stdout or "") + (r17.stderr or "")
+            ok &= case("⑭ ПОЛОМКА (условие «🎉 только без ⛔» отключено) КРАСИТ случай ⑭ — "
+                      "«🎉» снова едет поверх непойманного отказа",
+                      "🎉" in out17,
+                      f"«🎉» в выводе поломанной версии: {'🎉' in out17} (ждём True — "
+                      f"поломка обязана вернуть старый дефект)", differ=True)
+
+            # ═══ НОВЫЙ СЛУЧАЙ ⑮ (карточка #608, доводка по Н1, возврат PROTO 10:41 UTC):
+            # rules-from-pack.py НОВОГО контура отказывает КОДОМ на шаге 7б″ (опора правил
+            # пакета) — раньше это шло МИМО soft_failures: печаталось «⚠️ опора правил
+            # пакета: rules-from-pack.py отказал», а итог всё равно «🎉». Контур без опоры
+            # на КАЖДОМ следующем обновлении напишет «опоры нет» по всем правилам — это
+            # отказ шага. Своя ТРЕТЬЯ временная копия пакета (export-rules.py в ней цел —
+            # порча другого инструмента не должна путать причины).
+            pack_rfpfail = tmp / "pack-rfpfail"
+            shutil.copytree(pack_copy, pack_rfpfail, ignore=shutil.ignore_patterns("__pycache__"))
+            (pack_rfpfail / "scripts" / "rules-from-pack.py").write_text(
+                "import sys\n"
+                "sys.exit('⛔ ПОЛОМКА (карточка #608, доводка по Н1): rules-from-pack.py "
+                "нарочно отказывает кодом — проверяем, что это тоже отказ шага')\n",
+                encoding="utf-8")
+            mez8 = tmp / ".mezosync-608-rfpfail"
+            r18 = subprocess.run(
+                [sys.executable, str(pack_rfpfail / "scripts" / "init-group.py"),
+                 "--name", "bite608rfpfail", "--path", str(mez8), "--roles", "coord"],
+                capture_output=True, text=True, encoding="utf-8", timeout=300, env=env)
+            out18 = (r18.stdout or "") + (r18.stderr or "")
+            ok &= case("⑮ rules-from-pack.py нового контура отказывает КОДОМ (шаг опоры) → "
+                      "голос итога — «⚠️ … с отказами», подсказка «ПРОВЕРЬ ЗАПУСКОМ» в "
+                      "выводе всё равно есть",
+                      r18.returncode == 0 and "🎉" not in out18
+                      and "собрана с отказами" in out18
+                      and "опора правил пакета не записана" in out18
+                      and "ПРОВЕРЬ ЗАПУСКОМ" in out18,
+                      f"код {r18.returncode} (ждём 0); «с отказами» в выводе: "
+                      f"{'собрана с отказами' in out18}; подсказка в выводе: "
+                      f"{'ПРОВЕРЬ ЗАПУСКОМ' in out18}", differ=True)
+
+            # ── КОНТРОЛЬ ⑮ нарочной поломкой: soft_failures.append у отказа опоры снят —
+            # «🎉» снова едет поверх отказавшего шага (тот самый прежний дефект доводки).
+            # Строка-цель — из ДВУХ физических строк (f-string перенесён): ищем ПЕРВУЮ по
+            # уникальной подстроке, ВТОРУЮ — как ближайшую ниже, несущую закрывающую скобку
+            # вызова append(...), и убираем обе разом одним pass — тот же приём, что у ㊼.
+            na_lines = (pack_rfpfail / "scripts" / "init-group.py").read_text(
+                encoding="utf-8").splitlines(keepends=True)
+            na_idx = [i for i, ln in enumerate(na_lines)
+                     if "опора правил пакета не записана — rules-from-pack.py" in ln]
+            if len(na_idx) != 1:
+                sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: строка soft_failures.append (опора) не найдена "
+                         "дословно в init-group.py — испытуемое изменилось, поломка ⑮ бьёт мимо")
+            na_i = na_idx[0]
+            na_j = na_i
+            while ")" not in na_lines[na_j]:
+                na_j += 1
+            na_indent = na_lines[na_i][:len(na_lines[na_i]) - len(na_lines[na_i].lstrip())]
+            na_lines = (na_lines[:na_i]
+                       + [na_indent + "pass  # ПОЛОМКА: soft_failures.append(опора) снят\n"]
+                       + na_lines[na_j + 1:])
+            no_append_path = pack_rfpfail / "scripts" / "init-group-no-append.py"
+            no_append_path.write_text("".join(na_lines), encoding="utf-8")
+            mez9 = tmp / ".mezosync-608-rfpfail-poison"
+            r19 = subprocess.run(
+                [sys.executable, str(no_append_path), "--name", "bite608rfpfailpoison",
+                 "--path", str(mez9), "--roles", "coord"],
+                capture_output=True, text=True, encoding="utf-8", timeout=300, env=env)
+            out19 = (r19.stdout or "") + (r19.stderr or "")
+            ok &= case("⑮ ПОЛОМКА (append у отказа опоры снят) КРАСИТ ровно ⑮ — «🎉» снова "
+                      "едет поверх отказавшего шага",
+                      "🎉 Группа" in out19,
+                      f"«🎉 Группа» в выводе поломанной версии: {'🎉 Группа' in out19} (ждём "
+                      f"True — поломка обязана вернуть старый дефект)", differ=True)
+
+            # ── КОНТРОЛЬ нарочной поломкой (требование задания, п2): init-group.py КОПИИ
+            # пакета перестаёт звать --record-base (зовёт --summary вместо него — тоже
+            # настоящую команду, чтобы отказ инструмента не спутался с отказом поломки).
+            # Случай ⑪ обязан провалиться ИМЕННО по этой причине: опоры не будет, а не
+            # сборка упадёт. Патч — в КОПИИ init-group.py внутри уже готовой pack_copy;
+            # ни .mezosync/scripts/init-group.py, ни клон пакета не трогаются.
+            poisoned_init = pack_copy / "scripts" / "init-group.py"
+            poison_src = poisoned_init.read_text(encoding="utf-8")
+            poison_anchor = '             "--record-base", "--apply", "--actor", "init-group.py"],\n'
+            if poison_src.count(poison_anchor) != 1:
+                sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: строка вызова --record-base не найдена дословно "
+                         "в init-group.py — испытуемое изменилось, поломка бьёт мимо")
+            poisoned_init.write_text(poison_src.replace(poison_anchor, '             "--summary"],\n'),
+                                     encoding="utf-8")
+
+            mez3 = tmp / ".mezosync-608-poison"
+            r13 = subprocess.run(
+                [sys.executable, str(poisoned_init), "--name", "bite608poison", "--path",
+                 str(mez3), "--roles", "coord"],
+                capture_output=True, text=True, encoding="utf-8", timeout=300, env=env)
+            base_map3 = {}
+            if (mez3 / "mezosync.db").exists():
+                con608p = sqlite3.connect(str(mez3 / "mezosync.db"))
+                row3 = con608p.execute(
+                    "SELECT value FROM meta WHERE key='pack_rules_base'").fetchone()
+                con608p.close()
+                base_map3 = json.loads(row3[0]) if row3 and row3[0] else {}
+            ok &= case("⑪ ПОЛОМКА (init-group больше не зовёт --record-base) КРАСИТ ровно "
+                      "случай ⑪ — своей причиной (опоры нет, а не сборка упала)",
+                      r13.returncode == 0 and len(base_map3) == 0,
+                      f"код сборки {r13.returncode} (ждём 0 — сборка не обязана упасть); "
+                      f"записей опоры {len(base_map3)} (ждём 0)", differ=True)
 
     finally:
         mezo_stand.release(tmp)  # уборка отложена до исхода прогона

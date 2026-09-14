@@ -27,8 +27,10 @@
 """
 import re
 import sqlite3
+from pathlib import Path
 
 CC_TAIL = re.compile(r"\bcc\s+@.*", re.S)      # список «в копию» — всё от «cc @» до конца
+OWN_NOTES_SHOWN = 10    # своих записок после записи памяти строками; остальные — одной командой
 
 
 def _addressed_personally(body: str, role: str) -> bool:
@@ -40,6 +42,26 @@ def _addressed_personally(body: str, role: str) -> bool:
     """
     head = CC_TAIL.sub(" ", body or "").split("\n")[0]
     return bool(re.search(rf"@{role}\b", head, re.I))
+
+
+def _own_notes_command(db_path, role: str, since: str, total: int) -> str:
+    """Команда, печатающая ВСЕ свои записки после записи памяти, — исполнимая как напечатана.
+
+    Путь к db-q.py — от расположения ЭТОГО модуля, а не голым именем: роль копирует строку
+    из того, что читает, и голое имя из чужого рабочего каталога не запустится. --db — только
+    если база не та, что рядом со скриптами (песочница, стенд): иначе команда молча читала бы
+    другую базу. --limit — ровно число записок: предел по умолчанию живёт в db-q.py, здесь его
+    не повторяем.
+    """
+    here = Path(__file__).resolve().parent
+    db = Path(str(db_path)).resolve()
+    cmd = f"python {(here / 'db-q.py').as_posix()}"
+    if db != (here.parent / "mezosync.db").resolve():
+        cmd += f" --db {db.as_posix()}"
+    who = role.replace("'", "''")
+    return (f'{cmd} --limit {total} "SELECT id, timestamp, replace(substr(body_md, 1, 160), '
+            f"char(10), ' ') FROM messages_all WHERE writer_role='{who}' AND timestamp > '{since}' "
+            f'ORDER BY id"')
 
 
 def machine_block(db_path, role: str) -> list:
@@ -74,6 +96,7 @@ def machine_block(db_path, role: str) -> list:
     except sqlite3.Error as e:                                        # noqa: BLE001
         out.append(f"⚠️ положение в ленте НЕ СОБРАНО ({e})")
 
+    last = None     # нужна и блоку «свои записки после записи памяти», даже если запрос упал
     # ── СВОЙ СЛЕД: последняя записка старше памяти ──────────────────────────
     try:
         last = conn.execute(
@@ -89,6 +112,40 @@ def machine_block(db_path, role: str) -> list:
             out.append(line)
     except sqlite3.Error as e:                                        # noqa: BLE001
         out.append(f"⚠️ свой след НЕ СОБРАН ({e})")
+
+    # ── СВОИ ЗАПИСКИ ПОСЛЕ ЗАПИСИ ПАМЯТИ: все, а не одна последняя ─────────────
+    # 🩸 Карточка #466 ③, разбор OPSSRE (записка #5188), заказ PROTO (записка #5189 ②).
+    # Строка выше называет ОДНУ последнюю записку, а 14.09 у COORD после записи раздела state
+    # их было 40 — тридцать девять к роли при пробуждении не возвращались ничем.
+    # ⚖️ Отсчёт — от раздела state (с отметкой «правок нет», карточка #160), а не от самого
+    # нового раздела: положение дел живёт в state, и свежий мелкий раздел не значит, что оно
+    # переписано (тот же замер: после самого нового раздела у COORD 16 записок, после state — 40).
+    # Источник — messages_all: записка, унесённая в архив по возрасту, своей быть не перестаёт.
+    try:
+        mark = conn.execute(
+            "SELECT COALESCE(confirmed_at, saved_at) FROM phoenix WHERE role=? AND section='state'",
+            (role,)).fetchone()
+        mark_name = "state"
+        if not mark:
+            mark = conn.execute("SELECT MAX(COALESCE(confirmed_at, saved_at)) FROM phoenix "
+                                "WHERE role=?", (role,)).fetchone()
+            mark_name = "самый новый раздел — раздела state нет"
+        since = mark[0] if mark else None
+        own = conn.execute(
+            "SELECT id, timestamp, body_md FROM messages_all WHERE writer_role=? AND timestamp > ? "
+            "ORDER BY id", (role, since)).fetchall() if since else []
+        if own:
+            lead = "   " if last else "📝 "
+            out.append(f"{lead}после записи памяти ({mark_name}, {since[:16]} UTC) твоих записок "
+                       f"{len(own)} — читай их первыми:")
+            for note_id, stamp, body in own[-OWN_NOTES_SHOWN:]:
+                first = (body or "").strip().split("\n")[0].lstrip("# ").strip()
+                out.append(f"     #{note_id} {stamp[:16]}  {first[:90]}")
+            if len(own) > OWN_NOTES_SHOWN:
+                out.append(f"     и ещё {len(own) - OWN_NOTES_SHOWN} раньше — все одной командой:")
+                out.append(f"     {_own_notes_command(db_path, role, since, len(own))}")
+    except (sqlite3.Error, OSError) as e:                             # noqa: BLE001
+        out.append(f"⚠️ свои записки после записи памяти НЕ СОБРАНЫ ({e})")
 
     # ── СВОД: что изменилось после сохранения памяти ────────────────────────
     try:
@@ -106,15 +163,15 @@ def machine_block(db_path, role: str) -> list:
                 "SELECT rule_key, version, COALESCE(status,'active') FROM rules "
                 "WHERE updated_at > ? ORDER BY updated_at DESC", (oldest,)).fetchall()
             if fresh:
-                мёртвых = sum(1 for _, _, st in fresh if st != "active")
+                dead_count = sum(1 for _, _, st in fresh if st != "active")
                 names = " · ".join(
                     (f"⚰️{k} v{v} ({st})" if st != "active" else f"{k} v{v}")
                     for k, v, st in fresh[:8])
                 more = f" · …ещё {len(fresh) - 8}" if len(fresh) > 8 else ""
-                хвост = (f"\n   ⚰️ из них СНЯТЫХ: {мёртвых} — идти по ним незачем, там "
-                         f"надгробие, а не действующее требование" if мёртвых else "")
+                dead_note = (f"\n   ⚰️ из них СНЯТЫХ: {dead_count} — идти по ним незачем, там "
+                             f"надгробие, а не действующее требование" if dead_count else "")
                 out.append(f"📜 ПРАВИЛА, ПРАВЛЕННЫЕ ПОСЛЕ САМОГО СТАРОГО РАЗДЕЛА ПАМЯТИ: "
-                           f"{len(fresh)}\n   {names}{more}{хвост}")
+                           f"{len(fresh)}\n   {names}{more}{dead_note}")
             else:
                 out.append("📜 свод не менялся с момента сохранения памяти")
     except sqlite3.Error as e:                                        # noqa: BLE001
@@ -159,28 +216,28 @@ def machine_block(db_path, role: str) -> list:
             " JOIN backlog b ON b.id = e.backlog_id"
             " WHERE e.event_type = 'claim' AND e.at > datetime('now', '-24 hours')"
             " ORDER BY e.at DESC").fetchall()
-        живые = []
+        live_claims = []
         for bid, who, body, at, title in claims:
             # 🪤 СРАВНИВАТЬ ЧАСОМ НЕЛЬЗЯ: объявление и его снятие ложатся в ОДНУ секунду,
             # если роль передумала сразу, и «снятие позже объявления» тогда не выполняется.
             # Поймано приёмкой на первом же прогоне: снятая работа осталась на чужом экране.
             # ⇒ Берём ПОСЛЕДНЕЕ событие по номеру записи: он растёт всегда.
-            снято = conn.execute(
+            released = conn.execute(
                 "SELECT event_type FROM backlog_events WHERE backlog_id=?"
                 " AND event_type IN ('claim','claim_release')"
                 " ORDER BY id DESC LIMIT 1", (bid,)).fetchone()
-            снято = bool(снято) and снято[0] == "claim_release"
-            срок = body.split(" UTC")[0].replace("до ", "") if body.startswith("до ") else None
-            истёк = bool(срок) and conn.execute("SELECT ? < datetime('now')", (срок,)).fetchone()[0]
-            if снято or истёк:
+            released = bool(released) and released[0] == "claim_release"
+            deadline = body.split(" UTC")[0].replace("до ", "") if body.startswith("до ") else None
+            expired = bool(deadline) and conn.execute("SELECT ? < datetime('now')", (deadline,)).fetchone()[0]
+            if released or expired:
                 continue
-            живые.append((bid, who, title, body))
-        if живые:
-            out.append(f"🔧 СЕЙЧАС В РАБОТЕ У КОЛЛЕГ: {len(живые)} — не берись за то же, "
+            live_claims.append((bid, who, title, body))
+        if live_claims:
+            out.append(f"🔧 СЕЙЧАС В РАБОТЕ У КОЛЛЕГ: {len(live_claims)} — не берись за то же, "
                        f"не разбудив их владельца")
-            for bid, who, title, body in живые[:6]:
-                чьё = "ТВОЯ" if who.upper() == role.upper() else who
-                out.append(f"   #{bid:<4} [{чьё:8}] {title[:52]}")
+            for bid, who, title, body in live_claims[:6]:
+                owner_label = "ТВОЯ" if who.upper() == role.upper() else who
+                out.append(f"   #{bid:<4} [{owner_label:8}] {title[:52]}")
                 out.append(f"        {body[:96]}")
         else:
             out.append("🔧 объявленной работы у коллег нет — проверено запросом, а не молчанием")

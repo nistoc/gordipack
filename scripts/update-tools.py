@@ -42,6 +42,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import pathlib
 import shutil
 import sqlite3
@@ -251,6 +252,42 @@ def fetch(source: str, rev: str | None = None) -> tuple[pathlib.Path, str, bool]
     return tmp, (rev_out.stdout or "").strip()[:12], True
 
 
+def print_pack_rules_summary(db_path: pathlib.Path, tools_dir: pathlib.Path,
+                             src_dir: pathlib.Path) -> None:
+    """Строка о правилах пакета в конце прогона (карточка #608, шаг 3) — печатается и в
+    плане (без --apply), и после --apply, тем же rules-from-pack.py --summary, которым
+    контур сверяется сам. --source — СКАЧАННЫЙ источник, который update-tools уже держит
+    (src_dir), а не meta.template_checkout: тот ключ update-tools не пишет и не читает.
+
+    ⛔ НЕ МЕНЯЕТ КОД ВЫХОДА ОБНОВЛЕНИЯ: что бы rules-from-pack.py ни ответил, исход самого
+    update-tools этим не сдвигается — здесь только печать, коды выхода не пробрасываются.
+    """
+    rfp = tools_dir / "rules-from-pack.py"
+    if not rfp.exists():
+        # ⚖️ ВОЗВРАТ PROTO: «приедет этим обновлением» — правда, только если источник его
+        # ДЕЙСТВИТЕЛЬНО несёт. Источник без него — правды в «приедет» нет, и молчать об
+        # этом тоже нельзя: назвать оба места, где инструмента нет, а не одно из двух.
+        if (src_dir / "scripts" / "rules-from-pack.py").exists():
+            print("сверка правил пакета: инструмента rules-from-pack.py у контура нет — он "
+                  "приедет этим обновлением")
+        else:
+            print("сверка правил пакета: инструмента rules-from-pack.py нет ни у контура, "
+                  "ни в источнике")
+        return
+    env = dict(os.environ)
+    env.pop("MEZO_CONTAINER", None)   # своя среда — живой контур вызывающего сюда не путаем
+    r = subprocess.run(
+        [sys.executable, str(rfp), "--summary", "--db", str(db_path), "--source", str(src_dir)],
+        capture_output=True, text=True, timeout=120, env=env)
+    if r.returncode == 0:
+        print((r.stdout or "").strip())
+        return
+    # ⛔ КОД 2 (И ЛЮБОЙ ДРУГОЙ) — ПЕЧАТАЕМ ЕГО ПРИЧИНУ, НЕ МОЛЧИМ (требование карточки #608).
+    reason_lines = [ln for ln in ((r.stderr or "") + (r.stdout or "")).splitlines() if ln.strip()]
+    reason = reason_lines[-1] if reason_lines else "(без сообщения)"
+    print(f"сверка правил пакета: rules-from-pack.py отказал (код {r.returncode}) — {reason}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="забрать свежие инструменты из общего репозитория")
     ap.add_argument("--source", help="путь или URL; по умолчанию — записанный при сборке контура")
@@ -455,6 +492,7 @@ def main() -> int:
 
         if not a.apply:
             print(f"{NEWLINE}[ПЛАН] Ничего не записано. Забрать: тот же вызов с --apply")
+            print_pack_rules_summary(db, tools, src_dir)
             return 0
 
         taking = fresh + new_files + (unknown if a.overwrite_unknown else [])
@@ -503,6 +541,7 @@ def main() -> int:
                   f"--overwrite-unknown; оставить свои — ничего не делать.")
         print("👉 ОБЯЗАТЕЛЬНО СЛЕДОМ: прогони свои проверки (guard-all.py). Инструмент, "
               "приехавший и не прогнанный, — это не обновление, а надежда.")
+        print_pack_rules_summary(db, tools, src_dir)
         return 0
     finally:
         if temporary:

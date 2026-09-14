@@ -9,6 +9,7 @@ init-group.py — Создаёт новую группу агентов (mezosyn
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
 from datetime import datetime, timezone
@@ -16,7 +17,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
-SCRIPT_DIR = Path(__file__).parent
+SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 # v3 (2026-08-08): схема СОБИРАЕТСЯ из живой базы (vnext/tools/gen-schema.py), а не пишется
 # рукой. Повод — замер: рукописная v2 отстала от живой на ПЯТЬ сосудов (основание правил
@@ -57,9 +58,27 @@ def main():
                         help="Роли, которым завести отметку прочитанного (по умолчанию: coord)")
     args = parser.parse_args()
 
-    mezosync_dir = Path(args.path)
+    # ВОЗВРАТ PROTO (карточка #608, повторная приёмка Н1): --path резолвится в
+    # АБСОЛЮТНЫЙ путь СРАЗУ, до первого использования. Раньше относительный --path
+    # уходил в rules-from-pack.py НОВОГО контура (шаг 7б″) как есть, а тот инструмент
+    # резолвит относительный --db от СВОЕГО корня (mezo_paths.resolve_db, случай
+    # «относительный путь — от корня мезосинка, не от CWD вызывающего») — то есть от
+    # корня ЕЩЁ НЕ СОБРАННОГО контура, а не от каталога, откуда позвали init-group.py.
+    # Путь удваивался (…\m2\.mezosync\m2\.mezosync\mezosync.db), опора не находила базу
+    # и не записывалась, зеркало правил — тем же путём — не собиралось. Резолвим ЗДЕСЬ:
+    # все производные (mezosync_dir, db_path, tools_dir, …) дальше уже абсолютны и от
+    # текущего каталога не зависят.
+    mezosync_dir = Path(args.path).resolve()
     mezosync_dir.mkdir(parents=True, exist_ok=True)
     db_path = mezosync_dir / "mezosync.db"
+
+    # ВОЗВРАТ PROTO (карточка #608, повторная приёмка, п.2): «🎉 Группа готова» — ОДИН
+    # голос про исход, а не два (тот же класс, что уже лечили у пробы шага 8, — но шаг
+    # 7в печатал ⛔ и НЕ останавливал сборку, и «🎉» всё равно доезжала следом). Копим
+    # такие отказы здесь; в конце — если список не пуст, последней строкой идёт «⚠️ …
+    # с отказами», а не «🎉». Код выхода это НЕ меняет: вызывающие могут опираться на
+    # него, а список — для человека, читающего вывод.
+    soft_failures: list[str] = []
 
     if db_path.exists():
         print(f"⚠️  БД уже существует: {db_path}")
@@ -128,14 +147,29 @@ def main():
     print("  ✅ Универсальные правила загружены")
 
     # 4. Доменные правила
+    domain_loaded = False
     if args.domain:
         domain_file = DOMAIN_RULES_DIR / f"{args.domain}.sql"
         if domain_file.exists():
             domain_sql = domain_file.read_text(encoding="utf-8")
             conn.executescript(domain_sql)
             print(f"  ✅ Доменные правила [{args.domain}] загружены")
+            domain_loaded = True
         else:
             print(f"  ⚠️  Доменный пресет '{args.domain}' не найден, пропускаю")
+
+    # 4б. НАБОРЫ ПРАВИЛ ПАКЕТА, КОТОРЫЕ КОНТУР РЕАЛЬНО ЗАГРУЗИЛ (карточка #608, шаг 3,
+    # возврат PROTO): без этой записи rules-from-pack.py сверяет контур со ВСЕМИ наборами
+    # пакета разом, хотя контур взял только часть, — и на КАЖДОМ обновлении печатает шум
+    # вместо нуля (чужие наборы читались как «новое», перекрытое доменом universal-описание —
+    # как «опоры нет»). Порядок в списке — порядок загрузки: доменное идёт ВТОРЫМ и в
+    # rules-from-pack.py считается победившим при повторении ключа, ровно как оно и
+    # побеждает здесь, в живой таблице rules (INSERT OR REPLACE, домен грузится СЛЕДОМ).
+    pack_rule_sets = ["universal"] + ([args.domain] if domain_loaded else [])
+    conn.execute("INSERT INTO meta (key, value) VALUES ('pack_rule_sets', ?) "
+                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                 (json.dumps(pack_rule_sets, ensure_ascii=False),))
+    print(f"  ✅ Наборы правил пакета записаны: {', '.join(pack_rule_sets)}")
 
     # 5. Отметки прочитанного для ролей — ИМЯ РОЛИ В ВЕРХНЕМ РЕГИСТРЕ.
     # 🪤 НАЙДЕНО ЗАПУСКОМ СВЕЖЕГО КОНТУРА 10.08 01:09 UTC (#145): сборка заводила отметку
@@ -274,6 +308,42 @@ def main():
     print(f"  ✅ Отпечатки установки: {len(fingerprints)} файлов — по ним обновление отличит "
           f"твою правку от свежести источника")
 
+    # 7б″. ОПОРА ПРАВИЛ ПАКЕТА (карточка #608, шаг 3) — контур узнаёт, от какой версии
+    # правил пакета он начал жить, СРАЗУ при рождении, а не при первом чужом напоминании.
+    # ⚖️ Зовём rules-from-pack.py НОВОГО контура (он уже лежит в tools_dir — положен шагом 7
+    # выше), а не свой из SCRIPT_DIR: тот же приём, что у пробы в шаге 8 — потребитель
+    # получает то, что реально приехало ЕМУ, а не то, что запущено из шаблона.
+    # ⛔ Пакет БЕЗ rules/pack-rules.db (шаблон старее этой возможности, либо она ещё не
+    # собрана) — это НЕ отказ сборки: строка говорится вслух, и сборка идёт дальше.
+    rfp_tool = tools_dir / "rules-from-pack.py"
+    if not rfp_tool.exists():
+        print("  ℹ️ опора правил пакета не записана: rules-from-pack.py ещё не приехал в "
+              "шаблон (появится следующим обновлением)")
+    elif not (REPO_ROOT / "rules" / "pack-rules.db").exists():
+        print("  ℹ️ опора правил пакета не записана: в пакете нет базы правил")
+    else:
+        import subprocess as _sp_rfp
+        rfp_env = dict(os.environ)
+        rfp_env.pop("MEZO_CONTAINER", None)   # среда НОВОГО контура, не вызывающего сборку
+        r = _sp_rfp.run(
+            [sys.executable, str(rfp_tool), "--db", str(db_path), "--source", str(REPO_ROOT),
+             "--record-base", "--apply", "--actor", "init-group.py"],
+            capture_output=True, text=True, timeout=120, env=rfp_env)
+        out_rfp = ((r.stdout or "") + (r.stderr or "")).strip()
+        last_line = next((ln for ln in out_rfp.splitlines()[::-1] if ln.strip()), "")
+        if r.returncode != 0:
+            print(f"  ⚠️ опора правил пакета: rules-from-pack.py отказал (код {r.returncode}) — "
+                  f"{last_line[:200]}")
+            # ВОЗВРАТ PROTO (карточка #608, доводка по Н1, 10:41 UTC): этот отказ тоже
+            # шёл МИМО soft_failures — контур без опоры на КАЖДОМ следующем обновлении
+            # напишет «опоры нет» по всем правилам, это отказ шага, не мелочь. Ветки ℹ️
+            # выше (инструмента ещё нет / в пакете нет базы правил) — НЕ отказ, их не трогаем.
+            soft_failures.append(f"опора правил пакета не записана — rules-from-pack.py, "
+                                 f"код {r.returncode}")
+        else:
+            # last_line уже несёт свою метку («✅ опора сверена ...») — своей рядом не дублируем
+            print(f"  опора правил пакета: {last_line[:200]}")
+
     # 7в. ЗЕРКАЛО ПРАВИЛ — собирается СРАЗУ, а не при первой правке (#145).
     # 🪤 Свежий контур краснел «правил в базе 35, а файла НЕТ»: механизм пересборки есть
     # (#108/#110), но у нового контура ему нечего было пересобирать — первый читатель
@@ -287,9 +357,13 @@ def main():
                      "--out", str(gen / "sync.rules.md"), "--apply"],
                     capture_output=True, text=True, timeout=60)
         made = (gen / "sync.rules.md").exists()
-        print(f"  {'✅' if made else '⛔'} Зеркало правил: "
-              + (str(gen / 'sync.rules.md') if made
-                 else f"НЕ СОБРАНО — {(r.stderr or r.stdout).strip().splitlines()[-1][:80]}"))
+        if made:
+            print(f"  ✅ Зеркало правил: {gen / 'sync.rules.md'}")
+        else:
+            err_lines = (r.stderr or r.stdout).strip().splitlines()
+            reason = err_lines[-1][:80] if err_lines else "(без сообщения)"
+            print(f"  ⛔ Зеркало правил: НЕ СОБРАНО — {reason}")
+            soft_failures.append(f"зеркало правил не собрано — {reason}")
 
     # 7г. ЗАГОТОВКА ПАМЯТИ РОЛИ — контур рождается С ПАМЯТЬЮ, а не пустым (#145).
     # 🪤 Свежий контур краснел трижды об одном: «в phoenix нет ничего», «отметка
@@ -411,7 +485,20 @@ def main():
         sys.exit(1)
     print(f"  ✅ Проба запуском: {len(probes)} главных инструментов отвечают")
 
-    print(f"\n🎉 Группа «{args.name}» готова: {db_path}")
+    # ВОЗВРАТ PROTO (карточка #608, повторная приёмка, п.2): если за прогон был хоть
+    # один ⛔ (источники — soft_failures выше), последней СТРОКОЙ ИТОГА идёт честное
+    # «⚠️ … с отказами», а НЕ «🎉» — та же беда «два голоса про один исход», которую уже
+    # лечили у пробы шага 8, только здесь исход был не fatal и сборка НЕ падала. Код
+    # выхода НЕ меняется.
+    # ВОЗВРАТ PROTO (карточка #608, доводка по Н1, 10:41 UTC): при отказах строка ИТОГА
+    # раньше обрывала функцию (return) сразу за собой — роль теряла подсказки «ПРОВЕРЬ
+    # ЗАПУСКОМ» и «следующий шаг», которые идут дальше по коду. Меняется ТОЛЬКО первая
+    # строка итога (🎉 vs ⚠️); подсказки ниже печатаются в ОБОИХ исходах — контур собран
+    # и с ним всё равно работают, отказ шага не отменяет первую команду роли.
+    if soft_failures:
+        print(f"\n⚠️ Группа «{args.name}» собрана с отказами: {'; '.join(soft_failures)}")
+    else:
+        print(f"\n🎉 Группа «{args.name}» готова: {db_path}")
     print("   ⚖️ ПРОВЕРЬ ЗАПУСКОМ, А НЕ ГЛАЗАМИ:")
     print(f"     python {tools_dir / 'read-messages.py'} --role {args.roles[0].upper()}")
     # 🪤 ПОСЛЕДНЯЯ СТРОКА СБОРКИ НАЗЫВАЛА ФАЙЛ, КОТОРОГО НЕТ: «templates/coord.md» —

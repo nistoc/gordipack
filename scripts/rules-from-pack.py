@@ -1,0 +1,1096 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+r"""rules-from-pack.py — сверка правил контура с правилами пакета GORDI (карточка #608).
+
+ЗАЧЕМ. Контур уже живёт своим сводом правил (таблица `rules`), а пакет GORDI ведёт свой —
+и оба меняются независимо. Этот инструмент помогает роли узнать, что в пакете появилось
+новое или изменённое, сравнить со своим текстом, выбрать ход и подготовить предложение
+в пакет («обновить для всех»). БАЗУ ПРАВИЛ ПАКЕТА (`<пакет>/rules/pack-rules.db`) строит
+ДРУГОЙ инструмент — здесь она только ЧИТАЕТСЯ, по контракту (см. ниже).
+
+ПЕРЕЕЗД (карточка #608, шаг 3): инструмент родился в vnext-tools и оттуда переехал сюда,
+в инструменты контура (.mezosync/scripts) — чтобы update-tools.py привозил его соседним
+контурам вместе с остальными инструментами, а сборка нового контура (init-group.py) могла
+позвать его сразу после посева стартовых правил. Приёмка (bite-rules-from-pack.py) осталась
+в vnext-tools и находит эту копию через mezo_target.py — тем же приёмом, каким приёмки
+находят у себя update-tools.py и другие инструменты контура.
+
+КОНТРАКТ БАЗЫ ПРАВИЛ ПАКЕТА (файл `<пакет>/rules/pack-rules.db`, пишет чужой инструмент):
+    pack_rules(rule_set, rule_key, body, locked_by, text_sha,
+               pack_updated_at, pack_commit, removed_at)        PRIMARY KEY (rule_set, rule_key)
+    pack_rules_history(rule_set, rule_key, text_sha, body, locked_by,
+                        first_commit, first_seen_at, replaced_at)
+                                                     PRIMARY KEY (rule_set, rule_key, text_sha)
+    pack_rules_meta(key, value)   -- schema_version=1, built_at, head_commit, source_sha
+
+ТРИ ТЕКСТА, А НЕ ДВА. Сравнить «ваш текст» с «текстом пакета» напрямую нельзя: при
+расхождении не видно, кто менял — контур, пакет или оба сразу. Третья точка — ОПОРА:
+версия пакета, от которой контур когда-то пошёл. Она хранится отпечатком текста (не
+самим текстом) в meta контура, ключ `pack_rules_base`, JSON {"<набор>/<ключ>": "<sha>"}.
+Отказы от текущей версии пакета — ключ `pack_rules_skipped`, тот же вид.
+Если опоры нет, а ваш текст дословно совпадает с какой-то СТАРОЙ версией пакета — опора
+находится по истории пакета (`pack_rules_history`) и печатается отдельной строкой.
+
+ОТПЕЧАТОК ТЕКСТА — ОДИН НА ОБА ИНСТРУМЕНТА (контракт с bite-rules-from-pack.py и со
+строителем базы пакета): sha256 текста, приведённого к \n и без хвостовых пробелов,
+первые 16 знаков — см. `text_sha()`. Меняя формулу здесь, поменяй её и там.
+
+СОСТОЯНИЯ (О — опора, В — ваш текст, П — текст пакета сейчас):
+    same          В = П                              ход: —
+    pack-changed  В = О ≠ П (пакет ушёл вперёд)       ход: взять
+    local-changed В ≠ О = П (уточнили у себя)         ход: предложить в пакет
+    both-changed  В ≠ О ≠ П (менялись оба)            ход: свести, затем предложить
+    no-base       В ≠ П, опора неизвестна             ход: сравнить, решает роль
+    new           ключа нет у контура (пакет активен) ход: взять или отказаться
+    removed       снято В ПАКЕТЕ, у контура есть      ход: —
+    retired-here  снято У ВАС (status≠active), пакет держит, при ЛЮБОМ соотношении
+                  текстов — в «new» не попадает никогда   ход: оставить снятым или
+                  предложить снять в пакете (--propose)
+    skipped       отпечаток пакета уже отклонён       ход: —
+    (только у вас — пакет ключа не знает вовсе — в списке НЕ печатается, только в итоге)
+
+ВОЗВРАТ PROTO (карточка #608, повторная приёмка, 2026-09-14): «--state new» на живом
+контуре показывал правила, которые контур САМ снял (status≠'active' в своей таблице
+rules) — инструмент судил их по ТЕКСТУ пакета, не спросив статус у контура, и подталкивал
+вернуть осознанно отключённое правило. retired-here читает статус контура НАПЕРЁД любого
+сравнения текстов — эта проверка старше и «new», и «removed».
+
+ГРАНИЦА, НАЗЫВАЕМАЯ ВСЛУХ: инструмент сравнивает ТЕКСТЫ дословно и не судит смысл. Опора
+по истории находится, только если ваш текст СЕГОДНЯ совпадает дословно с какой-то версией
+пакета из прошлого, — иначе опоры нет, и решение остаётся за ролью.
+
+ЗАПУСК (примеры; «<инструменты контура>» — .mezosync/scripts РЯДОМ С ЖИВОЙ БАЗОЙ ТВОЕГО
+контура, путь у каждого контура свой — сам инструмент печатает АБСОЛЮТНЫЙ, см. --help):
+    python <инструменты контура>/rules-from-pack.py
+    python <инструменты контура>/rules-from-pack.py --state pack-changed
+    python <инструменты контура>/rules-from-pack.py --show acceptance-e2e
+    python <инструменты контура>/rules-from-pack.py --adopt acceptance-e2e --word \
+        "владелец, чат PROTO 2026-09-14 03:31:16 UTC" --apply
+    python <инструменты контура>/rules-from-pack.py --merge acceptance-e2e \
+        --file merged.txt --word "координатор, записка #608" --apply
+    python <инструменты контура>/rules-from-pack.py --skip acceptance-e2e --word "..." --apply
+    python <инструменты контура>/rules-from-pack.py --propose acceptance-e2e \
+        --why "пакет требует числа в замере, у нас голословно" --out proposal.md
+    python <инструменты контура>/rules-from-pack.py --record-base --apply --actor COORD
+    python <инструменты контура>/rules-from-pack.py --summary
+
+ЗАПИСЬ ПРАВИЛА — ТОЛЬКО ЧЕРЕЗ set-rule.py (подпроцессом, тем же --db, своё основание и
+--apply); этот инструмент прямых UPDATE/INSERT в `rules` не делает НИКОГДА. Прямая запись
+здесь — только в meta контура (`pack_rules_base` / `pack_rules_skipped`), и то лишь после
+успешной записи через set-rule.py (--skip и --record-base в `rules` не пишут вовсе, только
+в meta).
+
+--word «дословно: кто разрешил · когда · где» ОБЯЗАТЕЛЕН при ЛЮБОЙ настоящей записи
+(--apply у --adopt/--merge/--skip): решение взять/свести/отказаться от чужого текста —
+решение владельца или координатора контура, а не самого инструмента. Инструмент НЕ МОЖЕТ
+проверить, что слово подлинное, — и говорит об этом прямо, а не притворяется, что проверил.
+Если правило залочено владельцем (locked_by='owner' — у контура ИЛИ у пакета), это
+называется отдельной строкой: --word здесь обязан быть словом ИМЕННО владельца, а
+подлинность инструмент по-прежнему проверить не может. --record-base --word НЕ спрашивает
+(объяснение — в шапке над `record_base`): совпавший текст ничьего решения не меняет.
+
+--actor <имя роли> ОБЯЗАТЕЛЕН вместе с --apply у --adopt/--merge/--record-base — пишущий
+в контуре всегда называет СЕБЯ (как `backlog.py --actor`, `lease.py --role`), а не имя
+инструмента. Без --apply флаг не нужен. Пустой или отсутствующий --actor при --apply —
+отказ ДО любого соединения с базой, ничего не тронуто.
+
+БЕЗ --apply НИЧЕГО НЕ ЗАПИСЫВАЕТСЯ — только показ того, что было бы сделано (включая
+команду set-rule.py, которая была бы вызвана).
+
+--summary — ОДНА строка итога без построчного списка (для чужого вызова, например
+инструмента обновления контура): код выхода 0 всегда, КРОМЕ отказа поиска баз (нет базы
+пакета / нет базы контура) — там код 2 и причина в тексте, не молчание.
+
+⚖️ ЕСЛИ КЛЮЧ ЕСТЬ У ПАКЕТА В НЕСКОЛЬКИХ НАБОРАХ: список и --show показывают ВСЕ; для
+--adopt/--merge/--skip/--propose (им нужен ровно ОДИН текст) — если тексты в наборах
+совпадают, набор не важен; если разные — назови --rule-set явно (расширение сверх
+буквы контракта, понадобившееся для однозначной записи; см. отчёт).
+"""
+from __future__ import annotations
+
+import argparse
+import difflib
+import hashlib
+import json
+import os
+import re
+import sqlite3
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mezo_paths  # noqa: E402 — пути машины выводятся, не впечатаны
+
+HERE = Path(__file__).resolve().parent
+# ⚖️ НЕ через mezo_paths.live_scripts(): та функция слушает MEZO_CONTAINER вызывающего
+# ПЕРВЫМ делом, а нам нужно НАДЁЖНО найти РЕАЛЬНЫЙ set-rule.py рядом со своим контуром
+# независимо от чужого окружения — та же забота, что решает subprocess_env() ниже.
+# С переезда в .mezosync/scripts (карточка #608, шаг 3) set-rule.py — прямой сосед этого
+# файла, поэтому путь больше не поднимается на уровень выше.
+SET_RULE_PY = HERE / "set-rule.py"
+# ВОЗВРАТ PROTO (карточка #608, повторная приёмка): подсказка --propose печатала путь к
+# gordi-issue.py ВПЕЧАТАННЫМ («<КОНТУР>/...») — верно только у автора, у любого
+# другого контура (песочница, клон в другом месте) подсказка вела бы в пустоту. Путь —
+# от СВОЕГО расположения, как SET_RULE_PY выше.
+GORDI_ISSUE_PY = HERE / "gordi-issue.py"
+
+STATE_NAMES = ("new", "pack-changed", "local-changed", "both-changed",
+               "no-base", "removed", "retired-here", "skipped", "same")
+MOVE_BY_STATE = {
+    "new": "взять или отказаться",
+    "pack-changed": "взять",
+    "local-changed": "предложить в пакет",
+    "both-changed": "свести, затем предложить",
+    "no-base": "сравнить, решает роль",
+    "removed": "—",
+    "retired-here": "у вас снято, пакет его держит — оставить снятым или предложить снять "
+                    "в пакете (--propose)",
+    "skipped": "—",
+    "same": "—",
+}
+BOUNDARY_LINE = (
+    "⚖️ Граница: инструмент сравнивает ТЕКСТЫ дословно, смысл он не судит. Опора по истории "
+    "пакета находится, только если ваш текст СЕГОДНЯ дословно совпадает с какой-то прошлой "
+    "версией пакета — иначе опоры нет, и решение остаётся за ролью."
+)
+# приметы путей одной машины — тот же род, что у gordi-issue.py, для обезличивания предложений
+MACHINE_PATH = re.compile(r"[A-Za-z]:[\\/](?:guts|github|Users)[\\/][^\s\"'()]*", re.I)
+
+
+def text_sha(body: str) -> str:
+    """Отпечаток текста правила. ОДНА формула на весь контракт (см. шапку файла)."""
+    normalized = (body or "").replace("\r\n", "\n").rstrip()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+
+
+# ── ПУТИ И БАЗЫ ──────────────────────────────────────────────────────────────────────
+
+def find_pack_source(arg_source, conn) -> Path:
+    """Папка с клоном пакета: --source или meta.template_checkout контура."""
+    if arg_source:
+        p = Path(arg_source)
+        if not p.is_dir():
+            sys.exit(f"⛔ пакет не найден: папки «{p}» не существует. Укажи верный --source.")
+        return p
+    row = conn.execute("SELECT value FROM meta WHERE key='template_checkout'").fetchone()
+    if row and row[0] and Path(row[0]).is_dir():
+        return Path(row[0])
+    известно = f" (в meta записано «{row[0]}», но это не папка)" if row and row[0] else ""
+    sys.exit(
+        "⛔ клон пакета GORDI не найден: --source не задан, а meta.template_checkout"
+        f" контура{известно} не годится.\n"
+        "   Укажи явно: --source <папка с клоном пакета GORDI>"
+    )
+
+
+def open_pack_db(source: Path) -> sqlite3.Connection:
+    db_path = source / "rules" / "pack-rules.db"
+    if not db_path.exists():
+        sys.exit(
+            f"⛔ в пакете нет базы правил: пакет старее этой возможности или собран без "
+            f"неё (ждал {db_path})."
+        )
+    return sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
+
+
+def subprocess_env() -> dict:
+    """Среда для запуска set-rule.py БЕЗ живого MEZO_CONTAINER вызывающего («руками» —
+    записка #5096 про инструменты стенда, применена и здесь: явный --db не должен
+    подменяться чужим контейнером из окружения)."""
+    env = dict(os.environ)
+    env.pop("MEZO_CONTAINER", None)
+    return env
+
+
+# ── ЧТЕНИЕ ДАННЫХ ────────────────────────────────────────────────────────────────────
+
+def load_circuit_rules(conn) -> dict:
+    """rule_key -> тело, ТОЛЬКО действующие правила контура (status='active')."""
+    return {k: b for k, b in conn.execute(
+        "SELECT rule_key, body FROM rules WHERE status='active'")}
+
+
+def load_circuit_retired_keys(conn) -> set:
+    """Ключи, у которых в контуре ЕСТЬ строка, но НИ ОДНОЙ действующей (status≠'active') —
+    контур сам снял правило. Отдельно от load_circuit_rules(): нужно различить «ключа
+    у контура нет вовсе» (состояние «new») от «есть, контур сам его отключил» (состояние
+    «retired-here», карточка #608, возврат PROTO). Если у ключа ОДНОВРЕМЕННО есть
+    действующая строка — сюда он не попадает: правило сейчас действует, независимо от
+    того, снималось ли когда-то раньше."""
+    active = {k for (k,) in conn.execute("SELECT rule_key FROM rules WHERE status='active'")}
+    any_row = {k for (k,) in conn.execute("SELECT DISTINCT rule_key FROM rules")}
+    return any_row - active
+
+
+def circuit_is_retired(conn, key) -> bool:
+    """То же самое, что load_circuit_retired_keys(), но для ОДНОГО ключа (используется там,
+    где загружать весь набор ключей контура не нужно — например, у --adopt)."""
+    active = conn.execute(
+        "SELECT 1 FROM rules WHERE rule_key=? AND status='active' LIMIT 1", (key,)).fetchone()
+    if active:
+        return False
+    any_row = conn.execute("SELECT 1 FROM rules WHERE rule_key=? LIMIT 1", (key,)).fetchone()
+    return any_row is not None
+
+
+def circuit_locked_by(conn, key):
+    row = conn.execute(
+        "SELECT locked_by FROM rules WHERE rule_key=? AND status='active'", (key,)).fetchone()
+    return row[0] if row else None
+
+
+def needs_expiry_kind(conn, key) -> bool:
+    """True — set-rule.py потребует --expiry-kind явно и откажет без него: ключа у контура
+    ЕЩЁ НЕТ, либо он есть, но старше этого требования (поле «условие отмены» пусто у
+    самого правила — так уже бывает у живых правил, см. --list в set-rule.py, «основание
+    не заполнено»). Если поле УЖЕ стоит — не трогаем его: --adopt/--merge меняют ТЕКСТ,
+    а не молча стирают чей-то заранее выставленный срок годности."""
+    row = conn.execute(
+        "SELECT expiry_kind FROM rules WHERE rule_key=? AND status='active'", (key,)).fetchone()
+    return row is None or not (row[0] or "").strip()
+
+
+PACK_COLS = ("rule_set", "rule_key", "body", "locked_by", "text_sha",
+             "pack_updated_at", "pack_commit", "removed_at")
+
+
+def load_pack_rows(pack_conn) -> list:
+    rows = pack_conn.execute(f"SELECT {', '.join(PACK_COLS)} FROM pack_rules").fetchall()
+    return [dict(zip(PACK_COLS, r)) for r in rows]
+
+
+def make_history_has(pack_conn):
+    def history_has(rule_set, rule_key, sha) -> bool:
+        return pack_conn.execute(
+            "SELECT 1 FROM pack_rules_history WHERE rule_set=? AND rule_key=? AND text_sha=? "
+            "LIMIT 1", (rule_set, rule_key, sha)).fetchone() is not None
+    return history_has
+
+
+def load_meta_map(conn, key: str) -> dict:
+    row = conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+    if not row or not (row[0] or "").strip():
+        return {}
+    try:
+        data = json.loads(row[0])
+    except (ValueError, TypeError):
+        sys.exit(f"⛔ meta.{key} не разбирается как JSON — испорчено чужой рукой; "
+                 f"чинить руками, не отсюда")
+    return data if isinstance(data, dict) else {}
+
+
+def save_meta_map(conn, key: str, mapping: dict) -> None:
+    payload = json.dumps(mapping, ensure_ascii=False, sort_keys=True)
+    conn.execute(
+        "INSERT INTO meta(key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (key, payload))
+
+
+# ── СРАВНЕНИЕ ────────────────────────────────────────────────────────────────────────
+
+def classify_diff(v_sha, p_sha, base_sha):
+    """Состояние правила, у которого В (ваш текст) и П (текст пакета) УЖЕ разные."""
+    if base_sha is None:
+        return "no-base"
+    if base_sha == v_sha and base_sha != p_sha:
+        return "pack-changed"
+    if base_sha == p_sha and base_sha != v_sha:
+        return "local-changed"
+    return "both-changed"
+
+
+def resolve_base(rule_set, rule_key, v_sha, base_map, history_has):
+    """Отпечаток опоры и откуда он взят: (sha|None, 'meta'|'history'|None)."""
+    k = f"{rule_set}/{rule_key}"
+    if k in base_map:
+        return base_map[k], "meta"
+    if history_has(rule_set, rule_key, v_sha):
+        return v_sha, "history"
+    return None, None
+
+
+# ── НАБОРЫ ПАКЕТА, КОТОРЫЕ КОНТУР РЕАЛЬНО ВЗЯЛ (карточка #608, возврат PROTO) ──────────
+# ПОВОД. Инструмент сравнивал контур со ВСЕМИ наборами пакета разом — и печатал шум на
+# КАЖДОМ обновлении: чужой (не взятый контуром) набор считался «новым», а доменное
+# описание ключа, перекрывающее universal, читалось как расхождение с universal-версией,
+# у которой законно нет опоры. Живой пример (замер PROTO): свежий контур с доменом
+# data-platform показывал «новых 3 · опоры нет 3» вместо сплошного нуля.
+
+def load_meta_list(conn, key: str):
+    """JSON-список из meta.<key>. None — ключа НЕТ ВООБЩЕ (не путать с пустым списком:
+    пустой список — это записанное решение «наборов нет», а None — «не записано никогда»)."""
+    row = conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+    if row is None or row[0] is None:
+        return None
+    try:
+        data = json.loads(row[0])
+    except (ValueError, TypeError):
+        return None
+    return data if isinstance(data, list) else None
+
+
+def resolve_contour_rule_sets(conn, circuit_rules: dict, pack_rows: list) -> tuple:
+    """Наборы пакета, которые контур РЕАЛЬНО загрузил, в порядке загрузки (последний в
+    списке побеждает при повторении ключа — тем же порядком грузит их сама сборка:
+    universal, затем домен поверх неё). Возвращает (наборы, взято_из_meta: bool).
+
+    ИСТОЧНИК ①: meta.pack_rule_sets — пишет init-group.py при сборке (карточка #608).
+    ИСТОЧНИК ② (контур собран РАНЬШЕ этой записи — meta пуста): ВЫВОД ПО НАЛИЧИЮ.
+    universal берётся всегда; доменный набор считается взятым, если у контура есть ХОТЯ БЫ
+    ОДИН его ключ, которого нет в universal, — общий ключ (в обоих наборах сразу) отличить
+    так нельзя, поэтому он в вывод не идёт: он и не нужен, взятость набора решают ключи,
+    которые есть ТОЛЬКО в нём.
+    """
+    all_sets = sorted({row["rule_set"] for row in pack_rows})
+    recorded = load_meta_list(conn, "pack_rule_sets")
+    if recorded is not None:
+        return [s for s in recorded if isinstance(s, str)], True
+    universal_keys = {row["rule_key"] for row in pack_rows
+                      if row["rule_set"] == "universal" and not row["removed_at"]}
+    taken = ["universal"] if "universal" in all_sets else []
+    for rs in all_sets:
+        if rs == "universal":
+            continue
+        rs_keys = {row["rule_key"] for row in pack_rows
+                  if row["rule_set"] == rs and not row["removed_at"]}
+        if (rs_keys - universal_keys) & set(circuit_rules):
+            taken.append(rs)
+    return taken, False
+
+
+def rule_sets_note(contour_sets: list, via_meta: bool):
+    """Строка про источник наборов — печатается, ТОЛЬКО когда они выведены по наличию
+    (не записаны контуром): роль обязана знать, что это вывод, а не факт."""
+    if via_meta:
+        return None
+    return ("наборы контура не записаны — определены по наличию правил: "
+            + ", ".join(contour_sets))
+
+
+def governing_rows(pack_rows: list, contour_sets: list) -> dict:
+    """Один ряд пакета на КЛЮЧ — из ПОСЛЕДНЕГО (по порядку contour_sets) взятого набора,
+    где этот ключ встречается. Наборы, которые контур не взял, в сравнение не входят
+    ВООБЩЕ — ни как «новое», ни как расхождение; ключ, повторённый в нескольких взятых
+    наборах, сверяется ПО ПОБЕДИВШЕМУ описанию (домен перекрывает universal — тем же
+    порядком, каким контур их загрузил и каким они лежат в его живой таблице rules)."""
+    taken = set(contour_sets)
+    rows_by_set: dict = {}
+    for row in pack_rows:
+        if row["rule_set"] in taken:
+            rows_by_set.setdefault(row["rule_set"], {})[row["rule_key"]] = row
+    governing: dict = {}
+    for rs in contour_sets:
+        governing.update(rows_by_set.get(rs, {}))
+    return governing
+
+
+def build_rows(circuit_rules: dict, pack_rows: list, base_map: dict, skip_map: dict,
+               history_has, contour_sets: list, retired_keys: set) -> tuple:
+    """Строки списка (ОДНА на ключ — см. governing_rows) + отдельно ключи «только у вас».
+
+    retired_keys (карточка #608, возврат PROTO) — ключи, снятые САМИМ КОНТУРОМ
+    (load_circuit_retired_keys). Проверяются РАНЬШЕ и «new», и «removed»: контур,
+    отключивший правило сам, — не тот же случай, что «ключа никогда не было» и не тот же,
+    что «пакет его снял», при ЛЮБОМ соотношении текстов."""
+    governing = governing_rows(pack_rows, contour_sets)
+
+    out = []
+    for key, row in governing.items():
+        v_body = circuit_rules.get(key)
+        v_sha = text_sha(v_body) if v_body is not None else None
+        rule_set = row["rule_set"]
+        base_src = None
+        if v_sha is None:
+            if key in retired_keys:
+                state = "retired-here"
+            elif row["removed_at"]:
+                continue  # ни у контура, ни в пакете (сейчас) его нет — обсуждать нечего
+            else:
+                state = "new"
+        elif row["removed_at"]:
+            state = "removed"
+        else:
+            p_sha = row["text_sha"]
+            if v_sha == p_sha:
+                state = "same"
+            elif skip_map.get(f"{rule_set}/{key}") == p_sha:
+                state = "skipped"
+            else:
+                base_sha, base_src = resolve_base(rule_set, key, v_sha, base_map, history_has)
+                state = classify_diff(v_sha, p_sha, base_sha)
+        out.append({
+            "rule_key": key, "rule_set": rule_set, "state": state,
+            "move": MOVE_BY_STATE[state],
+            "pack_updated_at": row["pack_updated_at"], "removed_at": row["removed_at"],
+            "locked_by": row["locked_by"], "text_sha": row["text_sha"],
+            "base_source": base_src,
+        })
+    only_yours = sorted(k for k in circuit_rules if k not in governing)
+    return out, only_yours
+
+
+def summarize(rows: list, only_yours: list) -> dict:
+    counts = {s: 0 for s in STATE_NAMES}
+    for r in rows:
+        counts[r["state"]] += 1
+    counts["only-yours"] = len(only_yours)
+    return counts
+
+
+# ── ПЕЧАТЬ ───────────────────────────────────────────────────────────────────────────
+
+def print_diff(title: str, a_text: str, b_text: str) -> None:
+    print(f"\n--- различие: {title} ---")
+    diff = list(difflib.unified_diff(
+        a_text.splitlines(), b_text.splitlines(), lineterm=""))
+    print("\n".join(diff) if diff else "(текст совпадает дословно)")
+
+
+def print_listing(rows: list, only_yours: list, state_filter) -> None:
+    shown = [r for r in rows if state_filter is None or r["state"] == state_filter]
+    shown.sort(key=lambda r: (r["rule_key"], r["rule_set"]))
+    if not shown:
+        print("(строк по этому отбору нет)")
+    for r in shown:
+        when = r["pack_updated_at"] or "—"
+        if r["state"] == "removed" and r["removed_at"]:
+            when = f"{when} (снято {r['removed_at']})"
+        print(f"  {r['rule_key']:<35} {r['rule_set']:<16} {when:<24} "
+              f"{r['state']:<14} {r['move']}")
+    counts = summarize(rows, only_yours)
+    print()
+    print(BOUNDARY_LINE)
+    print("итог: " + " · ".join(f"{name} {counts[name]}" for name in (*STATE_NAMES, "only-yours")))
+
+
+# ── КООРДИНАТОР И ОБЕЗЛИЧИВАНИЕ (для --propose) ─────────────────────────────────────
+
+def find_coordinator(conn):
+    """Имя живой роли-координатора ИЗ ДАННЫХ (тот же приём, что у gordi-issue.py) —
+    None, если не нашлась РОВНО одна такая роль."""
+    try:
+        rows = conn.execute(
+            "SELECT role FROM roles WHERE lifecycle='alive' "
+            "AND lifecycle_reason LIKE '%координатор%'").fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    if len(rows) == 1:
+        return rows[0][0].upper()
+    return None
+
+
+def redact_machine_paths(text: str):
+    found = sorted({m.group(0) for m in MACHINE_PATH.finditer(text)})
+    return MACHINE_PATH.sub("<машина>/...", text), found
+
+
+# ── ЗАПИСЬ (общее для --adopt/--merge/--skip) ───────────────────────────────────────
+
+def apply_gate(apply: bool) -> bool:
+    """True — писать нельзя, показываем только предпросмотр (--apply не задан)."""
+    return not apply
+
+
+def require_word(word, why) -> None:
+    if not (word or "").strip():
+        sys.exit(
+            f"⛔ ЗАПИСЬ НЕ СДЕЛАНА — нужен --word «дословно: кто разрешил · когда · где» "
+            f"({why}). Инструмент не может проверить, что слово подлинное, — это остаётся "
+            f"на совести вызывающего."
+        )
+
+
+def record_base_for(base_map: dict, pairs) -> None:
+    """Обновить опору РОВНО у названных пар (rule_set, rule_key, sha) — и ни у каких других."""
+    for rule_set, rule_key, sha in pairs:
+        base_map[f"{rule_set}/{rule_key}"] = sha
+
+
+def pick_rule_set(rows_for_key: list, key: str, rule_set_hint):
+    """Один действующий (removed_at пуст) ряд пакета для ключа. Наборов несколько с
+    РАЗНЫМ текстом — нужен --rule-set; с ОДИНАКОВЫМ — набор не важен, берём любой."""
+    current = [r for r in rows_for_key if not r["removed_at"]]
+    if not current:
+        sys.exit(f"⛔ у пакета нет ДЕЙСТВУЮЩЕГО текста «{key}» (снято либо не найдено вовсе)")
+    if rule_set_hint:
+        for r in current:
+            if r["rule_set"] == rule_set_hint:
+                return r
+        sys.exit(f"⛔ в наборе «{rule_set_hint}» ключа «{key}» нет; есть в наборах: "
+                 + ", ".join(sorted(r["rule_set"] for r in current)))
+    if len(current) == 1:
+        return current[0]
+    if len({r["text_sha"] for r in current}) == 1:
+        return current[0]  # тексты одинаковы во всех наборах — набор не важен
+    sys.exit(
+        f"⛔ ключ «{key}» есть в НЕСКОЛЬКИХ наборах пакета с РАЗНЫМ текстом ("
+        + ", ".join(sorted(r["rule_set"] for r in current))
+        + ") — назови --rule-set, какой набор брать"
+    )
+
+
+def render_set_rule_preview(db_path, key, basis, word, actor, needs_expiry: bool,
+                            body_file_label: str = "<тело правила пакета>") -> str:
+    """body_file_label — ЧТО именно ляжет в --body-file: у --adopt это текст пакета, у
+    --merge — сведённый ВРУЧНУЮ текст из --file (возврат PROTO, замечание 2: холостой
+    --merge звал его «телом правила пакета», хотя пишет он совсем не пакетный текст)."""
+    word_display = word if (word or "").strip() else "<--word не задан>"
+    actor_display = actor if (actor or "").strip() else "<--actor не задан>"
+    expiry = " --expiry-kind forever" if needs_expiry else ""
+    return (f'python {SET_RULE_PY} --db {db_path} --key {key} --body-file {body_file_label} '
+            f'--basis "{basis}" --authorized-by "{word_display}" --source-ref "{word_display}"'
+            f'{expiry} --actor "{actor_display}" --apply')
+
+
+def run_set_rule(db_path, key, body_file, basis, word, actor, needs_expiry: bool):
+    """needs_expiry=True — set-rule.py потребует условие отмены явно (нечего наследовать:
+    ключа у контура ещё нет, либо поле у него пустое) — ставим «бессрочно», самое
+    нейтральное. needs_expiry=False — условие отмены НЕ трогаем, оно наследуется само
+    (иначе --adopt/--merge тихо стёрли бы уже поставленный кем-то срок годности)."""
+    cmd = [sys.executable, str(SET_RULE_PY), "--db", str(db_path), "--key", key,
+           "--body-file", str(body_file), "--basis", basis,
+           "--authorized-by", word, "--source-ref", word, "--actor", actor]
+    if needs_expiry:
+        cmd += ["--expiry-kind", "forever"]
+    cmd += ["--apply"]
+    cp = subprocess.run(cmd, env=subprocess_env(), capture_output=True, text=True,
+                        encoding="utf-8")
+    sys.stdout.write(cp.stdout)
+    if cp.returncode != 0:
+        sys.stderr.write(cp.stderr)
+        sys.exit(f"⛔ set-rule.py отказал на «{key}» (код {cp.returncode})")
+
+
+# ── --show ───────────────────────────────────────────────────────────────────────────
+
+def show_one(pack_conn, row, key, v_body, base_map, history_has) -> None:
+    rule_set = row["rule_set"]
+    print(f"\n═══ {key} · набор «{rule_set}» ═══")
+    print(f"\n— текст пакета сейчас (обновлён {row['pack_updated_at']}, "
+          f"коммит {row['pack_commit']}):")
+    if row["removed_at"]:
+        print(f"⛔ СНЯТО из пакета {row['removed_at']} — текущего текста в этом наборе нет")
+    else:
+        print(row["body"])
+    print("\n— ваш текст:")
+    print(v_body if v_body is not None else "(у контура нет действующего правила с этим ключом)")
+    if v_body is None or row["removed_at"]:
+        return
+    v_sha = text_sha(v_body)
+    p_sha = row["text_sha"]
+    if v_sha == p_sha:
+        print("\n(текст пакета и ваш текст совпадают дословно — сравнивать больше нечего)")
+        return
+    base_sha, base_src = resolve_base(rule_set, key, v_sha, base_map, history_has)
+    if base_sha is None:
+        print("\n⛔ опоры нет — неизвестно, с какой версии пакета контур начинал:")
+        print_diff("пакет → ваш", row["body"], v_body)
+        return
+    # ВОЗВРАТ PROTO (карточка #608, замечание 1): «с обеих сторон» (both-changed) — тот
+    # единственный случай, где ДВА diff'а (опора→пакет, опора→ваш) читаются сложнее, чем
+    # три текста рядом целиком: ни один из двух diff'ов не сравнивает пакет с вашим
+    # текстом напрямую. У остальных состояний, где опора найдена (pack-changed/
+    # local-changed), одна сторона и так совпадает с опорой — двух diff'ов хватает.
+    state = classify_diff(v_sha, p_sha, base_sha)
+    hist = pack_conn.execute(
+        "SELECT body, first_seen_at FROM pack_rules_history "
+        "WHERE rule_set=? AND rule_key=? AND text_sha=?", (rule_set, key, base_sha)).fetchone()
+    if base_src == "history":
+        print(f"\nопора найдена по истории пакета, версия от "
+              f"{hist[1] if hist else '(дата неизвестна)'}")
+    if hist is None:
+        print(f"\n⚠️ отпечаток опоры известен ({base_sha}), но текста этой версии в истории "
+              f"пакета больше нет — показываю без диффа «опора → …»:")
+        if state == "both-changed":
+            # ЗАМЕЧАНИЕ COORD (карточка #608, повторная приёмка): текст пакета и ваш текст
+            # УЖЕ напечатаны выше (в начале show_one, для ЛЮБОГО состояния) — второй раз их
+            # здесь не повторяем, только называем состояние и то, чего выше не было (опору).
+            print(f"\n⚖️ ИЗМЕНЕНО С ОБЕИХ СТОРОН — текст пакета и ваш текст см. ВЫШЕ; опора "
+                  f"известна только отпечатком ({base_sha}), текста этой версии в истории "
+                  f"больше нет.")
+        print_diff("пакет → ваш", row["body"], v_body)
+        return
+    o_body = hist[0]
+    if state == "both-changed":
+        # ЗАМЕЧАНИЕ COORD: та же граница — пакет и ваш текст уже показаны выше, здесь
+        # печатаем ТОЛЬКО опору (единственный из трёх текстов, которого выше не было).
+        print(f"\n⚖️ ИЗМЕНЕНО С ОБЕИХ СТОРОН — текст пакета и ваш текст см. ВЫШЕ; опора "
+              f"(версия, от которой контур начинал) целиком:\n{o_body}")
+    print_diff("опора → пакет", o_body, row["body"])
+    print_diff("опора → ваш", o_body, v_body)
+
+
+def cmd_show(conn, pack_conn, key, base_map, rule_set_hint) -> int:
+    v_body = load_circuit_rules(conn).get(key)
+    rows = [r for r in load_pack_rows(pack_conn) if r["rule_key"] == key
+            and (rule_set_hint is None or r["rule_set"] == rule_set_hint)]
+    if not rows:
+        sys.exit(f"⛔ ключа «{key}» нет в пакете" +
+                 (f" в наборе «{rule_set_hint}»" if rule_set_hint else ""))
+    history_has = make_history_has(pack_conn)
+    for row in rows:
+        show_one(pack_conn, row, key, v_body, base_map, history_has)
+    return 0
+
+
+# ── --adopt ──────────────────────────────────────────────────────────────────────────
+
+def adopt_keys(conn, db_path, pack_conn, base_map, keys, rule_set_hint, word, apply, actor) -> int:
+    by_key: dict = {}
+    for row in load_pack_rows(pack_conn):
+        by_key.setdefault(row["rule_key"], []).append(row)
+
+    plan = []
+    for key in keys:
+        rows = by_key.get(key)
+        if not rows:
+            sys.exit(f"⛔ ключа «{key}» нет в пакете вовсе")
+        plan.append((key, pick_rule_set(rows, key, rule_set_hint)))
+
+    owner_locked = sorted({key for key, row in plan if row["locked_by"] == "owner"}
+                          | {key for key, row in plan if circuit_locked_by(conn, key) == "owner"})
+    # ВОЗВРАТ PROTO (карточка #608): --adopt по ключу, который контур САМ отключил
+    # (status≠'active'), — это возврат осознанно снятого правила, не обычное взятие.
+    # --word здесь обязан явно называть это решение, а не быть общим словом про запись.
+    retired_here = sorted(key for key in keys if circuit_is_retired(conn, key))
+
+    for key, row in plan:
+        basis = (f"взято из пакета GORDI, коммит {row['pack_commit']}, "
+                 f"версия от {row['pack_updated_at']}")
+        tag = "ВЗЯЛ БЫ" if apply_gate(apply) else "БЕРУ"
+        print(f"{tag}: {key} ← набор «{row['rule_set']}» · основание: {basis}")
+        if apply_gate(apply):
+            print("   " + render_set_rule_preview(db_path, key, basis, word, actor,
+                                                   needs_expiry=needs_expiry_kind(conn, key)))
+    if owner_locked:
+        print(f"⚠️ ЗАЛОЧЕНО ВЛАДЕЛЬЦЕМ (в пакете или у контура): {', '.join(owner_locked)} — "
+              f"--word обязан быть словом ИМЕННО владельца; инструмент подлинность не проверяет.")
+    if retired_here:
+        print(f"⚠️ У ВАС СНЯТО: {', '.join(retired_here)} — правило было отключено в контуре "
+              f"самим контуром, пакет его по-прежнему держит; --word обязан явно подтверждать "
+              f"решение вернуть его.")
+
+    if apply_gate(apply):
+        print("\n[ХОЛОСТОЙ ПРОГОН] Не записано. Для записи — флаг --apply (и --word).")
+        return 0
+
+    require_word(word, "; ".join(filter(None, [
+        "правило залочено владельцем" if owner_locked else None,
+        "правило у вас снято, возврат требует явного решения" if retired_here else None,
+    ])) or "любая запись правила требует --word")
+
+    for key, row in plan:
+        basis = (f"взято из пакета GORDI, коммит {row['pack_commit']}, "
+                 f"версия от {row['pack_updated_at']}")
+        fd, body_file = tempfile.mkstemp(suffix=".txt")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(row["body"])
+            run_set_rule(db_path, key, body_file, basis, word, actor,
+                        needs_expiry=needs_expiry_kind(conn, key))
+        finally:
+            os.unlink(body_file)
+
+    # ⚡ ОПОРА ОБНОВЛЯЕТСЯ ТОЛЬКО У ВЗЯТЫХ КЛЮЧЕЙ — строка ниже единственная, кто это решает
+    adopted_pairs = [(row["rule_set"], key, row["text_sha"]) for key, row in plan]
+    record_base_for(base_map, adopted_pairs)
+    save_meta_map(conn, "pack_rules_base", base_map)
+    conn.commit()
+    print(f"\n✅ взято: {', '.join(k for k, _ in plan)} — опора обновлена только у взятых ключей")
+    return 0
+
+
+# ── --merge ──────────────────────────────────────────────────────────────────────────
+
+def merge_key(conn, db_path, pack_conn, base_map, key, rule_set_hint, file_path, word, apply,
+              actor) -> int:
+    rows = [r for r in load_pack_rows(pack_conn) if r["rule_key"] == key]
+    if not rows:
+        sys.exit(f"⛔ ключа «{key}» нет в пакете вовсе — сводить не с чем")
+    row = pick_rule_set(rows, key, rule_set_hint)
+    if not Path(file_path).exists():
+        sys.exit(f"⛔ файла со сведённым текстом нет: {file_path}")
+    merged_text = Path(file_path).read_text(encoding="utf-8")
+    if not merged_text.strip():
+        sys.exit("⛔ файл со сведённым текстом пуст — сводить нечем")
+
+    basis = f"сведено с пакетом GORDI, коммит {row['pack_commit']}"
+    owner_locked = row["locked_by"] == "owner" or circuit_locked_by(conn, key) == "owner"
+    tag = "СВЁЛ БЫ" if apply_gate(apply) else "СВОЖУ"
+    print(f"{tag}: {key} ← набор «{row['rule_set']}» · основание: {basis}")
+    if apply_gate(apply):
+        # ЗАМЕЧАНИЕ COORD (карточка #608, повторная приёмка): холостой --merge печатал
+        # подпись «<сведённый текст из --file>», а не САМ путь — роль не видела, какой
+        # именно файл set-rule.py возьмёт. Печатаем file_path — он и есть настоящее
+        # значение --body-file у НАСТОЯЩЕГО вызова set-rule.py (run_set_rule ниже).
+        print("   " + render_set_rule_preview(db_path, key, basis, word, actor,
+                                               needs_expiry=needs_expiry_kind(conn, key),
+                                               body_file_label=str(file_path)))
+    if owner_locked:
+        print("⚠️ ЗАЛОЧЕНО ВЛАДЕЛЬЦЕМ — --word обязан быть словом ИМЕННО владельца; "
+              "инструмент подлинность не проверяет.")
+
+    if apply_gate(apply):
+        print("\n[ХОЛОСТОЙ ПРОГОН] Не записано. Для записи — флаг --apply (и --word).")
+        return 0
+
+    require_word(word, "правило залочено владельцем" if owner_locked else
+                        "любая запись правила требует --word")
+    run_set_rule(db_path, key, file_path, basis, word, actor,
+                needs_expiry=needs_expiry_kind(conn, key))
+
+    record_base_for(base_map, [(row["rule_set"], key, row["text_sha"])])
+    save_meta_map(conn, "pack_rules_base", base_map)
+    conn.commit()
+    print("\n✅ сведено — опора теперь равна текущей версии пакета")
+    return 0
+
+
+# ── --skip ───────────────────────────────────────────────────────────────────────────
+
+def skip_key(conn, pack_conn, skip_map, key, rule_set_hint, word, apply) -> int:
+    rows = [r for r in load_pack_rows(pack_conn) if r["rule_key"] == key and not r["removed_at"]]
+    if not rows:
+        sys.exit(f"⛔ у пакета нет действующего текста «{key}», чтобы от него отказаться")
+    row = pick_rule_set(rows, key, rule_set_hint)
+
+    tag = "ОТКАЗАЛСЯ БЫ" if apply_gate(apply) else "ОТКАЗЫВАЮСЬ"
+    print(f"{tag}: {key} ← набор «{row['rule_set']}» (версия от {row['pack_updated_at']})")
+    if apply_gate(apply):
+        print("\n[ХОЛОСТОЙ ПРОГОН] Не записано. Для записи — флаг --apply (и --word). "
+              "⚖️ --skip НЕ вызывает set-rule.py — он пишет только в meta контура.")
+        return 0
+
+    require_word(word, "любая запись требует --word")
+    skip_map[f"{row['rule_set']}/{key}"] = row["text_sha"]
+    save_meta_map(conn, "pack_rules_skipped", skip_map)
+    conn.commit()
+    print("\n✅ отказ записан — вернётся к обычному сравнению, как только пакет сменит текст")
+    return 0
+
+
+# ── --record-base ────────────────────────────────────────────────────────────────────
+# ⚖️ --word ЗДЕСЬ НЕ СПРАШИВАЕМ (в отличие от --adopt/--merge/--skip). Эти три меняют
+# судьбу правила — берут чужой текст, сводят или отказываются — и это решение владельца
+# или координатора. Запись опоры у УЖЕ СОВПАВШЕГО текста ничьего решения не меняет:
+# это чинит бухгалтерию по факту, который и так уже верен. Актёра по-прежнему называть
+# нужно (кто свёл бухгалтерию) — это проверяется ДО вызова, в main().
+
+def record_base(conn, pack_rows: list, base_map: dict, apply: bool, actor,
+                contour_sets: list) -> int:
+    """Опора — ВСЕМ ключам, где текст контура сейчас РАВЕН тексту пакета (по отпечатку),
+    и только им. Несовпавших не трогаем вовсе — ни добавить, ни убрать у них запись.
+    Сверяется ПО ПОБЕДИВШЕМУ описанию взятых контуром наборов (governing_rows) — не по
+    каждому набору порознь: иначе universal-версия ключа, перекрытого доменом, ложно
+    заявила бы себя опорой рядом с настоящей (карточка #608, возврат PROTO)."""
+    circuit_rules = load_circuit_rules(conn)
+    governing = governing_rows(pack_rows, contour_sets)
+    matched = []
+    for key, row in governing.items():
+        if row["removed_at"]:
+            continue
+        v_body = circuit_rules.get(key)
+        if v_body is None or text_sha(v_body) != row["text_sha"]:
+            continue
+        matched.append((row["rule_set"], key, row["text_sha"]))
+    already = sum(1 for rs, rk, sha in matched if base_map.get(f"{rs}/{rk}") == sha)
+    to_write = len(matched) - already
+
+    tag = "ЗАПИСАЛ БЫ" if apply_gate(apply) else "ЗАПИСЫВАЮ"
+    print(f"{tag} опору у совпадающих ключей: совпадает всего {len(matched)}, "
+          f"уже верно записано {already}, {'будет изменено' if apply_gate(apply) else 'изменено'} "
+          f"{to_write}")
+    if apply_gate(apply):
+        print("\n[ХОЛОСТОЙ ПРОГОН] Не записано. Для записи — флаг --apply (и --actor).")
+        return 0
+
+    record_base_for(base_map, matched)
+    save_meta_map(conn, "pack_rules_base", base_map)
+    conn.commit()
+    print(f"\n✅ опора сверена (актёр: {actor}) — совпадающих ключей {len(matched)}, "
+          f"изменено записей {to_write}")
+    return 0
+
+
+# ── --summary ────────────────────────────────────────────────────────────────────────
+# Одна строка для ЧУЖОГО вызова (инструмент обновления контура и т.п.) — БЕЗ построчного
+# списка. Отказ (нет базы пакета / нет базы контура) — код 2 и причина В ТЕКСТЕ, не
+# молчание: чужой вызывающий обязан различить «всё чисто» от «сверка не состоялась».
+
+def cmd_summary(args) -> int:
+    try:
+        db_path = mezo_paths.resolve_db(args.db, __file__, must_exist=True, readonly=True)
+        conn = sqlite3.connect(f"file:{Path(db_path).as_posix()}?mode=ro", uri=True)
+        source = find_pack_source(args.source, conn)
+        pack_conn = open_pack_db(source)
+    except SystemExit as e:
+        msg = e.code if isinstance(e.code, str) else f"⛔ отказ при поиске баз (код {e.code})"
+        print(msg, file=sys.stderr)
+        return 2
+
+    circuit_rules = load_circuit_rules(conn)
+    pack_rows = load_pack_rows(pack_conn)
+    contour_sets, via_meta = resolve_contour_rule_sets(conn, circuit_rules, pack_rows)
+    note = rule_sets_note(contour_sets, via_meta)
+    if note:
+        print(note)
+    rows, only_yours = build_rows(circuit_rules, pack_rows, load_meta_map(conn, "pack_rules_base"),
+                                  load_meta_map(conn, "pack_rules_skipped"),
+                                  make_history_has(pack_conn), contour_sets,
+                                  load_circuit_retired_keys(conn))
+    counts = summarize(rows, only_yours)
+    print(f"правила пакета: новых {counts['new']} · изменено в пакете {counts['pack-changed']} · "
+          f"уточнено у вас {counts['local-changed']} · с обеих сторон {counts['both-changed']} · "
+          f"опоры нет {counts['no-base']} · снято в пакете {counts['removed']} · "
+          f"снято у вас {counts['retired-here']} — "
+          f"подробно: rules-from-pack.py")
+    return 0
+
+
+# ── --propose ────────────────────────────────────────────────────────────────────────
+
+def describe_source_occurrences(source: Path, rule_set: str, rule_key: str):
+    """ВОЗВРАТ PROTO (карточка #608, замечание 3): ключ может быть ОПИСАН НЕСКОЛЬКО РАЗ в
+    исходном .sql пакета — несколько блоков `INSERT OR REPLACE`, SQL исполняет их по
+    порядку файла, и действует ПОСЛЕДНЕЕ описание. pack_rules несёт только итог (одну
+    строку на ключ) — не видно, что правка ПЕРВОГО описания ничего не изменит. Читаем
+    САМ исходник (только чтение), называем число описаний и строку последнего.
+    None — исходника .sql нет (например, собранная копия без него) или описание ровно одно
+    (тогда говорить не о чем)."""
+    sql_path = (source / "rules" / "universal.sql" if rule_set == "universal"
+               else source / "rules" / "domain-specific" / f"{rule_set}.sql")
+    if not sql_path.exists():
+        return None
+    text = sql_path.read_text(encoding="utf-8")
+    pattern = re.compile(r"^\(\s*'" + re.escape(rule_key) + r"'\s*,", re.M)
+    lines_matched = [text.count("\n", 0, m.start()) + 1 for m in pattern.finditer(text)]
+    if len(lines_matched) <= 1:
+        return None
+    return (f"⚠️ ключ описан в {sql_path.name} {len(lines_matched)} раз, действует "
+            f"ПОСЛЕДНЕЕ описание (строка {lines_matched[-1]}) — правьте его.")
+
+
+def write_proposal_letter(conn, title: str, body: str, out_path) -> int:
+    """Хвост письма --propose, ОБЩИЙ для обеих причин письма (замена текста контуром /
+    снятие ключа, который контур сам отключил): обезличивание путей машины, запись файла,
+    подсказка на канал issues. Путь к gordi-issue.py — от СВОЕГО расположения (возврат
+    PROTO, карточка #608: прежде был впечатан и годился только автору инструмента)."""
+    body, found = redact_machine_paths(body)
+    if not out_path:
+        sys.exit("⛔ --propose требует --out <файл> — тело предложения без пути не пишется")
+    Path(out_path).write_text(body, encoding="utf-8")
+    print(f"✅ тело предложения записано: {out_path}")
+    if found:
+        print(f"⚠️ обезличены пути машины ({len(found)} шт.) — проверь текст глазами перед отправкой")
+
+    coordinator = find_coordinator(conn)
+    role_for_cmd = coordinator or "<координатор>"
+    if coordinator is None:
+        print("⚠️ не нашёл РОВНО ОДНУ живую роль-координатора в roles.lifecycle_reason — "
+              "подставь имя координатора сам")
+    print("👉 сначала холостой прогон канала issues, затем — по слову координатора:")
+    print(f'   python {GORDI_ISSUE_PY} create '
+          f'--role {role_for_cmd} --title "{title}" --body-file {out_path} --dry-run')
+    return 0
+
+
+def propose_retire(conn, pack_conn, source: Path, key, why, out_path, rule_set_hint) -> int:
+    """ВОЗВРАТ PROTO (карточка #608, повторная приёмка): ключ, который контур САМ снял
+    (retired-here) — раньше --propose по нему отказывал («предлагать нечего»), хотя
+    предложить есть что: снять этот ключ в пакете ДЛЯ ВСЕХ, раз контур от него уже
+    отказался. Письмо называет, ЧТО ИМЕННО снято у контура — по полям его же строки в
+    `rules` (какие заполнены), а не только словом «снято»."""
+    rows = [r for r in load_pack_rows(pack_conn) if r["rule_key"] == key and not r["removed_at"]]
+    if not rows:
+        sys.exit(f"⛔ у пакета уже нет действующего текста «{key}» — снимать нечего, он и так снят")
+    row = pick_rule_set(rows, key, rule_set_hint)
+    p_body = row["body"]
+
+    circuit_row = conn.execute(
+        "SELECT status, basis, revoked_at, revoked_by, revoked_reason, superseded_by, "
+        "updated_at FROM rules WHERE rule_key=?", (key,)).fetchone()
+    (status, basis, revoked_at, revoked_by, revoked_reason, superseded_by, updated_at) = (
+        circuit_row if circuit_row else (None, None, None, None, None, None, None))
+
+    def show_field(label, value):
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return f"{label}: (не заполнено)"
+        return f"{label}: {value}"
+
+    fields_block = "\n".join([
+        show_field("статус", status),
+        show_field("основание снятия (basis)", basis),
+        show_field("отмена — когда (revoked_at)", revoked_at),
+        show_field("отмена — кем (revoked_by)", revoked_by),
+        show_field("отмена — причина (revoked_reason)", revoked_reason),
+        show_field("заменено записью (superseded_by)", superseded_by),
+        show_field("последняя правка (updated_at)", updated_at),
+    ])
+
+    dup_note = describe_source_occurrences(source, row["rule_set"], key)
+    measure = (
+        f"у контура ключ «{key}» СНЯТ (не действует):\n{fields_block}\n\n"
+        f"текст пакета сейчас (набор «{row['rule_set']}», обновлён {row['pack_updated_at']}, "
+        f"коммит {row['pack_commit']}):\n{p_body}"
+        + (f"\n\n{dup_note}" if dup_note else "")
+    )
+    body = (
+        f"## ЗАМЕР\n{measure}\n\n"
+        f"## КЛАСС\n{why.strip()}\n\n"
+        f"## ПРЕДЛОЖЕНИЕ\n"
+        f"снять правило «{key}» в наборе «{row['rule_set']}» из пакета — контур больше его "
+        f"не несёт (снятие описано выше), предложение просит убрать его для всех. "
+        f"Цена: строк уберётся {len(p_body.splitlines())} (весь текущий текст правила).\n"
+    )
+    title = f"pack-rules: снять «{key}» в наборе «{row['rule_set']}»"
+    return write_proposal_letter(conn, title, body, out_path)
+
+
+def propose(conn, pack_conn, source: Path, key, why, out_path, rule_set_hint) -> int:
+    v_body = load_circuit_rules(conn).get(key)
+    if v_body is None:
+        if circuit_is_retired(conn, key):
+            return propose_retire(conn, pack_conn, source, key, why, out_path, rule_set_hint)
+        sys.exit(f"⛔ у контура нет действующего правила «{key}» — предлагать нечего")
+    rows = [r for r in load_pack_rows(pack_conn) if r["rule_key"] == key and not r["removed_at"]]
+    if not rows:
+        sys.exit(f"⛔ у пакета нет действующего текста «{key}» — предлагать замену не на что")
+    row = pick_rule_set(rows, key, rule_set_hint)
+    p_body = row["body"]
+    if text_sha(v_body) == text_sha(p_body):
+        sys.exit(f"⛔ текст «{key}» у контура и у пакета УЖЕ совпадает дословно — предлагать нечего")
+
+    diff_lines = list(difflib.unified_diff(
+        p_body.splitlines(), v_body.splitlines(), lineterm=""))
+    added = sum(1 for l in diff_lines if l.startswith("+") and not l.startswith("+++"))
+    removed_n = sum(1 for l in diff_lines if l.startswith("-") and not l.startswith("---"))
+
+    dup_note = describe_source_occurrences(source, row["rule_set"], key)
+    measure = (
+        f"пакет, набор «{row['rule_set']}», обновлено {row['pack_updated_at']} "
+        f"(коммит {row['pack_commit']}):\n{p_body}\n\n"
+        f"текст контура:\n{v_body}\n\n"
+        f"различие (пакет → контур):\n" + "\n".join(diff_lines)
+        + (f"\n\n{dup_note}" if dup_note else "")
+    )
+    body = (
+        f"## ЗАМЕР\n{measure}\n\n"
+        f"## КЛАСС\n{why.strip()}\n\n"
+        f"## ПРЕДЛОЖЕНИЕ\n"
+        f"заменить текст правила «{key}» в наборе «{row['rule_set']}» на текст контура. "
+        f"Цена: строк добавится {added}, уберётся {removed_n} (по построчному различию).\n"
+    )
+    title = f"pack-rules: обновить «{key}» в наборе «{row['rule_set']}»"
+    return write_proposal_letter(conn, title, body, out_path)
+
+
+# ── main ─────────────────────────────────────────────────────────────────────────────
+
+def build_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(
+        description="Правила пакета GORDI против правил контура: список расхождений, показ, "
+                     "взятие, сведение, отказ, тело предложения в пакет (карточка #608).")
+    ap.add_argument("--db", default=None,
+                    help="БД контура (по умолчанию — живая, от расположения скрипта)")
+    ap.add_argument("--source", default=None,
+                    help="папка с клоном пакета (по умолчанию — meta.template_checkout контура)")
+    ap.add_argument("--state", choices=STATE_NAMES, default=None,
+                    help="показать только строки этого состояния")
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--show", metavar="KEY")
+    mode.add_argument("--adopt", nargs="+", metavar="KEY")
+    mode.add_argument("--merge", metavar="KEY")
+    mode.add_argument("--skip", metavar="KEY")
+    mode.add_argument("--propose", metavar="KEY")
+    mode.add_argument("--record-base", dest="record_base", action="store_true",
+                      help="записать опору всем ключам, чей текст СЕЙЧАС равен тексту пакета")
+    mode.add_argument("--summary", action="store_true",
+                      help="одна строка итога без списка, для чужого вызова")
+    ap.add_argument("--file", default=None, help="файл со сведённым текстом (нужен с --merge)")
+    ap.add_argument("--why", default=None, help="одно предложение класса ошибки (--propose)")
+    ap.add_argument("--out", default=None, help="файл для тела предложения (--propose)")
+    ap.add_argument("--rule-set", dest="rule_set", default=None,
+                    help="какой набор пакета брать, если ключ есть в нескольких с разным текстом")
+    ap.add_argument("--word", default=None,
+                    help="дословно: кто разрешил · когда · где — обязателен при записи "
+                         "(--adopt/--merge/--skip)")
+    ap.add_argument("--actor", default=None,
+                    help="кто пишет в audit_log контура — своё имя роли; ОБЯЗАТЕЛЕН вместе "
+                         "с --apply у --adopt/--merge/--record-base, без --apply не нужен")
+    ap.add_argument("--apply", action="store_true", help="без него — холостой прогон")
+    return ap
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+
+    if args.merge and not args.file:
+        sys.exit("⛔ --merge требует --file <файл со сведённым текстом>")
+    if args.propose and not args.why:
+        sys.exit("⛔ --propose требует --why <одно предложение: что уточнение исправляет>")
+    if args.propose and not args.out:
+        sys.exit("⛔ --propose требует --out <файл для тела предложения>")
+
+    # ⚖️ ПИШУЩИЙ В КОНТУРЕ ВСЕГДА НАЗЫВАЕТ СЕБЯ (как backlog.py --actor, lease.py --role) —
+    # проверка ДО любого соединения с базой: отказ обязан быть нулевым по последствиям.
+    if args.apply and (args.adopt or args.merge or args.record_base) \
+            and not (args.actor or "").strip():
+        sys.exit(
+            "⛔ ЗАПИСЬ НЕ СДЕЛАНА — нужен --actor <имя роли>: пишущий в контуре всегда "
+            "называет себя. Без --apply флаг не нужен."
+        )
+
+    if args.summary:
+        return cmd_summary(args)
+
+    is_write = bool(args.adopt or args.merge or args.skip or args.record_base)
+    db_path = mezo_paths.resolve_db(args.db, __file__, must_exist=True, readonly=not is_write)
+    conn = sqlite3.connect(
+        f"file:{Path(db_path).as_posix()}?mode={'rw' if is_write else 'ro'}", uri=True)
+
+    source = find_pack_source(args.source, conn)
+    pack_conn = open_pack_db(source)
+
+    if args.show:
+        return cmd_show(conn, pack_conn, args.show, load_meta_map(conn, "pack_rules_base"),
+                        args.rule_set)
+    if args.adopt:
+        return adopt_keys(conn, db_path, pack_conn, load_meta_map(conn, "pack_rules_base"),
+                          args.adopt, args.rule_set, args.word, args.apply, args.actor)
+    if args.merge:
+        return merge_key(conn, db_path, pack_conn, load_meta_map(conn, "pack_rules_base"),
+                         args.merge, args.rule_set, args.file, args.word, args.apply, args.actor)
+    if args.skip:
+        return skip_key(conn, pack_conn, load_meta_map(conn, "pack_rules_skipped"),
+                        args.skip, args.rule_set, args.word, args.apply)
+    if args.record_base:
+        pack_rows = load_pack_rows(pack_conn)
+        contour_sets, via_meta = resolve_contour_rule_sets(conn, load_circuit_rules(conn), pack_rows)
+        note = rule_sets_note(contour_sets, via_meta)
+        if note:
+            print(note)
+        return record_base(conn, pack_rows, load_meta_map(conn, "pack_rules_base"),
+                           args.apply, args.actor, contour_sets)
+    if args.propose:
+        return propose(conn, pack_conn, source, args.propose, args.why, args.out, args.rule_set)
+
+    # список — режим по умолчанию
+    circuit_rules = load_circuit_rules(conn)
+    pack_rows = load_pack_rows(pack_conn)
+    contour_sets, via_meta = resolve_contour_rule_sets(conn, circuit_rules, pack_rows)
+    note = rule_sets_note(contour_sets, via_meta)
+    if note:
+        print(note)
+    rows, only_yours = build_rows(circuit_rules, pack_rows, load_meta_map(conn, "pack_rules_base"),
+                                  load_meta_map(conn, "pack_rules_skipped"),
+                                  make_history_has(pack_conn), contour_sets,
+                                  load_circuit_retired_keys(conn))
+    print_listing(rows, only_yours, args.state)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

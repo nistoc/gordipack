@@ -5,7 +5,7 @@ r"""ПРОВЕРКА: свод правил в посеве не отстал о
 Повод — замер 20.08: из 39 правил посева дословно совпадало с живым ОДНО, и никто этого
 не видел месяц. Причина невидимости названа отдельно, потому что она и есть главное:
 
-  🪤 НОМЕР ВЕРСИИ В ПОСЕВЕ ВСЕГДА «1». Это счёт НОВОГО контура, а не возраст текста.
+  🪤 НОМЕР ВЕРСИИ В ПОСЕВЕ СТАВИТ ТОТ, КТО ПЕРЕНОСИТ, — о возрасте текста в живом своде он не говорит.
      По нему свежесть проверить НЕЛЬЗЯ, а выглядит он как обычная версия — и потому
      молча отвечает «всё в порядке» на вопрос, который ему не задавали.
 
@@ -21,8 +21,8 @@ r"""ПРОВЕРКА: свод правил в посеве не отстал о
      Механизм этого не знает и не притворяется, что знает.
 
 Зовут так:
-    python C:/guts/.atlas/vnext-tools/guard-seed-rules.py
-    python C:/guts/.atlas/vnext-tools/guard-seed-rules.py --show <ключ>   # тела рядом
+    python <КОНТУР>/vnext-tools/guard-seed-rules.py
+    python <КОНТУР>/vnext-tools/guard-seed-rules.py --show <ключ>   # тела рядом
 """
 from __future__ import annotations
 
@@ -43,23 +43,23 @@ import mezo_stand  # временный каталог убирается при
 # ⚖️ Честный признак отставания — ВРЕМЯ: правило, изменённое в живом своде ПОСЛЕ последнего
 # догона посева, могло унести с собой урок, которого в посеве нет. Это не доказывает долг —
 # это называет, что человеку надо посмотреть. Длина остаётся справкой, а не приговором.
-МЕТКА_ДОГОНА = "ПОСЛЕДНИЙ ДОГОН ПОСЕВА:"
+CATCHUP_MARK = "ПОСЛЕДНИЙ ДОГОН ПОСЕВА:"
 
 
-def посев_как_база(файл: pathlib.Path) -> dict[str, str]:
+def seed_as_database(seed_file: pathlib.Path) -> dict[str, str]:
     """Применяем файл посева так же, как это делает сборка контура."""
     d = mezo_stand.new("seed-check-")
     con = sqlite3.connect(str(d / "seed.db"))
     con.execute("""CREATE TABLE rules (id INTEGER PRIMARY KEY, rule_key TEXT UNIQUE, body TEXT,
                    locked_by TEXT, version INT, basis TEXT, authorized TEXT, source_ref TEXT,
                    expiry_kind TEXT, expiry_cond TEXT)""")
-    con.executescript(файл.read_text(encoding="utf-8"))
-    строки = {r[0]: r[1] for r in con.execute("SELECT rule_key, body FROM rules")}
+    con.executescript(seed_file.read_text(encoding="utf-8"))
+    rows = {r[0]: r[1] for r in con.execute("SELECT rule_key, body FROM rules")}
     con.close()
-    return строки
+    return rows
 
 
-def дубли_в_посеве(файл: pathlib.Path) -> list[tuple[str, int, bool]]:
+def duplicates_in_seed(seed_file: pathlib.Path) -> list[tuple[str, int, bool]]:
     """→ [(ключ, сколько определений, объявлен ли дубль)] для ключей с >1 определением.
 
     ═══ Карточка #430 ③ (находка COORD 29.08): его правка легла в ПЕРВОЕ определение
@@ -69,17 +69,17 @@ def дубли_в_посеве(файл: pathlib.Path) -> list[tuple[str, int, b
     (маркер COORD над мёртвым блоком). Необъявленный дубль — красный; объявленный
     назван без красноты: удаление дубля — разрушающее, словом владельца.
     """
-    текст = файл.read_text(encoding="utf-8")
-    счёт: dict[str, int] = {}
-    for k in re.findall(r"^\s*\('([\w-]+)',\s*" + chr(36) + "", текст, re.M):
-        счёт[k] = счёт.get(k, 0) + 1
-    итог = []
-    for k, n in sorted(счёт.items()):
+    text = seed_file.read_text(encoding="utf-8")
+    count: dict[str, int] = {}
+    for k in re.findall(r"^\s*\('([\w-]+)',\s*" + chr(36) + "", text, re.M):
+        count[k] = count.get(k, 0) + 1
+    result = []
+    for k, n in sorted(count.items()):
         if n > 1:
-            объявлен = bool(re.search(r"МЁРТВОЕ ОПРЕДЕЛЕНИЕ[^\n]*'" + re.escape(k) + "'",
-                                      текст))
-            итог.append((k, n, объявлен))
-    return итог
+            declared = bool(re.search(r"МЁРТВОЕ ОПРЕДЕЛЕНИЕ[^\n]*'" + re.escape(k) + "'",
+                                      text))
+            result.append((k, n, declared))
+    return result
 
 
 def main() -> int:
@@ -90,115 +90,115 @@ def main() -> int:
                                  "Нужен приёмке: испытывать проверку на живой базе нельзя")
     a = ap.parse_args()
 
-    файл = pathlib.Path(a.seed) if a.seed else mezo_paths.template_root() / "rules" / "universal.sql"
-    if not файл.exists():
-        print(f"⛔ НЕ ЗАПУСТИЛАСЬ: посева нет — {файл}")
+    seed_file = pathlib.Path(a.seed) if a.seed else mezo_paths.template_root() / "rules" / "universal.sql"
+    if not seed_file.exists():
+        print(f"⛔ НЕ ЗАПУСТИЛАСЬ: посева нет — {seed_file}")
         return 2
     try:
-        посев = посев_как_база(файл)
+        seed = seed_as_database(seed_file)
     except sqlite3.Error as e:
         print(f"⛔ НЕ ЗАПУСТИЛАСЬ: посев не применяется к чистой базе — {e}")
         print("   Это само по себе находка: сборка нового контура на нём ляжет.")
         return 2
 
     con = sqlite3.connect(str(pathlib.Path(a.db) if a.db else mezo_paths.live_db()))
-    живые = {r[0]: (r[1], r[2], (r[3] or "")[:16]) for r in
+    live_rules = {r[0]: (r[1], r[2], (r[3] or "")[:16]) for r in
              con.execute("SELECT rule_key, body, status, updated_at FROM rules")}
     con.close()
 
     if a.show:
         k = a.show
-        print(f"── ПОСЕВ ({len(посев.get(k, ''))} знаков)\n{посев.get(k, '(нет)')}")
-        print(f"\n── ЖИВОЕ ({len(живые.get(k, ('',''))[0])} знаков)\n{живые.get(k, ('(нет)', ''))[0]}")
+        print(f"── ПОСЕВ ({len(seed.get(k, ''))} знаков)\n{seed.get(k, '(нет)')}")
+        print(f"\n── ЖИВОЕ ({len(live_rules.get(k, ('',''))[0])} знаков)\n{live_rules.get(k, ('(нет)', ''))[0]}")
         return 0
 
-    догон = ""  # 🔴 пусто = метки в посеве НЕТ. Ниже это КРАСНОЕ, а не «нечего сравнивать»
-    for line in файл.read_text(encoding="utf-8").splitlines():
-        if МЕТКА_ДОГОНА in line:
-            догон = line.split(МЕТКА_ДОГОНА, 1)[1].strip()
+    catchup = ""  # 🔴 пусто = метки в посеве НЕТ. Ниже это КРАСНОЕ, а не «нечего сравнивать»
+    for line in seed_file.read_text(encoding="utf-8").splitlines():
+        if CATCHUP_MARK in line:
+            catchup = line.split(CATCHUP_MARK, 1)[1].strip()
             break
 
-    if not догон:
+    if not catchup:
         # 🩸 ОПЛАЧЕНО 05.09: метку в посеве переименовали («ПОСЛЕДНИЙ ПОЛНЫЙ ДОГОН») из добрых
         # побуждений — отличить полный догон от частичного. Проверка ищет строку ДОСЛОВНО,
         # не нашла, и вместо «отстали 14» напечатала «отстали 0». Ослепла МОЛЧА: признак
         # отставания держится на одной этой строке, и её отсутствие выглядело как порядок.
         # ⚡ КЛАСС: переименование учащей строки гасит проверку без единого красного.
         print("=" * 84)
-        print(f"🔴 В ПОСЕВЕ НЕТ МЕТКИ «{МЕТКА_ДОГОНА}» — сравнивать не с чем, и это ОТКАЗ,")
+        print(f"🔴 В ПОСЕВЕ НЕТ МЕТКИ «{CATCHUP_MARK}» — сравнивать не с чем, и это ОТКАЗ,")
         print("   а не «отставших нет». Признак отставания держится на этой строке и только")
         print("   на ней: без неё проверка молча объявит порядок при любом расхождении.")
-        print(f"   👉 верни строку в шапку {файл} ДОСЛОВНО, с часом последнего полного догона.")
+        print(f"   👉 верни строку в шапку {seed_file} ДОСЛОВНО, с часом последнего полного догона.")
         return 2
 
-    беднее, богаче, снятые, совпали = [], [], [], 0
-    for k, тело in sorted(посев.items()):
-        ж = живые.get(k)
-        if not ж:
+    poorer, richer, revoked, matched = [], [], [], 0
+    for k, body in sorted(seed.items()):
+        entry = live_rules.get(k)
+        if not entry:
             continue
-        живое, статус, правлено = ж
-        if статус != "active":
-            снятые.append(k)
+        live_body, status, edited_at = entry
+        if status != "active":
+            revoked.append(k)
             continue
-        if тело.strip() == живое.strip():
-            совпали += 1
+        if body.strip() == live_body.strip():
+            matched += 1
             continue
-        if догон and (правлено or "") > догон:
-            беднее.append((k, правлено or "?", len(тело), len(живое)))
-        elif len(тело) > len(живое):
-            богаче.append((k, len(тело), len(живое)))
-    нет_в_посеве = sorted(k for k, (_, st, _u) in живые.items()
-                          if st == "active" and k not in посев)
+        if catchup and (edited_at or "") > catchup:
+            poorer.append((k, edited_at or "?", len(body), len(live_body)))
+        elif len(body) > len(live_body):
+            richer.append((k, len(body), len(live_body)))
+    missing_from_seed = sorted(k for k, (_, st, _u) in live_rules.items()
+                          if st == "active" and k not in seed)
 
     print("=" * 84)
     print("СВОД ПРАВИЛ: ПОСЕВ ПРОТИВ ЖИВОГО")
-    print(f"  посев: {файл}")
-    print(f"  правил в посеве {len(посев)} · живых активных "
-          f"{sum(1 for _, (_, s, _u) in живые.items() if s == 'active')}")
-    print(f"  последний догон посева: {догон or 'НЕ ОТМЕЧЕН — судить о свежести нечем'}")
+    print(f"  посев: {seed_file}")
+    print(f"  правил в посеве {len(seed)} · живых активных "
+          f"{sum(1 for _, (_, s, _u) in live_rules.items() if s == 'active')}")
+    print(f"  последний догон посева: {catchup or 'НЕ ОТМЕЧЕН — судить о свежести нечем'}")
     print("=" * 84)
 
-    for k, правлено, a_, b in беднее:
-        print(f"🔴 {k:30} правлено {правлено} ПОСЛЕ догона · посев {a_:5} · живое {b:5}")
-    for k, a_, b in богаче:
+    for k, edited_at, a_, b in poorer:
+        print(f"🔴 {k:30} правлено {edited_at} ПОСЛЕ догона · посев {a_:5} · живое {b:5}")
+    for k, a_, b in richer:
         print(f"🟡 {k:30} посев {a_:5} · живое {b:5} — посев БОГАЧЕ, копировать живое нельзя")
-    for k in снятые:
+    for k in revoked:
         print(f"⚠️ {k:30} у вас СНЯТО, а в посеве живое — решите, умолчание это или долг")
-    if нет_в_посеве:
-        print(f"⚪ нет в посеве вовсе: {len(нет_в_посеве)} — общее ли это, решает человек:")
-        print("   " + " · ".join(нет_в_посеве[:12]) + ("…" if len(нет_в_посеве) > 12 else ""))
+    if missing_from_seed:
+        print(f"⚪ нет в посеве вовсе: {len(missing_from_seed)} — общее ли это, решает человек:")
+        print("   " + " · ".join(missing_from_seed[:12]) + ("…" if len(missing_from_seed) > 12 else ""))
 
     # ═══ Карточка #430 ③: ключ, определённый в файле дважды, называется ВСЛУХ.
     # ⚖️ ЖЁЛТЫМ, а не красным, и это решение с замером: живой посев несёт 27 наслоений
     # (файл рос семью волнами дозаливок «INSERT OR REPLACE») — красное на всех до
     # большого сведения было бы вечно-красным и учило не верить проверке. Ловушка
     # от этого не тише: правка в НЕ-последнее определение умирает молча (COORD 29.08).
-    дубли = дубли_в_посеве(файл)
-    немые_дубли = [(k, n) for k, n, объявлен in дубли if not объявлен]
-    for k, n in немые_дубли:
+    duplicates = duplicates_in_seed(seed_file)
+    silent_duplicates = [(k, n) for k, n, declared in duplicates if not declared]
+    for k, n in silent_duplicates:
         print(f"⚠️ {k:30} определён {n} раз БЕЗ объявления — в базу доедет ПОСЛЕДНЕЕ, "
               f"правка в верхнее умрёт молча. Правь ПОСЛЕДНЕЕ вхождение")
-    for k, n, объявлен in дубли:
-        if объявлен:
+    for k, n, declared in duplicates:
+        if declared:
             print(f"ℹ️ {k:30} определён {n} раз, дубль ОБЪЯВЛЕН в файле — исполняется "
                   f"последнее; удаление мёртвого блока — словом владельца")
 
     print("-" * 84)
-    print(f"совпадают дословно {совпали} · 🔴 отстали {len(беднее)} · 🟡 богаче {len(богаче)} "
-          f"· ⚠️ снятых у нас {len(снятые)} · ⚪ вне посева {len(нет_в_посеве)}"
-          f" · дубли ключей: немых {len(немые_дубли)} / объявленных "
-          f"{len(дубли) - len(немые_дубли)}")
-    if беднее:
+    print(f"совпадают дословно {matched} · 🔴 отстали {len(poorer)} · 🟡 богаче {len(richer)} "
+          f"· ⚠️ снятых у нас {len(revoked)} · ⚪ вне посева {len(missing_from_seed)}"
+          f" · дубли ключей: немых {len(silent_duplicates)} / объявленных "
+          f"{len(duplicates) - len(silent_duplicates)}")
+    if poorer:
         print("⛔ Эти правила менялись в живом своде ПОСЛЕ последнего догона — посмотри, "
               "не унесли ли они с собой урок, которого в посеве нет.")
-        print("   Отставание НЕ ВИДНО по номеру версии: в посеве он всегда «1».")
+        print("   Отставание НЕ ВИДНО по номеру версии: в посеве его ставит тот, кто переносит, и о возрасте текста в живом своде он не говорит.")
     else:
         print("✅ отставших правил нет.")
-    if немые_дубли:
+    if silent_duplicates:
         print("⚠️ Наслоения посева: правку кладут в текст, который НЕ исполняется, "
               "и никто не скажет (оплачено COORD 29.08, карточка #430). Сведение "
               "наслоений — отдельное решение владельца, до него правь ПОСЛЕДНЕЕ вхождение.")
-    return 1 if беднее else 0
+    return 1 if poorer else 0
 
 
 if __name__ == "__main__":

@@ -48,6 +48,15 @@ r"""bite-update-tools-rev.py — приёмка карточки #604 ②③: up
     так был пуст); красит СВОЕЙ причиной — возвращается ложное «нет в истории»
   ⑨ КОНТРОЛЬ нарочной поломкой: снята проверка «нет ни одного коммита» — красит РОВНО ③-1г
     (возвращается ложное «нет в истории»), не трогает ③-1б (там HEAD есть)
+  ⑩ КАРТОЧКА #608, ШАГ 3: update-tools печатает строку о правилах пакета — «правила
+    пакета: …» (источник с базой правил rules/pack-rules.db), «в пакете нет базы правил»
+    (источник без неё), и в ПЛАНЕ, и после --apply; КОНТРОЛЬ нарочной поломкой — сняты
+    оба вызова print_pack_rules_summary, красит РОВНО ⑩а, своей причиной (строка пропадает,
+    а не меняется код выхода)
+  ⑩г ВОЗВРАТ PROTO (карточка #608, шаг 3, повторная приёмка): инструмента rules-from-pack.py
+    нет НИ у контура, НИ в источнике — сказано честно про ОБА места, а не «приедет
+    обновлением» (та строка была бы ложью — обновление его не несёт); КОНТРОЛЬ нарочной
+    поломкой — снято различение «источник несёт / не несёт», красит РОВНО ⑩г своей причиной
 
 ИСПЫТУЕТСЯ через mezo_target (живой контур или MEZO_SCRIPTS_ROOT — копия для укуса).
 ПАКЕТ — ЛОКАЛЬНАЯ КОПИЯ <ШАБЛОН>, ТОЛЬКО ЧТЕНИЕ: git log/show — команды на
@@ -63,6 +72,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import sqlite3
 import subprocess
 import sys
@@ -625,6 +635,157 @@ rc9b, out9b = run(upd2b_broken4, "--source", str(worktree_src4))
 case("⑨ та же поломка НЕ трогает ③-1б: там HEAD есть",
      rc9b == 0 and appearance_sig in out9b,
      f"код {rc9b}")
+
+# ═══ ⑩ КАРТОЧКА #608, ШАГ 3: update-tools печатает строку о правилах пакета — и когда
+# источник несёт базу правил, и когда её нет. rules-from-pack.py копируем в контур ОТДЕЛЬНО
+# от TARGET: update-tools зовёт его подпроцессом по строковому пути, а не импортом, и
+# copy_tool() по AST-соседям такую связь не видит — граница названа в её же шапке (docstring
+# copy_tool: «не чинит уже написанные приёмки, которые копируют файл своей рукой»).
+RFP_TOOL = mezo_target.script("rules-from-pack.py")
+
+
+def make_minimal_source(root: pathlib.Path, with_pack_db: bool) -> pathlib.Path:
+    """Минимальный источник для update-tools: пустой scripts/ (диффу нечего брать — нам
+    важна только строка о правилах, не сам перенос файлов) и, по флагу, rules/pack-rules.db
+    по контракту rules-from-pack.py (та же схема, что у bite-rules-from-pack.py)."""
+    (root / "scripts").mkdir(parents=True, exist_ok=True)
+    if with_pack_db:
+        rules_dir = root / "rules"
+        rules_dir.mkdir(parents=True, exist_ok=True)
+        pconn = sqlite3.connect(str(rules_dir / "pack-rules.db"))
+        pconn.executescript(
+            "CREATE TABLE pack_rules (rule_set TEXT, rule_key TEXT, body TEXT, locked_by TEXT, "
+            "text_sha TEXT, pack_updated_at TEXT, pack_commit TEXT, removed_at TEXT, "
+            "PRIMARY KEY (rule_set, rule_key));"
+            "CREATE TABLE pack_rules_history (rule_set TEXT, rule_key TEXT, text_sha TEXT, "
+            "body TEXT, locked_by TEXT, first_commit TEXT, first_seen_at TEXT, replaced_at TEXT, "
+            "PRIMARY KEY (rule_set, rule_key, text_sha));"
+            "CREATE TABLE pack_rules_meta (key TEXT PRIMARY KEY, value TEXT);"
+        )
+        pconn.commit()
+        pconn.close()
+    return root
+
+
+t10 = stand / "t10"
+db10_dir = make_contour(t10, TARGET)
+upd10 = db10_dir / "scripts" / "update-tools.py"
+mezo_stand.copy_tool(RFP_TOOL, db10_dir / "scripts")   # испытуемый зовёт его подпроцессом
+
+src_with_db = make_minimal_source(stand / "pack-with-rules-db", with_pack_db=True)
+src_without_db = make_minimal_source(stand / "pack-without-rules-db", with_pack_db=False)
+
+rc10a, out10a = run(upd10, "--source", str(src_with_db))
+case("⑩а update-tools печатает «правила пакета: …» в ПЛАНЕ, когда у источника есть база правил",
+     rc10a == 0 and "правила пакета: " in out10a,
+     f"код {rc10a} · строка найдена: {'правила пакета: ' in out10a}")
+
+rc10b, out10b = run(upd10, "--source", str(src_without_db))
+case("⑩б update-tools печатает «в пакете нет базы правил», когда у источника её нет — не молчит",
+     rc10b == 0 and "в пакете нет базы правил" in out10b,
+     f"код {rc10b} · строка найдена: {'в пакете нет базы правил' in out10b}")
+
+rc10c, out10c = run(upd10, "--source", str(src_with_db), "--apply")
+case("⑩в строка о правилах пакета печатается и ПОСЛЕ --apply, не только в плане",
+     rc10c == 0 and "правила пакета: " in out10c,
+     f"код {rc10c} · строка найдена: {'правила пакета: ' in out10c}")
+
+# ── ⑩ КОНТРОЛЬ нарочной поломкой (требование задания, п3): update-tools больше НЕ зовёт
+# print_pack_rules_summary — случай ⑩а обязан провалиться ИМЕННО по этой причине.
+broken5_dir = stand / "broken5"
+broken5_tool = mezo_stand.copy_tool(TARGET, broken5_dir)
+broken5_src = broken5_tool.read_text(encoding="utf-8")
+# Отступ у двух вызовов РАЗНЫЙ (план — глубже вложен, чем итог --apply) — образец режет
+# ЦЕЛУЮ строку по отступу, а не литеральный текст с зашитыми пробелами: иначе снятие одного
+# отступа оставило бы обрывок пробелов перед следующей строкой и испортило бы синтаксис файла.
+call_pattern = re.compile(r"[ \t]*print_pack_rules_summary\(db, tools, src_dir\)\n")
+occurrences = len(call_pattern.findall(broken5_src))
+if occurrences != 2:
+    sys.exit(f"⛔ НЕ ЗАПУСТИЛАСЬ: строка вызова print_pack_rules_summary встречена "
+             f"{occurrences} раз (ждали 2) — испытуемое изменилось, поломка бьёт мимо")
+broken5_tool.write_text(call_pattern.sub("", broken5_src), encoding="utf-8")
+
+t10d = stand / "t10d"
+db10d_dir = make_contour(t10d, broken5_tool)
+upd10d = db10d_dir / "scripts" / "update-tools.py"
+mezo_stand.copy_tool(RFP_TOOL, db10d_dir / "scripts")
+src_with_db2 = make_minimal_source(stand / "pack-with-rules-db-2", with_pack_db=True)
+rc10e, out10e = run(upd10d, "--source", str(src_with_db2))
+case("⑩ ПОЛОМКА (сняты оба вызова print_pack_rules_summary) КРАСИТ ровно случай ⑩а — своей "
+     "причиной",
+     rc10e == 0 and "правила пакета: " not in out10e,
+     f"код {rc10e} · строка пропала: {'правила пакета: ' not in out10e}")
+
+# ── ⑩г ОТЗЫВ PROTO (карточка #608, шаг 3): инструмента rules-from-pack.py нет НИ у контура,
+# НИ в источнике — update-tools обязан назвать ОБА места, а не соврать «приедет обновлением»
+# (та ложь заставила бы ждать инструмент, который никогда не приедет). src_without_db — тот же
+# минимальный источник, что и в случае ⑩б: он никогда не несёт rules-from-pack.py
+# (make_minimal_source кладёт только пустой scripts/).
+# 🩸 КОНТУР БЕЗ ИНСТРУМЕНТА СТЕНД ДЕЛАЕТ САМ, А НЕ ПОЛАГАЕТСЯ НА ПАКЕТ. make_contour() собирает
+# контур init-group.py ИЗ РАБОЧЕЙ КОПИИ ПАКЕТА, а с переносом карточки #608 (14.09) пакет несёт
+# scripts/rules-from-pack.py — и свежий контур получает его сам. Прежний комментарий здесь
+# («контур честно остаётся без него») был верен, пока пакет инструмента не нёс: 14.09 11:04 UTC
+# случай провалился на ИСПРАВНОМ update-tools.py — стенд перестал строить свою предпосылку
+# (найдено PROTO прогоном после переноса в пакет). ⇒ убираем файл из контура стенда явно
+# и проверяем, что его там нет, до запуска.
+def drop_rfp_from_stand(db_dir: pathlib.Path) -> None:
+    rfp_in_stand = db_dir / "scripts" / "rules-from-pack.py"
+    if rfp_in_stand.exists():
+        rfp_in_stand.unlink()
+    if rfp_in_stand.exists():
+        sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: rules-from-pack.py не убран из контура стенда — случай ⑩г "
+                 "проверял бы не то")
+
+
+t10g = stand / "t10g"
+db10g_dir = make_contour(t10g, TARGET)
+drop_rfp_from_stand(db10g_dir)           # это и есть случай: у контура инструмента нет
+upd10g = db10g_dir / "scripts" / "update-tools.py"
+rc10g, out10g = run(upd10g, "--source", str(src_without_db))
+case("⑩г строка о правилах пакета честно называет ОБА места, где инструмента нет — не путает "
+     "с «приедет обновлением»",
+     rc10g == 0 and "нет ни у контура, ни в источнике" in out10g
+     and "приедет этим обновлением" not in out10g,
+     f"код {rc10g} · строка: {out10g.strip().splitlines()[-1] if out10g.strip() else '(пусто)'}")
+
+# ── ⑩г КОНТРОЛЬ нарочной поломкой: снимаем именно различение «источник несёт инструмент /
+# не несёт» — инструмент начинает ВСЕГДА печатать «приедет обновлением», даже когда его нет
+# нигде. Красит РОВНО случай ⑩г (там источник тоже пуст — «приедет» там ложь), а случаи
+# ⑩а/⑩б/⑩в не трогает: там rules-from-pack.py у контура ЕСТЬ, и до этой ветки исполнение
+# вообще не доходит (rfp.exists() истинно раньше).
+broken6_dir = stand / "broken6"
+broken6_tool = mezo_stand.copy_tool(TARGET, broken6_dir)
+broken6_src = broken6_tool.read_text(encoding="utf-8")
+anchor6 = (
+    '        if (src_dir / "scripts" / "rules-from-pack.py").exists():\n'
+    '            print("сверка правил пакета: инструмента rules-from-pack.py у контура нет — он "\n'
+    '                  "приедет этим обновлением")\n'
+    '        else:\n'
+    '            print("сверка правил пакета: инструмента rules-from-pack.py нет ни у контура, "\n'
+    '                  "ни в источнике")\n'
+    '        return\n'
+)
+if broken6_src.count(anchor6) != 1:
+    sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: якорь ветвления «приедет / нет нигде» в update-tools.py "
+             "найден не ровно один раз — испытуемое изменилось, поломка бьёт мимо")
+patched6 = broken6_src.replace(
+    anchor6,
+    '        print("сверка правил пакета: инструмента rules-from-pack.py у контура нет — он "\n'
+    '              "приедет этим обновлением")\n'
+    '        return\n',
+)
+broken6_tool.write_text(patched6, encoding="utf-8")
+
+t10h = stand / "t10h"
+db10h_dir = make_contour(t10h, broken6_tool)
+drop_rfp_from_stand(db10h_dir)           # та же предпосылка, что у ⑩г
+upd10h = db10h_dir / "scripts" / "update-tools.py"
+rc10i, out10i = run(upd10h, "--source", str(src_without_db))
+case("⑩г ПОЛОМКА (снято различение источника) КРАСИТ ровно случай ⑩г — своей причиной (лжёт "
+     "«приедет», хотя нет нигде)",
+     rc10i == 0 and "приедет этим обновлением" in out10i
+     and "нет ни у контура, ни в источнике" not in out10i,
+     f"код {rc10i} · строка: {out10i.strip().splitlines()[-1] if out10i.strip() else '(пусто)'}")
 
 print("---- контроль: рабочая копия пакета не тронута ----")
 pack_after = pack_state()

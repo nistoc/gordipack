@@ -52,8 +52,12 @@ def build(msgs, cursor=None, phoenix=(), rules=(), cards=()):
                    timestamp TEXT, body_md TEXT, tags TEXT, priority TEXT)""")
     con.execute("CREATE TABLE read_cursors (reader_role TEXT PRIMARY KEY, last_read_id INTEGER)")
     con.execute("CREATE TABLE phoenix (role TEXT, section TEXT, body TEXT, saved_at TEXT)")
+    # 🩸 status — как в живой базе: блок «правила» машинного слоя читает его по карточке #517.
+    # Без столбца случай ⑤ проваливался на ЛЮБОЙ редакции модуля: «свежесть свода НЕ СОБРАНА
+    # (no such column: status)» — найдено OPSSRE 14.09, записки #5196 и #5197.
     con.execute("""CREATE TABLE rules (rule_key TEXT PRIMARY KEY, body TEXT, locked_by TEXT,
-                   version INTEGER, updated_at TEXT)""")
+                   version INTEGER, updated_at TEXT,
+                   status TEXT NOT NULL DEFAULT 'active')""")
     for mid, role, ts, body in msgs:
         con.execute("INSERT INTO messages (id, writer_role, timestamp, body_md) VALUES (?,?,?,?)",
                     (mid, role, ts, body))
@@ -62,7 +66,8 @@ def build(msgs, cursor=None, phoenix=(), rules=(), cards=()):
     for sec, at in phoenix:
         con.execute("INSERT INTO phoenix VALUES ('PROTO', ?, 'тело', ?)", (sec, at))
     for k, v, at in rules:
-        con.execute("INSERT INTO rules VALUES (?, 'текст', 'owner', ?, ?)", (k, v, at))
+        con.execute("INSERT INTO rules (rule_key, body, locked_by, version, updated_at) "
+                    "VALUES (?, 'текст', 'owner', ?, ?)", (k, v, at))
     con.commit()
     con.close()
     return path
