@@ -127,6 +127,82 @@ def previous_counts(out: Path):
     return None
 
 
+# 🩸 КАРТОЧКА #612 ②. Час ПРЕЖНЕЙ выгрузки — граница окна, в котором запись
+# remove_rows журнала (audit_log) засчитывается в объяснение ТЕКУЩЕЙ убыли. Без
+# границы одна и та же старая запись объясняла бы убыль повторно на КАЖДОМ
+# следующем прогоне (карточка #612, сомнение исполнителя: «журнал старше прежней
+# выгрузки» — запись ДО этой границы уже объяснила убыль на ПРЕЖНЕМ прогоне и не
+# имеет права объяснить её ещё раз здесь). Строка «-- снят: …» пишется этим же
+# файлом (см. main): формат YYYY-MM-DD HH:MM:SS, тот же порядок сравнения, что и
+# у audit_log.timestamp (SQLite datetime('now') — тоже UTC, без метки часового пояса).
+_PREVIOUS_SNAPSHOT_AT_RE = re.compile(r"^-- снят: (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) UTC")
+
+
+def previous_snapshot_at(out: Path):
+    """Час прежней выгрузки (текстом «YYYY-MM-DD HH:MM:SS», как у audit_log.timestamp)
+    из шапки прежнего дампа. None — строки нет/не читается: окно неизвестно, и
+    сверка с журналом ниже это называет, а не гадает час."""
+    if not out.exists():
+        return None
+    try:
+        with out.open(encoding="utf-8") as f:
+            for _ in range(12):
+                line = f.readline()
+                m = _PREVIOUS_SNAPSHOT_AT_RE.match(line)
+                if m:
+                    return m.group(1)
+    except OSError:
+        return None
+    return None
+
+
+_NAMED_REMOVED_RE = re.compile(r"^снято строк: (\d+)")
+
+
+def named_removals(conn, table: str, since):
+    """→ (сумма_снятого_по_журналу, [строки-пояснения]) — записи remove_rows
+    (действие инструмента remove-rows.py, карточка #612 ①) для ЭТОЙ таблицы НЕ
+    РАНЬШЕ часа прежней выгрузки (since, включительно — секундная точность часа
+    роднит запись и дамп, случившиеся подряд, см. примечание у SQL-запроса ниже).
+    since=None — окно неизвестно (шапки со часом нет, например прежний дамп снят
+    версией до карточки #612, или час не распознан) — тогда ни одна запись не
+    засчитывается: неизвестное окно не повод доверять журналу вслепую, лучше
+    назвать убыль неназванной, чем один раз случайно объяснить её дважды.
+
+    ⚖️ Таблицы audit_log в базе может не быть вовсе (учебные/проверочные базы без
+    полной схемы координации, включая стенды bite-backup-shrink.py) — это НЕ беда
+    этой функции: отсутствие журнала не отличается от отсутствия записей в нём,
+    отвечаем (0, []), а не падаем.
+    """
+    if since is None:
+        return 0, []
+    try:
+        # ⚠️ ГРАНИЦА ВКЛЮЧИТЕЛЬНА (>=, не >). audit_log.timestamp — секундная точность
+        # (SQLite datetime('now') без долей секунды); прежняя выгрузка и запись
+        # remove_rows, случившаяся сразу следом, легко попадают В ОДНУ И ТУ ЖЕ
+        # секунду — строгое «после» теряло бы её (поймано прогоном приёмки
+        # bite-remove-rows-shrink.py, случай 4, а не рассуждением). Ценой — редкий
+        # теоретический повторный счёт, если И запись, И следующий дамп совпадут по
+        # секунде ДВАЖДЫ подряд; дешевле этой редкости, чем терять запись, снятую
+        # секунда в секунду с выгрузкой, — а так теряло каждый второй живой прогон.
+        rows = conn.execute(
+            "SELECT actor_role, timestamp, diff_md FROM audit_log "
+            "WHERE action='remove_rows' AND target=? AND timestamp >= ? ORDER BY timestamp",
+            (table, since)).fetchall()
+    except sqlite3.Error:
+        return 0, []   # audit_log нет вовсе, либо схема иная — не наша забота здесь
+    total = 0
+    notes = []
+    for actor, ts, diff_md in rows:
+        m = _NAMED_REMOVED_RE.match(diff_md or "")
+        if not m:
+            continue      # запись есть, но формы «снято строк: N» в ней нет — не считаем
+        n = int(m.group(1))
+        total += n
+        notes.append(f"{actor} {ts} UTC −{n}")
+    return total, notes
+
+
 SEARCH_HEADER_NOTE = ("таблицы поиска в прежней шапке — теперь сверяются выдачей,"
                       " не числом строк")
 # 🩸 ВТОРОЙ СЛЕД ТОГО ЖЕ ПЕРЕХОДА (находка PROTO, карточка #610). Прежняя выгрузка
@@ -139,8 +215,20 @@ SEARCH_SIZE_SHRINK_NOTE = ("выгрузка меньше: таблицы пои
                           " в обычных таблицах не убыло")
 
 
-def check_row_shrink(previous: dict, counts: dict, search_related_names: set = frozenset()):
+def check_row_shrink(previous: dict, counts: dict, search_related_names: set = frozenset(),
+                     conn=None, since=None):
     """→ (тревоги, объяснения, заметка_о_поиске): убыль строк против прежнего дампа.
+
+    🩸 КАРТОЧКА #612 ②. Убыль в ОБЫЧНОЙ таблице, не объяснённая ни чисткой истории,
+    ни переездом messages→messages_history, теперь сверяется с audit_log ДО того,
+    как стать тревогой: если записи remove_rows (действие remove-rows.py, карточка
+    #612 ①) для этой таблицы НЕ РАНЬШЕ часа прежней выгрузки (`since`, см.
+    previous_snapshot_at) в СУММЕ дают РОВНО ту же убыль — это не тревога, а строка
+    «убыль названа журналом: …». Сумма МЕНЬШЕ убыли (часть снята без следа) или
+    БОЛЬШЕ (названо больше, чем в самом деле пропало — тоже расхождение, а не повод
+    молчать) — тревога, как и раньше, с добавкой того, что журнал всё же назвал.
+    `conn`/`since` не даны (вызов без них, например старым кодом) — ветка ведёт
+    себя ТОЧНО как до карточки #612: журнал не спрашивается вовсе.
 
     🩸 ПЕРЕХОД (находка COORD, карточка #610). Прежняя выгрузка, снятая СТАРОЙ версией,
     несёт в шапке счётчиков таблицу поиска и её служебные — они там ЕСТЬ, а в счётчиках
@@ -172,7 +260,22 @@ def check_row_shrink(previous: dict, counts: dict, search_related_names: set = f
                     alerts.append(f"messages −{was - now}, а messages_history выросла лишь"
                                   f" на {growth} — переездом НЕ объяснено")
             else:
-                alerts.append(f"{t} −{was - now} строк — удалять из неё никто не должен")
+                # 🪤 КАРТОЧКА #612, ЛОВУШКА ②. Финальная строка тревоги ниже — тот же
+                # литерал, что и ДО карточки #612 («удалять из неё никто не должен»,
+                # закрыто скобкой сразу за ним): за него держится якорь обратного хода
+                # ⑩ в bite-backup-shrink.py (weaken() ищет ЭТУ строку буквально). Меняя
+                # текст — правь якорь тем же ходом (поиск файла в vnext-tools). Строка
+                # частичного схождения ниже НАРОЧНО не повторяет тот же хвост слово
+                # в слово — иначе .replace(anchor, ..., 1) мог бы попасть не в ту ветку.
+                named, notes = named_removals(conn, t, since) if conn is not None else (0, [])
+                if named and named == (was - now):
+                    explanations.append(
+                        f"{t} −{was - now} — убыль названа журналом: " + "; ".join(notes))
+                elif named:
+                    alerts.append(f"{t} −{was - now} строк, журналом названо лишь {named} —"
+                                  f" с убылью не сходится, часть снята без следа")
+                else:
+                    alerts.append(f"{t} −{was - now} строк — удалять из неё никто не должен")
     return alerts, explanations, search_note
 
 
@@ -511,6 +614,16 @@ def main():
     counts = {t: conn.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0] for t in real_tables}
 
     out = Path(args.out)
+    # 🩸 КАРТОЧКА #617 (замечание COORD). --out, указывающий на СУЩЕСТВУЮЩИЙ КАТАЛОГ,
+    # раньше долетал до os.replace(tmp_sql, out) в write_and_verify и падал непойманной
+    # трассировкой (PermissionError на Windows / IsADirectoryError на POSIX) — вместо
+    # отказа словами. Гард — ДО записи чего бы то ни было (тот же принцип, что у
+    # гарда невосстановимой таблицы поиска выше): называет, что не так, и какой путь
+    # дать, кодом ≠ 0.
+    if out.exists() and out.is_dir():
+        print(f"⛔ --out указывает на СУЩЕСТВУЮЩИЙ КАТАЛОГ, а не на файл: {out}")
+        print(f"   выгрузка НЕ ЗАПИСАНА: дай путь к ФАЙЛУ, например {out / 'mezosync.dump.sql'}")
+        raise SystemExit(1)
     old_size = out.stat().st_size if out.exists() else 0
 
     lines = ["-- mezosync.db — текстовый дамп для git-восстановимости",
@@ -538,9 +651,11 @@ def main():
     # Сверка СТРОК ПО ТАБЛИЦАМ против шапки прежнего дампа — главный замер.
     # Байтовая дельта выше — только справка: она и врёт в обе стороны (карточка #250).
     previous = previous_counts(out)
+    since = previous_snapshot_at(out)   # карточка #612 ②: граница окна для audit_log
     search_related_names = set(virtual_sql) | shadow_names
     alerts, explanations, search_note = (
-        check_row_shrink(previous, counts, search_related_names) if previous else ([], [], None))
+        check_row_shrink(previous, counts, search_related_names, conn=conn, since=since)
+        if previous else ([], [], None))
     if alerts:
         print("  🔴 СТРОКИ ПРОПАЛИ БЕЗ ЗАКОННОЙ ПРИЧИНЫ — проверь, не потеряна ли часть БД,"
               " ПРЕЖДЕ чем коммитить:")
@@ -549,8 +664,15 @@ def main():
         if explanations:
             print("     (законная часть убыли, к тревоге не относится: "
                   + " · ".join(explanations) + ")")
-    elif explanations and delta < 0:
-        print("  ✅ дамп уменьшился ЗАКОННО: " + " · ".join(explanations))
+    elif explanations:
+        # 🩸 КАРТОЧКА #612: условие «and delta < 0» СНЯТО. Запись audit_log сама добавляет
+        # байты (диф с БЫЛО-JSON) — она может перекрыть убыль своей же таблицы в
+        # байтах дампа, и тогда «убыль названа журналом» не печаталась бы никогда
+        # (поймано прогоном bite-remove-rows-shrink.py, случай 4, не рассуждением).
+        # Объяснение убыли — факт про СТРОКИ, а не про байты; печатать его безусловно,
+        # раз оно есть и тревог нет, — тот же принцип, что уже давно у ветки alerts.
+        print("  ✅ дамп уменьшился ЗАКОННО: " + " · ".join(explanations)
+              if delta < 0 else "  ✅ убыль объяснена: " + " · ".join(explanations))
     elif search_note and delta < 0:
         # см. SEARCH_SIZE_SHRINK_NOTE выше: та же причина, что у search_note,
         # объясняет и байтовую убыль — «взгляни глазами» здесь была бы ложной тревогой.

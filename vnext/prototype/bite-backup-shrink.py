@@ -46,6 +46,7 @@ import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
+import mezo_stand  # noqa: E402
 
 SCRIPTS = mezo_paths.container_root(__file__) / ".mezosync" / "scripts"
 TOOL = SCRIPTS / "backup-db.py"
@@ -87,7 +88,8 @@ def run_tool(db, out, *flags, script=TOOL):
     r = subprocess.run([sys.executable, str(script), "--db", str(db),
                         "--out", str(out), *flags],
                        capture_output=True, text=True, encoding="utf-8",
-                       errors="replace", timeout=300)
+                       errors="replace", timeout=300,
+                       env=mezo_stand.stand_env(pathlib.Path(db).parent))
     return r.returncode, (r.stdout or "") + (r.stderr or "")
 
 
@@ -249,6 +251,47 @@ def main() -> int:
                        code10 == 0 and code7 == 1,
                        f"слабая {code10} против настоящей {code7} — ловит именно общая"
                        " ветка", differ=True)
+
+        # ⑪ КАРТОЧКА #617 (замечание COORD): --out указывает на СУЩЕСТВУЮЩИЙ КАТАЛОГ →
+        # отказ СЛОВАМИ, код ≠ 0, БЕЗ трассировки. Было: os.replace(tmp_sql, out) в
+        # write_and_verify падал непойманным PermissionError (Windows) / IsADirectoryError
+        # (POSIX) — трассировка вместо понятного отказа.
+        d11 = pathlib.Path(tempfile.mkdtemp(prefix="bite-shrink-11-"))
+        cleanup_dirs.append(d11)
+        db11 = build_stand(d11)
+        out_as_dir = d11 / "outdir"
+        out_as_dir.mkdir()
+        code11, output11 = run_tool(db11, out_as_dir, "--apply")
+        ok &= case("⑪ --out указывает на СУЩЕСТВУЮЩИЙ КАТАЛОГ → отказ словами, код ≠ 0,"
+                   " без трассировки",
+                   code11 != 0 and "Traceback" not in output11
+                   and "СУЩЕСТВУЮЩИЙ КАТАЛОГ" in output11,
+                   f"код {code11}; «Traceback» в выводе: {'Traceback' in output11}", differ=True)
+
+        # ⑫ ОБРАТНЫЙ ХОД: гард каталога снят → случай ⑪ ПРОВАЛИВАЕТСЯ (прежняя
+        # трассировка возвращается вместо отказа словами).
+        d12 = pathlib.Path(tempfile.mkdtemp(prefix="bite-shrink-12-"))
+        cleanup_dirs.append(d12)
+        weak12 = weaken(
+            d12,
+            '    if out.exists() and out.is_dir():\n'
+            '        print(f"⛔ --out указывает на СУЩЕСТВУЮЩИЙ КАТАЛОГ, а не на файл: {out}")\n'
+            '        print(f"   выгрузка НЕ ЗАПИСАНА: дай путь к ФАЙЛУ, например {out / \'mezosync.dump.sql\'}")\n'
+            '        raise SystemExit(1)',
+            '    pass  # П-#617: гард каталога снят')
+        if weak12 is None:
+            ok &= case("⑫ ОБРАТНЫЙ ХОД: гард каталога снят", False,
+                       "⛔ НЕ ЗАПУСТИЛСЯ: якорь гарда каталога не найден — backup-db.py"
+                       " менялся, правь приёмку")
+        else:
+            code12, output12 = run_tool(db11, out_as_dir, "--apply", script=weak12)
+            ok &= case("⑫ ОБРАТНЫЙ ХОД: без гарда каталога случай ⑪ ПРОВАЛИВАЕТСЯ"
+                       " (трассировка вместо отказа словами)",
+                       code12 != 0 and ("Traceback" in output12
+                                        or "СУЩЕСТВУЮЩИЙ КАТАЛОГ" not in output12),
+                       f"код {code12}; «Traceback» в выводе: {'Traceback' in output12};"
+                       " «СУЩЕСТВУЮЩИЙ КАТАЛОГ» в выводе:"
+                       f" {'СУЩЕСТВУЮЩИЙ КАТАЛОГ' in output12}", differ=True)
     finally:
         for d in cleanup_dirs:
             shutil.rmtree(d, ignore_errors=True)
