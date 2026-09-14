@@ -746,9 +746,13 @@ def main() -> int:
     conn = sqlite3.connect(str(db))
     if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='phoenix_archive'"
                         ).fetchone():
-        # путь шага выводится от расположения базы, а не пишется литералом машины:
-        # у чужого контура база лежит в другом месте (перенос в образец это ловит)
-        migration = db.resolve().parent / "scripts" / "migrations" / "20260904-phoenix-archive.py"
+        # путь шага — ОТ РАСПОЛОЖЕНИЯ ЭТОГО СКРИПТА (как у memory-records.py), а не от
+        # --db (карточка #632, находка COORD 2026-09-14): «от --db» верно, только пока
+        # db лежит рядом со scripts/ по формуле .mezosync/mezosync.db — а --db на КОПИЮ
+        # базы (приёмка, песочница) этой формуле не подчиняется и печатал tmp/scripts/…,
+        # несуществующий путь на вид правильным текстом. mezo_paths.live_scripts(__file__)
+        # ищет корень контейнера ПО ПРИЗНАКУ (.mezosync/mezosync.db), не по соседству с db.
+        migration = mezo_paths.live_scripts(__file__) / "migrations" / "20260904-phoenix-archive.py"
         sys.exit("⛔ В этой базе нет архива памяти. Накати шаг:\n"
                  f"   python {migration.as_posix()}")
 

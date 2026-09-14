@@ -101,15 +101,30 @@ def live_control_state():
     """Контрольное число живой базы — ТОЛЬКО ЧТЕНИЕ, для проверки «не тронуто» (тот же
     приём, что и bite-archive-move-look.py: значение СНИМАЕТСЯ, а не вписано числом —
     иначе законная работа ДРУГОЙ роли между прогонами красила бы контроль не по своей
-    причине)."""
+    причине).
+
+    None — в ЭТОЙ живой базе нет слоя записей (таблицы phoenix_records): карточка #632,
+    находка COORD 2026-09-14 — контур, собранный init-group из клона пакета, до шага
+    20260904-phoenix-records.py ещё не дорос, и голый SELECT ронял ЗАГРУЗКУ ЭТОГО ФАЙЛА
+    трассировкой sqlite3.OperationalError на любом прогоне. Таблицы нет — не отказ
+    приёмки, а факт о контуре; отказ печатает вызывающий, словами, а не трассировкой."""
     con = sqlite3.connect(f"file:{LIVE_DB.as_posix()}?mode=ro", uri=True)
     try:
+        if not con.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='phoenix_records'"
+        ).fetchone():
+            return None
         return con.execute("SELECT COUNT(*) FROM phoenix_records").fetchone()[0]
     finally:
         con.close()
 
 
 LIVE_BEFORE = live_control_state()
+if LIVE_BEFORE is None:
+    sys.exit(f"⛔ НЕ ЗАПУСТИЛАСЬ: в живой базе этого контура нет слоя записей (таблицы "
+             f"phoenix_records) — контрольное число «живая база не тронута» снять не с "
+             f"чего.\n   База: {LIVE_DB}\n   Накати шаг схемы 20260904-phoenix-records.py "
+             f"и повтори.")
 
 
 def find_env() -> dict:

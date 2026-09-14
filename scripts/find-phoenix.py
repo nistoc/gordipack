@@ -97,10 +97,24 @@ def _section_label(section: str) -> str:
 SECTION_LABELS = {s: _section_label(s) for s in SECTION_ORDER}
 
 # ── АРХИВ ПАМЯТИ — найти() ИЗ memory-archive.py, ТЕМ ЖЕ ПРИЁМОМ, ЧТО У memory-records.py ──
-# memory-archive.py лежит в другом каталоге контейнера (vnext-tools), поэтому путь строится
-# от CONTAINER_ROOT, а не как HERE / "имя" — путь ищется от РАСПОЛОЖЕНИЯ ЭТОГО ФАЙЛА
-# на диске, а не от --db, и переживёт запуск инструмента из копии-песочницы.
-_memory_archive_path = CONTAINER_ROOT / "vnext-tools" / "memory-archive.py"
+# memory-archive.py — НЕ ВСЕГДА в vnext-tools (карточка #632, находка COORD 2026-09-14 на
+# контуре, собранном init-group из клона пакета: соседи звеньев там лежат РЯДОМ со скриптами,
+# каталога vnext-tools нет вовсе). Жёсткий путь «CONTAINER_ROOT / vnext-tools / имя» ронял
+# ЗАГРУЗКУ МОДУЛЯ (FileNotFoundError на импорте, до main()) — то есть падал на ЛЮБОМ запросе.
+# ⇒ ищем ТЕМ ЖЕ приёмом, каким это уже чинит save-phoenix.py::vnext_tool() (там же починено
+# 13.09 для role-prompts.py/save-phoenix.py, сюда донесено карточкой #632): четыре кандидата
+# по очереди, не нашли ни одного — берём первый, чтобы дальнейший отказ называл ОЖИДАЕМОЕ
+# место, а не пустоту.
+def _vnext_tool(name):
+    """Путь к звену-помощнику в ОБЕИХ раскладках — приём save-phoenix.py::vnext_tool()."""
+    candidates = [CONTAINER_ROOT / "vnext-tools" / name,               # наш контейнер (зона PROTO)
+                  HERE / name,                                          # собранный контур: звенья рядом
+                  HERE.parent / "vnext" / "prototype" / name,           # шаблон: scripts/ и vnext/ — соседи
+                  CONTAINER_ROOT / "vnext" / "prototype" / name]
+    return next((c for c in candidates if c.exists()), candidates[0])
+
+
+_memory_archive_path = _vnext_tool("memory-archive.py")
 _memory_archive_spec = importlib.util.spec_from_file_location(
     "_find_phoenix_memory_archive", _memory_archive_path)
 _memory_archive = importlib.util.module_from_spec(_memory_archive_spec)
@@ -285,7 +299,8 @@ def _rebuild_command(conn, role, section) -> str:
     count = conn.execute("SELECT COUNT(*) FROM phoenix_records WHERE role=? AND section=?",
                          (role, section)).fetchone()[0]
     flag = "--parse" if count == 0 else "--rebuild"
-    memory_records = (CONTAINER_ROOT / "vnext-tools" / "memory-records.py").as_posix()
+    # тот же жёсткий путь и то же лечение, что у _memory_archive_path выше (карточка #632)
+    memory_records = _vnext_tool("memory-records.py").as_posix()
     return f"python {memory_records} --role {role} --section {section} {flag}"
 
 
