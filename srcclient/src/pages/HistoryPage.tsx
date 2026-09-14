@@ -315,17 +315,28 @@ export function HistoryPage({ refreshMs }: { refreshMs: number }) {
  * Здесь — сперва ближайший «круглый» верх НЕ МЕНЬШЕ max, затем, если он совпал
  * с max почти вплотную (меньше 20% шага запаса), добавляется ещё один шаг —
  * чтобы верхняя точка не липла к самому краю графика.
+ *
+ * ⚠️ ШАГ ОБЯЗАН БЫТЬ ЦЕЛЫМ (≥ 1). Второй замер владельца 2026-09-14 (роль TAXO,
+ *    30 дней): при малом max (например 1) прежний расчёт давал ДРОБНЫЙ шаг
+ *    (0.2 — mag получался меньше единицы), и Math.round схлопывал соседние
+ *    дробные отметки в ОДНО И ТО ЖЕ целое число (0,0,0,1,1,1,1 → после round
+ *    видны повторы). Ось считает штуки задач — дробной отметки не бывает
+ *    в принципе, — а повтор значения давал ПОВТОРЯЮЩИЙСЯ React key, из-за чего
+ *    при смене фильтра старые подписи не убирались и налезали на новые
+ *    («14 · 12 · 10 · 2 · 8 · 6 · 1 · 4 · 2 · 0» на снимке владельца).
+ *    Починка — `mag` никогда не бывает меньше 1, значит и `step` тоже: тик
+ *    считается ДО округления, а не после, и повторов не возникает по построению.
  */
 function axisTicks(max: number): number[] {
-  if (max <= 0) return [0, 1];
-  const rough = max / 4;
-  const mag = 10 ** Math.floor(Math.log10(rough || 1));
+  const safeMax = Math.max(1, Math.ceil(max));
+  const rough = safeMax / 4;
+  const mag = Math.max(1, 10 ** Math.floor(Math.log10(rough || 1)));
   const norm = rough / mag;
-  const step = norm >= 5 ? 5 * mag : norm >= 2 ? 2 * mag : mag;
-  let top = Math.ceil(max / step) * step;
-  if (top - max < step * 0.2) top += step;
+  const step = Math.max(1, norm >= 5 ? 5 * mag : norm >= 2 ? 2 * mag : mag);
+  let top = Math.ceil(safeMax / step) * step;
+  if (top - safeMax < step * 0.2) top += step;
   const ticks: number[] = [];
-  for (let v = 0; v <= top + step * 0.001; v += step) ticks.push(Math.round(v));
+  for (let v = 0; v <= top + 0.5; v += step) ticks.push(v);
   return ticks;
 }
 
@@ -340,36 +351,75 @@ function tickDayIndices(n: number, maxTicks = 10): number[] {
 
 // ── SVG: вид а) Поток ───────────────────────────────────────────────────────
 
+/**
+ * ДВЕ ОСИ Y, А НЕ ОДНА ОБЩАЯ — слово владельца 2026-09-14 (снимок: роль TAXO,
+ * 30 дней). Раньше столбцы («новых»/«закрыто») и линия («открыто на конец дня»)
+ * делили одну шкалу, и при малом числе новых/закрытых (частый случай у роли
+ * с небольшим потоком) столбцы становились почти незаметны на фоне линии,
+ * потому что верх шкалы считался по МАКСИМУМУ ИЗ ВСЕХ ТРЁХ величин сразу.
+ * ЛЕВАЯ шкала — от max(created, closed): по ней столбцы и горизонтальная сетка
+ * (сетка — только левая, чтобы не было двух наложенных сеток). ПРАВАЯ шкала —
+ * от max(openEnd): по ней линия и точки, без своей сетки — только короткая
+ * засечка у правого края на каждый тик. Цифры разных цветов (левая — нейтральная
+ * var(--muted), правая — var(--warn), тот же оранжевый, что у линии), и подписи
+ * осей сверху слева/справа словами говорят, какая шкала чья.
+ */
 function FlowChart({ points }: { points: FlowPoint[] }) {
   const W = 900;
   const H = 300;
   const padL = 40;
-  const padR = 16;
-  const padT = 14;
+  // ⚠️ padR ≥ 40 — под цифры правой шкалы (слово владельца, пункт 2): при 16,
+  //    как было раньше, подписи правой оси обрезались бы краем SVG.
+  const padR = 44;
+  const padT = 26;
   const padB = 46;
   const innerW = W - padL - padR;
   const innerH = H - padT - padB;
   const n = Math.max(1, points.length);
-  const maxVal = Math.max(1, ...points.map((p) => Math.max(p.created, p.closed, p.openEnd)));
-  const ticks = axisTicks(maxVal);
-  const yMax = ticks[ticks.length - 1] || maxVal;
+
+  const leftMax = Math.max(1, ...points.map((p) => Math.max(p.created, p.closed)));
+  const leftTicks = axisTicks(leftMax);
+  const leftYMax = leftTicks[leftTicks.length - 1] || leftMax;
+  const rightMax = Math.max(1, ...points.map((p) => p.openEnd));
+  const rightTicks = axisTicks(rightMax);
+  const rightYMax = rightTicks[rightTicks.length - 1] || rightMax;
+
   const y0 = padT + innerH;
-  const scale = innerH / yMax;
-  const y = (v: number) => y0 - v * scale;
+  const leftScale = innerH / leftYMax;
+  const rightScale = innerH / rightYMax;
+  const yLeft = (v: number) => y0 - v * leftScale;
+  const yRight = (v: number) => y0 - v * rightScale;
+
   const groupW = innerW / n;
   const barW = Math.max(1, groupW * 0.32);
   const tickIdx = tickDayIndices(points.length);
 
   const linePoints = points
-    .map((p, i) => `${(padL + groupW * (i + 0.5)).toFixed(1)},${y(p.openEnd).toFixed(1)}`)
+    .map((p, i) => `${(padL + groupW * (i + 0.5)).toFixed(1)},${yRight(p.openEnd).toFixed(1)}`)
     .join(' ');
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="history-svg" role="img" aria-label="Поток задач по дням">
-      {ticks.map((t) => (
-        <g key={t}>
-          <line x1={padL} x2={W - padR} y1={y(t)} y2={y(t)} stroke="var(--border)" strokeWidth={1} />
-          <text x={padL - 6} y={y(t) + 3} textAnchor="end" fontSize={10} fill="var(--muted)">{t}</text>
+    <svg viewBox={`0 0 ${W} ${H}`} className="history-svg" role="img" aria-label="Поток задач по дням — две шкалы: слева новых/закрыто, справа открыто">
+      {/* подписи осей — какая шкала чья, словами и цветом */}
+      {/* слова левой подписи — цветами своих столбцов, как «открыто» справа цветом линии */}
+      <text x={padL} y={14} textAnchor="start" fontSize={10} fill="var(--muted)">
+        <tspan fill="var(--info)">новых</tspan> · <tspan fill="var(--good)">закрыто</tspan>
+      </text>
+      <text x={W - padR} y={14} textAnchor="end" fontSize={10} fill="var(--warn)">открыто</text>
+
+      {/* сетка и подписи — ТОЛЬКО левая шкала, чтобы не накладывать две сетки */}
+      {leftTicks.map((t, i) => (
+        <g key={`L-${i}`}>
+          <line x1={padL} x2={W - padR} y1={yLeft(t)} y2={yLeft(t)} stroke="var(--border)" strokeWidth={1} />
+          <text x={padL - 6} y={yLeft(t) + 3} textAnchor="end" fontSize={10} fill="var(--muted)">{t}</text>
+        </g>
+      ))}
+
+      {/* правая шкала — короткая засечка у края + цифра тем же цветом, что линия */}
+      {rightTicks.map((t, i) => (
+        <g key={`R-${i}`}>
+          <line x1={W - padR} x2={W - padR + 5} y1={yRight(t)} y2={yRight(t)} stroke="var(--warn)" strokeWidth={1} />
+          <text x={W - padR + 8} y={yRight(t) + 3} textAnchor="start" fontSize={10} fill="var(--warn)">{t}</text>
         </g>
       ))}
 
@@ -378,15 +428,15 @@ function FlowChart({ points }: { points: FlowPoint[] }) {
         return (
           <g key={p.day}>
             <title>{`${p.day} UTC — новых ${p.created} · закрыто ${p.closed} · открыто на конец дня ${p.openEnd}`}</title>
-            <rect x={cx - barW - 1} y={y(p.created)} width={barW} height={Math.max(0, y0 - y(p.created))} fill="var(--info)" />
-            <rect x={cx + 1} y={y(p.closed)} width={barW} height={Math.max(0, y0 - y(p.closed))} fill="var(--good)" />
+            <rect x={cx - barW - 1} y={yLeft(p.created)} width={barW} height={Math.max(0, y0 - yLeft(p.created))} fill="var(--info)" />
+            <rect x={cx + 1} y={yLeft(p.closed)} width={barW} height={Math.max(0, y0 - yLeft(p.closed))} fill="var(--good)" />
           </g>
         );
       })}
 
       <polyline points={linePoints} fill="none" stroke="var(--warn)" strokeWidth={2} />
       {points.map((p, i) => (
-        <circle key={`c-${p.day}`} cx={padL + groupW * (i + 0.5)} cy={y(p.openEnd)} r={2.6} fill="var(--warn)">
+        <circle key={`c-${p.day}`} cx={padL + groupW * (i + 0.5)} cy={yRight(p.openEnd)} r={2.6} fill="var(--warn)">
           <title>{`${p.day} UTC — открыто на конец дня: ${p.openEnd}`}</title>
         </circle>
       ))}
@@ -416,7 +466,7 @@ function FlowLegend() {
     <div className="history-legend" data-group="history-flow-legend">
       <span><i className="history-legend__swatch" style={{ background: 'var(--info)' }} /> новых</span>
       <span><i className="history-legend__swatch" style={{ background: 'var(--good)' }} /> закрыто</span>
-      <span><i className="history-legend__swatch" style={{ background: 'var(--warn)' }} /> открыто на конец дня</span>
+      <span><i className="history-legend__swatch" style={{ background: 'var(--warn)' }} /> открыто на конец дня (правая шкала)</span>
     </div>
   );
 }
@@ -445,8 +495,8 @@ function StatusChart({ days, series, order }: { days: string[]; series: Map<stri
 
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="history-svg" role="img" aria-label="Задачи по статусам, по дням">
-      {ticks.map((t) => (
-        <g key={t}>
+      {ticks.map((t, i) => (
+        <g key={`t-${i}`}>
           <line x1={padL} x2={W - padR} y1={y0 - t * scale} y2={y0 - t * scale} stroke="var(--border)" strokeWidth={1} />
           <text x={padL - 6} y={y0 - t * scale + 3} textAnchor="end" fontSize={10} fill="var(--muted)">{t}</text>
         </g>
