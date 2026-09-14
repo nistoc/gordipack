@@ -231,7 +231,22 @@ def find_pack_source(arg_source, conn) -> Path:
         # meta.template_source ЕСТЬ — берём тем же ходом, что update-tools.py (fetch()
         # сама решает: локальная папка — напрямую, иначе — временный клон).
         tools = _load_update_tools()
-        tmp, _rev, _temporary = tools.fetch(source)
+        try:
+            tmp, _rev, _temporary = tools.fetch(source)
+        except SystemExit as e:
+            # ВОЗВРАТ COORD (карточка #614, ветка «а», 2026-09-14 17:58 UTC): адрес в meta
+            # ЕСТЬ, но источник не читается (нет сети, форма ssh, опечатка) — fetch() уже
+            # отказал СЛОВАМИ update-tools.py («⛔ НЕ ЗАБРАЛОСЬ ... источник недоступен»),
+            # но не называет, что делать ДАЛЬШЕ роли ИМЕННО ЭТОГО инструмента. Готовая
+            # команда — ПОСЛЕДНЕЙ строкой: у чужого вызывающего (update-tools.py:
+            # print_pack_rules_summary) в вывод попадает только ПОСЛЕДНЯЯ строка причины
+            # (reason_lines[-1]) — она обязана нести совет, а не только диагноз fetch().
+            reason = e.code if isinstance(e.code, str) else str(e.code)
+            sys.exit(
+                f"{reason}\n"
+                "   rules-from-pack.py: источник в meta.template_source не читается — "
+                "укажи явно: --source <папка с клоном пакета GORDI>"
+            )
         return tmp
     meta_note = f" (в meta записано «{row[0]}», но это не папка)" if row and row[0] else ""
     sys.exit(

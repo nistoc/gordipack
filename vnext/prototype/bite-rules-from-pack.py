@@ -83,6 +83,12 @@ print(f"⚖️ испытуется: {mezo_target.label()}")
 OWN_ROOT = str(mezo_paths.container_root()).replace("\\", "/")
 OWN_ROOT_BS = OWN_ROOT.replace("/", "\\")
 
+# ВОЗВРАТ COORD (карточка #614, ветка «а», 2026-09-14 17:58 UTC): адрес в meta ЕСТЬ, но не
+# читается — отказ обязан нести готовую команду словами ПРО ПРАВИЛА (что делает роль ЭТОГО
+# инструмента), не только диагноз update-tools.py. Одна константа — и в случаях ниже, и в
+# поломке (Р): разведённые литералы разошлись бы однажды незаметно.
+READY_SOURCE_COMMAND = "--source <папка с клоном пакета GORDI>"
+
 CASES = DIFFER = 0
 
 
@@ -329,6 +335,27 @@ def patch_removed_state_ignores_skip(src: str):
     new = (
         "        elif row[\"removed_at\"]:\n"
         "            state = \"removed\"  # ПОЛОМКА (П): skip_map больше не смотрим\n"
+    )
+    return src.replace(old, new), src.count(old)
+
+def patch_no_ready_command(src: str):
+    """(Р) карточка #614, возврат COORD (ветка «а», 2026-09-14 17:58 UTC): готовая
+    команда «--source <папка с клоном пакета GORDI>» в отказе find_pack_source() при
+    НЕЧИТАЕМОМ адресе убрана — снова только диагноз update-tools.py, без совета, что
+    делать роли ИМЕННО ЭТОГО инструмента. Должны провалиться случаи ㊾в′ и ㊾г (готовую
+    команду ждут оба).
+    """
+    old = (
+        '            reason = e.code if isinstance(e.code, str) else str(e.code)\n'
+        '            sys.exit(\n'
+        '                f"{reason}\\n"\n'
+        '                "   rules-from-pack.py: источник в meta.template_source не читается — "\n'
+        '                "укажи явно: --source <папка с клоном пакета GORDI>"\n'
+        '            )\n'
+    )
+    new = (
+        '            reason = e.code if isinstance(e.code, str) else str(e.code)\n'
+        '            sys.exit(reason)  # ПОЛОМКА (Р): готовая команда убрана\n'
     )
     return src.replace(old, new), src.count(old)
 
@@ -1564,6 +1591,39 @@ def main() -> int:
               f"нет источника: {cpN.stderr.strip()[:120]!r}; источник не читается: "
               f"{cpU.stderr.strip()[:120]!r}")
 
+    # ── ㊾в′ ВОЗВРАТ COORD (карточка #614, ветка «а»): в отказе «источник не читается» —
+    # готовая команда СЛОВАМИ ПРО ПРАВИЛА (--source <папка с клоном>), а не только диагноз
+    # update-tools.py. Тот же прогон cpU выше — новая проверка ДОБАВЛЕНА, старая (㊾в) не тронута.
+    ok &= case("㊾в′ ВОЗВРАТ COORD: в отказе «источник не читается» — готовая команда «"
+              + READY_SOURCE_COMMAND + "» словами ПРО ПРАВИЛА, не только слова update-tools.py",
+              READY_SOURCE_COMMAND in cpU.stderr and "rules-from-pack.py" in cpU.stderr,
+              f"готовая команда в отказе: {READY_SOURCE_COMMAND in cpU.stderr}; "
+              f"хвост отказа: {cpU.stderr.strip()[-160:]!r}")
+
+    # ── ㊾г ВСТРЕЧНЫЙ БЕЗ СЕТИ (карточка #614, ветка «б»): template_source — АДРЕС В
+    # ФОРМЕ SSH (git@host:repo.git), заведомо НЕДОСТУПНЫЙ. Приёмка НЕ идёт в сеть и НЕ
+    # спрашивает учётных данных: GIT_SSH_COMMAND подменён на команду, падающую МГНОВЕННО
+    # и БЕЗ единого сетевого вызова (сильнее, чем просто BatchMode=yes — тот всё равно
+    # стучится в сеть и может ждать таймаут); GIT_TERMINAL_PROMPT=0 — на случай, если сам
+    # git попробует спросить пароль в терминале, а не через ssh.
+    ssh_root = root / "remote-614-ssh"
+    ssh_root.mkdir()
+    circuit_dbS = ssh_root / "circuit.db"
+    make_circuit_db(circuit_dbS, rules=[], meta={
+        "template_source": "git@zzz-bite-614-unreachable-host.invalid:gordi/pack.git"})
+    no_network_env = dict(mezo_stand.stand_env(root),
+                          GIT_TERMINAL_PROMPT="0",
+                          GIT_SSH_COMMAND=f'"{sys.executable}" -c "import sys; sys.exit(1)"')
+    cpS = subprocess.run([sys.executable, str(RFP_PATH), "--db", str(circuit_dbS)],
+                        env=no_network_env, capture_output=True, text=True, encoding="utf-8",
+                        timeout=30)
+    ok &= case("㊾г ВСТРЕЧНЫЙ без сети: template_source — ssh-форма, недоступная (git clone "
+              "падает МГНОВЕННО, ни один байт в сеть не уходит) — готовая команда «"
+              + READY_SOURCE_COMMAND + "» тоже в выводе",
+              cpS.returncode != 0 and READY_SOURCE_COMMAND in cpS.stderr,
+              f"код {cpS.returncode}; готовая команда в отказе: "
+              f"{READY_SOURCE_COMMAND in cpS.stderr}; хвост: {cpS.stderr.strip()[-160:]!r}")
+
     # ═══ ㊿ КАРТОЧКА #614 п.2 (G3/PROTO): разряд «снято в пакете» (removed) — совет несёт
     # ДВА пути вместо пустого "—", и --skip теперь принимает такую строку (и отпускает,
     # если пакет когда-нибудь сменит отпечаток снова — симметрично обычному «skipped»).
@@ -1676,6 +1736,26 @@ def main() -> int:
     ok &= case("㊾ ПОЛОМКА (М) «template_source не читается» красит ровно ㊾а: снова отказ",
               refused_m,
               f"отказ выброшен: {refused_m} (под верным кодом случай ㊾а клонирует и не падает)")
+
+    # ── ПОЛОМКА (Р) карточка #614, возврат COORD (ветка «а»): готовая команда «--source
+    # <папка с клоном пакета GORDI>» в отказе «источник не читается» убрана — должны
+    # провалиться случаи ㊾в′ и ㊾г (оба бьют по ОДНОМУ И ТОМУ ЖЕ except-блоку в
+    # find_pack_source(); фикстура из ㊾в переиспользуется — второй такой же беды из ㊾г
+    # искать не нужно, поломка одна на весь блок).
+    mod_r = load_rfp(patch=patch_no_ready_command, name="rfp_bite_no_ready_command")
+    connRb = sqlite3.connect(f"file:{circuit_dbU.as_posix()}?mode=ro", uri=True)
+    caught_r = None
+    try:
+        mod_r.find_pack_source(None, connRb)
+    except SystemExit as e:
+        caught_r = str(e)
+    connRb.close()
+    ready_missing = caught_r is not None and READY_SOURCE_COMMAND not in caught_r
+    ok &= case("㊾ ПОЛОМКА (Р) «готовая команда убрана» красит ровно ㊾в′ и ㊾г: готовой "
+              "команды в отказе больше нет",
+              ready_missing,
+              f"отказ: {caught_r!r} (под верным кодом готовая команда «{READY_SOURCE_COMMAND}» "
+              f"обязана в нём быть)")
 
     mod_n = load_rfp(patch=patch_removed_advice_empty, name="rfp_bite_removed_advice_empty")
     move_n = mod_n.MOVE_BY_STATE["removed"]

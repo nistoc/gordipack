@@ -100,6 +100,30 @@ def find_mirror(mezo: Path) -> Path:
     return next((c for c in candidates if c.exists()), candidates[-1])
 
 
+def same_bytes(a: bytes, b: bytes) -> bool:
+    """Содержимое, а не байты дословно: перевод строк CRLF/LF не считаем расхождением
+    (правило bytes-are-not-content — тот же приём, что у update-tools.py: same_text)."""
+    return a.replace(b"\r\n", b"\n") == b.replace(b"\r\n", b"\n")
+
+
+def stale_mirror_note(candidates: list, chosen: Path):
+    """ЗАМЕЧАНИЕ COORD (карточка #618, повторная приёмка, принято 2026-09-14 17:58 UTC):
+    если файл-зеркало есть в ОБЕИХ раскладках, судится по-прежнему ПЕРВЫЙ найденный
+    (`chosen` — тот же, что вернул find_mirror) — эта функция ничего не меняет в выборе.
+    Она только НАЗЫВАЕТ второго кандидата, если он ТОЖЕ существует и его содержимое
+    ОТЛИЧАЕТСЯ от выбранного: раньше про такой отставший второй файл проверка молчала
+    вовсе. Совпадающий второй файл — не беда (дубль, не расхождение), строки нет.
+    Предупреждение — код выхода НЕ МЕНЯЕТ, сверяется по-прежнему только `chosen`."""
+    lines = []
+    for other in candidates:
+        if other == chosen or not other.exists():
+            continue
+        if not same_bytes(other.read_bytes(), chosen.read_bytes()):
+            lines.append(f"⚠️  есть и второй файл: {other} — не сверялся (отличается от "
+                        f"выбранного {chosen})")
+    return "\n".join(lines) if lines else None
+
+
 def from_db(db: Path):
     if not db.exists():
         return None
@@ -207,6 +231,13 @@ def main() -> int:
         print(f"   Собрать: python {Path(__file__).resolve().parent / 'export-rules.py'} "
               f"--db {args.db} --apply")
         return 1
+
+    # ЗАМЕЧАНИЕ COORD (карточка #618): второй файл-зеркало, если он тоже есть и отличается
+    # от выбранного, — назвать одной строкой, а не молчать. Судится по-прежнему `path`
+    # (chosen) — код выхода эта строка не меняет, это предупреждение.
+    stale = stale_mirror_note(searched, path)
+    if stale:
+        print(stale)
 
     mirror = from_file(path)
 
