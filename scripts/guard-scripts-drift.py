@@ -25,11 +25,37 @@ guard-scripts-drift.py — рантайм тулкита против его в�
 ЗАПУСК (АБСОЛЮТНЫЙ путь):
     python <КОНТУР>/.mezosync/scripts/guard-scripts-drift.py         # exit 1 при расхождении
     python <КОНТУР>/.mezosync/scripts/guard-scripts-drift.py --sync  # рантайм → репо (рантайм ИСТОЧНИК)
+
+═══ КАРТОЧКА #625 (2026-09-14) — «строк по существу» считало по ПОЛОЖЕНИЮ, не по СОДЕРЖИМОМУ ═══
+Было: построчный zip(a, b) — при одной вставленной строке весь хвост файла сдвигается,
+и КАЖДАЯ следующая строка сравнивается не с той, с какой должна, — «расхождение» росло
+до размера хвоста файла (297 вместо 5 на living-примере карточки). Стало: число строк,
+отличающихся ПО СОДЕРЖИМОМУ — difflib.SequenceMatcher находит настоящие правки (замена/
+вставка/удаление), а не пересчитывает сдвинутый хвост. См. _line_diff_count() и её
+употребление в report_pair(). Приёмка случая — bite-drift-sanitize.py, случай ⑥.
+
+═══ ПЕРЕВОД ИМЁН (по слову COORD, чат PROTO 2026-09-14, поправка к G7/#625) ═══
+Внутренние имена (функции/переменные) переведены на английский ЦЕЛИКОМ. НЕ переведены:
+· комментарии и докстроки — печатаемый человеку текст, по норме контура;
+· строки, которые печатаются человеку (print/докстроки) — тем же основанием;
+· ключи в obj.meta ('mirror_repo', 'template_checkout') — поля живой базы;
+· значения набора _PRINTING_CALLS («суд», «случай») — это ИМЕНА функций в ЧУЖИХ файлах
+  (приёмках .mezosync/scripts и vnext-tools), по которым здешний разбор узнаёт «печатающий
+  вызов»; перевод этих строк не перевёл бы чужой код, а разорвал бы распознавание;
+· плейсхолдеры <КОНТУР>/<ШАБЛОН>/<репозиторий> — печатаемые заглушки путей, не имена кода.
+Внешний якорь: vnext-tools/bite-common-helpers.py (случай ⑤) правит ИСХОДНЫЙ ТЕКСТ этого
+файла строкой вызова сверить_общих_помощников() внутри return — переименование функции
+ломает эту строку молча (find/replace находит 0 вхождений), если якорь не обновить вслед
+за именем. Функция переименована в check_shared_helpers; якорь в bite-common-helpers.py
+обновлён тем же ходом (возврат по G7, 2026-09-14) — И заменяет теперь ВСЕ вхождения
+(их три call-сайта внутри check_against_template()), не только первое текстуально: первое
+не обязательно то, что исполняется.
 """
 
 import argparse
 import ast
 import filecmp
+import difflib
 import hashlib
 import io
 import shutil
@@ -49,21 +75,27 @@ RUNTIME = Path(__file__).resolve().parent
 # впечатанное в наш инструмент». Умолчание остаётся нашим — но только как умолчание.
 
 
-def _зеркало() -> Path:
-    имя = None
+def _resolve_mirror_repo() -> Path:
+    name = None
     try:
         import sqlite3
         import mezo_paths as _mp
         c = sqlite3.connect(str(_mp.live_db()))
         row = c.execute("SELECT value FROM meta WHERE key = 'mirror_repo'").fetchone()
         c.close()
-        имя = (row[0] if row else "") or None
-    except Exception:                                  # noqa: BLE001
-        имя = None
-    return RUNTIME.parent.parent / (имя or "atlas.agents-sync.db") / "scripts"
+        name = (row[0] if row else "") or None
+    # ⚠️ ПОПРАВКА COORD (возврат по G7): _mp.live_db() зовёт container_root() БЕЗ
+    # script_file — при копии этого файла ВНЕ контура (нет .mezosync/mezosync.db
+    # вверх по дереву, MEZO_CONTAINER не задан) он делает sys.exit(строка) — а это
+    # SystemExit, не Exception. Узкий except его не ловит, и модуль падает ЗДЕСЬ,
+    # ЕЩЁ ДО того, как выполнится соседний блок _own_container ниже (тот уже ловит
+    # (SystemExit, Exception) правильно) — та же асимметрия, но она стреляет ПЕРВОЙ.
+    except (SystemExit, Exception):                    # noqa: BLE001
+        name = None
+    return RUNTIME.parent.parent / (name or "atlas.agents-sync.db") / "scripts"
 
 
-REPO = _зеркало()
+REPO = _resolve_mirror_repo()
 
 # ── ВТОРАЯ ПАРА КОПИЙ, ДОБАВЛЕНА 07.08 17:18 UTC ПО ЗАМЕРУ @RCC (записка #3338) ──
 # Он пошёл за инструментом в vnext-tools — каталог, который его сохранённая память называет зоной
@@ -110,7 +142,13 @@ try:
     _r2 = _c2.execute("SELECT value FROM meta WHERE key = 'template_checkout'").fetchone()
     _c2.close()
     VNEXT_TEMPLATE = Path(_r2[0]) / "vnext" / "prototype" if _r2 and _r2[0] else None
-except Exception:                                      # noqa: BLE001
+# ⚠️ ПОПРАВКА COORD (возврат по G7): та же асимметрия, что была у _resolve_mirror_repo()
+# выше, — _mp2.live_db() тоже зовёт container_root() без script_file и может выйти
+# SystemExit'ом, если инструмент лежит ВНЕ контура. Сосед-блок _own_container уже ловит
+# (SystemExit, Exception) — здесь было только Exception, и копия падала трассировкой
+# вместо тихого VNEXT_TEMPLATE=None (который check_against_template() и так объясняет
+# читателю словами «с общим образцом НЕ сверялось»).
+except (SystemExit, Exception):                        # noqa: BLE001
     VNEXT_TEMPLATE = None
 
 
@@ -133,20 +171,20 @@ PLACEHOLDERS = [
 # нашего репозитория уже однажды уехало в инструмент соседа и советовало ему завести
 # репозиторий с чужим именем (находка контура tapas 19.08 10:46 UTC).
 try:
-    _репо = sorted(d.name for d in _own_container.iterdir()
-                   if d.is_dir() and (d / ".git").exists())
+    _repo_dirs = sorted(d.name for d in _own_container.iterdir()
+                        if d.is_dir() and (d / ".git").exists())
 except OSError:
-    _репо = []
-for _имя in _репо:
-    for _кос in (chr(92), "/"):
-        PLACEHOLDERS.append((f"<КОНТУР>{_кос}{_имя}", f"<КОНТУР>{_кос}<репозиторий>"))
+    _repo_dirs = []
+for _name in _repo_dirs:
+    for _slash in (chr(92), "/"):
+        PLACEHOLDERS.append((f"<КОНТУР>{_slash}{_name}", f"<КОНТУР>{_slash}<репозиторий>"))
 if VNEXT_TEMPLATE is not None:
-    _корень_шаблона = str(VNEXT_TEMPLATE.parent.parent)
-    PLACEHOLDERS += [(_корень_шаблона, "<ШАБЛОН>"),
-                     (_корень_шаблона.replace(chr(92), "/"), "<ШАБЛОН>")]
+    _template_root_str = str(VNEXT_TEMPLATE.parent.parent)
+    PLACEHOLDERS += [(_template_root_str, "<ШАБЛОН>"),
+                     (_template_root_str.replace(chr(92), "/"), "<ШАБЛОН>")]
 
 
-def сверить_общих_помощников() -> int:
+def check_shared_helpers() -> int:
     """ТРЕТЬЯ ПАРА КОПИЙ: файлы с ОДНИМ ИМЕНЕМ в двух рабочих каталогах контура.
 
     🩸 НАЙДЕНО 2026-09-06 (карточка #578) нарочной поломкой: копия инструмента на временном
@@ -165,29 +203,29 @@ def сверить_общих_помощников() -> int:
     """
     if not (RUNTIME.is_dir() and VNEXT_RUNTIME and VNEXT_RUNTIME.is_dir()):
         return 0
-    общие = sorted({p.name for p in RUNTIME.glob("*.py")}
-                   & {p.name for p in VNEXT_RUNTIME.glob("*.py")})
-    if not общие:
+    common = sorted({p.name for p in RUNTIME.glob("*.py")}
+                    & {p.name for p in VNEXT_RUNTIME.glob("*.py")})
+    if not common:
         print("📎 общие помощники двух рабочих каталогов: файлов с общим именем НЕТ")
         return 0
-    разошлись = [n for n in общие
-                 if not filecmp.cmp(RUNTIME / n, VNEXT_RUNTIME / n, shallow=False)]
-    if not разошлись:
-        print(f"✅ общие помощники двух рабочих каталогов: {len(общие)} совпадают байт в байт")
+    diverged = [n for n in common
+                if not filecmp.cmp(RUNTIME / n, VNEXT_RUNTIME / n, shallow=False)]
+    if not diverged:
+        print(f"✅ общие помощники двух рабочих каталогов: {len(common)} совпадают байт в байт")
         return 0
     print("")
-    print(f"⛔ ОБЩИЕ ПОМОЩНИКИ РАСХОДЯТСЯ ({len(разошлись)} из {len(общие)}) — "
+    print(f"⛔ ОБЩИЕ ПОМОЩНИКИ РАСХОДЯТСЯ ({len(diverged)} из {len(common)}) — "
           f"инструменты двух каталогов работают РАЗНЫМ кодом под одним именем:")
-    for n in разошлись:
+    for n in diverged:
         a, b = RUNTIME / n, VNEXT_RUNTIME / n
         print(f"   {n:22} контур {sha(a)} ({a.stat().st_size}б) ≠ "
               f"v-next {sha(b)} ({b.stat().st_size}б)")
     print("   👉 сведи их ОДНОЙ версией (у каждого файла своя ведущая сторона — смотри "
           "глазами, автоматом не сводим) и повтори прогон")
-    return len(разошлись)
+    return len(diverged)
 
 
-def сверить_с_шаблоном():
+def check_against_template():
     """Сверка с общим образцом — только если контур объявил, где его рабочая копия.
 
     ⛔ Прежде путь к образцу был впечатан абсолютной строкой, и у соседа инструмент шёл
@@ -205,18 +243,18 @@ def сверить_с_шаблоном():
               "не объявлена (запись `template_checkout` в meta).")
         print("   Это НЕ «расхождений нет»: отставание от образца меряет "
               "update-tools.py — он ходит в сам репозиторий, а не на диск.")
-        return сверить_общих_помощников()
+        return check_shared_helpers()
     if not VNEXT_TEMPLATE.is_dir():
         print(f"⚠️ vnext-tools ↔ образец: каталога нет, сверка НЕ ВЫПОЛНЕНА — "
               f"{VNEXT_TEMPLATE}")
         print("   Запись `template_checkout` в meta ЕСТЬ, но каталога по ней нет: копию "
               "перенесли, переименовали или ещё не забрали. Причина ДРУГАЯ, чем "
               "«не объявлена», и чинится другим действием.")
-        return сверить_общих_помощников()
+        return check_shared_helpers()
     report_pair(VNEXT_RUNTIME, VNEXT_TEMPLATE, "vnext-tools", "образец", "@PROTO")
     # Третья пара идёт следом НАМЕРЕННО, одним местом: у main четыре выхода,
     # и вызов, расставленный по каждому, рано или поздно потерялся бы в одном.
-    return сверить_общих_помощников()
+    return check_shared_helpers()
 
 
 def sha(p):
@@ -236,6 +274,28 @@ def sha_sanitized(p):
     return hashlib.sha256("\n".join(_sanitized_lines(p)).encode("utf-8")).hexdigest()[:12]
 
 
+def _line_diff_count(a_lines, b_lines):
+    """Число строк, различающихся ПО СОДЕРЖИМОМУ (карточка #625).
+
+    ⛔ БЫЛО: построчный zip(a, b) — сравнение по ПОЗИЦИИ. Одна вставленная в начало
+    строка сдвигает весь хвост файла на одну позицию, и КАЖДАЯ следующая строка
+    сравнивается не с той строкой, с которой должна: 297 «расхождений» на файле,
+    где правки — одна вставка import и две замены (по факту 5 строк, карточка #625).
+    ⇒ СТАЛО: difflib.SequenceMatcher находит настоящие правки — вставку, удаление,
+    замену — а не пересчитывает сдвинутый хвост. autojunk=False: файлы кода короткие,
+    и эвристика «частая строка — мусор» здесь не нужна и может исказить разбор.
+    Число = сумма длин НЕРАВНЫХ кусков с обеих сторон (удалено + добавлено) —
+    ровно то же самое «удалено + добавлено» построчным сравнением, которое требует
+    критерий приёмки карточки #625, но БЕЗ позиционного сдвига.
+    """
+    matcher = difflib.SequenceMatcher(a=a_lines, b=b_lines, autojunk=False)
+    changed = 0
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag != "equal":
+            changed += (i2 - i1) + (j2 - j1)
+    return changed
+
+
 # ═══ ПЕРЕНОС В ШАБЛОН (карточка #576) ═══════════════════════════════════════════════
 # ⚡ ЗАЧЕМ ЭТО ЗДЕСЬ, А НЕ ОТДЕЛЬНЫМ ИНСТРУМЕНТОМ: правило обезличивания (PLACEHOLDERS)
 # уже живёт в этом файле и им пользуется СРАВНЕНИЕ. Пока переносил человек, правило знало
@@ -251,10 +311,10 @@ def sha_sanitized(p):
 # ⇒ Перенос отличает одно от другого и ОТКАЗЫВАЕТСЯ, когда путь стои́т в исполняемом месте:
 #   молча обезличить его значило бы изготовить поломку и отдать её соседям.
 
-_ПЕЧАТАЮЩИЕ = {"print", "case", "суд", "случай", "write", "sys.exit", "exit"}
+_PRINTING_CALLS = {"print", "case", "суд", "случай", "write", "sys.exit", "exit"}
 
 
-def _зовут(node):
+def _call_name(node):
     """Имя вызываемого — для Call. «obj.method» приводим к «method»."""
     f = node.func
     if isinstance(f, ast.Name):
@@ -264,7 +324,7 @@ def _зовут(node):
     return ""
 
 
-def безопасные_места(text):
+def _safe_spans(text):
     """Смещения (начало, конец) кусков текста, где заглушка законна: комментарии,
     докстроки и строки внутри печатающих вызовов.
 
@@ -272,72 +332,72 @@ def безопасные_места(text):
     идёт не в print, а в case/суд/случай. Незнакомая печатающая обёртка сюда не попадёт,
     и перенос честно ОТКАЖЕТСЯ, а не обезличит наугад.
     """
-    начала_строк, поз = [0], 0
-    for стр in text.splitlines(keepends=True):
-        поз += len(стр)
-        начала_строк.append(поз)
+    line_starts, pos = [0], 0
+    for line in text.splitlines(keepends=True):
+        pos += len(line)
+        line_starts.append(pos)
 
-    def смещение(row, col):
-        return начала_строк[row - 1] + col
+    def offset(row, col):
+        return line_starts[row - 1] + col
 
-    места = []
+    spans = []
     try:
-        дерево = ast.parse(text)
+        tree = ast.parse(text)
     except SyntaxError:
         return None                      # неразбираемый файл — судить нечем, вызывающий откажет
 
-    печатаемые = set()
-    for узел in ast.walk(дерево):
-        if isinstance(узел, ast.Call) and _зовут(узел) in _ПЕЧАТАЮЩИЕ:
-            for под in ast.walk(узел):
-                if isinstance(под, ast.Constant) and isinstance(под.value, str):
-                    печатаемые.add((под.lineno, под.col_offset))
+    printable = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and _call_name(node) in _PRINTING_CALLS:
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
+                    printable.add((sub.lineno, sub.col_offset))
         # докстрока: строковое выражение первым в теле модуля, функции или класса
-        if isinstance(узел, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            тело = getattr(узел, "body", [])
-            if тело and isinstance(тело[0], ast.Expr) and isinstance(тело[0].value, ast.Constant) \
-                    and isinstance(тело[0].value.value, str):
-                к = тело[0].value
-                печатаемые.add((к.lineno, к.col_offset))
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            body = getattr(node, "body", [])
+            if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) \
+                    and isinstance(body[0].value.value, str):
+                doc_node = body[0].value
+                printable.add((doc_node.lineno, doc_node.col_offset))
 
-    for т in tokenize.generate_tokens(io.StringIO(text).readline):
-        if т.type == tokenize.COMMENT:
-            места.append((смещение(*т.start), смещение(*т.end)))
-        elif т.type == tokenize.STRING and (т.start[0], т.start[1]) in печатаемые:
-            места.append((смещение(*т.start), смещение(*т.end)))
-    return места
+    for tok in tokenize.generate_tokens(io.StringIO(text).readline):
+        if tok.type == tokenize.COMMENT:
+            spans.append((offset(*tok.start), offset(*tok.end)))
+        elif tok.type == tokenize.STRING and (tok.start[0], tok.start[1]) in printable:
+            spans.append((offset(*tok.start), offset(*tok.end)))
+    return spans
 
 
-def обезличить_текст(text):
+def anonymize_text(text):
     """→ (новый текст, сколько заменено, [строки с путём В ИСПОЛНЯЕМОМ месте]).
 
     Заменяем ТОЛЬКО внутри безопасных мест. Путь, найденный вне их, не трогаем и
     возвращаем как причину отказа — с номером строки, чтобы человек посмотрел сам.
     """
-    места = безопасные_места(text)
-    if места is None:
+    spans = _safe_spans(text)
+    if spans is None:
         return None, 0, ["файл не разбирается — обезличивать вслепую нельзя"]
-    замены, опасные = [], []
+    replacements, unsafe = [], []
     for real, mark in PLACEHOLDERS:
         if not real:
             continue
-        поз = text.find(real)
-        while поз != -1:
-            внутри = any(н <= поз and поз + len(real) <= к for н, к in места)
-            if внутри:
-                замены.append((поз, поз + len(real), mark))
+        pos = text.find(real)
+        while pos != -1:
+            inside = any(start <= pos and pos + len(real) <= end for start, end in spans)
+            if inside:
+                replacements.append((pos, pos + len(real), mark))
             else:
-                строка = text.count("\n", 0, поз) + 1
-                опасные.append(f"строка {строка}: «{real}» вне читаемого человеком текста")
-            поз = text.find(real, поз + 1)
-    if опасные:
-        return None, 0, опасные
-    for н, к, mark in sorted(замены, reverse=True):
-        text = text[:н] + mark + text[к:]
-    return text, len(замены), []
+                line_no = text.count("\n", 0, pos) + 1
+                unsafe.append(f"строка {line_no}: «{real}» вне читаемого человеком текста")
+            pos = text.find(real, pos + 1)
+    if unsafe:
+        return None, 0, unsafe
+    for start, end, mark in sorted(replacements, reverse=True):
+        text = text[:start] + mark + text[end:]
+    return text, len(replacements), []
 
 
-def перенести_в_шаблон(имена, runtime_dirs, template_dir):
+def transfer_to_template(names, runtime_dirs, template_dir):
     """Скопировать названные файлы в шаблон, обезличив пути. Вернуть код возврата."""
     if template_dir is None:
         print("⛔ ШАБЛОН НЕ ОБЪЯВЛЕН (meta.template_checkout пуст) — переносить некуда")
@@ -352,31 +412,31 @@ def перенести_в_шаблон(имена, runtime_dirs, template_dir):
         print("   Сам его не создаю — публичный каталог заводит человек, а молча созданный"
               " пустой каталог выглядел бы как выкачанный образец.")
         return 2
-    плохо = 0
-    for имя in имена:
-        источник = None
-        for каталог in runtime_dirs:
-            п = Path(имя) if Path(имя).is_absolute() else внутри_каталога(каталог, имя)
-            if п.exists():
-                источник = п
+    bad = 0
+    for name in names:
+        source = None
+        for folder in runtime_dirs:
+            candidate = Path(name) if Path(name).is_absolute() else inside_dir(folder, name)
+            if candidate.exists():
+                source = candidate
                 break
-        if источник is None:
-            print(f"🔴 {имя}: не найден ни в одном рабочем каталоге — переносить нечего")
-            плохо += 1
+        if source is None:
+            print(f"🔴 {name}: не найден ни в одном рабочем каталоге — переносить нечего")
+            bad += 1
             continue
-        текст = источник.read_bytes().decode("utf-8", "replace")
-        новый, сколько, опасные = обезличить_текст(текст)
-        if новый is None:
-            print(f"🔴 {источник.name}: ОТКАЗ — путь этой машины стои́т там, где его нельзя"
+        text = source.read_bytes().decode("utf-8", "replace")
+        new_text, replaced, unsafe = anonymize_text(text)
+        if new_text is None:
+            print(f"🔴 {source.name}: ОТКАЗ — путь этой машины стои́т там, где его нельзя"
                   f" заменить заглушкой (обезличенная ИСПОЛНЯЕМАЯ строка ломает инструмент"
                   f" у потребителя):")
-            for о in опасные:
-                print(f"      {о}")
+            for reason in unsafe:
+                print(f"      {reason}")
             print("   👉 вынеси путь из вычисления (он обязан выводиться от расположения"
                   " файла) — и повтори перенос")
-            плохо += 1
+            bad += 1
             continue
-        цель = template_dir / источник.name
+        target = template_dir / source.name
         # 🔴 ЗДЕСЬ БЫЛО `write_text(...)`, И ОНО УДВАИВАЛО КОНЦЫ СТРОК (находка @COORD,
         # записка #4904). Файл читается БАЙТАМИ, значит «\r\n» доезжает в текст как есть;
         # запись текстом на Windows переводит каждый «\n» ещё раз — выходит «\r\r\n».
@@ -387,19 +447,19 @@ def перенести_в_шаблон(имена, runtime_dirs, template_dir):
         # значит «\r\r\n» для неё то же, что «\r\n». Правка и проверяющая её сверка читали
         # ПО-РАЗНОМУ — сверка слепа именно к той порче, которую правка вносит.
         # ⇒ Пишем БАЙТАМИ: что прочитали, то и записали, кроме подставленных заглушек.
-        цель.write_bytes(новый.encode("utf-8"))
-        print(f"✅ {источник.name} → шаблон · заглушек подставлено {сколько}")
-    if плохо:
-        print(f"\n⛔ ПЕРЕНЕСЕНО НЕ ВСЁ: отказов {плохо}. Ничего из отказавшего не тронуто.")
+        target.write_bytes(new_text.encode("utf-8"))
+        print(f"✅ {source.name} → шаблон · заглушек подставлено {replaced}")
+    if bad:
+        print(f"\n⛔ ПЕРЕНЕСЕНО НЕ ВСЁ: отказов {bad}. Ничего из отказавшего не тронуто.")
         return 1
     print("\n⚖️ ГРАНИЦА: перенос обезличил ПУТИ. Что содержимое верно по существу —"
           " он не знает и не обещает; прогон шаблона по-прежнему за человеком.")
     return 0
 
 
-def внутри_каталога(каталог, имя):
+def inside_dir(folder, name):
     """Путь внутри каталога — отдельной функцией, чтобы имя с подкаталогом тоже работало."""
-    return Path(каталог) / имя
+    return Path(folder) / name
 
 
 def scripts_in(root):
@@ -483,12 +543,13 @@ def report_pair(left, right, left_name, right_name, whose):
         # правило bytes-are-not-content): «46753б ≠ 46767б» не говорит читающему, правка
         # это или окончания строк, и разбор занимал 15 минут руками при одном различии.
         # Различий больше, чем строк в файле, — признак, что сверка сравнивает не то.
-        сa = _sanitized_lines(a[n])
-        сb = _sanitized_lines(b[n])
-        по_существу = (sum(1 for x, y in zip(сa, сb) if x != y)
-                       + abs(len(сa) - len(сb)))
+        # ⚠️ КАРТОЧКА #625: число ниже — НЕ построчный zip (тот считает по ПОЗИЦИИ и
+        # сходит с ума на одной вставленной строке), а difflib-разбор _line_diff_count().
+        a_lines = _sanitized_lines(a[n])
+        b_lines = _sanitized_lines(b[n])
+        changed_lines = _line_diff_count(a_lines, b_lines)
         print(f"   {n:30} {a[n].stat().st_size:6}б ≠ {b[n].stat().st_size:6}б   "
-              f"свежее: {newer} · строк по существу: {по_существу}")
+              f"свежее: {newer} · строк по существу: {changed_lines}")
     if len(diff) > 8:
         print(f"   … ещё {len(diff) - 8}")
     print("   👉 роль идёт за инструментом ПО ПУТИ ИЗ СВОЕЙ ПАМЯТИ: сдано у автора ≠ доступно ей")
@@ -524,10 +585,10 @@ def main():
     # чем оно объявлено глобальным в той же функции, и первая редакция этой правки падала
     # разбором. Пусть стои́т здесь — заодно перенос видит каталоги, заданные аргументами.
     if args.to_template:
-        каталоги = [Path(args.vnext_runtime) if args.vnext_runtime else VNEXT_RUNTIME,
-                    Path(args.runtime) if args.runtime else RUNTIME]
-        шаблон = Path(args.vnext_template) if args.vnext_template else VNEXT_TEMPLATE
-        sys.exit(перенести_в_шаблон(args.to_template, каталоги, шаблон))
+        folders = [Path(args.vnext_runtime) if args.vnext_runtime else VNEXT_RUNTIME,
+                   Path(args.runtime) if args.runtime else RUNTIME]
+        template = Path(args.vnext_template) if args.vnext_template else VNEXT_TEMPLATE
+        sys.exit(transfer_to_template(args.to_template, folders, template))
     if args.runtime:
         RUNTIME = Path(args.runtime)
     if args.repo:
@@ -570,7 +631,7 @@ def main():
 
     if not (only_rt or only_rp or diff):
         print("\n✅ СОВПАДАЕТ: рантайм и версионированная копия идентичны.")
-        sys.exit(1 if сверить_с_шаблоном() else 0)
+        sys.exit(1 if check_against_template() else 0)
 
     if only_rt:
         print(f"\n⛔ НЕТ В РЕПО ({len(only_rt)}) — не версионированы, потеряются вместе с каталогом:")
@@ -588,7 +649,7 @@ def main():
     if not args.sync:
         # Путь СВОЙСТВОМ (@STUD #2864): относительная форма в рабочем выводе учит отозванному.
         print(f"\n   Синхронизировать: python {Path(__file__).resolve().as_posix()} --sync   (затем commit+push)")
-        сверить_с_шаблоном()
+        check_against_template()
         sys.exit(1)
 
     for n in only_rt + diff:
@@ -604,7 +665,7 @@ def main():
     # ⛔ ПОСЛЕ --sync тоже показываем, но НЕ синхронизируем: --sync означает «рантайм → репо»
     # для МОЕЙ пары. Чужая пара сюда не входит, и молчание о ней после успешного синка
     # прочиталось бы как «все копии сведены».
-    if сверить_с_шаблоном():
+    if check_against_template():
         sys.exit(1)
 
 

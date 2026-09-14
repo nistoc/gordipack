@@ -13,8 +13,8 @@
 Найдено @OPSSRE 05.09 06:37 UTC на своей памяти (записка #4792), разрешение и приёмка
 @PROTO (записка #4794 §④): «Ⓐ+Ⓑ — да, твоей рукой».
 
-⚖️ ЧЕМ СУДИМ. Часть случаев зовёт `совет()` напрямую — там предмет это ОДИН приговор.
-Часть строит НАСТОЯЩИЙ раздел памяти во временной базе и зовёт `показать()` — там предмет
+⚖️ ЧЕМ СУДИМ. Часть случаев зовёт `advise()` напрямую — там предмет это ОДИН приговор.
+Часть строит НАСТОЯЩИЙ раздел памяти во временной базе и зовёт `show()` — там предмет
 это ИТОГ ЧИСЛОМ, и проверить его на отдельном приговоре нельзя по построению.
 ⛔ Живая база только ЧИТАЕТСЯ (случай ⑥), и только чужие разделы — ни одного переноса.
 """
@@ -30,162 +30,162 @@ import sqlite3
 import sys
 import tempfile
 
-ЗДЕСЬ = pathlib.Path(__file__).resolve().parent
-ИНСТР = ЗДЕСЬ / "memory-archive.py"
+HERE = pathlib.Path(__file__).resolve().parent
+TOOL = HERE / "memory-archive.py"
 
-spec = importlib.util.spec_from_file_location("memarch", ИНСТР)
+spec = importlib.util.spec_from_file_location("memarch", TOOL)
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
 
-СЕГОДНЯ = datetime.date(2026, 9, 5)
-случаи: list[tuple[str, str, str, bool]] = []
+TODAY = datetime.date(2026, 9, 5)
+cases: list[tuple[str, str, str, bool]] = []
 
 
-def случай(имя: str, ждали: str, вышло: str) -> None:
-    ок = ждали == вышло
-    случаи.append((имя, ждали, вышло, ок))
-    print(f"  {'✅' if ок else '🔴'} {имя}")
-    print(f"      ждали: {ждали} · вышло: {вышло}")
+def record_case(name: str, expected: str, actual: str) -> None:
+    ok = expected == actual
+    cases.append((name, expected, actual, ok))
+    print(f"  {'✅' if ok else '🔴'} {name}")
+    print(f"      ждали: {expected} · вышло: {actual}")
 
 
-def приговор(текст: str) -> tuple[str, str, bool]:
-    return m.совет(текст, СЕГОДНЯ)
+def verdict(text: str) -> tuple[str, str, bool]:
+    return m.advise(text, TODAY)
 
 
-def печать_раздела(тело: str) -> str:
-    """Настоящий путь показа: временная база + показать(). Возвращает весь вывод."""
-    with tempfile.TemporaryDirectory(dir=str(ЗДЕСЬ)) as врем:
-        путь = pathlib.Path(врем) / "t.db"
-        c = sqlite3.connect(путь)
+def render_section(body: str) -> str:
+    """Настоящий путь показа: временная база + show(). Возвращает весь вывод."""
+    with tempfile.TemporaryDirectory(dir=str(HERE)) as tmp:
+        db_path = pathlib.Path(tmp) / "t.db"
+        c = sqlite3.connect(db_path)
         c.execute("CREATE TABLE phoenix (role TEXT, section TEXT, body TEXT, saved_at TEXT)")
-        c.execute("INSERT INTO phoenix VALUES ('X','state',?,'2026-09-05T06:00:00Z')", (тело,))
+        c.execute("INSERT INTO phoenix VALUES ('X','state',?,'2026-09-05T06:00:00Z')", (body,))
         c.commit()
-        было, sys.stdout = sys.stdout, io.StringIO()
+        saved_stdout, sys.stdout = sys.stdout, io.StringIO()
         try:
-            m.показать(c, "X", "state")
+            m.show(c, "X", "state")
             return sys.stdout.getvalue()
         finally:
-            sys.stdout = было
+            sys.stdout = saved_stdout
             c.close()
 
 
 # ── тексты. У «архивной по возрасту» приметы (⚰️ · урок · снято…) возраст ЕСТЬ условие ──
-БЕЗ_ДАТЫ = "## ⚰️ надгробие: правило снято\nурок оплачен, разбор ниже\nтело блока\n"
-С_ДАТОЙ = "## ⚰️ надгробие 2026-08-01: правило снято\nурок оплачен\nтело блока\n"
-ЗАКРЫТО_БЕЗ_ДАТЫ = "## работа закрыт, сделано\nподробности замера\n"
-БЕЗ_ПРИМЕТ = "## просто раздел\nникаких примет тут нет\n"
-ГОРЯЧЕЕ = "## ⛔ ЗАПРЕТ действует\nправо, слово владельца\n"
+NO_DATE = "## ⚰️ надгробие: правило снято\nурок оплачен, разбор ниже\nтело блока\n"
+WITH_DATE = "## ⚰️ надгробие 2026-08-01: правило снято\nурок оплачен\nтело блока\n"
+CLOSED_NO_DATE = "## работа закрыт, сделано\nподробности замера\n"
+NO_MARKERS = "## просто раздел\nникаких примет тут нет\n"
+HOT = "## ⛔ ЗАПРЕТ действует\nправо, слово владельца\n"
 
 print("ПРИЁМКА карточки #556 · разгрузка памяти: последствие у блока без даты")
-print(f"инструмент: {ИНСТР}")
-эталон = hashlib.md5(ИНСТР.read_bytes()).hexdigest()
-исходник_б = ИНСТР.read_bytes()          # 🔴 БАЙТЫ, не текст: запись текстом
-исходник = исходник_б.decode("utf-8")    #    переводит концы строк, и восстановление
+print(f"инструмент: {TOOL}")
+reference_hash = hashlib.md5(TOOL.read_bytes()).hexdigest()
+original_bytes = TOOL.read_bytes()          # 🔴 БАЙТЫ, не текст: запись текстом
+original_text = original_bytes.decode("utf-8")    #    переводит концы строк, и восстановление
                                          #    вернёт содержимое, но не байты (поймано
                                          #    отпечатком на первом прогоне 05.09 07:47)
-print(f"отпечаток эталона: {эталон}")
+print(f"отпечаток эталона: {reference_hash}")
 print("-" * 88)
 
 # ⓪ КОНТРОЛЬ ПЕРВЫМ — не зелен контроль, встречные не значат ничего
-з, п, д = приговор(ГОРЯЧЕЕ)
-случай("⓪ контроль: горячий блок судится как раньше", "🔥 · не держится", f"{з} · {'держится' if д else 'не держится'}")
+mark, why, holds = verdict(HOT)
+record_case("⓪ контроль: горячий блок судится как раньше", "🔥 · не держится", f"{mark} · {'держится' if holds else 'не держится'}")
 
 # ① Ⓐ ПОСЛЕДСТВИЕ НАЗВАНО В САМОЙ СТРОКЕ
-з, п, д = приговор(БЕЗ_ДАТЫ)
-есть_последствие = "НЕ ИЗМЕНИТСЯ САМ НИКОГДА" in п and "ПРОСТАВЬ ДАТУ" in п
-случай("① Ⓐ приговор несёт ПОСЛЕДСТВИЕ, а не только причину",
+mark, why, holds = verdict(NO_DATE)
+has_consequence = "НЕ ИЗМЕНИТСЯ САМ НИКОГДА" in why and "ПРОСТАВЬ ДАТУ" in why
+record_case("① Ⓐ приговор несёт ПОСЛЕДСТВИЕ, а не только причину",
        "⚖️ · последствие названо · держится",
-       f"{з} · {'последствие названо' if есть_последствие else '🔴 только причина'} · "
-       f"{'держится' if д else 'не держится'}")
+       f"{mark} · {'последствие названо' if has_consequence else '🔴 только причина'} · "
+       f"{'держится' if holds else 'не держится'}")
 
 # ③ ВСТРЕЧНЫЙ ГЛАВНЫЙ: та же примета, но ДАТА ЕСТЬ ⇒ ни строки, ни счёта
-з, п, д = приговор(С_ДАТОЙ)
-случай("③ встречный: дата ЕСТЬ ⇒ новой строки нет и в счёт не идёт",
+mark, why, holds = verdict(WITH_DATE)
+record_case("③ встречный: дата ЕСТЬ ⇒ новой строки нет и в счёт не идёт",
        "последствия нет · не держится",
-       f"{'🔴 последствие названо' if 'НЕ ИЗМЕНИТСЯ' in п else 'последствия нет'} · "
-       f"{'держится' if д else 'не держится'}")
+       f"{'🔴 последствие названо' if 'НЕ ИЗМЕНИТСЯ' in why else 'последствия нет'} · "
+       f"{'держится' if holds else 'не держится'}")
 
 # ③b ВСТРЕЧНЫЙ: примета архивная, но ВНЕ возрастной группы — возраст ей не нужен
-з, п, д = приговор(ЗАКРЫТО_БЕЗ_ДАТЫ)
-случай("③b встречный: закрытая работа без даты ⇒ её никто не держит",
-       "📦 · не держится", f"{з} · {'держится' if д else 'не держится'}")
+mark, why, holds = verdict(CLOSED_NO_DATE)
+record_case("③b встречный: закрытая работа без даты ⇒ её никто не держит",
+       "📦 · не держится", f"{mark} · {'держится' if holds else 'не держится'}")
 
 # ③c ВСТРЕЧНЫЙ: примет нет вовсе — «дат нет» тут не беда, а обычное дело
-з, п, д = приговор(БЕЗ_ПРИМЕТ)
-случай("③c встречный: примет нет ⇒ в счёт не идёт (иначе признак горел бы всегда)",
-       "⚪ · не держится", f"{з} · {'держится' if д else 'не держится'}")
+mark, why, holds = verdict(NO_MARKERS)
+record_case("③c встречный: примет нет ⇒ в счёт не идёт (иначе признак горел бы всегда)",
+       "⚪ · не держится", f"{mark} · {'держится' if holds else 'не держится'}")
 
 # ② Ⓑ ИТОГ ЧИСЛОМ — на НАСТОЯЩЕМ пути показа, два таких блока в разделе
-вывод = печать_раздела(БЕЗ_ДАТЫ + "\n" + БЕЗ_ДАТЫ.replace("надгробие", "надгробие второе")
-                       + "\n" + С_ДАТОЙ + "\n" + ГОРЯЧЕЕ)
-м = re.search(r"БЛОКОВ БЕЗ ДАТЫ: (\d+) · суммарно (\d+) знаков", вывод)
-случай("② Ⓑ итог числом: два таких блока сосчитаны, третий и четвёртый — нет",
+output = render_section(NO_DATE + "\n" + NO_DATE.replace("надгробие", "надгробие второе")
+                       + "\n" + WITH_DATE + "\n" + HOT)
+match = re.search(r"БЛОКОВ БЕЗ ДАТЫ: (\d+) · суммарно (\d+) знаков", output)
+record_case("② Ⓑ итог числом: два таких блока сосчитаны, третий и четвёртый — нет",
        "число 2 · размер больше нуля",
-       (f"число {м.group(1)} · размер {'больше нуля' if int(м.group(2)) > 0 else '0'}")
-       if м else "🔴 строки итога НЕТ ВОВСЕ")
+       (f"число {match.group(1)} · размер {'больше нуля' if int(match.group(2)) > 0 else '0'}")
+       if match else "🔴 строки итога НЕТ ВОВСЕ")
 
 # ④ ВТОРОЙ ВСТРЕЧНЫЙ: таких блоков НЕТ ⇒ итоговой строки быть НЕ ДОЛЖНО
-вывод_чистый = печать_раздела(ГОРЯЧЕЕ + "\n" + С_ДАТОЙ + "\n" + ЗАКРЫТО_БЕЗ_ДАТЫ)
-случай("④ встречный: таких блоков нет ⇒ итоговой строки НЕТ (ноль не горит)",
+clean_output = render_section(HOT + "\n" + WITH_DATE + "\n" + CLOSED_NO_DATE)
+record_case("④ встречный: таких блоков нет ⇒ итоговой строки НЕТ (ноль не горит)",
        "строки итога нет",
-       "🔴 строка итога напечатана" if "БЛОКОВ БЕЗ ДАТЫ" in вывод_чистый else "строки итога нет")
+       "🔴 строка итога напечатана" if "БЛОКОВ БЕЗ ДАТЫ" in clean_output else "строки итога нет")
 
 # ⑤ ПОРЧА В САМОМ ИНСТРУМЕНТЕ — обезврежен признак «дат в блоке нет»
 print("  … ставлю порчу: обезвреживаю признак «дат в блоке нет» в самом инструменте")
-лит = "if по_возрасту and суток is None:"
-порча = исходник.replace(лит, "if по_возрасту and False:")
-print(f"  … порча изменила текст: {порча != исходник}")
-if порча == исходник:
+target_line = "if archive_by_age and age_days is None:"
+corrupted_text = original_text.replace(target_line, "if archive_by_age and False:")
+print(f"  … порча изменила текст: {corrupted_text != original_text}")
+if corrupted_text == original_text:
     print("  🔴 ОТКАЗ: порча НЕ применилась — прогон ничего не докажет")
     sys.exit(2)
-пало_у_порчи: list[str] = []
+failed_under_corruption: list[str] = []
 try:
-    ИНСТР.write_bytes(порча.encode("utf-8"))
-    spec2 = importlib.util.spec_from_file_location("memarch_b", ИНСТР)
+    TOOL.write_bytes(corrupted_text.encode("utf-8"))
+    spec2 = importlib.util.spec_from_file_location("memarch_b", TOOL)
     mb = importlib.util.module_from_spec(spec2)
     spec2.loader.exec_module(mb)
-    з2, п2, д2 = mb.совет(БЕЗ_ДАТЫ, СЕГОДНЯ)
-    if "НЕ ИЗМЕНИТСЯ САМ НИКОГДА" not in п2:
-        пало_у_порчи.append("①")
-    if not д2:
-        пало_у_порчи.append("②")
-    _, _, д3 = mb.совет(С_ДАТОЙ, СЕГОДНЯ)          # встречный обязан УСТОЯТЬ
-    встречный_цел = not д3
+    mark2, why2, holds2 = mb.advise(NO_DATE, TODAY)
+    if "НЕ ИЗМЕНИТСЯ САМ НИКОГДА" not in why2:
+        failed_under_corruption.append("①")
+    if not holds2:
+        failed_under_corruption.append("②")
+    _, _, holds3 = mb.advise(WITH_DATE, TODAY)          # встречный обязан УСТОЯТЬ
+    counter_intact = not holds3
 finally:
-    ИНСТР.write_bytes(исходник_б)                  # ⛔ БЕЗУСЛОВНО и ПОБАЙТНО
-    цел = hashlib.md5(ИНСТР.read_bytes()).hexdigest() == эталон
-    print(f"  ♻️ инструмент восстановлен: отпечаток {'СОВПАЛ ✅' if цел else '🔴 РАЗОШЁЛСЯ'}")
-случай("⑤ ПОРЧА: без признака ① и ② краснеют, встречный ③ цел",
+    TOOL.write_bytes(original_bytes)                  # ⛔ БЕЗУСЛОВНО и ПОБАЙТНО
+    intact = hashlib.md5(TOOL.read_bytes()).hexdigest() == reference_hash
+    print(f"  ♻️ инструмент восстановлен: отпечаток {'СОВПАЛ ✅' if intact else '🔴 РАЗОШЁЛСЯ'}")
+record_case("⑤ ПОРЧА: без признака ① и ② краснеют, встречный ③ цел",
        "пали ①②, встречный цел",
-       f"пали {''.join(пало_у_порчи) or 'никто'}, встречный "
-       f"{'цел' if встречный_цел else '🔴 тоже упал'}")
+       f"пали {''.join(failed_under_corruption) or 'никто'}, встречный "
+       f"{'цел' if counter_intact else '🔴 тоже упал'}")
 
 # ⑥ ЖИВАЯ ПАМЯТЬ НЕСКОЛЬКИХ РОЛЕЙ — только чтение, ни одного переноса
 conn = sqlite3.connect(f"file:{m.mezo_paths.live_db()}?mode=ro", uri=True)
-строки = conn.execute("SELECT role, section, body FROM phoenix ORDER BY role, section").fetchall()
-по_ролям: dict[str, int] = {}
-упало = []
-for роль, раздел, тело in строки:
+rows = conn.execute("SELECT role, section, body FROM phoenix ORDER BY role, section").fetchall()
+by_role: dict[str, int] = {}
+failed = []
+for role, section, body in rows:
     try:
-        куски, _ = m.блоки(тело or "")
-        n = sum(1 for к in куски if m.совет(к["тело"], СЕГОДНЯ)[2])
-        по_ролям[роль] = по_ролям.get(роль, 0) + n
+        chunks, _ = m.blocks(body or "")
+        n = sum(1 for chunk in chunks if m.advise(chunk["тело"], TODAY)[2])
+        by_role[role] = by_role.get(role, 0) + n
     except Exception as e:
-        упало.append(f"{роль}/{раздел}: {e.__class__.__name__}")
+        failed.append(f"{role}/{section}: {e.__class__.__name__}")
 conn.close()
-случай("⑥ живая память всех ролей: считается у каждой, ни одна не падает",
-       f"ролей {len(по_ролям)} · падений 0",
-       f"ролей {len(по_ролям)} · падений {len(упало)}" + (f" ({'; '.join(упало[:2])})" if упало else ""))
+record_case("⑥ живая память всех ролей: считается у каждой, ни одна не падает",
+       f"ролей {len(by_role)} · падений 0",
+       f"ролей {len(by_role)} · падений {len(failed)}" + (f" ({'; '.join(failed[:2])})" if failed else ""))
 print("      блоков без даты по ролям: " +
-      " · ".join(f"{р} {n}" for р, n in sorted(по_ролям.items()) if n) or "      ни у кого")
+      " · ".join(f"{r} {n}" for r, n in sorted(by_role.items()) if n) or "      ни у кого")
 
 print("-" * 88)
-сошлось = sum(1 for *_, ок in случаи if ок)
-print(f"сошлось {сошлось} из {len(случаи)}")
-if сошлось != len(случаи):
-    for имя, ждали, вышло, ок in случаи:
-        if not ок:
-            print(f"  🔴 {имя}: ждали «{ждали}», вышло «{вышло}»")
+matched = sum(1 for *_, ok in cases if ok)
+print(f"сошлось {matched} из {len(cases)}")
+if matched != len(cases):
+    for name, expected, actual, ok in cases:
+        if not ok:
+            print(f"  🔴 {name}: ждали «{expected}», вышло «{actual}»")
     sys.exit(1)
 print("⚖️ ГРАНИЦА: судится ТОЛЬКО тот случай, где блок держат ЗА отсутствие даты.")
 print("   Блоки без даты с ДРУГИМ приговором (закрытая работа · примет нет) в счёт")

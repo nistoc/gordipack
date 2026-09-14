@@ -21,7 +21,6 @@ import hashlib
 import io
 import os
 import pathlib
-import shutil
 import sqlite3
 import subprocess
 import sys
@@ -29,33 +28,36 @@ import tempfile
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
-ЗДЕСЬ = pathlib.Path(__file__).resolve().parent
-КОРЕНЬ = ЗДЕСЬ.parent
-ЖИВАЯ = КОРЕНЬ / ".mezosync" / "mezosync.db"
-ШАГ = КОРЕНЬ / ".mezosync" / "scripts" / "migrations" / "20260904-phoenix-records-autoincrement.py"
-ПАМЯТЬ = ЗДЕСЬ / "memory-records.py"
+HERE = pathlib.Path(__file__).resolve().parent
+ROOT = HERE.parent
+LIVE = ROOT / ".mezosync" / "mezosync.db"
+STEP = ROOT / ".mezosync" / "scripts" / "migrations" / "20260904-phoenix-records-autoincrement.py"
+MEMORY_TOOL = HERE / "memory-records.py"
 
-прошло: list[str] = []
-пало: list[str] = []
+sys.path.insert(0, str(HERE))
+import mezo_stand  # noqa: E402 — карточка #505/#624: согласованная копия живой базы
 
-
-def случай(имя: str, ок: bool, чем: str = "") -> None:
-    (прошло if ок else пало).append(имя)
-    print(f"  {'✅' if ок else '🔴'} {имя}")
-    if not ок and чем:
-        for с in чем.strip().splitlines()[:8]:
-            print(f"       {с}")
+passed: list[str] = []
+failed: list[str] = []
 
 
-def зов(*args, env=None):
+def case(title: str, ok: bool, detail: str = "") -> None:
+    (passed if ok else failed).append(title)
+    print(f"  {'✅' if ok else '🔴'} {title}")
+    if not ok and detail:
+        for line in detail.strip().splitlines()[:8]:
+            print(f"       {line}")
+
+
+def run(*args, env=None):
     p = subprocess.run([sys.executable, *map(str, args)], capture_output=True, text=True,
                        encoding="utf-8", env=dict(os.environ, PYTHONIOENCODING="utf-8", **(env or {})))
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 
-def отпечаток_базы(путь) -> str:
+def db_fingerprint(path) -> str:
     """Хэш ВСЕХ строк всех таблиц — чтобы «база не тронута» было утверждением, а не надеждой."""
-    c = sqlite3.connect(путь)
+    c = sqlite3.connect(path)
     h = hashlib.sha256()
     for (t,) in c.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"):
         h.update(t.encode())
@@ -65,8 +67,8 @@ def отпечаток_базы(путь) -> str:
     return h.hexdigest()[:16]
 
 
-def отпечаток_записей(путь):
-    c = sqlite3.connect(путь)
+def records_fingerprint(path):
+    c = sqlite3.connect(path)
     h = hashlib.sha256(); n = 0; s = 0
     for id_, role, section, body in c.execute(
             "SELECT id, role, section, body FROM phoenix_records ORDER BY id"):
@@ -75,7 +77,7 @@ def отпечаток_записей(путь):
     return n, s, h.hexdigest()[:16]
 
 
-def снять_счётчик(путь) -> None:
+def strip_counter(path) -> None:
     """Изготовить состояние «ДО шага» на копии: пересобрать таблицу БЕЗ AUTOINCREMENT,
     убрать счётчик и запись шага из журнала.
 
@@ -88,180 +90,182 @@ def снять_счётчик(путь) -> None:
     судит «уже сведено» как успех. Лечится тем, что приёмка ИЗГОТАВЛИВАЕТ «до» сама и
     проверяет, что изготовила (случай ⓪), а не надеется застать его в живой базе.
     """
-    c = sqlite3.connect(путь)
+    c = sqlite3.connect(path)
     ddl = c.execute("SELECT sql FROM sqlite_master WHERE name='phoenix_records'").fetchone()[0]
     if "AUTOINCREMENT" not in ddl.upper():
         c.close(); return
-    поля = ("id, role, section, subject, body, body_chars, happened_at, source, expiry_cond, "
+    fields = ("id, role, section, subject, body, body_chars, happened_at, source, expiry_cond, "
             "alive, revoked_at, revoked_note, ord, origin_chars, created_at, created_by")
     c.execute("BEGIN")
     c.execute(ddl.replace("AUTOINCREMENT", "").replace("phoenix_records", "phoenix_records_old", 1))
-    c.execute(f"INSERT INTO phoenix_records_old ({поля}) SELECT {поля} FROM phoenix_records")
+    c.execute(f"INSERT INTO phoenix_records_old ({fields}) SELECT {fields} FROM phoenix_records")
     c.execute("DROP TABLE phoenix_records")
     c.execute("ALTER TABLE phoenix_records_old RENAME TO phoenix_records")
-    for з in ("CREATE INDEX idx_phoenix_records_role    ON phoenix_records(role, section, ord)",
+    for stmt in ("CREATE INDEX idx_phoenix_records_role    ON phoenix_records(role, section, ord)",
               "CREATE INDEX idx_phoenix_records_subject ON phoenix_records(role, subject)",
               "CREATE INDEX idx_phoenix_records_alive   ON phoenix_records(role, alive)",
               "CREATE INDEX idx_phoenix_records_when    ON phoenix_records(role, happened_at)"):
-        c.execute(з)
+        c.execute(stmt)
     c.execute("DELETE FROM sqlite_sequence WHERE name='phoenix_records'")
     c.execute("DELETE FROM schema_migrations WHERE version='20260904-phoenix-records-autoincrement'")
     c.execute("COMMIT")
     c.close()
 
 
-def опыт_повтора_номера(путь) -> tuple[int, int]:
+def id_reuse_experiment(path) -> tuple[int, int]:
     """Удалить запись с наибольшим номером, вставить новую. Вернуть (удалённый, новый)."""
-    c = sqlite3.connect(путь)
+    c = sqlite3.connect(path)
     mx = c.execute("SELECT MAX(id) FROM phoenix_records").fetchone()[0]
     c.execute("DELETE FROM phoenix_records WHERE id=?", (mx,))
     cur = c.execute("INSERT INTO phoenix_records (role, section, subject, body, body_chars, created_by) "
                     "VALUES ('ПРОБА', 'state', 'разное', 'подсадка приёмки', 16, 'bite')")
-    новый = cur.lastrowid
+    new_id = cur.lastrowid
     c.commit(); c.close()
-    return mx, новый
+    return mx, new_id
 
 
 def main() -> int:
     print("=" * 88)
     print("ПРИЁМКА шага 20260904-phoenix-records-autoincrement — карточка #532 (причина)")
-    print(f"шаг: {ШАГ}")
-    print(f"живая база (только копируется): {ЖИВАЯ}")
+    print(f"шаг: {STEP}")
+    print(f"живая база (только копируется): {LIVE}")
     print("=" * 88)
-    for f in (ШАГ, ЖИВАЯ, ПАМЯТЬ):
+    for f in (STEP, LIVE, MEMORY_TOOL):
         if not f.is_file():
             sys.exit(f"⛔ ОТКАЗ МЕРИТЬ: нет файла {f}")
 
     with tempfile.TemporaryDirectory() as tmp:
-        песок = pathlib.Path(tmp)
-        (песок / "scripts").mkdir()
+        sandbox = pathlib.Path(tmp)
+        (sandbox / "scripts").mkdir()
         # копия базы лежит так, чтобы шаг с --db её нашёл; журнал схемы — рядом со скриптами
-        к_контроль = песок / "control.db"
-        к_шаг = песок / "step.db"
-        shutil.copy2(ЖИВАЯ, к_контроль)
-        shutil.copy2(ЖИВАЯ, к_шаг)
+        control_copy = sandbox / "control.db"
+        step_db = sandbox / "step.db"
+        mezo_stand.snapshot_db(LIVE, control_copy)  # карточка #505/#624: согласованная копия, не shutil.copy2
+        mezo_stand.snapshot_db(LIVE, step_db)
 
         print()
         print("── ⓪ ИЗГОТОВЛЕНИЕ «ДО»: копии приводятся к состоянию без счётчика ────")
-        зап_живой = отпечаток_записей(к_шаг)
-        for к in (к_контроль, к_шаг):
-            снять_счётчик(к)
-        c = sqlite3.connect(к_шаг)
+        live_records_fp = records_fingerprint(step_db)
+        for copy_path in (control_copy, step_db):
+            strip_counter(copy_path)
+        c = sqlite3.connect(step_db)
         ddl0 = c.execute("SELECT sql FROM sqlite_master WHERE name='phoenix_records'").fetchone()[0]
-        ж0 = c.execute("SELECT 1 FROM schema_migrations WHERE version='20260904-phoenix-records-autoincrement'").fetchone()
+        journal0 = c.execute("SELECT 1 FROM schema_migrations WHERE version='20260904-phoenix-records-autoincrement'").fetchone()
         c.close()
-        случай("⓪ копия приведена к «до»: AUTOINCREMENT снят, записи целы, шага в журнале нет",
-               "AUTOINCREMENT" not in ddl0.upper() and отпечаток_записей(к_шаг) == зап_живой and not ж0,
-               f"AUTOINCREMENT={'AUTOINCREMENT' in ddl0.upper()} записи={отпечаток_записей(к_шаг)==зап_живой} журнал={bool(ж0)}")
+        case("⓪ копия приведена к «до»: AUTOINCREMENT снят, записи целы, шага в журнале нет",
+               "AUTOINCREMENT" not in ddl0.upper() and records_fingerprint(step_db) == live_records_fp and not journal0,
+               f"AUTOINCREMENT={'AUTOINCREMENT' in ddl0.upper()} записи={records_fingerprint(step_db)==live_records_fp} журнал={bool(journal0)}")
 
         print()
         print("── ① КОНТРОЛЬ: беда воспроизводится на НЕмигрированной копии ─────────")
-        уд, нов = опыт_повтора_номера(к_контроль)
-        случай("① без счётчика: удалённый номер ВЫДАН ЗАНОВО (беда карточки видна опытом)",
-               уд == нов, f"удалён {уд}, новый {нов} — повтора нет, опыт не различает")
+        deleted_id, new_id = id_reuse_experiment(control_copy)
+        case("① без счётчика: удалённый номер ВЫДАН ЗАНОВО (беда карточки видна опытом)",
+               deleted_id == new_id, f"удалён {deleted_id}, новый {new_id} — повтора нет, опыт не различает")
 
         print()
         print("── ②–⑥ ШАГ на копии ──────────────────────────────────────────────────")
-        до = отпечаток_базы(к_шаг)
-        код, вывод = зов(ШАГ, "--db", к_шаг, "--dry-run")
-        случай("② холостой прогон: код 0, база НЕ тронута (отпечаток всех таблиц тот же)",
-               код == 0 and "ВХОЛОСТУЮ" in вывод and отпечаток_базы(к_шаг) == до, вывод)
+        before = db_fingerprint(step_db)
+        code, output = run(STEP, "--db", step_db, "--dry-run")
+        case("② холостой прогон: код 0, база НЕ тронута (отпечаток всех таблиц тот же)",
+               code == 0 and "ВХОЛОСТУЮ" in output and db_fingerprint(step_db) == before, output)
 
-        зап_до = отпечаток_записей(к_шаг)
-        код, вывод = зов(ШАГ, "--db", к_шаг)
-        зап_после = отпечаток_записей(к_шаг)
-        случай("③ применение: каждая запись на месте (число · сумма длин · отпечаток совпали)",
-               код == 0 and зап_до == зап_после and "ВРЕЗАНО" in вывод,
-               f"код {код} · до {зап_до} · после {зап_после}" + chr(10) + вывод)
+        records_before = records_fingerprint(step_db)
+        code, output = run(STEP, "--db", step_db)
+        records_after = records_fingerprint(step_db)
+        case("③ применение: каждая запись на месте (число · сумма длин · отпечаток совпали)",
+               code == 0 and records_before == records_after and "ВРЕЗАНО" in output,
+               f"код {code} · до {records_before} · после {records_after}" + chr(10) + output)
 
-        c = sqlite3.connect(к_шаг)
+        c = sqlite3.connect(step_db)
         ddl = c.execute("SELECT sql FROM sqlite_master WHERE name='phoenix_records'").fetchone()[0]
         seq = c.execute("SELECT seq FROM sqlite_sequence WHERE name='phoenix_records'").fetchone()
         mx = c.execute("SELECT MAX(id) FROM phoenix_records").fetchone()[0]
         idx = c.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND tbl_name='phoenix_records' "
                         "AND name LIKE 'idx_%'").fetchone()[0]
-        хвост = c.execute("SELECT 1 FROM sqlite_master WHERE name='phoenix_records_new'").fetchone()
+        leftover = c.execute("SELECT 1 FROM sqlite_master WHERE name='phoenix_records_new'").fetchone()
         c.close()
-        случай("④ AUTOINCREMENT в схеме · счётчик ≥ max(id) · 4 указателя · хвоста _new нет · журнал верен",
-               "AUTOINCREMENT" in ddl and seq and seq[0] >= mx and idx == 4 and not хвост
-               and "✅ проверка журнала" in вывод,
-               f"AUTOINCREMENT={'AUTOINCREMENT' in ddl} seq={seq} max={mx} idx={idx} хвост={bool(хвост)}")
+        case("④ AUTOINCREMENT в схеме · счётчик ≥ max(id) · 4 указателя · хвоста _new нет · журнал верен",
+               "AUTOINCREMENT" in ddl and seq and seq[0] >= mx and idx == 4 and not leftover
+               and "✅ проверка журнала" in output,
+               f"AUTOINCREMENT={'AUTOINCREMENT' in ddl} seq={seq} max={mx} idx={idx} хвост={bool(leftover)}")
 
-        уд, нов = опыт_повтора_номера(к_шаг)
-        случай("⑤ ГЛАВНЫЙ: после шага удалённый номер НЕ повторяется",
-               нов != уд and нов > уд, f"удалён {уд}, новый {нов}")
+        deleted_id, new_id = id_reuse_experiment(step_db)
+        case("⑤ ГЛАВНЫЙ: после шага удалённый номер НЕ повторяется",
+               new_id != deleted_id and new_id > deleted_id, f"удалён {deleted_id}, новый {new_id}")
 
-        до2 = отпечаток_базы(к_шаг)
-        код, вывод = зов(ШАГ, "--db", к_шаг)
-        случай("⑥ повторный запуск: «уже сведено», база не тронута",
-               код == 0 and "уже сведено" in вывод and отпечаток_базы(к_шаг) == до2, вывод)
+        before2 = db_fingerprint(step_db)
+        code, output = run(STEP, "--db", step_db)
+        case("⑥ повторный запуск: «уже сведено», база не тронута",
+               code == 0 and "уже сведено" in output and db_fingerprint(step_db) == before2, output)
 
         # ⑦ инструмент памяти: исход сборки КАЖДОЙ пары роль·раздел на мигрированной копии
         # обязан быть ТЕМ ЖЕ, что на немигрированной. 🩸 Первая редакция требовала «сходится» —
         # и покраснела на COORD·state, где слои разошлись В ЖИВОЙ базе ещё до шага (роль
         # сохранила память после разбора). Шаг за чужое расхождение не отвечает; отвечает
         # за то, чтобы НИЧЕГО не изменить — и это здесь и судится.
-        c = sqlite3.connect(к_контроль)
-        пары = c.execute("SELECT role, section FROM phoenix_records WHERE role<>'ПРОБА' "
+        c = sqlite3.connect(control_copy)
+        pairs = c.execute("SELECT role, section FROM phoenix_records WHERE role<>'ПРОБА' "
                          "GROUP BY role, section ORDER BY 1, 2").fetchall()
         c.close()
-        def исход(база, роль, разд):
-            к, в = зов(ПАМЯТЬ, "--db", база, "--role", роль, "--section", разд, "--собрать")
-            строки = [с.strip() for с in в.splitlines() if 'собрано знаков' in с or 'живое тело' in с
-                      or 'сходится' in с or 'РАСХОЖДЕНИЕ' in с]
-            return (к, tuple(строки))
-        разн = [(р, с) for р, с in пары if исход(к_контроль, р, с) != исход(к_шаг, р, с)]
-        сходятся = sum(1 for р, с in пары if исход(к_шаг, р, с)[0] == 0)
-        случай(f"⑦ ВСТРЕЧНЫЙ: исход сборки всех {len(пары)} пар роль·раздел ОДИНАКОВ до и после шага "
-               f"(сходятся {сходятся}, расходятся в живой базе {len(пары)-сходятся} — не предмет шага)",
-               not разн, f"исход отличается у: {разн}")
+        def outcome(db, role, section):
+            code, out = run(MEMORY_TOOL, "--db", db, "--role", role, "--section", section, "--собрать")
+            lines = [line.strip() for line in out.splitlines() if 'собрано знаков' in line or 'живое тело' in line
+                      or 'сходится' in line or 'РАСХОЖДЕНИЕ' in line]
+            return (code, tuple(lines))
+        diff = [(role, section) for role, section in pairs if outcome(control_copy, role, section) != outcome(step_db, role, section)]
+        matching = sum(1 for role, section in pairs if outcome(step_db, role, section)[0] == 0)
+        case(f"⑦ ВСТРЕЧНЫЙ: исход сборки всех {len(pairs)} пар роль·раздел ОДИНАКОВ до и после шага "
+               f"(сходятся {matching}, расходятся в живой базе {len(pairs)-matching} — не предмет шага)",
+               not diff, f"исход отличается у: {diff}")
 
         print()
         print("── ⑧ ПОРЧА копии шага: сверка «до сноса» солгала → обязан откатить ─────")
-        к_порча = песок / "porcha.db"
-        shutil.copy2(ЖИВАЯ, к_порча)
-        снять_счётчик(к_порча)
-        исходный = ШАГ.read_text(encoding="utf-8")
-        порченый = исходный.replace("        if после != до:", "        if после == до:")
-        if порченый == исходный:
-            случай("⑧ ПОРЧА: образец не найден — ОПЫТ НЕ ПОСТАВЛЕН", False, "порча не легла")
+        corrupt_db = sandbox / "porcha.db"
+        mezo_stand.snapshot_db(LIVE, corrupt_db)  # карточка #505/#624: согласованная копия, не shutil.copy2
+        strip_counter(corrupt_db)
+        original_text = STEP.read_text(encoding="utf-8")
+        # ⚠️ строка ниже — образец из ЧУЖОГО файла (самого шага STEP), его имена «после»/«до»
+        # там его собственные и переводу этого правила не подлежат (не наш идентификатор)
+        corrupted_text = original_text.replace("        if после != до:", "        if после == до:")
+        if corrupted_text == original_text:
+            case("⑧ ПОРЧА: образец не найден — ОПЫТ НЕ ПОСТАВЛЕН", False, "порча не легла")
         else:
-            коп = ШАГ.parent / "_porcha_autoincrement_bite.py"   # рядом: шаг ищет журнал от своего места
+            corrupt_copy = STEP.parent / "_porcha_autoincrement_bite.py"   # рядом: шаг ищет журнал от своего места
             try:
-                коп.write_text(порченый, encoding="utf-8")
-                до3 = отпечаток_базы(к_порча)
-                код, вывод = зов(коп, "--db", к_порча)
-                c = sqlite3.connect(к_порча)
-                хвост = c.execute("SELECT 1 FROM sqlite_master WHERE name='phoenix_records_new'").fetchone()
+                corrupt_copy.write_text(corrupted_text, encoding="utf-8")
+                before3 = db_fingerprint(corrupt_db)
+                code, output = run(corrupt_copy, "--db", corrupt_db)
+                c = sqlite3.connect(corrupt_db)
+                leftover = c.execute("SELECT 1 FROM sqlite_master WHERE name='phoenix_records_new'").fetchone()
                 c.close()
-                случай("⑧ порченый шаг ОТКАТИЛ: код ≠ 0, «откат» в выводе, база нетронута, хвоста нет",
-                       код != 0 and "откат" in вывод.lower() and отпечаток_базы(к_порча) == до3 and not хвост,
-                       f"код {код} · хвост={bool(хвост)}" + chr(10) + вывод)
+                case("⑧ порченый шаг ОТКАТИЛ: код ≠ 0, «откат» в выводе, база нетронута, хвоста нет",
+                       code != 0 and "откат" in output.lower() and db_fingerprint(corrupt_db) == before3 and not leftover,
+                       f"код {code} · хвост={bool(leftover)}" + chr(10) + output)
             finally:
-                if коп.exists():
-                    коп.unlink()
+                if corrupt_copy.exists():
+                    corrupt_copy.unlink()
 
         print()
         print("── ⑨⑩ ПРЕДУСЛОВИЯ СЛОВАМИ (приёмка @STUD карточки #380 — тот же класс) ─")
-        к_ноль = песок / "nojournal.db"
-        shutil.copy2(ЖИВАЯ, к_ноль)
-        c = sqlite3.connect(к_ноль); c.execute("DROP TABLE schema_migrations"); c.commit(); c.close()
-        до9 = отпечаток_базы(к_ноль)
-        код, вывод = зов(ШАГ, "--db", к_ноль)
-        случай("⑨ база БЕЗ журнала схемы → отказ СЛОВАМИ (назван журнал и что сделать), код 1, без стека, база не тронута",
-               код == 1 and "НЕТ ЖУРНАЛА СХЕМЫ" in вывод and "migrate-live.py" in вывод
-               and "Traceback" not in вывод and отпечаток_базы(к_ноль) == до9, f"код {код}" + chr(10) + вывод)
-        к_текст = песок / "notadb.db"
-        к_текст.write_text("просто текст, не база", encoding="utf-8")
-        код, вывод = зов(ШАГ, "--db", к_текст)
-        случай("⑩ файл-не-база → отказ СЛОВАМИ («не база SQLite»), код 1, без стека",
-               код == 1 and "не база SQLite" in вывод and "Traceback" not in вывод, f"код {код}" + chr(10) + вывод)
+        nojournal_db = sandbox / "nojournal.db"
+        mezo_stand.snapshot_db(LIVE, nojournal_db)  # карточка #505/#624: согласованная копия, не shutil.copy2
+        c = sqlite3.connect(nojournal_db); c.execute("DROP TABLE schema_migrations"); c.commit(); c.close()
+        before9 = db_fingerprint(nojournal_db)
+        code, output = run(STEP, "--db", nojournal_db)
+        case("⑨ база БЕЗ журнала схемы → отказ СЛОВАМИ (назван журнал и что сделать), код 1, без стека, база не тронута",
+               code == 1 and "НЕТ ЖУРНАЛА СХЕМЫ" in output and "migrate-live.py" in output
+               and "Traceback" not in output and db_fingerprint(nojournal_db) == before9, f"код {code}" + chr(10) + output)
+        notadb_db = sandbox / "notadb.db"
+        notadb_db.write_text("просто текст, не база", encoding="utf-8")
+        code, output = run(STEP, "--db", notadb_db)
+        case("⑩ файл-не-база → отказ СЛОВАМИ («не база SQLite»), код 1, без стека",
+               code == 1 and "не база SQLite" in output and "Traceback" not in output, f"код {code}" + chr(10) + output)
 
     print()
     print("=" * 88)
-    print(f"ИТОГ: прошло {len(прошло)} · пало {len(пало)}")
-    for и in пало:
-        print(f"   🔴 {и}")
+    print(f"ИТОГ: прошло {len(passed)} · пало {len(failed)}")
+    for name in failed:
+        print(f"   🔴 {name}")
     print("=" * 88)
     print("⚖️ ЧЕГО ЭТА ПРИЁМКА НЕ ПРОВЕРЯЕТ: поведение ЖИВОЙ базы под живой нагрузкой —")
     print("   всё здесь на копии. Что копия и живая равносильны, доказывает не совпадение")
@@ -269,7 +273,7 @@ def main() -> int:
     print("   И состояние «до» здесь ИЗГОТОВЛЕНО (случай ⓪), а не застигнуто: после 04.09")
     print("   20:37 UTC живой базы без счётчика нет. Обратная пересборка — мой же код, и")
     print("   если она врёт так же, как шаг, оба зелёные разом. Отдельного судьи у этого нет.")
-    return 1 if пало else 0
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

@@ -42,7 +42,8 @@ r"""rules-from-pack.py — сверка правил контура с прав�
     both-changed  В ≠ О ≠ П (менялись оба)            ход: свести, затем предложить
     no-base       В ≠ П, опора неизвестна             ход: сравнить, решает роль
     new           ключа нет у контура (пакет активен) ход: взять или отказаться
-    removed       снято В ПАКЕТЕ, у контура есть      ход: —
+    removed       снято В ПАКЕТЕ, у контура есть      ход: снять у себя либо остаться (--skip)
+                  (карточка #614: было "—" — пустой совет; --skip теперь принимает и эту строку)
     retired-here  снято У ВАС (status≠active), пакет держит, при ЛЮБОМ соотношении
                   текстов — в «new» не попадает никогда   ход: оставить снятым или
                   предложить снять в пакете (--propose)
@@ -122,6 +123,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402 — пути машины выводятся, не впечатаны
+import mezo_stand  # noqa: E402 — временный клон источника (карточка #614) убирается штатно:
+                    # решает finish() внизу файла, как у update-tools.py
 
 HERE = Path(__file__).resolve().parent
 # ⚖️ НЕ через mezo_paths.live_scripts(): та функция слушает MEZO_CONTAINER вызывающего
@@ -135,6 +138,27 @@ SET_RULE_PY = HERE / "set-rule.py"
 # другого контура (песочница, клон в другом месте) подсказка вела бы в пустоту. Путь —
 # от СВОЕГО расположения, как SET_RULE_PY выше.
 GORDI_ISSUE_PY = HERE / "gordi-issue.py"
+# КАРТОЧКА #614 ①: update-tools.py — рядом, тот же соглашение путей, что у SET_RULE_PY/
+# GORDI_ISSUE_PY выше (от СВОЕГО расположения, не впечатано).
+UPDATE_TOOLS_PY = HERE / "update-tools.py"
+
+_update_tools_module = None  # кэш — грузим по требованию, не на каждый вызов
+
+
+def _load_update_tools():
+    """update-tools.py — переиспользуем его fetch() (временный клон источника: только
+    чтение, убирается штатно через mezo_stand), а не пишем второй способ (карточка #614 ①,
+    task-g3-614.md п.1). Имя файла с дефисом — обычный `import` его не берёт, грузим по пути,
+    как это уже делают приёмки (см. bite-rules-from-pack.py: load_rfp)."""
+    global _update_tools_module
+    if _update_tools_module is None:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("update_tools_for_rfp", str(UPDATE_TOOLS_PY))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _update_tools_module = mod
+    return _update_tools_module
+
 
 STATE_NAMES = ("new", "pack-changed", "local-changed", "both-changed",
                "no-base", "removed", "retired-here", "skipped", "same")
@@ -144,7 +168,12 @@ MOVE_BY_STATE = {
     "local-changed": "предложить в пакет",
     "both-changed": "свести, затем предложить",
     "no-base": "сравнить, решает роль",
-    "removed": "—",
+    # КАРТОЧКА #614 ②: было "—" (пустой совет). Два пути, а не один: снять у себя (готовая
+    # команда — см. render_retire_preview(), печатается в списке под строкой) или остаться
+    # и записать отказ (--skip, теперь принимает и снятый пакетом ключ). По умолчанию —
+    # ничего не делаем НИ С ОДНОЙ стороны, обе команды требуют --apply отдельно.
+    "removed": "пакет его больше не несёт — снять у себя (set-rule.py, см. готовую команду "
+              "ниже) или остаться и записать отказ (--skip); по умолчанию не трогаем",
     "retired-here": "у вас снято, пакет его держит — оставить снятым или предложить снять "
                     "в пакете (--propose)",
     "skipped": "—",
@@ -168,7 +197,26 @@ def text_sha(body: str) -> str:
 # ── ПУТИ И БАЗЫ ──────────────────────────────────────────────────────────────────────
 
 def find_pack_source(arg_source, conn) -> Path:
-    """Папка с клоном пакета: --source или meta.template_checkout контура."""
+    """Папка с клоном пакета: --source, meta.template_checkout (готовая папка на диске) —
+    либо, когда контур знает только meta.template_source (карточка #614): АДРЕС УДАЛЁНКИ,
+    как его пишет init-group.py (`git remote get-url origin`, а НЕ папка клона) — временный
+    клон, ТЕМ ЖЕ приёмом, что update-tools.py берёт свежие инструменты (см. update-tools.py:
+    fetch()) — только чтение, клон убирается штатно через mezo_stand (см. finish() внизу
+    этого файла), код клонирования здесь НЕ повторён — вызван оттуда (task-g3-614.md п.1:
+    «переиспользуй его код, не пиши второй способ»).
+
+    ⚖️ fetch() сам решает, клонировать или нет: если значение template_source — уже папка
+    НА ДИСКЕ (is_dir()), она берётся НАПРЯМУЮ, без сети; иначе — `git clone --depth 1`
+    во временный каталог. Один вызов покрывает и адрес удалёнки, и путь одинаково —
+    решение уже принято внутри fetch(), повторять его здесь не нужно.
+
+    ГРАНИЦА (карточка #614 п.1, обязана остаться): «источника нет» (ни --source, ни
+    template_checkout, ни template_source) — отказ ЗДЕСЬ, ниже. «Источник не читается»
+    (значение есть, но клонировать/открыть не вышло — сеть недоступна, путь не git,
+    внутри нет rules/pack-rules.db) — отказ ИЗ fetch() («⛔ НЕ ЗАБРАЛОСЬ из ...») либо
+    позже из open_pack_db() («⛔ в пакете нет базы правил») — оба уже различают причину
+    словами, второй способ здесь заводить не нужно.
+    """
     if arg_source:
         p = Path(arg_source)
         if not p.is_dir():
@@ -177,10 +225,18 @@ def find_pack_source(arg_source, conn) -> Path:
     row = conn.execute("SELECT value FROM meta WHERE key='template_checkout'").fetchone()
     if row and row[0] and Path(row[0]).is_dir():
         return Path(row[0])
-    известно = f" (в meta записано «{row[0]}», но это не папка)" if row and row[0] else ""
+    src_row = conn.execute("SELECT value FROM meta WHERE key='template_source'").fetchone()
+    source = ((src_row[0] if src_row else "") or "").strip()
+    if source:
+        # meta.template_source ЕСТЬ — берём тем же ходом, что update-tools.py (fetch()
+        # сама решает: локальная папка — напрямую, иначе — временный клон).
+        tools = _load_update_tools()
+        tmp, _rev, _temporary = tools.fetch(source)
+        return tmp
+    meta_note = f" (в meta записано «{row[0]}», но это не папка)" if row and row[0] else ""
     sys.exit(
-        "⛔ клон пакета GORDI не найден: --source не задан, а meta.template_checkout"
-        f" контура{известно} не годится.\n"
+        "⛔ источник пакета GORDI неизвестен: --source не задан, meta.template_checkout"
+        f" контура{meta_note} не годится, а meta.template_source пусто.\n"
         "   Укажи явно: --source <папка с клоном пакета GORDI>"
     )
 
@@ -411,7 +467,15 @@ def build_rows(circuit_rules: dict, pack_rows: list, base_map: dict, skip_map: d
             else:
                 state = "new"
         elif row["removed_at"]:
-            state = "removed"
+            # КАРТОЧКА #614 ②: --skip годится и здесь («пакет его больше не несёт, а я
+            # держу и дальше») — тот же отпечаток-ключ, что и у живого текста пакета
+            # (skip_map хранит sha ПОСЛЕДНЕЙ версии пакета перед снятием); отпустится
+            # само, если этот отпечаток когда-нибудь перестанет совпадать (симметрично
+            # обычному «skipped» ниже).
+            if skip_map.get(f"{rule_set}/{key}") == row["text_sha"]:
+                state = "skipped"
+            else:
+                state = "removed"
         else:
             p_sha = row["text_sha"]
             if v_sha == p_sha:
@@ -427,6 +491,9 @@ def build_rows(circuit_rules: dict, pack_rows: list, base_map: dict, skip_map: d
             "pack_updated_at": row["pack_updated_at"], "removed_at": row["removed_at"],
             "locked_by": row["locked_by"], "text_sha": row["text_sha"],
             "base_source": base_src,
+            # КАРТОЧКА #614 ②: нужен для готовой команды «снять у себя» под строкой
+            # «removed» в print_listing() — комментарий-основание set-rule.py.
+            "pack_commit": row["pack_commit"],
         })
     only_yours = sorted(k for k in circuit_rules if k not in governing)
     return out, only_yours
@@ -449,7 +516,25 @@ def print_diff(title: str, a_text: str, b_text: str) -> None:
     print("\n".join(diff) if diff else "(текст совпадает дословно)")
 
 
-def print_listing(rows: list, only_yours: list, state_filter) -> None:
+def render_retire_preview(db_path, key: str, basis: str) -> str:
+    """Готовая команда «снять у себя» для разряда «снято в пакете» (карточка #614 ②).
+
+    ⚖️ НИКАКОГО НОВОГО СПОСОБА ЗАПИСИ: тем же set-rule.py, что и у --adopt/--merge —
+    правило «запись правила ТОЛЬКО через set-rule.py» (шапка файла) не нарушено.
+    Тело по-прежнему решает роль — не выдумываем его за неё, печатаем плейсхолдер,
+    начинающий с УЖЕ ПРИНЯТОЙ в своде отметки отзыва «⛔ ОТОЗВАНО» (см. rule_status.py,
+    TOMBSTONE) — не новый жаргон, а существующий признак, который уже умеет читать
+    свод (текстом — всегда; полем status — там, где UPDATE того же set-rule.py его
+    касается; на базах, где поле status уже есть, отдельно от этого хода решает
+    COORD/владелец — set-rule.py сегодня поле status не выставляет ни при каком флаге,
+    и здесь это не обещано сверх того, что инструмент делает на самом деле)."""
+    return (f'python {SET_RULE_PY} --db {db_path} --key {key} '
+            f'--body-file <файл: тело начни с «⛔ ОТОЗВАНО — …»> '
+            f'--basis "{basis}" --authorized-by "<кто разрешил>" '
+            f'--source-ref "<где сказано>" --actor "<твоя роль>" --apply')
+
+
+def print_listing(rows: list, only_yours: list, state_filter, db_path=None) -> None:
     shown = [r for r in rows if state_filter is None or r["state"] == state_filter]
     shown.sort(key=lambda r: (r["rule_key"], r["rule_set"]))
     if not shown:
@@ -460,6 +545,14 @@ def print_listing(rows: list, only_yours: list, state_filter) -> None:
             when = f"{when} (снято {r['removed_at']})"
         print(f"  {r['rule_key']:<35} {r['rule_set']:<16} {when:<24} "
               f"{r['state']:<14} {r['move']}")
+        # КАРТОЧКА #614 ②: было — ничего не печаталось под строкой «removed» (пустой
+        # совет в MOVE_BY_STATE). Два ПОКАЗАННЫХ пути, db_path=None (например, --summary
+        # печатает список не отсюда) — тихо пропускаем готовую команду, а не падаем.
+        if r["state"] == "removed" and db_path is not None:
+            basis = f"снято в пакете, коммит {r.get('pack_commit') or '?'}"
+            print(f"      снять у себя:  {render_retire_preview(db_path, r['rule_key'], basis)}")
+            print(f"      либо остаться: python {Path(__file__).resolve()} --db {db_path} "
+                  f"--skip {r['rule_key']} --word \"<дословно: кто разрешил·когда·где>\" --apply")
     counts = summarize(rows, only_yours)
     print()
     print(BOUNDARY_LINE)
@@ -528,6 +621,30 @@ def pick_rule_set(rows_for_key: list, key: str, rule_set_hint):
     sys.exit(
         f"⛔ ключ «{key}» есть в НЕСКОЛЬКИХ наборах пакета с РАЗНЫМ текстом ("
         + ", ".join(sorted(r["rule_set"] for r in current))
+        + ") — назови --rule-set, какой набор брать"
+    )
+
+
+def pick_removed_rule_set(rows_for_key: list, key: str, rule_set_hint):
+    """Тот же выбор набора, что у pick_rule_set(), но для СНЯТЫХ (removed_at непуст) строк.
+
+    КАРТОЧКА #614 ②: pick_rule_set() отбрасывает снятые строки НАРОЧНО (ищет действующий
+    текст — нужно --adopt/--merge/--propose). --skip у разряда «снято в пакете» ищет
+    ОБРАТНОЕ — последний снятый текст, поэтому не переиспользует ту функцию целиком, а
+    повторяет её же логику выбора набора на своём (уже отфильтрованном) списке строк."""
+    if rule_set_hint:
+        for r in rows_for_key:
+            if r["rule_set"] == rule_set_hint:
+                return r
+        sys.exit(f"⛔ в наборе «{rule_set_hint}» снятого ключа «{key}» нет; снят в наборах: "
+                 + ", ".join(sorted(r["rule_set"] for r in rows_for_key)))
+    if len(rows_for_key) == 1:
+        return rows_for_key[0]
+    if len({r["text_sha"] for r in rows_for_key}) == 1:
+        return rows_for_key[0]
+    sys.exit(
+        f"⛔ снятый ключ «{key}» есть в НЕСКОЛЬКИХ наборах пакета с РАЗНЫМ текстом ("
+        + ", ".join(sorted(r["rule_set"] for r in rows_for_key))
         + ") — назови --rule-set, какой набор брать"
     )
 
@@ -752,13 +869,23 @@ def merge_key(conn, db_path, pack_conn, base_map, key, rule_set_hint, file_path,
 # ── --skip ───────────────────────────────────────────────────────────────────────────
 
 def skip_key(conn, pack_conn, skip_map, key, rule_set_hint, word, apply) -> int:
-    rows = [r for r in load_pack_rows(pack_conn) if r["rule_key"] == key and not r["removed_at"]]
-    if not rows:
-        sys.exit(f"⛔ у пакета нет действующего текста «{key}», чтобы от него отказаться")
-    row = pick_rule_set(rows, key, rule_set_hint)
+    """⚖️ КАРТОЧКА #614 ②: --skip годится и для разряда «снято в пакете» (removed_at непуст) —
+    «пакет его больше не несёт, а я держу и дальше». Сначала ищем ДЕЙСТВУЮЩИЙ текст (старое
+    поведение, не тронуто); нет действующего — берём последний СНЯТЫЙ (pick_removed_rule_set,
+    а не pick_rule_set — та НАРОЧНО отбрасывает снятые строки, см. её докстроку)."""
+    active_rows = [r for r in load_pack_rows(pack_conn) if r["rule_key"] == key and not r["removed_at"]]
+    if active_rows:
+        row = pick_rule_set(active_rows, key, rule_set_hint)
+    else:
+        removed_rows = [r for r in load_pack_rows(pack_conn) if r["rule_key"] == key and r["removed_at"]]
+        if not removed_rows:
+            sys.exit(f"⛔ ключа «{key}» нет в пакете вовсе — отказываться не от чего")
+        row = pick_removed_rule_set(removed_rows, key, rule_set_hint)
 
     tag = "ОТКАЗАЛСЯ БЫ" if apply_gate(apply) else "ОТКАЗЫВАЮСЬ"
-    print(f"{tag}: {key} ← набор «{row['rule_set']}» (версия от {row['pack_updated_at']})")
+    when = (f"снято {row['removed_at']}, коммит {row['pack_commit']}" if row["removed_at"]
+           else f"версия от {row['pack_updated_at']}")
+    print(f"{tag}: {key} ← набор «{row['rule_set']}» ({when})")
     if apply_gate(apply):
         print("\n[ХОЛОСТОЙ ПРОГОН] Не записано. Для записи — флаг --apply (и --word). "
               "⚖️ --skip НЕ вызывает set-rule.py — он пишет только в meta контура.")
@@ -1088,9 +1215,12 @@ def main() -> int:
                                   load_meta_map(conn, "pack_rules_skipped"),
                                   make_history_has(pack_conn), contour_sets,
                                   load_circuit_retired_keys(conn))
-    print_listing(rows, only_yours, args.state)
+    print_listing(rows, only_yours, args.state, db_path)
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # КАРТОЧКА #614 ①: find_pack_source() может завести временный клон через
+    # update-tools.fetch() (mezo_stand.new() внутри неё уже поставил его на учёт) —
+    # finish() решает, убрать его или сохранить, ТЕМ ЖЕ способом, что и update-tools.py.
+    sys.exit(mezo_stand.finish(main()))

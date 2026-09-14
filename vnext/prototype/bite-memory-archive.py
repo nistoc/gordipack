@@ -20,16 +20,18 @@ memory-hot-and-archive — или они отвечают на разные во
 возраста не назначено вовсе. Признак, взятый в одиночку, гасит и то, что ищет.
 ⇒ Здесь оба края закрыты встречными случаями: третий и первый в списке ниже.
 
-Запуск:  python C:/guts/.atlas/vnext-tools/bite-memory-archive.py
+Запуск:  python <КОНТУР>/vnext-tools/bite-memory-archive.py
 Выход:   0 — подсказка согласна с правилом · 1 — спорит
 """
 import datetime
 import importlib.util
 import io
+import os
 import sys
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-sys.path.insert(0, 'C:/guts/.atlas/vnext-tools')
+# свой каталог — от расположения файла: путь машины здесь ломал бы копию у потребителя пакета
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # 🩸 ИНСТРУМЕНТ БЕРЁТСЯ ИЗ СВОЕГО КАТАЛОГА, А НЕ ПО ВПЕЧАТАННОМУ ПУТИ.
 # Первая редакция этой приёмки звала memory-archive.py по абсолютному пути в живой
@@ -43,9 +45,9 @@ spec = importlib.util.spec_from_file_location(
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
 
-СЕГОДНЯ = datetime.date(2026, 9, 4)
+TODAY = datetime.date(2026, 9, 4)
 
-СЛУЧАИ = [
+CASES = [
     ("Работа 2026-08-31 закрыта, приёмка пройдена.", "📦",
      "закрытая работа 4 суток — у пункта «закрытые работы» возраста НЕТ, унести можно"),
     ("⚰️ Снято 2026-08-31: прежний порядок отозван.", "🔒",
@@ -72,22 +74,22 @@ spec.loader.exec_module(m)
     ("Просто текст без примет и без дат.", "⚪", "примет нет"),
 ]
 
-плохо = 0
+bad = 0
 print("РАЗЛИЧАЮЩИЕ СЛУЧАИ ПОДСКАЗКИ ПЕРЕНОСА (сегодня = 2026-09-04)")
 print("-" * 88)
-for текст, ждём, зачем in СЛУЧАИ:
-    знак, почему, _ = m.совет(текст, СЕГОДНЯ)   # третье — «держится без даты», карточка #556
-    ок = знак == ждём
-    плохо += 0 if ок else 1
-    print(f"  {'✅' if ок else '🔴'} ждём {ждём}, получено {знак}   {зачем}")
-    print(f"        └ {почему}")
+for text, expected, reason in CASES:
+    mark, why, _ = m.advise(text, TODAY)   # третье — «держится без даты», карточка #556
+    ok = mark == expected
+    bad += 0 if ok else 1
+    print(f"  {'✅' if ok else '🔴'} ждём {expected}, получено {mark}   {reason}")
+    print(f"        └ {why}")
 print("-" * 88)
 # ── РЕЗАК: черта с текстом внутри (находка @RCC 04.09, записки #4707 и #4717) ──
 # Три случая, взятые у него дословно; сумма знаков сверяется в каждом.
 print()
 print("РЕЗАК БЛОКОВ — черта с текстом внутри (случаи @RCC)")
 NL = chr(10); F = chr(96) * 3
-_сл = [
+_cases = [
     ("① черта с текстом СНАРУЖИ ограды → режет, тема — текст черты",
      "вступление" + NL + "═══ 🔑 ЖИВЫЕ СЛОВА ВЛАДЕЛЬЦА ═══" + NL + "слово" + NL + "═══ 📋 ОЧЕРЕДЬ ═══" + NL + "пункт" + NL,
      3, "🔑 ЖИВЫЕ СЛОВА ВЛАДЕЛЬЦА"),
@@ -99,25 +101,25 @@ _сл = [
      "a" + NL + "──────────" + NL + "b" + NL + "──────────" + NL + "c" + NL,
      3, "b"),
 ]
-for имя, текст, ждём_кусков, ждём_тему in _сл:
-    куски, способ = m.блоки(текст)
-    темы = [к["тема"] for к in куски]
-    ок = len(куски) == ждём_кусков and ждём_тему in темы and "".join(к["тело"] for к in куски) == текст
-    if not ок:
-        плохо += 1
-    print(f"  {'✅' if ок else '🔴'} {имя}: кусков {len(куски)} (ждём {ждём_кусков}) · темы {темы}")
+for name, text, expected_chunks, expected_topic in _cases:
+    chunks, method = m.blocks(text)
+    topics = [chunk["тема"] for chunk in chunks]
+    ok = len(chunks) == expected_chunks and expected_topic in topics and "".join(chunk["тело"] for chunk in chunks) == text
+    if not ok:
+        bad += 1
+    print(f"  {'✅' if ok else '🔴'} {name}: кусков {len(chunks)} (ждём {expected_chunks}) · темы {topics}")
 # ПОРЧА: без учёта ограды случай ② обязан покраснеть — иначе ограда ни при чём
-_исх = m.ОГРАДА
+_orig_fence_re = m.FENCE_RE
 try:
     import re as _re
-    m.ОГРАДА = _re.compile(r"^НИКОГДА-НЕ-СОВПАДЁТ$")
-    куски, _ = m.блоки(_сл[1][1])
-    ок = len(куски) != 3 or "ПОРЯДОК ПРИ ПРОБУЖДЕНИИ" in [к["тема"] for к in куски]
-    if not ок:
-        плохо += 1
-    print(f"  {'✅' if ок else '🔴'} ④ ПОРЧА учёта ограды → строка внутри кода РЕЖЕТ (значит ② проходил по ограде)")
+    m.FENCE_RE = _re.compile(r"^НИКОГДА-НЕ-СОВПАДЁТ$")
+    chunks, _ = m.blocks(_cases[1][1])
+    ok = len(chunks) != 3 or "ПОРЯДОК ПРИ ПРОБУЖДЕНИИ" in [chunk["тема"] for chunk in chunks]
+    if not ok:
+        bad += 1
+    print(f"  {'✅' if ok else '🔴'} ④ ПОРЧА учёта ограды → строка внутри кода РЕЖЕТ (значит ② проходил по ограде)")
 finally:
-    m.ОГРАДА = _исх
+    m.FENCE_RE = _orig_fence_re
 
 # ── РЕЗАК: ВТОРАЯ ДВЕРЬ — до-резка крупных кусков по абзацам (карточка #541, @RCC записка #4735) ──
 # Резка по черте ограду уважала (② выше), а до-резка по абзацам — нет: пустая строка внутри
@@ -128,97 +130,130 @@ print()
 print("РЕЗАК БЛОКОВ — до-резка по абзацам НЕ режет внутри ограды (карточка #541)")
 
 
-def _оград(к):
-    return sum(1 for s in к["строки"] if m.ОГРАДА.match(s.rstrip(NL)))
+def _fence_count(chunk):
+    return sum(1 for s in chunk["строки"] if m.FENCE_RE.match(s.rstrip(NL)))
 
 
-def _разорванные(куски):
+def _broken_boundaries(chunks):
     """Границы между кусками, попавшие ВНУТРЬ ограды — по чётности оград, считанной с начала
     раздела. Возвращает номера кусков, которые НАЧИНАЮТСЯ внутри незакрытого блока кода.
     🩸 Первая редакция считала «куски с нечётным числом оград» — и покраснела на четырёх
     разделах живой памяти, где ограда НЕПАРНАЯ В САМОМ ИСТОЧНИКЕ (автор открыл «```» и не
     закрыл): последний кусок такого раздела нечётен по построению, резак тут ни при чём.
     Судить надо ГРАНИЦУ, а не кусок, и непарный источник называть отдельно, не красным."""
-    чётность, рваные = 0, []
-    for i, к in enumerate(куски, 1):
-        if i > 1 and чётность % 2 == 1:
-            рваные.append(i)
-        чётность += _оград(к)
-    return рваные
+    parity, torn = 0, []
+    for i, chunk in enumerate(chunks, 1):
+        if i > 1 and parity % 2 == 1:
+            torn.append(i)
+        parity += _fence_count(chunk)
+    return torn
 
 
 # ⑤ подсадка ПО ДЛИНЕ: блок кода ~6000 знаков с ПУСТЫМИ строками внутри (ровно так рвалось у
 # @RCC: граница 18 574 легла на пустую строку перед «💡 ТРИ СТАРЫХ УРОКА» внутри ограды)
-_код = F + NL + "".join("строка кода " + str(i) + ": " + "x" * 40 + NL + (NL if i % 10 == 0 else "")
+_code_block = F + NL + "".join("строка кода " + str(i) + ": " + "x" * 40 + NL + (NL if i % 10 == 0 else "")
                         for i in range(120)) + F + NL
-_текст5 = ("# Заголовок 1" + NL + "абзац" + NL + NL + "# Заголовок 2" + NL + "вступление" + NL + NL
-           + _код + NL + "после кода" + NL + NL + ("ещё абзац" + NL + NL) * 30
+_text5 = ("# Заголовок 1" + NL + "абзац" + NL + NL + "# Заголовок 2" + NL + "вступление" + NL + NL
+           + _code_block + NL + "после кода" + NL + NL + ("ещё абзац" + NL + NL) * 30
            + "# Заголовок 3" + NL + "хвост" + NL)
-_куски5, _способ5 = m.блоки(_текст5)
-_сир5 = _разорванные(_куски5)
-_сумма5 = "".join(к["тело"] for к in _куски5) == _текст5
-ок = not _сир5 and _сумма5 and "до-резаны" in _способ5
-if not ок:
-    плохо += 1
-print(f"  {'✅' if ок else '🔴'} ⑤ ВСТРЕЧНЫЙ ПО ДЛИНЕ: блок кода {len(_код)} зн. с пустыми строками внутри →"
-      f" кусков {len(_куски5)}, до-резка была: {'до-резаны' in _способ5}, границ внутри ограды {len(_сир5)},"
-      f" сумма {'сошлась' if _сумма5 else 'РАЗОШЛАСЬ'}")
+_chunks5, _method5 = m.blocks(_text5)
+_torn5 = _broken_boundaries(_chunks5)
+_sum_ok5 = "".join(chunk["тело"] for chunk in _chunks5) == _text5
+ok = not _torn5 and _sum_ok5 and "до-резаны" in _method5
+if not ok:
+    bad += 1
+print(f"  {'✅' if ok else '🔴'} ⑤ ВСТРЕЧНЫЙ ПО ДЛИНЕ: блок кода {len(_code_block)} зн. с пустыми строками внутри →"
+      f" кусков {len(_chunks5)}, до-резка была: {'до-резаны' in _method5}, границ внутри ограды {len(_torn5)},"
+      f" сумма {'сошлась' if _sum_ok5 else 'РАЗОШЛАСЬ'}")
+
+def _fence_spans(body):
+    """Промежутки оград ТЕКУЩЕГО тела (смещения в знаках), парами от начала раздела."""
+    at, pos = [], 0
+    for line in body.splitlines(keepends=True):
+        if m.FENCE_RE.match(line.rstrip(NL)):
+            at.append(pos)
+        pos += len(line)
+    return list(zip(at[0::2], at[1::2]))
+
+
+def _boundaries_inside(chunks, body):
+    """Границы кусков, лёгшие строго ВНУТРЬ ограды; граница на самом открытии ограды — законна."""
+    offset, bounds = 0, []
+    for chunk in chunks[:-1]:
+        offset += len(chunk["тело"])
+        bounds.append(offset)
+    spans = _fence_spans(body)
+    return bounds, [g for g in bounds if any(s < g < e for s, e in spans)]
+
 
 # ⑥ ЖИВАЯ ПАМЯТЬ ВСЕХ РОЛЕЙ (только чтение): ни один кусок ни одного раздела не начинается
-# и не кончается внутри ограды. Материал @RCC (§state, ограда 14 619–19 575) — среди них.
+# и не кончается внутри ограды. Материал @RCC (§state) — среди них.
+# 🩸 14.09: здесь стояли ВПЕЧАТАННЫЕ смещения ограды @RCC «14 619–19 575» (записка #4735).
+# Раздел пересохранён 05.09, ограды переехали — и случай краснел на границе, стоящей РОВНО
+# на открытии ограды (18 895): судил числа прошлой редакции, а не текст. Теперь ограды
+# считаются по ТЕКУЩЕМУ телу; раздел с непарной оградой не судится — как и все остальные.
 import sqlite3 as _sq  # noqa: E402
 import mezo_paths as _mp  # noqa: E402
 _c = _sq.connect("file:" + _mp.live_db().as_posix() + "?mode=ro", uri=True)
-_ряды = _c.execute("SELECT role, section, body FROM phoenix ORDER BY role, section").fetchall()
+_rows = _c.execute("SELECT role, section, body FROM phoenix ORDER BY role, section").fetchall()
 _c.close()
-_беды, _непарные, _разделов, _rcc = [], [], 0, None
-for _r, _s, _b in _ряды:
-    _к, _сп = m.блоки(_b)
-    _разделов += 1
-    _всего = sum(_оград(к) for к in _к)
-    _с = _разорванные(_к)
-    if _всего % 2:
-        _непарные.append(f"{_r}·{_s} ({_всего})")   # автор не закрыл «```» — резак не судится
-    elif _с:
-        _беды.append(f"{_r}·{_s}: куски {_с}")
-    if (_r, _s) == ("RCC", "state"):
-        # материал @RCC: ограда 14 619–19 575 (записка #4735) — ни одна граница куска не внутри
-        _смещ, _границы = 0, []
-        for к in _к[:-1]:
-            _смещ += len(к["тело"])
-            _границы.append(_смещ)
-        _внутри = [g for g in _границы if 14619 < g < 19575]
-        _rcc = (len(_к), _границы, _внутри, "".join(к["тело"] for к in _к) == _b, len(_b))
-ок = (not _беды and _rcc is not None and not _rcc[2] and _rcc[3])
-if not ок:
-    плохо += 1
-print(f"  {'✅' if ок else '🔴'} ⑥ ЖИВАЯ ПАМЯТЬ, разделов {_разделов} (чтение): границ внутри ограды"
-      f" {len(_беды)}{' — ' + '; '.join(_беды) if _беды else ''}")
-if _непарные:
+_issues, _unpaired, _sections_total, _rcc = [], [], 0, None
+for _role, _section, _body in _rows:
+    _chunks, _method = m.blocks(_body)
+    _sections_total += 1
+    _fence_total = sum(_fence_count(chunk) for chunk in _chunks)
+    _broken = _broken_boundaries(_chunks)
+    if _fence_total % 2:
+        _unpaired.append(f"{_role}·{_section} ({_fence_total})")   # автор не закрыл «```» — резак не судится
+    elif _broken:
+        _issues.append(f"{_role}·{_section}: куски {_broken}")
+    if (_role, _section) == ("RCC", "state"):
+        # материал @RCC: ни одна граница куска не внутри ограды ТЕКУЩЕГО тела
+        _boundaries, _inside_fence = _boundaries_inside(_chunks, _body)
+        _rcc = (len(_chunks), _boundaries, _inside_fence, "".join(chunk["тело"] for chunk in _chunks) == _body,
+                len(_body), _fence_total % 2 == 1)
+ok = (not _issues and _rcc is not None and (_rcc[5] or not _rcc[2]) and _rcc[3])
+if not ok:
+    bad += 1
+print(f"  {'✅' if ok else '🔴'} ⑥ ЖИВАЯ ПАМЯТЬ, разделов {_sections_total} (чтение): границ внутри ограды"
+      f" {len(_issues)}{' — ' + '; '.join(_issues) if _issues else ''}")
+if _unpaired:
     print(f"     ⚠️ ограда НЕПАРНАЯ В ИСТОЧНИКЕ (автор открыл «```» и не закрыл) — не судится, названо"
-          f" поимённо: {', '.join(_непарные)}")
+          f" поимённо: {', '.join(_unpaired)}")
 if _rcc:
-    print(f"     RCC·state ({_rcc[4]} зн.): кусков {_rcc[0]}, границы {_rcc[1]}, внутри ограды"
-          f" 14 619–19 575: {_rcc[2] or 'нет'}, сумма {'сошлась' if _rcc[3] else 'РАЗОШЛАСЬ'}")
+    _rcc_fence = ("ограда непарная — внутри ограды не судится" if _rcc[5]
+                  else f"внутри ограды: {_rcc[2] or 'нет'}")
+    print(f"     RCC·state ({_rcc[4]} зн.): кусков {_rcc[0]}, границы {_rcc[1]}, {_rcc_fence},"
+          f" сумма {'сошлась' if _rcc[3] else 'РАЗОШЛАСЬ'}")
 else:
     print("     🔴 RCC·state — РАЗДЕЛА НЕТ, материал @RCC не найден")
 
 # ⑦ ПОРЧА: до-резка снова слепа к ограде → ⑤ ОБЯЗАН покраснеть ПРИ СОШЕДШЕЙСЯ СУММЕ —
 # то есть красит парность оград, а не сумма (иначе порча незаметна по построению)
-_исх = m.ОГРАДА
+_orig_fence_re = m.FENCE_RE
 try:
-    m.ОГРАДА = _re.compile(r"^НИКОГДА-НЕ-СОВПАДЁТ$")
-    _куски7, _ = m.блоки(_текст5)
-    _сумма7 = "".join(к["тело"] for к in _куски7) == _текст5
+    m.FENCE_RE = _re.compile(r"^НИКОГДА-НЕ-СОВПАДЁТ$")
+    _chunks7, _ = m.blocks(_text5)
+    _sum_ok7 = "".join(chunk["тело"] for chunk in _chunks7) == _text5
 finally:
-    m.ОГРАДА = _исх
-_сир7 = _разорванные(_куски7)      # считаем НАСТОЯЩЕЙ оградой, уже восстановленной
-ок = len(_сир7) > 0 and _сумма7
-if not ок:
-    плохо += 1
-print(f"  {'✅' if ок else '🔴'} ⑦ ПОРЧА (ограда не узнаётся): границ внутри ограды {len(_сир7)} при сумме"
-      f" {'СОШЕДШЕЙСЯ' if _сумма7 else 'разошедшейся'} — красит чётность, не сумма")
+    m.FENCE_RE = _orig_fence_re
+_torn7 = _broken_boundaries(_chunks7)      # считаем НАСТОЯЩЕЙ оградой, уже восстановленной
+ok = len(_torn7) > 0 and _sum_ok7
+if not ok:
+    bad += 1
+print(f"  {'✅' if ok else '🔴'} ⑦ ПОРЧА (ограда не узнаётся): границ внутри ограды {len(_torn7)} при сумме"
+      f" {'СОШЕДШЕЙСЯ' if _sum_ok7 else 'разошедшейся'} — красит чётность, не сумма")
 
-print("ИТОГ:", "✅ подсказка согласна с правилом" if not плохо
-      else f"🔴 расхождений {плохо} — подсказка спорит с правилом")
-sys.exit(1 if плохо else 0)
+# ⑦-бис: тот же порченый разрез судит и счёт по ТЕКУЩЕМУ телу, которым теперь меряется
+# материал @RCC в ⑥ — иначе замена впечатанных смещений могла ослепить ⑥ без следа
+_, _inside7 = _boundaries_inside(_chunks7, _text5)
+_, _inside5 = _boundaries_inside(_chunks5, _text5)
+ok = len(_inside7) > 0 and not _inside5
+if not ok:
+    bad += 1
+print(f"  {'✅' if ok else '🔴'} ⑦-бис счёт оград по текущему телу: порченый разрез — внутри ограды"
+      f" {len(_inside7)}, целый — {len(_inside5)}")
+
+print("ИТОГ:", "✅ подсказка согласна с правилом" if not bad
+      else f"🔴 расхождений {bad} — подсказка спорит с правилом")
+sys.exit(1 if bad else 0)

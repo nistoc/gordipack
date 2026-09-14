@@ -55,6 +55,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -255,6 +256,83 @@ def patch_show_duplicate_pack_text(src: str):
     return "".join(lines[:i + 1] + dup + lines[i + 1:]), 1
 
 
+# ── ПОЛОМКИ карточки #614 (G3, PROTO) ───────────────────────────────────────────────
+
+def patch_no_remote_clone(src: str):
+    """(М) карточка #614 п.1: meta.template_source (адрес удалёнки) больше не читается —
+    find_pack_source() снова отказывает без --source, как ДО правки. Должен провалиться
+    случай ㊾ (новый контур из пакета, template_source = адрес удалёнки, без --source)."""
+    old = (
+        "    src_row = conn.execute(\"SELECT value FROM meta WHERE key='template_source'\").fetchone()\n"
+        '    source = ((src_row[0] if src_row else "") or "").strip()\n'
+        "    if source:\n"
+    )
+    new = (
+        "    src_row = conn.execute(\"SELECT value FROM meta WHERE key='template_source'\").fetchone()\n"
+        '    source = ((src_row[0] if src_row else "") or "").strip()\n'
+        "    if False:  # ПОЛОМКА (М): template_source больше не читается\n"
+    )
+    return src.replace(old, new), src.count(old)
+
+
+def patch_removed_advice_empty(src: str):
+    """(Н) карточка #614 п.2: совет у разряда «снято в пакете» — снова пустой "—",
+    как ДО правки. Должен провалиться случай ㊿а (совет несёт оба пути)."""
+    old = (
+        '    "removed": "пакет его больше не несёт — снять у себя (set-rule.py, см. готовую команду "\n'
+        '              "ниже) или остаться и записать отказ (--skip); по умолчанию не трогаем",\n'
+    )
+    new = '    "removed": "—",  # ПОЛОМКА (Н): совет снова пуст\n'
+    return src.replace(old, new), src.count(old)
+
+
+def patch_removed_skip_broken(src: str):
+    """(О) карточка #614 п.2: --skip снова отказывает у разряда «снято в пакете» — ветка,
+    принимающая СНЯТУЮ строку, снята (старое поведение skip_key). Должен провалиться
+    случай ㊿б (--skip у removed-ключа пишет и отпускает)."""
+    old = (
+        '    active_rows = [r for r in load_pack_rows(pack_conn) if r["rule_key"] == key and not r["removed_at"]]\n'
+        "    if active_rows:\n"
+        "        row = pick_rule_set(active_rows, key, rule_set_hint)\n"
+        "    else:\n"
+        '        removed_rows = [r for r in load_pack_rows(pack_conn) if r["rule_key"] == key and r["removed_at"]]\n'
+        "        if not removed_rows:\n"
+        '            sys.exit(f"⛔ ключа «{key}» нет в пакете вовсе — отказываться не от чего")\n'
+        "        row = pick_removed_rule_set(removed_rows, key, rule_set_hint)\n"
+    )
+    new = (
+        '    rows = [r for r in load_pack_rows(pack_conn) if r["rule_key"] == key and not r["removed_at"]]\n'
+        "    if not rows:\n"
+        '        sys.exit(f"⛔ у пакета нет действующего текста «{key}», чтобы от него отказаться")'
+        "  # ПОЛОМКА (О)\n"
+        "    row = pick_rule_set(rows, key, rule_set_hint)\n"
+    )
+    return src.replace(old, new), src.count(old)
+
+
+def patch_removed_state_ignores_skip(src: str):
+    """(П) карточка #614 п.2: build_rows() снова не смотрит skip_map у снятых строк —
+    записанный --skip не отпускает нагара, ключ навсегда «removed». Должен провалиться
+    случай ㊿в (после --skip строка становится «skipped», не «removed»)."""
+    old = (
+        "        elif row[\"removed_at\"]:\n"
+        "            # КАРТОЧКА #614 ②: --skip годится и здесь («пакет его больше не несёт, а я\n"
+        "            # держу и дальше») — тот же отпечаток-ключ, что и у живого текста пакета\n"
+        "            # (skip_map хранит sha ПОСЛЕДНЕЙ версии пакета перед снятием); отпустится\n"
+        "            # само, если этот отпечаток когда-нибудь перестанет совпадать (симметрично\n"
+        "            # обычному «skipped» ниже).\n"
+        "            if skip_map.get(f\"{rule_set}/{key}\") == row[\"text_sha\"]:\n"
+        "                state = \"skipped\"\n"
+        "            else:\n"
+        "                state = \"removed\"\n"
+    )
+    new = (
+        "        elif row[\"removed_at\"]:\n"
+        "            state = \"removed\"  # ПОЛОМКА (П): skip_map больше не смотрим\n"
+    )
+    return src.replace(old, new), src.count(old)
+
+
 def patch_merge_dry_run_label(src: str):
     """ПОЛОМКА (Л) карточка #608, повторная приёмка Н1, замечание COORD (4): холостой
     --merge снова показывает подпись-заглушку «<сведённый текст из --file>» вместо
@@ -415,16 +493,82 @@ def build_retired_fixture(root: Path, text_sha):
     return circuit_db, pack_dir, key
 
 
+# ── ФИКСТУРА: «СНЯТО В ПАКЕТЕ» (карточка #614 ②, G3/PROTO) ─────────────────────────────
+REMOVED614_PREFIX = "zzz-bite-rfp-removed614-"
+
+
+def build_removed_fixture(root: Path, text_sha):
+    """Один ключ: пакет СНЯЛ его (removed_at непуст), контур держит ДЕЙСТВУЮЩИЙ текст —
+    состояние «removed» («снято в пакете»). Возвращает (circuit_db, pack_dir, key)."""
+    key = REMOVED614_PREFIX + "k1"
+    circuit_body = "текст у нас, живой\n"
+    pack_body = "текст пакета — последняя версия перед снятием\n"
+    circuit_db = root / "circuit.db"
+    pack_dir = root / "pack"
+    make_circuit_db(
+        circuit_db,
+        rules=[{"rule_key": key, "body": circuit_body}],
+        meta={"template_checkout": str(pack_dir), "pack_rules_base": "{}",
+              "pack_rules_skipped": "{}", "pack_rule_sets": json.dumps(["universal"])},
+        roles=[("COORD", "alive", "координатор контура; в живом реестре")])
+    make_pack_db(pack_dir / "rules" / "pack-rules.db",
+                rows=[{"rule_set": RULE_SET, "rule_key": key, "body": pack_body,
+                       "text_sha": text_sha(pack_body), "pack_commit": "removed0614",
+                       "removed_at": "2026-09-13 00:00:00 UTC"}])
+    return circuit_db, pack_dir, key
+
+
+# ── ФИКСТУРА: «АДРЕС УДАЛЁНКИ» В meta.template_source (карточка #614 ①, G3/PROTO) ──────
+# Реальный git-репозиторий, построенный ЛОКАЛЬНО (никакой сети) — task-g3-614.md п.3:
+# «адрес — локальный file://-адрес или путь к голому клону в песочнице, НЕ сеть».
+REMOTE614_PREFIX = "zzz-bite-rfp-remote614-"
+
+
+def build_remote_pack_fixture(root: Path, text_sha):
+    """Пакет-репозиторий (git init + commit, локально) + контур, у которого
+    meta.template_source — file://-адрес ЭТОГО репозитория, а meta.template_checkout
+    отсутствует вовсе (ровно то, что пишет init-group.py настоящему новому контуру:
+    `git remote get-url origin`, а не папка клона). Возвращает (circuit_db, file_url, key)."""
+    pack_repo = root / "pack-origin"
+    pack_repo.mkdir(parents=True)
+    git_env = dict(os.environ, GIT_AUTHOR_NAME="bite614", GIT_AUTHOR_EMAIL="bite@614",
+                  GIT_COMMITTER_NAME="bite614", GIT_COMMITTER_EMAIL="bite@614")
+    subprocess.run(["git", "init", "-q"], cwd=str(pack_repo), check=True, env=git_env)
+    (pack_repo / "rules").mkdir()
+    key = REMOTE614_PREFIX + "k1"
+    body = "universal текст, пришедший клоном\n"
+    make_pack_db(pack_repo / "rules" / "pack-rules.db",
+                rows=[{"rule_set": RULE_SET, "rule_key": key, "body": body,
+                       "text_sha": text_sha(body), "pack_commit": "remote0614"}])
+    subprocess.run(["git", "add", "-A"], cwd=str(pack_repo), check=True, env=git_env)
+    subprocess.run(["git", "commit", "-q", "-m", "bite #614 fixture"],
+                   cwd=str(pack_repo), check=True, env=git_env)
+
+    circuit_db = root / "circuit.db"
+    file_url = "file:///" + str(pack_repo.resolve()).replace("\\", "/")
+    make_circuit_db(circuit_db, rules=[], meta={"template_source": file_url},
+                    roles=[("COORD", "alive", "координатор контура; в живом реестре")])
+    return circuit_db, file_url, key
+
+
 def build_sandboxed_tool(dest_dir: Path) -> Path:
-    """Копия испытуемого инструмента (и mezo_paths.py — прямого соседа по импорту, без
-    него не запустится) в каталог ЗАВЕДОМО вне <КОНТУР> — карточка #608, возврат
-    PROTO В2: путь к gordi-issue.py обязан резолвиться от РАСПОЛОЖЕНИЯ ЭТОЙ КОПИИ, а не
-    быть впечатанным путём автора."""
+    """Копия испытуемого инструмента (и mezo_paths.py/mezo_stand.py — прямых соседей по
+    импорту, без них не запустится) в каталог ЗАВЕДОМО вне <КОНТУР> — карточка #608,
+    возврат PROTO В2: путь к gordi-issue.py обязан резолвиться от РАСПОЛОЖЕНИЯ ЭТОЙ КОПИИ,
+    а не быть впечатанным путём автора.
+    ⚡ КАРТОЧКА #614: rules-from-pack.py теперь безусловно зовёт `import mezo_stand`
+    (временный клон источника убирается тем же приёмом, что у update-tools.py) — сосед
+    добавлен сюда следом, иначе копия падает `ModuleNotFoundError` ДО того, как дело
+    доходит до --propose, который вообще этот путь не трогает (--source задан явно)."""
     dest_dir.mkdir(parents=True, exist_ok=True)
     tool_copy = dest_dir / "rules-from-pack.py"
     tool_copy.write_text(RFP_PATH.read_text(encoding="utf-8"), encoding="utf-8")
     (dest_dir / "mezo_paths.py").write_text(
         (RFP_PATH.parent / "mezo_paths.py").read_text(encoding="utf-8"), encoding="utf-8")
+    mezo_stand_src = RFP_PATH.parent / "mezo_stand.py"
+    if mezo_stand_src.exists():
+        (dest_dir / "mezo_stand.py").write_text(
+            mezo_stand_src.read_text(encoding="utf-8"), encoding="utf-8")
     return tool_copy
 
 
@@ -1357,6 +1501,230 @@ def main() -> int:
               "<сведённый текст из --file>" in shown8l and str(merged_file8) not in shown8l,
               f"заглушка в выводе: {'<сведённый текст из --file>' in shown8l}; путь "
               f"файла в выводе: {str(merged_file8) in shown8l} (ждём False)")
+
+    # ═══ ㊾ КАРТОЧКА #614 п.1 (G3/PROTO): новый контур из пакета — meta.template_source
+    # несёт АДРЕС УДАЛЁНКИ (как его пишет init-group.py: `git remote get-url origin`),
+    # а НЕ папку клона; rules-from-pack.py без --source и без meta.template_checkout
+    # обязан взять базу правил ТЕМ ЖЕ ходом, что update-tools.py (временный клон, только
+    # чтение, убирается штатно) — а не отказывать. Адрес — ЛОКАЛЬНЫЙ file://, сеть не
+    # участвует (task-g3-614.md п.3).
+    remote_root = root / "remote-614"
+    remote_root.mkdir()
+    circuit_dbM, file_url, remote_key = build_remote_pack_fixture(remote_root, mod.text_sha)
+    connM = sqlite3.connect(f"file:{circuit_dbM.as_posix()}?mode=ro", uri=True)
+    # ⚖️ Тот же приём, что у случая ⑭ (владелец без --word): SystemExit ловим САМИ, а не
+    # даём ему уронить весь прогон — на коде ДО правки find_pack_source() без --source
+    # отказывает именно так, и это ОБЯЗАНО читаться как «случай не прошёл», не как крах.
+    cloned = None
+    try:
+        cloned = mod.find_pack_source(None, connM)
+        clone_ok = (cloned.is_dir() and (cloned / "rules" / "pack-rules.db").exists()
+                   and str(cloned.resolve()) != str((remote_root / "pack-origin").resolve()))
+    except SystemExit as e:
+        clone_ok = False
+        print(f"   (SystemExit: {e})")
+    connM.close()
+    ok &= case("㊾а find_pack_source() без --source берёт meta.template_source (адрес "
+              "удалёнки) временным клоном — папка есть, в ней читается база правил",
+              clone_ok,
+              f"клон: {cloned} · это папка с rules/pack-rules.db внутри, ≠ самому "
+              f"исходнику: {clone_ok}")
+
+    cpM = subprocess.run(
+        [sys.executable, str(RFP_PATH), "--db", str(circuit_dbM)],
+        env=mezo_stand.stand_env(root), capture_output=True, text=True, encoding="utf-8")
+    ok &= case("㊾б тот же случай — ПОЛНЫЙ прогон CLI без --source: код 0, ключ пакета "
+              "виден («new»)",
+              cpM.returncode == 0 and remote_key in cpM.stdout and "new" in cpM.stdout,
+              f"код {cpM.returncode}; вывод: {cpM.stdout.strip()[:200]!r}")
+
+    # ── ㊾в ГРАНИЦА task-g3-614.md п.1: «источника нет» ≠ «источник не читается» ─────────
+    unreadable_root = root / "remote-614-unreadable"
+    unreadable_root.mkdir()
+    circuit_dbU = unreadable_root / "circuit.db"
+    make_circuit_db(circuit_dbU, rules=[], meta={
+        "template_source": "file:///C:/zzz-bite-614-there-is-definitely-no-repo-here"})
+    cpU = subprocess.run([sys.executable, str(RFP_PATH), "--db", str(circuit_dbU)],
+                        env=mezo_stand.stand_env(root), capture_output=True, text=True,
+                        encoding="utf-8")
+    no_source_root = root / "remote-614-no-source"
+    no_source_root.mkdir()
+    circuit_dbN = no_source_root / "circuit.db"
+    make_circuit_db(circuit_dbN, rules=[], meta={})
+    cpN = subprocess.run([sys.executable, str(RFP_PATH), "--db", str(circuit_dbN)],
+                        env=mezo_stand.stand_env(root), capture_output=True, text=True,
+                        encoding="utf-8")
+    ok &= case("㊾в отказ различает «источника нет» (нет ни --source, ни template_checkout, "
+              "ни template_source) и «источник не читается» (template_source есть, клон не "
+              "удался) — РАЗНЫЕ слова, не один и тот же текст",
+              cpU.returncode != 0 and cpN.returncode != 0
+              and "источник пакета GORDI неизвестен" in cpN.stderr
+              and "источник пакета GORDI неизвестен" not in cpU.stderr
+              and "НЕ ЗАБРАЛОСЬ" in cpU.stderr and "источник недоступен" in cpU.stderr,
+              f"нет источника: {cpN.stderr.strip()[:120]!r}; источник не читается: "
+              f"{cpU.stderr.strip()[:120]!r}")
+
+    # ═══ ㊿ КАРТОЧКА #614 п.2 (G3/PROTO): разряд «снято в пакете» (removed) — совет несёт
+    # ДВА пути вместо пустого "—", и --skip теперь принимает такую строку (и отпускает,
+    # если пакет когда-нибудь сменит отпечаток снова — симметрично обычному «skipped»).
+    circuit_dbR2, pack_dirR2, removed_key = build_removed_fixture(root / "removed-614", mod.text_sha)
+    connR2 = sqlite3.connect(f"file:{circuit_dbR2.as_posix()}?mode=ro", uri=True)
+    pconnR2 = mod.open_pack_db(pack_dirR2)
+    circR2 = mod.load_circuit_rules(connR2)
+    packR2 = mod.load_pack_rows(pconnR2)
+    csR2, _ = mod.resolve_contour_rule_sets(connR2, circR2, packR2)
+    rowsR2, onlyR2 = mod.build_rows(circR2, packR2, mod.load_meta_map(connR2, "pack_rules_base"),
+                                    mod.load_meta_map(connR2, "pack_rules_skipped"),
+                                    mod.make_history_has(pconnR2), csR2,
+                                    mod.load_circuit_retired_keys(connR2))
+    row_removed = next(r for r in rowsR2 if r["rule_key"] == removed_key)
+    buf_removed = io.StringIO()
+    # ⚖️ Тот же приём, что у ㊾а/㊿б: на коде ДО правки print_listing() ещё не берёт
+    # db_path четвёртым параметром — TypeError ловим сами, случай читается как «не
+    # прошёл» (нет готовой команды в пустом выводе), а не роняет весь прогон.
+    try:
+        with contextlib.redirect_stdout(buf_removed):
+            mod.print_listing(rowsR2, onlyR2, None, circuit_dbR2)
+    except TypeError as e:
+        print(f"   (TypeError: {e})")
+    listing_removed = buf_removed.getvalue()
+    connR2.close(); pconnR2.close()
+    ok &= case("㊿а совет у «снято в пакете» несёт ДВА пути (снять у себя / --skip), а не "
+              "пустой «—»; список печатает готовую команду",
+              row_removed["move"] != "—" and "снять у себя" in row_removed["move"]
+              and "--skip" in row_removed["move"]
+              and "снято в пакете, коммит" in listing_removed
+              and "--skip" in listing_removed,
+              f"совет: {row_removed['move']!r}; готовая команда в списке: "
+              f"{'снято в пакете, коммит' in listing_removed}")
+
+    # ── ㊿б --skip у removed-ключа: холостой прогон ничего не пишет, --apply пишет ──────
+    circuit_dbR3, pack_dirR3, removed_key3 = build_removed_fixture(root / "removed-614-skip",
+                                                                    mod.text_sha)
+    conn3 = sqlite3.connect(f"file:{circuit_dbR3.as_posix()}?mode=rw", uri=True)
+    pconn3 = mod.open_pack_db(pack_dirR3)
+    skip3 = mod.load_meta_map(conn3, "pack_rules_skipped")
+    before3 = snapshot(circuit_dbR3)
+    # ⚖️ Тот же приём, что у ㊾а выше: на коде ДО правки skip_key() отказывает (нет
+    # действующего текста пакета у removed-ключа) — SystemExit ловим сами, случай читается
+    # как «не прошёл», а не роняет весь прогон.
+    rc_dry = rc_apply = None
+    try:
+        rc_dry = mod.skip_key(conn3, pconn3, dict(skip3), removed_key3, None, None, False)
+        after_dry = snapshot(circuit_dbR3)
+        rc_apply = mod.skip_key(conn3, pconn3, skip3, removed_key3, None,
+                                "владелец, приёмка bite, тест ㊿б", True)
+    except SystemExit as e:
+        after_dry = snapshot(circuit_dbR3)
+        print(f"   (SystemExit: {e})")
+    conn3.close(); pconn3.close()
+
+    conn3b = sqlite3.connect(f"file:{circuit_dbR3.as_posix()}?mode=ro", uri=True)
+    pconn3b = mod.open_pack_db(pack_dirR3)
+    circ3b = mod.load_circuit_rules(conn3b)
+    pack3b = mod.load_pack_rows(pconn3b)
+    cs3b, _ = mod.resolve_contour_rule_sets(conn3b, circ3b, pack3b)
+    rows3b, _ = mod.build_rows(circ3b, pack3b, mod.load_meta_map(conn3b, "pack_rules_base"),
+                               mod.load_meta_map(conn3b, "pack_rules_skipped"),
+                               mod.make_history_has(pconn3b), cs3b,
+                               mod.load_circuit_retired_keys(conn3b))
+    state_after_skip3 = next(r["state"] for r in rows3b if r["rule_key"] == removed_key3)
+    conn3b.close(); pconn3b.close()
+    ok &= case("㊿б --skip годится для removed-ключа: холостой прогон не пишет, --apply "
+              "пишет, состояние становится «skipped»",
+              rc_dry == 0 and before3 == after_dry and rc_apply == 0
+              and state_after_skip3 == "skipped",
+              f"холостой не изменил снимок: {before3 == after_dry}; после --apply "
+              f"состояние: «{state_after_skip3}» (ждём skipped)")
+
+    # ── ㊿в пакет меняет снятый текст СНОВА — отказ отпускает (симметрично случаю ⑯) ────
+    pconn3c = sqlite3.connect(str(pack_dirR3 / "rules" / "pack-rules.db"))
+    new_removed_text = "текст пакета — другая версия перед снятием\n"
+    pconn3c.execute("UPDATE pack_rules SET body=?, text_sha=? WHERE rule_key=?",
+                    (new_removed_text, mod.text_sha(new_removed_text), removed_key3))
+    pconn3c.commit(); pconn3c.close()
+    conn3c = sqlite3.connect(f"file:{circuit_dbR3.as_posix()}?mode=ro", uri=True)
+    pconn3d = mod.open_pack_db(pack_dirR3)
+    circ3c = mod.load_circuit_rules(conn3c)
+    pack3c = mod.load_pack_rows(pconn3d)
+    cs3c, _ = mod.resolve_contour_rule_sets(conn3c, circ3c, pack3c)
+    rows3c, _ = mod.build_rows(circ3c, pack3c, mod.load_meta_map(conn3c, "pack_rules_base"),
+                               mod.load_meta_map(conn3c, "pack_rules_skipped"),
+                               mod.make_history_has(pconn3d), cs3c,
+                               mod.load_circuit_retired_keys(conn3c))
+    state_after_move3 = next(r["state"] for r in rows3c if r["rule_key"] == removed_key3)
+    conn3c.close(); pconn3d.close()
+    ok &= case("㊿в отказ отпускает: пакет сменил снятый текст СНОВА — состояние снова "
+              "«removed», не «skipped»",
+              state_after_move3 == "removed",
+              f"состояние после смены текста пакета: «{state_after_move3}» (ждём removed)")
+
+    # ── ПОЛОМКИ (М/Н/О/П) карточки #614 — по одной на новую ветку. Собраны ЗДЕСЬ, ПОСЛЕ
+    # ВСЕХ новых позитивных случаев (㊾а-в, ㊿а-в): поломки бьют по коду, которого на
+    # версии ДО правки нет вовсе — прогон на ней обязан сперва честно провалить каждый
+    # новый случай (см. их try/except SystemExit/TypeError) и только потом встать на
+    # попытке применить первую же поломку (load_rfp сама откажет: «поломка не нашла
+    # ровно одну строку-цель») — а не наоборот.
+    mod_m = load_rfp(patch=patch_no_remote_clone, name="rfp_bite_no_remote_clone")
+    connMb = sqlite3.connect(f"file:{circuit_dbM.as_posix()}?mode=ro", uri=True)
+    refused_m = False
+    try:
+        mod_m.find_pack_source(None, connMb)
+    except SystemExit:
+        refused_m = True
+    connMb.close()
+    ok &= case("㊾ ПОЛОМКА (М) «template_source не читается» красит ровно ㊾а: снова отказ",
+              refused_m,
+              f"отказ выброшен: {refused_m} (под верным кодом случай ㊾а клонирует и не падает)")
+
+    mod_n = load_rfp(patch=patch_removed_advice_empty, name="rfp_bite_removed_advice_empty")
+    move_n = mod_n.MOVE_BY_STATE["removed"]
+    ok &= case("㊿ ПОЛОМКА (Н) «совет снова пуст» красит ровно ㊿а",
+              move_n == "—",
+              f"MOVE_BY_STATE['removed'] под поломкой: {move_n!r} (ждём «—»)")
+
+    mod_o = load_rfp(patch=patch_removed_skip_broken, name="rfp_bite_removed_skip_broken")
+    circuit_dbO, pack_dirO, removed_keyO = build_removed_fixture(root / "removed-614-break-o",
+                                                                  mod_o.text_sha)
+    connO = sqlite3.connect(f"file:{circuit_dbO.as_posix()}?mode=rw", uri=True)
+    pconnO = mod_o.open_pack_db(pack_dirO)
+    skipO = mod_o.load_meta_map(connO, "pack_rules_skipped")
+    refused_o = False
+    try:
+        mod_o.skip_key(connO, pconnO, skipO, removed_keyO, None,
+                       "владелец, приёмка, тест ㊿-О", True)
+    except SystemExit:
+        refused_o = True
+    connO.close(); pconnO.close()
+    ok &= case("㊿ ПОЛОМКА (О) «--skip у removed снова отказывает» красит ровно ㊿б",
+              refused_o,
+              f"отказ выброшен: {refused_o} (под верным кодом случай ㊿б пишет и не падает)")
+
+    mod_p = load_rfp(patch=patch_removed_state_ignores_skip, name="rfp_bite_removed_ignores_skip")
+    circuit_dbP, pack_dirP, removed_keyP = build_removed_fixture(root / "removed-614-break-p",
+                                                                  mod_p.text_sha)
+    connP2 = sqlite3.connect(f"file:{circuit_dbP.as_posix()}?mode=rw", uri=True)
+    pconnP2 = mod_p.open_pack_db(pack_dirP)
+    skipP = mod_p.load_meta_map(connP2, "pack_rules_skipped")
+    mod_p.skip_key(connP2, pconnP2, skipP, removed_keyP, None,
+                   "владелец, приёмка, тест ㊿-П", True)
+    connP2.close(); pconnP2.close()
+    connP3 = sqlite3.connect(f"file:{circuit_dbP.as_posix()}?mode=ro", uri=True)
+    pconnP3 = mod_p.open_pack_db(pack_dirP)
+    circP3 = mod_p.load_circuit_rules(connP3)
+    packP3 = mod_p.load_pack_rows(pconnP3)
+    csP3, _ = mod_p.resolve_contour_rule_sets(connP3, circP3, packP3)
+    rowsP3, _ = mod_p.build_rows(circP3, packP3, mod_p.load_meta_map(connP3, "pack_rules_base"),
+                                 mod_p.load_meta_map(connP3, "pack_rules_skipped"),
+                                 mod_p.make_history_has(pconnP3), csP3,
+                                 mod_p.load_circuit_retired_keys(connP3))
+    state_p = next(r["state"] for r in rowsP3 if r["rule_key"] == removed_keyP)
+    connP3.close(); pconnP3.close()
+    ok &= case("㊿ ПОЛОМКА (П) «build_rows не смотрит skip_map у removed» красит ровно "
+              "㊿б/в: после --apply состояние остаётся «removed», не «skipped»",
+              state_p == "removed",
+              f"состояние под поломкой после --skip --apply: «{state_p}» (под верным "
+              f"кодом — «skipped»)")
 
     # ── ㉟ контроль: живая база контура не изменилась ────────────────────────────────
     after_live = fake_key_count_live()

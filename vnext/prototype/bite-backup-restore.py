@@ -64,6 +64,15 @@ SCRIPTS = mezo_paths.container_root(__file__) / ".mezosync" / "scripts"
 TOOL = SCRIPTS / "backup-db.py"
 MIRROR = mezo_paths.container_root(__file__) / "atlas.agents-sync.db"      # ТОЛЬКО чтение
 RESTORE_VERIFY = MIRROR / "restore-verify.py"                              # ТОЛЬКО чтение
+# 🩸 КАРТОЧКА #617 ①② (находка COORD Н1, песочный контур n2 из чистого клона пакета).
+# У ПОТРЕБИТЕЛЯ ПАКЕТА (например, tapas) нашего хранилища atlas.agents-sync.db нет и не
+# будет — RESTORE_VERIFY там не существует. Раньше отсутствие файла давало подпроцессу
+# backup-db.py-приёмки код 2 («не удалось открыть файл»), а следующий же шаг ЭТОЙ приёмки
+# (сверка счётчиков строк «источник ↔ развёрнутая копия», случаи С1/С2/С3) открывал
+# НИКОГДА не появившийся restore-restored.db и падал НЕПОЙМАННОЙ трассировкой sqlite3
+# («unable to open database file») — приёмка умирала целиком, случай С10 и все за ним
+# не запускались вовсе. Проверяем НАЛИЧИЕ файла ОДИН РАЗ и говорим об этом словами.
+RESTORE_VERIFY_MISSING = not RESTORE_VERIFY.exists()
 LIVE_DB = mezo_paths.live_db(__file__)                                     # ТОЛЬКО чтение
 
 CASES = DIFFER = BAD = 0
@@ -345,7 +354,7 @@ def case_c1_c2(d: pathlib.Path, out_dir: pathlib.Path):
     routput = (r.stdout or "") + (r.stderr or "")
     (out_dir / "c1-restore-verify.txt").write_text(routput, encoding="utf-8")
     case("С1 restore-verify.py на развёрнутой копии → зелёная сверка ролей",
-         r.returncode == 0 and "СВЕРКА ЗЕЛЁНАЯ" in routput,
+         r.returncode == 0 and "ПРОВЕРКА ПРОШЛА" in routput,
          f"код {r.returncode}, время {t_restore_verify:.2f} с; строка со счётом ролей — в файле", differ=True)
 
     # независимая сверка строк по обычным таблицам источник↔копия (кроме служебных поиска)
@@ -430,8 +439,88 @@ def case_c3(d: pathlib.Path, out_dir: pathlib.Path):
     routput = (r.stdout or "") + (r.stderr or "")
     (out_dir / "c3-restore-verify.txt").write_text(routput, encoding="utf-8")
     case("С3 restore-verify.py на развёрнутой (без поиска) → зелёная сверка ролей",
-         r.returncode == 0 and "СВЕРКА ЗЕЛЁНАЯ" in routput,
+         r.returncode == 0 and "ПРОВЕРКА ПРОШЛА" in routput,
          f"код {r.returncode}; строка со счётом ролей — в файле c3-restore-verify.txt", differ=True)
+
+
+# ── С11: карточка #617 ③ (находка COORD Н2) — нуль сверенных слов различает
+#        «таблиц поиска нет» и «таблицы есть, но пусты», а не одну строку на оба ──
+
+def build_empty_search_stand(d: pathlib.Path) -> pathlib.Path:
+    """Таблица поиска (внешнее содержимое) ЕСТЬ, но ПУСТА целиком — ни строки в
+    содержимом, ни в индексе. Случай С11(б): «таблицы есть, но пусты»."""
+    d.mkdir(parents=True, exist_ok=True)
+    db = d / "empty-search.db"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE phoenix_records (id INTEGER PRIMARY KEY, subject TEXT,"
+               " body TEXT)")
+    con.execute("CREATE VIRTUAL TABLE phoenix_records_fts USING fts5(subject, body,"
+               " content='phoenix_records', content_rowid='id')")
+    con.execute("CREATE TABLE phoenix_history (id INTEGER PRIMARY KEY, body TEXT)")
+    con.executemany("INSERT INTO phoenix_history (body) VALUES (?)",
+                    [(f"версия {i}",) for i in range(3)])
+    con.commit()
+    con.close()
+    return db
+
+
+def case_c11(d: pathlib.Path, out_dir: pathlib.Path, tool=TOOL, label="c11"):
+    """(а) база БЕЗ таблиц поиска вовсе → «поиск: таблиц поиска нет» (законно, не
+    тревога). (б) таблица поиска ЕСТЬ, но пуста → «поиск: слов для сверки нет —
+    не проверен» (сверка ожидалась и не состоялась — это НЕ то же самое, что «а»,
+    и не то же самое, что пройденная сверка)."""
+    no_fts_db = build_no_search_stand(d / "no-fts")
+    out_a = d / "c11a.dump.sql"
+    code_a, output_a = run_tool(no_fts_db, out_a, "--apply", script=tool)
+    (out_dir / f"{label}a-run.txt").write_text(output_a, encoding="utf-8")
+    case("С11(а) база БЕЗ таблиц поиска → «поиск: таблиц поиска нет», а не «сверен по 0»",
+         code_a == 0 and "поиск: таблиц поиска нет" in output_a
+         and "сверен по 0" not in output_a,
+         f"код {code_a}; полный вывод — {label}a-run.txt", differ=True)
+
+    empty_db = build_empty_search_stand(d / "empty")
+    out_b = d / "c11b.dump.sql"
+    code_b, output_b = run_tool(empty_db, out_b, "--apply", script=tool)
+    (out_dir / f"{label}b-run.txt").write_text(output_b, encoding="utf-8")
+    case("С11(б) таблица поиска ЕСТЬ, но пуста → «слов для сверки нет — не проверен»,"
+         " а не «сверен по 0» (это разные причины одного нуля)",
+         code_b == 0 and "поиск: слов для сверки нет — не проверен" in output_b
+         and "сверен по 0" not in output_b,
+         f"код {code_b}; полный вывод — {label}b-run.txt", differ=True)
+
+
+def case_c11_reverse_gate(d: pathlib.Path, out_dir: pathlib.Path):
+    """Обратный ход: различение снято, нуль снова печатается КАК ПРОЙДЕННАЯ сверка
+    («поиск сверен по 0 словам») — оба под-случая С11 обязаны провалиться ПО СВОЕЙ
+    причине (искомая строка пропала), а не молчанием."""
+    weak = weaken(
+        d,
+        '        if not search_tables:\n'
+        '            search_summary = "поиск: таблиц поиска нет"\n'
+        '        elif words_checked == 0:\n'
+        '            search_summary = "поиск: слов для сверки нет — не проверен"\n'
+        '        else:\n'
+        '            search_summary = f"поиск сверен по {words_checked} словам"',
+        '        search_summary = f"поиск сверен по {words_checked} словам"'
+        '  # П-С11: различение нуля снято',
+        "c11")
+    if weak is None:
+        case("П-С11 обратный ход: различение нуля снято", False,
+             "⛔ НЕ ЗАПУСТИЛАСЬ: якорь в гарде не найден — гард менялся, правь приёмку")
+        return
+    no_fts_db = build_no_search_stand(d / "no-fts")
+    out_a = d / "p-c11a.dump.sql"
+    code_a, output_a = run_tool(no_fts_db, out_a, "--apply", script=weak)
+    (out_dir / "p-c11a-run.txt").write_text(output_a, encoding="utf-8")
+    empty_db = build_empty_search_stand(d / "empty")
+    out_b = d / "p-c11b.dump.sql"
+    code_b, output_b = run_tool(empty_db, out_b, "--apply", script=weak)
+    (out_dir / "p-c11b-run.txt").write_text(output_b, encoding="utf-8")
+    case("П-С11 обратный ход: без различения ОБА под-случая С11 КРАСНЕЮТ по"
+         " «сверен по 0 словам»",
+         "сверен по 0 словам" in output_a and "сверен по 0 словам" in output_b,
+         f"(а) код {code_a}, вывод — p-c11a-run.txt; (б) код {code_b}, вывод —"
+         " p-c11b-run.txt", differ=True)
 
 
 # ── С9: знак CR в значении переживает нормализацию концов строк в git ────
@@ -1225,11 +1314,24 @@ def main() -> int:
             d8 = tmp_root / "c8"; d8.mkdir(parents=True, exist_ok=True)
             case_c8_probe(d8)
         else:
-            d1 = tmp_root / "c1c2"; d1.mkdir(parents=True, exist_ok=True)
-            case_c1_c2(d1, out_dir)
+            # С1 и (вложенный в неё же) С2 сверяют РАЗВЁРНУТУЮ restore-verify.py копию —
+            # без файла восстановить нечем, а без восстановленной базы нечем сверять
+            # триггеры. С3 — тот же приём на базе без таблицы поиска. Без хранилища эти
+            # три случая НЕ ЗАПУСКАЮТСЯ и говорят об этом одной строкой — ни трассировки,
+            # ни тихого пропуска; всё остальное (включая С10) идёт как обычно.
+            if RESTORE_VERIFY_MISSING:
+                print("➖ не запустилось: нет restore-verify.py — С1, С2 и С3 не проверены")
+            else:
+                d1 = tmp_root / "c1c2"; d1.mkdir(parents=True, exist_ok=True)
+                case_c1_c2(d1, out_dir)
 
-            d3 = tmp_root / "c3"; d3.mkdir(parents=True, exist_ok=True)
-            case_c3(d3, out_dir)
+                d3 = tmp_root / "c3"; d3.mkdir(parents=True, exist_ok=True)
+                case_c3(d3, out_dir)
+
+            d11 = tmp_root / "c11"; d11.mkdir(parents=True, exist_ok=True)
+            case_c11(d11, out_dir)
+            dp11 = tmp_root / "p-c11"; dp11.mkdir(parents=True, exist_ok=True)
+            case_c11_reverse_gate(dp11, out_dir)
 
             d9 = tmp_root / "c9"; d9.mkdir(parents=True, exist_ok=True)
             case_c9(d9, out_dir)

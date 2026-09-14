@@ -41,6 +41,20 @@
 и на стенде; база контура (найденного обычным способом — MEZO_CONTAINER или подъём
 от расположения) только читается снимком, чтобы у стенда была настоящая схема.
 
+ВОЗВРАТ COORD 14.09 (карточка #505 → заведена #624): разбор ④ не видел ЧЕТЫРЕ формы,
+которыми 4 приёмки вычисляли путь к живой базе, — они не подпадали ни под одну названную
+границу (не shell, не имя на лету, не параметр извне, не exec), а тем не менее ускользали:
+  ⑥-а IfExp: `pathlib.Path(a.db) if a.db else mezo_paths.live_db()` — жив, если ХОТЬ ОДНА ветка живая
+  ⑥-б Subscript: `Path(__file__).resolve().parents[N]` — след берётся у значения, не у индекса
+  ⑥-в атрибутная форма `pathlib.Path(__file__)` (через import pathlib) — как бы `Path(__file__)`
+  ⑥-г след, полученный ВНУТРИ if/try/with/for/while (например, `live = Path(mezo_paths.live_db())`
+      под try, за которым идёт `shutil.copy2(live, …)` уже ПОСЛЕ блока) — раньше ветки сканировались
+      на КОПИИ среды присвоений, и след терялся на выходе из блока (пропущен bite-empty-data-reasons)
+  ⑥-д присвоение кортежем `a, b = X, Y` — попарно, а не как единое значение
+Случаи ⑨ и ⑩ ниже — на КАЖДУЮ из этих форм подложенный файл, который разбор ④ обязан найти,
+и нарочная поломка, снимающая РОВНО эту способность (переключателем NEW_FORM_TOGGLES,
+на копии копии этого файла) — она обязана провалить ровно подложенный случай своей формы.
+
     python <абсолютный путь>/bite-db-snapshot.py
 """
 from __future__ import annotations
@@ -276,6 +290,19 @@ WEAK_ROOT_FUNCS = {"mezo_root", "container_root"}
 DB_LITERAL = "mezosync.db"
 COPY_FUNCS = {"copy", "copy2", "copyfile", "copyfileobj"}
 
+# ═══ ВОЗВРАТ COORD (карточка #505 → #624): пять способностей разбора ④, добавленных
+# 14.09, — КАЖДАЯ переключаема ОТДЕЛЬНО, чтобы нарочная поломка могла снять ровно одну,
+# не задевая соседние (case_10 ниже гоняет разбор с одним False за раз на копии копии
+# этого файла — текстовая замена ОДНОГО "True" на "False", не переписывание тела функции).
+NEW_FORM_TOGGLES = {
+    "ifexp": True,          # ⑥-а: IfExp — живая хотя бы в одной ветке
+    "subscript": True,      # ⑥-б: след Subscript берётся у значения (.parents[N] и подобные)
+    "path_attr": True,      # ⑥-в: pathlib.Path(__file__) — атрибутная форма Path
+    "branch_merge": True,   # ⑥-г: след из if/try/with/for/while выходит НАРУЖУ блока
+    "tuple_assign": True,   # ⑥-д: присвоение кортежем a, b = X, Y — попарно
+}
+_TAINT_RANK = {"WEAK": 1, "LIVE": 2}
+
 
 def _mezo_alias(tree):
     alias, imported = None, {}
@@ -306,7 +333,13 @@ def _taint(node, env, alias, imported):
             return "LIVE"
         if fname in WEAK_ROOT_FUNCS:
             return "WEAK"
-        if (isinstance(f, ast.Name) and f.id == "Path" and node.args
+        # ⑥-в: pathlib.Path(__file__) — атрибутная форма (import pathlib; pathlib.Path(...)),
+        # не только голое имя Path(...) (from pathlib import Path). Пример живой: ЗДЕСЬ/HERE в
+        # bite-phoenix-records-autoincrement.py = pathlib.Path(__file__).resolve().parent.
+        is_path_name = isinstance(f, ast.Name) and f.id == "Path"
+        is_path_attr = (NEW_FORM_TOGGLES["path_attr"] and isinstance(f, ast.Attribute)
+                        and f.attr == "Path")
+        if ((is_path_name or is_path_attr) and node.args
                 and isinstance(node.args[0], ast.Name) and node.args[0].id == "__file__"):
             return "WEAK"
         base = _taint(f, env, alias, imported)
@@ -319,6 +352,18 @@ def _taint(node, env, alias, imported):
         return None
     if isinstance(node, ast.Attribute):
         return _taint(node.value, env, alias, imported)
+    # ⑥-б: Subscript (Path(__file__).resolve().parents[1], список/кортеж по индексу) — след
+    # берётся у ЗНАЧЕНИЯ, индекс/срез разбору не важен: он не решает, живая база или нет.
+    if isinstance(node, ast.Subscript) and NEW_FORM_TOGGLES["subscript"]:
+        return _taint(node.value, env, alias, imported)
+    # ⑥-а: IfExp (`X if cond else Y`) — живая, если ХОТЬ ОДНА из веток живая: опыт не знает,
+    # какая ветка исполнится, и осторожная сторона — считать выражение живым уже по одной.
+    if isinstance(node, ast.IfExp) and NEW_FORM_TOGGLES["ifexp"]:
+        t_body = _taint(node.body, env, alias, imported)
+        t_orelse = _taint(node.orelse, env, alias, imported)
+        if "LIVE" in (t_body, t_orelse):
+            return "LIVE"
+        return t_body or t_orelse
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
         lt = _taint(node.left, env, alias, imported)
         if lt is None:
@@ -334,17 +379,51 @@ def _taint(node, env, alias, imported):
     return None
 
 
+def _merge_branches(env, *branch_envs):
+    """⑥-г: след, попавший в ЖИВУЮ базу хоть в ОДНОЙ ветке (if/try/with/for/while), живой
+    и ПОСЛЕ блока — а не только внутри неё. Каждый branch_env — своя КОПИЯ среды на входе
+    в ветку (наследует всё, что было ДО неё); объединение здесь — по приоритету LIVE > WEAK >
+    ничего, и оно ЗАМЕНЯЕТ содержимое env целиком (а не только добавляет ключи), иначе имя,
+    которое КАЖДАЯ ветка честно расчистила, осталось бы тронутым старым следом снаружи."""
+    if not NEW_FORM_TOGGLES["branch_merge"]:
+        return   # прежнее поведение: ветки не меняют внешнюю среду — след теряется на выходе
+    merged = {}
+    for be in branch_envs:
+        for k, v in be.items():
+            if v and _TAINT_RANK.get(v, 0) >= _TAINT_RANK.get(merged.get(k), 0):
+                merged[k] = v
+    env.clear()
+    env.update(merged)
+
+
+def _assign_one(tgt, value_node, env, alias, imported):
+    t = _taint(value_node, env, alias, imported)
+    if isinstance(tgt, ast.Name):
+        if t:
+            env[tgt.id] = t
+        elif tgt.id in env:
+            del env[tgt.id]
+
+
+def _scan_assign(stmt, env, alias, imported, violations, relpath):
+    # ⑥-д: `a, b = X, Y` — попарно: taint(a) от X, taint(b) от Y, а не общий taint кортежа
+    # (которого у Tuple/List и не бывает). Без этого `live, why_not = None, "…"` не трогал
+    # env ВООБЩЕ (targets[0] — Tuple, не Name), и старый след `live` мог остаться неверным.
+    for tgt in stmt.targets:
+        if (NEW_FORM_TOGGLES["tuple_assign"] and isinstance(tgt, (ast.Tuple, ast.List))
+                and isinstance(stmt.value, (ast.Tuple, ast.List))
+                and len(tgt.elts) == len(stmt.value.elts)):
+            for sub_tgt, sub_val in zip(tgt.elts, stmt.value.elts):
+                _assign_one(sub_tgt, sub_val, env, alias, imported)
+        else:
+            _assign_one(tgt, stmt.value, env, alias, imported)
+    _scan_expr(stmt.value, env, alias, imported, violations, relpath)
+
+
 def _scan_stmts(body, env, alias, imported, violations, relpath):
     for stmt in body:
         if isinstance(stmt, ast.Assign):
-            t = _taint(stmt.value, env, alias, imported)
-            for tgt in stmt.targets:
-                if isinstance(tgt, ast.Name):
-                    if t:
-                        env[tgt.id] = t
-                    elif tgt.id in env:
-                        del env[tgt.id]
-            _scan_expr(stmt.value, env, alias, imported, violations, relpath)
+            _scan_assign(stmt, env, alias, imported, violations, relpath)
         elif isinstance(stmt, ast.Expr):
             _scan_expr(stmt.value, env, alias, imported, violations, relpath)
         elif isinstance(stmt, ast.With):
@@ -355,17 +434,36 @@ def _scan_stmts(body, env, alias, imported, violations, relpath):
                 _scan_expr(item.context_expr, env, alias, imported, violations, relpath)
             _scan_stmts(stmt.body, env, alias, imported, violations, relpath)
         elif isinstance(stmt, ast.If):
-            _scan_stmts(stmt.body, dict(env), alias, imported, violations, relpath)
-            _scan_stmts(stmt.orelse, dict(env), alias, imported, violations, relpath)
+            # ⑥-г: ветки сканируются на КОПИЯХ (входное состояние сохранено на случай, если
+            # условие ложно/истинно) — но результат объединяется ОБРАТНО в env, а не теряется.
+            body_env = dict(env)
+            _scan_stmts(stmt.body, body_env, alias, imported, violations, relpath)
+            else_env = dict(env)
+            _scan_stmts(stmt.orelse, else_env, alias, imported, violations, relpath)
+            _merge_branches(env, body_env, else_env)
         elif isinstance(stmt, (ast.For, ast.While)):
-            _scan_stmts(stmt.body, dict(env), alias, imported, violations, relpath)
-            _scan_stmts(stmt.orelse, dict(env), alias, imported, violations, relpath)
+            body_env = dict(env)
+            _scan_stmts(stmt.body, body_env, alias, imported, violations, relpath)
+            else_env = dict(env)
+            _scan_stmts(stmt.orelse, else_env, alias, imported, violations, relpath)
+            _merge_branches(env, body_env, else_env)
         elif isinstance(stmt, ast.Try):
-            _scan_stmts(stmt.body, dict(env), alias, imported, violations, relpath)
+            body_env = dict(env)
+            _scan_stmts(stmt.body, body_env, alias, imported, violations, relpath)
+            handler_envs = []
             for h in stmt.handlers:
-                _scan_stmts(h.body, dict(env), alias, imported, violations, relpath)
-            _scan_stmts(stmt.orelse, dict(env), alias, imported, violations, relpath)
-            _scan_stmts(stmt.finalbody, dict(env), alias, imported, violations, relpath)
+                h_env = dict(env)
+                _scan_stmts(h.body, h_env, alias, imported, violations, relpath)
+                handler_envs.append(h_env)
+            # orelse исполняется только ПОСЛЕ успешного body — начинаем от его состояния
+            orelse_env = dict(body_env)
+            _scan_stmts(stmt.orelse, orelse_env, alias, imported, violations, relpath)
+            combined = dict(env)
+            _merge_branches(combined, body_env, orelse_env, *handler_envs)
+            # finally исполняется ВСЕГДА, поверх того, что осталось после body/handlers/orelse
+            final_env = dict(combined)
+            _scan_stmts(stmt.finalbody, final_env, alias, imported, violations, relpath)
+            _merge_branches(env, final_env)
         elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             _scan_stmts(stmt.body, dict(env), alias, imported, violations, relpath)
 
@@ -414,7 +512,15 @@ SCAN_BOUNDARY = (
     "      копирование через shell-команду (os.system/subprocess cp/copy), имя функции,\n"
     "      собранное на лету (getattr(mezo_paths, 'live_'+'db')), источник, переданный ПАРАМЕТРОМ\n"
     "      функции извне модуля (межпроцедурный след внутри одного файла разбирается, между\n"
-    "      файлами — нет), и код, не являющийся статическим текстом (exec/eval)."
+    "      файлами — нет), и код, не являющийся статическим текстом (exec/eval).\n"
+    "   ⛔ ВОЗВРАТ COORD 14.09 (карточка #624): атрибут аргумента argparse (`a.db`, `args.db`),\n"
+    "      чьё значение по умолчанию — живая база (`default=str(LIVE_DB)` или функция вроде\n"
+    "      resolve_db внутри самого argparse-объявления) — разбор НЕ отслеживает: цель\n"
+    "      присвоения `args.db = …` не простое имя (ast.Attribute, не ast.Name), и связь\n"
+    "      «--db по умолчанию живая» живёт внутри вызова add_argument, а не в дереве присвоений,\n"
+    "      которое строит разбор. Ровно так остаётся невидимым guard-launcher-forms.py:243\n"
+    "      (`shutil.copy(a.db, db_copy)` ← `--db` default=str(LIVE_DB)) — этот файл переведён\n"
+    "      на mezo_stand.snapshot_db РУКОЙ, разбор ④ его правку не подтверждает и не обязан."
 )
 
 
@@ -600,6 +706,188 @@ def case_8():
         differ=True)
 
 
+# ═══ ⑨⑩ ВОЗВРАТ COORD (карточка #505 → #624): пять новых форм, каждая — подложенный файл ══
+
+NEW_FORM_SAMPLES = {
+    "ifexp": (
+        "bite-MUTANT-ifexp.py",
+        '''# -*- coding: utf-8 -*-
+"""bite-MUTANT-ifexp.py — НАРОЧНО подложенный файл (карточка #624, разбор ④, форма ⑥-а
+IfExp): условное выражение, где ОДНА из веток — живая база. Не рабочий инструмент."""
+import pathlib
+import shutil
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import mezo_paths  # noqa: E402
+
+DB_ARG = None
+SRC = pathlib.Path(DB_ARG) if DB_ARG else mezo_paths.live_db(__file__)
+
+
+def demo(dst):
+    shutil.copyfile(SRC, dst)   # ветка else IfExp — живая; разбор ④ обязан найти
+'''
+    ),
+    "subscript": (
+        "bite-MUTANT-subscript.py",
+        '''# -*- coding: utf-8 -*-
+"""bite-MUTANT-subscript.py — НАРОЧНО подложенный файл (карточка #624, разбор ④, форма ⑥-б
+Subscript): след живой базы берётся у ЗНАЧЕНИЯ Path(__file__).resolve().parents[N], не у
+индекса. Не рабочий инструмент."""
+import shutil
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+LIVE = ROOT / ".mezosync" / "mezosync.db"
+
+
+def demo(dst):
+    shutil.copy2(LIVE, dst)   # корень из Subscript; разбор ④ обязан найти
+'''
+    ),
+    "path_attr": (
+        "bite-MUTANT-pathlib-attr.py",
+        '''# -*- coding: utf-8 -*-
+"""bite-MUTANT-pathlib-attr.py — НАРОЧНО подложенный файл (карточка #624, разбор ④, форма
+⑥-в): pathlib.Path(__file__) атрибутной формой (import pathlib), а не Path(__file__) через
+`from pathlib import Path`. Не рабочий инструмент."""
+import pathlib
+import shutil
+
+HERE = pathlib.Path(__file__).resolve().parent
+ROOT = HERE.parent
+LIVE = ROOT / ".mezosync" / "mezosync.db"
+
+
+def demo(dst):
+    shutil.copy2(LIVE, dst)   # HERE — атрибутная форма Path; разбор ④ обязан найти
+'''
+    ),
+    "branch_merge": (
+        "bite-MUTANT-branch-out.py",
+        '''# -*- coding: utf-8 -*-
+"""bite-MUTANT-branch-out.py — НАРОЧНО подложенный файл (карточка #624, разбор ④, форма
+⑥-г): след живой базы, полученный ВНУТРИ try/if, используется ПОСЛЕ блока — разбор обязан
+пронести его наружу. Не рабочий инструмент."""
+import shutil
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mezo_paths  # noqa: E402
+
+
+def demo(dst):
+    live = None
+    try:
+        live = Path(mezo_paths.live_db())
+        if not live.exists():
+            live, reason = None, "нет файла"
+    except Exception as e:
+        reason = str(e)
+    if live is not None:
+        shutil.copy2(live, dst)   # след из try/if, живёт ПОСЛЕ блока; разбор ④ обязан найти
+'''
+    ),
+    "tuple_assign": (
+        "bite-MUTANT-tuple-assign.py",
+        '''# -*- coding: utf-8 -*-
+"""bite-MUTANT-tuple-assign.py — НАРОЧНО подложенный файл (карточка #624, разбор ④, форма
+⑥-д): присвоение кортежем `a, b = X, Y` — попарно. Не рабочий инструмент."""
+import shutil
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mezo_paths  # noqa: E402
+
+src, note = mezo_paths.live_db(), "источник — живая база"
+
+
+def demo(dst):
+    shutil.copyfile(src, dst)   # taint из присвоения кортежем; разбор ④ обязан найти
+'''
+    ),
+}
+
+
+def _plant_new_forms(dir_path: Path, only=None):
+    """Положить подложенные файлы новых форм (все или один по ключу only) в каталог."""
+    for key, (fname, text) in NEW_FORM_SAMPLES.items():
+        if only is not None and key != only:
+            continue
+        (dir_path / fname).write_text(text, encoding="utf-8")
+
+
+def case_9():
+    """⑨ НОВЫЕ ФОРМЫ (карточка #624): на КАЖДУЮ из пяти — подложенный файл; разбор ④ ПОЛНЫМ
+    составом (живой NEW_FORM_TOGGLES, не испорченная копия) обязан найти КАЖДЫЙ."""
+    stand = mezo_stand.new("bite-db-snapshot-c9-")
+    forms_dir = stand / "new-forms"
+    forms_dir.mkdir()
+    _plant_new_forms(forms_dir)
+    violations = scan_for_live_copies([forms_dir])
+    found_files = {Path(relpath).name for relpath, _, _ in violations}
+    print(f"   подложено форм: {len(NEW_FORM_SAMPLES)} · разбор нашёл нарушений: {len(violations)}")
+    ok = True
+    for key, (fname, _) in NEW_FORM_SAMPLES.items():
+        seen = fname in found_files
+        ok = case(f"⑨ форма «{key}» ({fname}): разбор ④ находит", seen,
+                   "" if seen else f"⛔ разбор НЕ нашёл {fname} среди {sorted(found_files)}",
+                   differ=True) and ok
+    mezo_stand.release(stand)
+    return ok
+
+
+def make_mutant_analyzer(stand: Path, disable_key: str):
+    """Копия КОПИИ bite-db-snapshot.py, где ОДНА способность разбора ④ выключена
+    ПЕРЕКЛЮЧАТЕЛЕМ (замена одного "True" на "False" в NEW_FORM_TOGGLES) — не переписыванием
+    тела функции, чтобы поломка задевала РОВНО одну способность, а не соседние. mezo_paths и
+    mezo_stand уже загружены в ЭТОМ процессе (sys.modules): мутанту не нужны их файлы рядом,
+    import переиспользует то, что уже загружено — как у case_5 с mezo_stand.py."""
+    import importlib.util
+    real_src = Path(__file__).resolve()
+    text = real_src.read_text(encoding="utf-8")
+    marker = f'"{disable_key}": True,'
+    if marker not in text:
+        raise RuntimeError(f"переключатель «{disable_key}» не найден в тексте разбора")
+    mutated = text.replace(marker, f'"{disable_key}": False,', 1)
+    mutant_path = stand / f"bite_db_snapshot_mutant_{disable_key}.py"
+    mutant_path.write_text(mutated, encoding="utf-8")
+    spec = importlib.util.spec_from_file_location(f"bite_db_snapshot_mutant_{disable_key}", mutant_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def case_10():
+    """⑩ ПОЛОМКА НА КАЖДУЮ НОВУЮ ВОЗМОЖНОСТЬ (карточка #624, на копии копии этого файла):
+    снять способность по одной → проваливается РОВНО подложенный случай этой формы, четыре
+    остальных остаются найдены — иначе поломка красила бы соседние формы за компанию."""
+    stand = mezo_stand.new("bite-db-snapshot-c10-")
+    forms_dir = stand / "new-forms"
+    forms_dir.mkdir()
+    _plant_new_forms(forms_dir)
+    ok = True
+    for key in NEW_FORM_TOGGLES:
+        mutant_stand = stand / f"mutant-{key}"
+        mutant_stand.mkdir()
+        mod = make_mutant_analyzer(mutant_stand, key)
+        violations = mod.scan_for_live_copies([forms_dir])
+        found_files = {Path(relpath).name for relpath, _, _ in violations}
+        all_files = {fname for fname, _ in NEW_FORM_SAMPLES.values()}
+        expected_missing = NEW_FORM_SAMPLES[key][0]
+        missing = all_files - found_files
+        exact = missing == {expected_missing}
+        ok = case(f"⑩ поломка «{key}»: провален РОВНО подложенный случай этой формы",
+                   exact,
+                   f"пропали: {sorted(missing) or '(ничего)'} — ожидали ровно {{{expected_missing!r}}}",
+                   differ=True) and ok
+    mezo_stand.release(stand)
+    return ok
+
+
 # ═══════════════════════════════ main ══════════════════════════════════════════════════
 
 def main() -> int:
@@ -617,14 +905,25 @@ def main() -> int:
     mezo_stand.release(stand12)
 
     ok3 = case_3()
-    ok4 = case_4([Path(__file__).resolve().parent,
-                  mezo_paths.live_scripts(__file__)])
+    roots = [Path(__file__).resolve().parent, mezo_paths.live_scripts(__file__)]
+    # ВОЗВРАТ COORD (карточка #624): «корни разбора ④ — проверь, что туда входят оба каталога
+    # ЦЕЛИКОМ, включая .mezosync/scripts/migrations». rglob("*.py") в scan_for_live_copies уже
+    # рекурсивен — migrations лежит ВНУТРИ live_scripts() и никогда не исключался; печатаем
+    # число найденных там файлов, чтобы это было утверждением, а не молчаливой надеждой.
+    migrations_dir = roots[1] / "migrations"
+    migrations_files = sorted(migrations_dir.rglob("*.py")) if migrations_dir.is_dir() else []
+    print(f"   разбор ④: корень {roots[1]} включает migrations/ ЦЕЛИКОМ рекурсией (rglob) — "
+          f"там {len(migrations_files)} файлов (карточка #624, возврат COORD)\n")
+    ok4 = case_4(roots)
     ok5 = case_5()
     ok6 = case_6()
     ok7 = case_7()
     ok8 = case_8()
+    ok9 = case_9()
+    ok10 = case_10()
 
-    ok = ok1 and ok2 and ok3 and ok4 and ok5 and ok6 and ok7 and ok8 and not third
+    ok = (ok1 and ok2 and ok3 and ok4 and ok5 and ok6 and ok7 and ok8 and ok9 and ok10
+          and bool(migrations_files) and not third)
 
     print()
     print((f"✅ ПРИНЯТО — случаев {CASES}, различающих {DIFFER}" if ok else

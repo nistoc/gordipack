@@ -386,9 +386,21 @@ def restore_and_check(source_conn, dump_text: str, real_counts: dict,
             except sqlite3.Error as exc:
                 return False, f"копия негодна: integrity-check «{name}» — {exc}"
 
+        # 🩸 КАРТОЧКА #617 ③ (находка COORD Н2). Нуль сверенных слов раньше печатался ТОЙ ЖЕ
+        # строкой, что и настоящая сверка («поиск сверен по 0 словам») — на новорождённом
+        # контуре (таблиц поиска нет вовсе) это звучало как ПРОЙДЕННАЯ проверка, когда
+        # проверять было нечего. Различаем ДВЕ разные причины нуля, а не одну:
+        #   · таблиц поиска нет вовсе (search_tables пуст) — это законно, не тревога;
+        #   · таблицы есть, а слов для сверки не набралось (пустой словарь) — это МОЛЧАНИЕ
+        #     там, где сверка ожидалась, и её нельзя выдавать за пройденную.
+        if not search_tables:
+            search_summary = "поиск: таблиц поиска нет"
+        elif words_checked == 0:
+            search_summary = "поиск: слов для сверки нет — не проверен"
+        else:
+            search_summary = f"поиск сверен по {words_checked} словам"
         return True, (f"копия разворачивается: таблиц {len(real_counts)} · "
-                      f"строк {sum(real_counts.values())} · "
-                      f"поиск сверен по {words_checked} словам")
+                      f"строк {sum(real_counts.values())} · " + search_summary)
     finally:
         v.close()
         verify_db.unlink(missing_ok=True)

@@ -30,7 +30,6 @@ guard-section-lag.py и guard-rights-registry.py отказывали кодом
 mezo_stand (убирается при успехе, сохраняется при провале — как у соседних bite-*.py).
 """
 import os
-import shutil
 import sqlite3
 import subprocess
 import sys
@@ -205,7 +204,7 @@ def main() -> int:
             print(f"⚪ ④ неприменим в этом месте — {why_not}; не засчитан")
         else:
             live_copy = stand / "live-copy.db"
-            shutil.copy2(live, live_copy)
+            mezo_stand.snapshot_db(live, live_copy)  # карточка #505/#624: согласованная копия, не shutil.copy2
             con = sqlite3.connect(f"file:{live_copy}?mode=ro", uri=True)
             message_count = con.execute("SELECT COUNT(*) FROM messages_all").fetchone()[0]
             registry_count = con.execute("SELECT COUNT(*) FROM role_rights").fetchone()[0]

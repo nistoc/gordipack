@@ -18,7 +18,6 @@
 
 ⛔ Точка отката: %TEMP%/mezosync.pre-schema-journal.db
 """
-import shutil
 import sqlite3
 import pathlib
 import sys
@@ -53,7 +52,20 @@ conn = sqlite3.connect(DB, timeout=15)
 
 if len(sys.argv) <= 1:                       # живая база — точка отката обязательна
     backup = Path(tempfile.gettempdir()) / "mezosync.pre-schema-journal.db"
-    shutil.copy(DB, backup)
+    # карточка #624: копирование ОДНОГО файла (shutil.copy) теряет хвост WAL-журнала —
+    # тот же класс беды, что чинит mezo_stand.snapshot_db для приёмок (карточка #505).
+    # ⚖️ ПОЧЕМУ НЕ mezo_stand ЗДЕСЬ: шаг схемы должен быть САМОДОСТАТОЧНЫМ (переносим
+    # его как один файл, без vnext-tools/.mezosync/scripts рядом — второй проект,
+    # чужая машина) — поэтому резервное копирование SQLite сделано прямо тут, тем же
+    # приёмом (Connection.backup, источник строго на чтение), каким его делает snapshot_db.
+    backup_src = sqlite3.connect(f"file:{Path(DB).as_posix()}?mode=ro", uri=True)
+    backup_dst = sqlite3.connect(str(backup))
+    try:
+        with backup_dst:
+            backup_src.backup(backup_dst)
+    finally:
+        backup_src.close()
+        backup_dst.close()
     print(f"точка отката: {backup} ({backup.stat().st_size} б)")
 
 # ⚠️ BEGIN до любой правки схемы: DDL первым действием уходит в автокоммит, и обещание

@@ -29,7 +29,6 @@
 import argparse
 import os
 import re
-import shutil
 import sqlite3
 import subprocess
 import sys
@@ -240,7 +239,7 @@ def main() -> int:
     forms, n_src, mentions = collect(a.db)
     work = mezo_stand.new("forms-")
     db_copy = work / "copy.db"
-    shutil.copy(a.db, db_copy)
+    mezo_stand.snapshot_db(a.db, db_copy)  # карточка #505/#624: согласованная копия, не shutil.copy
     ctx = {"file": str(work / "text.md"), "dir": str(work)}
     Path(ctx["file"]).write_text("проверка формы вызова\n", encoding="utf-8")
 
