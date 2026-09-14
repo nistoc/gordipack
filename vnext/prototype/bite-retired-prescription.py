@@ -52,14 +52,14 @@ RULE_PUSH = "no-push-without-owner"
 # друг с другом и оба разошлись с жизнью.
 # ⇒ КЛАСС: ДВА ВПЕЧАТАННЫХ ЧИСЛА, СВЕРЯЕМЫЕ ДРУГ С ДРУГОМ, ДАЮТ ЗЕЛЁНОЕ НАВСЕГДА —
 #   и перестают говорить о предмете вовсе. Число теперь ОДНО, и живёт в перечне.
-def _версия_сверки_из_испытуемого() -> int:
+def _check_version_from_target() -> int:
     """Прочитать «версия_сверки» правила о push прямо из перечня испытуемого."""
     try:
-        текст = open(CHECK, encoding="utf-8").read()
+        text = open(CHECK, encoding="utf-8").read()
         # берём блок записи про push и число из него: перечень — обычный литерал
-        кусок = текст.split(f'"правило": "{RULE_PUSH}"', 1)
-        if len(кусок) > 1:
-            m = re.search(r'"версия_сверки":\s*(\d+)', кусок[1])
+        chunk = text.split(f'"правило": "{RULE_PUSH}"', 1)
+        if len(chunk) > 1:
+            m = re.search(r'"версия_сверки":\s*(\d+)', chunk[1])
             if m:
                 return int(m.group(1))
     except OSError:
@@ -71,11 +71,11 @@ def _версия_сверки_из_испытуемого() -> int:
     sys.exit(2)
 
 
-ВЕРСИЯ_СВЕРКИ = _версия_сверки_из_испытуемого()
+CHECK_VERSION = _check_version_from_target()
 cases, bad, differ = [], 0, 0
 
 
-def build_db(path, push_version=ВЕРСИЯ_СВЕРКИ, trace=True):
+def build_db(path, push_version=CHECK_VERSION, trace=True):
     """trace — есть ли у правила след в журнале решений этого контура.
 
     🪤 РАЗЛИЧЕНИЕ, ВВЕДЁННОЕ 18.08 ПРИ ЧИСТКЕ ПОСЕВА. «Правила нет» бывает ДВУХ родов:
@@ -112,14 +112,15 @@ def build_src(root, unsaved_lines):
             f.write("\n".join(body) + "\n")
 
 
-def run(lines, push_version=ВЕРСИЯ_СВЕРКИ, trace=True):
+def run(lines, push_version=CHECK_VERSION, trace=True):
     tmp = str(mezo_stand.new("bite-presc-"))
     db = os.path.join(tmp, "c.db")
     root = os.path.join(tmp, "src")
     build_db(db, push_version, trace)
     build_src(root, lines)
     r = subprocess.run([sys.executable, CHECK, "--db", db, "--root", root, "--only", "no-push-without-owner"],
-                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+                       capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       env=mezo_stand.stand_env(tmp))  # карточка #613: env закреплён за стендом
     mezo_stand.release(tmp)  # уборка отложена до исхода прогона
     return (r.stdout or "") + (r.stderr or ""), r.returncode
 
@@ -162,7 +163,7 @@ case("⑤ обычная отправка в той же форме — КРАС
 # ⑥ версия в песочнице ВЫШЕ той, против которой сверялся перечень — на единицу,
 #    чтобы случай оставался про «правило переписали», а не про конкретное число
 out, code = run(['print("   ② лечит только слово владельца (push)")'],
-                push_version=ВЕРСИЯ_СВЕРКИ + 1)
+                push_version=CHECK_VERSION + 1)
 case("⑥ версия правила выросла — ПЕРЕЧЕНЬ УСТАРЕЛ (код 2), источник не назван виновным",
      code == 2 and "ПЕРЕЧЕНЬ УСТАРЕЛ" in out and "unsaved.py:" not in out,
      f"код {code}", True)

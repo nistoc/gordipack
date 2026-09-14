@@ -98,7 +98,8 @@ def run_guard(stand: Path, tool: Path | None = None):
         [sys.executable, str(tool or TOOL),
          "--runtime", str(stand / "contour"), "--repo", str(stand / "mirror"),
          "--vnext-runtime", str(stand / "vnext"), "--vnext-template", str(stand / "template")],
-        capture_output=True, text=True, encoding="utf-8", timeout=300)
+        capture_output=True, text=True, encoding="utf-8", timeout=300,
+        env=mezo_stand.stand_env(stand))  # карточка #613: env закреплён за стендом
     return r.returncode, (r.stdout or "") + (r.stderr or "")
 
 
@@ -113,7 +114,8 @@ def run_guard_on_real(stand: Path):
          "--repo", str(stand / "repo"),
          "--vnext-runtime", str(mezo_paths.container_root(__file__) / "vnext-tools"),
          "--vnext-template", str(stand / "template")],
-        capture_output=True, text=True, encoding="utf-8", timeout=300)
+        capture_output=True, text=True, encoding="utf-8", timeout=300,
+        env=mezo_stand.stand_env(stand))  # карточка #613: env закреплён за стендом
     return r.returncode, (r.stdout or "") + (r.stderr or "")
 
 

@@ -68,14 +68,14 @@ def find_dirs(root: pathlib.Path):
     spec = importlib.util.spec_from_file_location("_guard_for_bite", GUARD)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module._каталоги_координации(root)
+    return module._coordination_dirs(root)
 
 
 def find_bridge(root: pathlib.Path):
     spec = importlib.util.spec_from_file_location("_guard_for_bite_bridge", GUARD)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module._папки_моста(root)
+    return module._bridge_dirs(root)
 
 
 def make_tree(base: pathlib.Path, *paths: str) -> pathlib.Path:

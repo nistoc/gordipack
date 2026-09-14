@@ -37,71 +37,71 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
 import mezo_stand  # noqa: E402
 
-ПРОГОН = Path(mezo_paths.live_scripts(__file__)) / "guard-all.py"
-ИСХОДНИК = ПРОГОН.read_text(encoding="utf-8")
+GUARD_ALL = Path(mezo_paths.live_scripts(__file__)) / "guard-all.py"
+SOURCE_TEXT = GUARD_ALL.read_text(encoding="utf-8")
 
-итог: list[tuple[str, bool, str]] = []
-
-
-def случай(имя: str, ок: bool, слово: str) -> None:
-    итог.append((имя, ок, слово))
-    print(f"{'✅' if ок else '🔴'} {имя}: {слово}")
+results: list[tuple[str, bool, str]] = []
 
 
-def признак(имя_контура: str):
+def record_case(name: str, ok: bool, detail: str) -> None:
+    results.append((name, ok, detail))
+    print(f"{'✅' if ok else '🔴'} {name}: {detail}")
+
+
+def own_letter_predicate(group_name: str):
     """Достать из живого прогона ТУ ЖЕ функцию различения, а не переписывать её здесь.
 
     ⚡ Переписанная копия признака — это своя транскрипция вместо предмета: она зелена
     к себе самой и ничего не говорит о том, что стои́т в инструменте.
     """
-    окружение: dict = {"Path": Path}
-    начало = ИСХОДНИК.index("    def _наше_письмо(файл)")
-    конец = ИСХОДНИК.index("    unannounced = []", начало)
-    тело = "\n".join(с[4:] if с.startswith("    ") else с
-                     for с in ИСХОДНИК[начало:конец].splitlines())
-    окружение["_своё_имя"] = имя_контура
-    exec(тело, окружение)                                  # noqa: S102 — свой же исходник
-    return окружение["_наше_письмо"]
+    namespace: dict = {"Path": Path}
+    start = SOURCE_TEXT.index("    def _is_our_letter(file)")
+    end = SOURCE_TEXT.index("    unannounced = []", start)
+    body = "\n".join(ln[4:] if ln.startswith("    ") else ln
+                     for ln in SOURCE_TEXT[start:end].splitlines())
+    namespace["_own_name"] = group_name
+    exec(body, namespace)                                  # noqa: S102 — свой же исходник
+    return namespace["_is_our_letter"]
 
 
 def main() -> int:
-    стенд = Path(tempfile.mkdtemp(prefix="bite-own-letters-"))
-    mezo_stand.release(стенд)
+    stand = Path(tempfile.mkdtemp(prefix="bite-own-letters-"))
+    mezo_stand.release(stand)
 
-    наше = стенд / "answer.tapas.проба.md"
-    наше.write_text("2026-09-06 02:40 UTC · пишет **PROTO контура Atlas**. Все метки UTC.\n"
+    ours = stand / "answer.tapas.проба.md"
+    ours.write_text("2026-09-06 02:40 UTC · пишет **PROTO контура Atlas**. Все метки UTC.\n"
                     "тело письма\n", encoding="utf-8")
-    чужое = стенд / "ask.atlas.проба.md"
-    чужое.write_text("2026-09-06 02:40 UTC · пишет **COORD контура Tapas**.\n"
+    theirs = stand / "ask.atlas.проба.md"
+    theirs.write_text("2026-09-06 02:40 UTC · пишет **COORD контура Tapas**.\n"
                      "тело письма\n", encoding="utf-8")
-    безымянное = стенд / "status.проба.md"
-    безымянное.write_text("# Просто заголовок без указания автора\n", encoding="utf-8")
+    unnamed = stand / "status.проба.md"
+    unnamed.write_text("# Просто заголовок без указания автора\n", encoding="utf-8")
 
-    наше_письмо = признак("atlas")
+    our_letter_fn = own_letter_predicate("atlas")
 
-    случай("① наше письмо опознано как наше", наше_письмо(наше), "да")
-    случай("② ВСТРЕЧНЫЙ: письмо соседа НЕ опознано как наше",
-           not наше_письмо(чужое),
+    record_case("① наше письмо опознано как наше", our_letter_fn(ours), "да")
+    record_case("② ВСТРЕЧНЫЙ: письмо соседа НЕ опознано как наше",
+           not our_letter_fn(theirs),
            "нет — значит признак различает автора, а не просто молчит про всё")
-    случай("③ ГРАНИЦА: письмо без указания автора судится ПО-ПРЕЖНЕМУ",
-           not наше_письмо(безымянное),
+    record_case("③ ГРАНИЦА: письмо без указания автора судится ПО-ПРЕЖНЕМУ",
+           not our_letter_fn(unnamed),
            "не наше — неизвестное авторство не считается нашим")
 
     # ④ имя контура берётся ИЗ БАЗЫ: с другим именем то же письмо перестаёт быть нашим
-    чужой_признак = признак("tapas")
-    случай("④ имя контура не впечатано: с чужим именем наше письмо уже не наше",
-           not чужой_признак(наше) and чужой_признак(чужое),
+    other_predicate = own_letter_predicate("tapas")
+    record_case("④ имя контура не впечатано: с чужим именем наше письмо уже не наше",
+           not other_predicate(ours) and other_predicate(theirs),
            "признак следует за именем контура, а не за словом «Atlas» в коде")
 
     # ⑤ ЖИВОЙ ПРОГОН печатает, сколько наших писем выведено из-под суда — молчание
     #    об исключённых читалось бы как «проверено», а они не проверены, а ИСКЛЮЧЕНЫ.
-    r = subprocess.run([sys.executable, str(ПРОГОН)], capture_output=True, text=True,
+    r = subprocess.run([sys.executable, str(GUARD_ALL)], capture_output=True, text=True,
                        encoding="utf-8", timeout=900)
-    вывод = (r.stdout or "") + (r.stderr or "")
-    строка = re.search(r"📤 мост: наших собственных писем (\d+)", вывод)
-    случай("⑤ живой прогон НАЗЫВАЕТ число исключённых писем",
-           строка is not None and int(строка.group(1)) > 0,
-           f"сказано: {строка.group(0)}" if строка else "строки нет — исключение молчаливо")
+    output = (r.stdout or "") + (r.stderr or "")
+    match = re.search(r"📤 мост: наших собственных писем (\d+)", output)
+    record_case("⑤ живой прогон НАЗЫВАЕТ число исключённых писем",
+           match is not None and int(match.group(1)) > 0,
+           f"сказано: {match.group(0)}" if match else "строки нет — исключение молчаливо")
 
     # ── ⑥ ГРАНИЦА, найденная @COORD (записка #4910) на трёх стендах: строка про исключённых
     #    обязана печататься и при НУЛЕ наших писем. Первая редакция печатала её только при
@@ -109,20 +109,20 @@ def main() -> int:
     # ⚡ Читателю «исключённых ноль» и «проверка этого не делает» неразличимы: одно молчание
     #    на две разные беды. Судим условие печати ПРЯМО В ИСХОДНИКЕ: стенд с нулём наших
     #    писем эта приёмка не строит и того не обещает.
-    условие = re.search(r"\n(\s*)if ([^\n]+):\n\s*print\(f\"📤 мост", ИСХОДНИК)
-    по_числу = bool(условие and "наших_писем" in условие.group(2))
-    случай("⑥ строка про исключённых печатается и при НУЛЕ наших писем",
-           условие is not None and not по_числу,
-           f"условие печати: «{условие.group(2)}»" if условие else "условия печати не нашёл")
+    condition_match = re.search(r"\n(\s*)if ([^\n]+):\n\s*print\(f\"📤 мост", SOURCE_TEXT)
+    gated_by_count = bool(condition_match and "our_letters_count" in condition_match.group(2))
+    record_case("⑥ строка про исключённых печатается и при НУЛЕ наших писем",
+           condition_match is not None and not gated_by_count,
+           f"условие печати: «{condition_match.group(2)}»" if condition_match else "условия печати не нашёл")
 
-    красных = [и for и, ок, _ in итог if not ок]
+    failed = [case_name for case_name, ok, _ in results if not ok]
     print("")
     print("=" * 78)
-    print(f"РАЗЛИЧАЮЩИХ СЛУЧАЕВ {len(итог)}, из них ВСТРЕЧНЫХ 2 (② и ③); ⑥ добавлен по границе @COORD")
+    print(f"РАЗЛИЧАЮЩИХ СЛУЧАЕВ {len(results)}, из них ВСТРЕЧНЫХ 2 (② и ③); ⑥ добавлен по границе @COORD")
     print("⚖️ Признак берётся ИЗ ЖИВОГО инструмента, а не переписан здесь: переписанная")
     print("   копия зелена к себе самой и о предмете не говорит ничего.")
-    if красных:
-        print(f"🔴 ПРОВАЛЕНО {len(красных)}: {' · '.join(красных)}")
+    if failed:
+        print(f"🔴 ПРОВАЛЕНО {len(failed)}: {' · '.join(failed)}")
         return 1
     print("✅ ВСЕ СЛУЧАИ ПРОЙДЕНЫ")
     return 0

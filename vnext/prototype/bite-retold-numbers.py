@@ -56,7 +56,8 @@ def stand(tmp, name, body, open_cards=3):
     con.commit()
     con.close()
     r = subprocess.run([sys.executable, CHECK, "--db", db],
-                       capture_output=True, text=True, encoding="utf-8")
+                       capture_output=True, text=True, encoding="utf-8",
+                       env=mezo_stand.stand_env(tmp))  # карточка #613: env закреплён за стендом
     return (r.stdout or "") + (r.stderr or ""), r.returncode
 
 
@@ -115,7 +116,8 @@ def main() -> int:
     con.execute("CREATE TABLE phoenix (role TEXT, section TEXT, saved_at TEXT, body TEXT)")
     con.commit(); con.close()
     r = subprocess.run([sys.executable, CHECK, "--db", db9],
-                       capture_output=True, text=True, encoding="utf-8")
+                       capture_output=True, text=True, encoding="utf-8",
+                       env=mezo_stand.stand_env(tmp))  # карточка #613: env закреплён за стендом
     ok &= case("⑨ сохранённой памяти ролей нет — отказ мерить, отдельный код",
                r.returncode == 2 and "нечего" in r.stdout,
                f"код {r.returncode}", differ=True)
@@ -157,16 +159,16 @@ def main() -> int:
     #    Без него зелень ⑩–⑬ означала бы «сегодня не болит», а не «сужение работает».
     import shutil
     d15 = pathlib.Path(str(mezo_stand.new("bite-retold-old-")))
-    цел = pathlib.Path(CHECK).read_text(encoding="utf-8")
-    поломка = цел.replace("if m and RULES_ALIEN.search(line):", "if m and False:", 1)
-    if поломка == цел:
+    whole = pathlib.Path(CHECK).read_text(encoding="utf-8")
+    broken = whole.replace("if m and RULES_ALIEN.search(line):", "if m and False:", 1)
+    if broken == whole:
         ok &= case("⑮ ОБРАТНЫЙ ХОД: без гасителей случай ⑫ краснеет",
                    False,
                    "⛔ НЕ ЗАПУСТИЛСЯ: место гасителей не найдено — проверка менялась, "
                    "правь приёмку. Молча пропустить нельзя: это был бы зелёный без опыта")
     else:
-        прежний = d15 / "прежний.py"
-        прежний.write_text(поломка, encoding="utf-8")
+        previous = d15 / "прежний.py"  # имя ФАЙЛА не трогаем (правило владельца)
+        previous.write_text(broken, encoding="utf-8")
         shutil.copy(pathlib.Path(CHECK).with_name("mezo_paths.py"), d15 / "mezo_paths.py")
         shutil.copy(pathlib.Path(CHECK).with_name("mention.py"), d15 / "mention.py")
         db15 = os.path.join(tmp, "o.db")
@@ -180,8 +182,9 @@ def main() -> int:
         for _ in range(5):
             con.execute("INSERT INTO rules (body) VALUES ('живое правило')")
         con.commit(); con.close()
-        r15 = subprocess.run([sys.executable, str(прежний), "--db", db15],
-                             capture_output=True, text=True, encoding="utf-8")
+        r15 = subprocess.run([sys.executable, str(previous), "--db", db15],
+                             capture_output=True, text=True, encoding="utf-8",
+                             env=mezo_stand.stand_env(tmp))  # карточка #613
         ok &= case("⑮ ОБРАТНЫЙ ХОД: без гасителей случай ⑫ краснеет",
                    r15.returncode == 1,
                    f"код прежней редакции {r15.returncode} против 0 у нынешней — "

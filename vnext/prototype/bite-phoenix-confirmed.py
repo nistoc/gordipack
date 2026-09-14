@@ -67,7 +67,8 @@ def save(db, text, d):
         fh.write(text)
     r = subprocess.run([sys.executable, SAVE, "--db", db, "--role", "PROTO",
                         "--section", "state", "--file", f],
-                       capture_output=True, text=True, encoding="utf-8")
+                       capture_output=True, text=True, encoding="utf-8",
+                       env=mezo_stand.stand_env(d))  # карточка #613: env закреплён за стендом
     return (r.stdout or "") + (r.stderr or ""), r.returncode
 
 

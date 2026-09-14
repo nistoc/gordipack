@@ -18,21 +18,48 @@
      save-phoenix, а не своей копией правила                        РАЗЛИЧАЮЩИЙ
   ⑥ подсказка об отставании молчит, когда память СВЕЖА              РАЗЛИЧАЮЩИЙ
      (признак, горящий всегда, перестаёт значить что-либо)
+  ⑦ MEZO_CONTAINER живого выставлен — живая база ПОБАЙТНО ТА ЖЕ     РАЗЛИЧАЮЩИЙ
+     (карточка #613: subprocess внутри write() без env= отдавал испытуемому
+     среду ВЫЗЫВАЮЩЕГО — теперь закреплена env=mezo_stand.stand_env(d))
 
-⛔ Живой базы не касается: своя песочница.
+⛔ Живой базы не касается: своя песочница. Случай ⑦ живую базу тоже только ЧИТАЕТ —
+   отпечатком через согласованный снимок (mezo_stand.snapshot_db, тот же приём, что
+   у самого помощника: сырой хеш файла в режиме WAL даёт РВАНЫЙ снимок и ложное красное).
 """
+import hashlib
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mezo_paths  # noqa: E402 — где живая база у ЭТОГО процесса (случай ⑦)
 import mezo_target  # noqa: E402 — какую копию испытываем, решается ОДНИМ местом
 import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
 
 WRITE = str(mezo_target.script("write-message.py"))
 CASES = DIFFER = 0
+
+
+def live_fingerprint() -> tuple[str, Path]:
+    """Отпечаток живой базы, которую видит ЭТОТ процесс, — согласованным снимком
+    (mezo_stand.snapshot_db, backup() библиотеки sqlite3 под mode=ro), а не сырым
+    хешем файла: живая база работает в WAL, и хеш ОДНОГО основного файла без журнала —
+    рваный снимок, который меняется от постороннего чтения журнала, а не от записи
+    (тот же класс дважды поймал контур — карточка #505, шапка mezo_stand.snapshot_db).
+    """
+    root = mezo_paths.container_root(__file__)
+    live = root / ".mezosync" / "mezosync.db"
+    tmp_dir = Path(tempfile.mkdtemp(prefix="bite-alongside-fp-"))
+    try:
+        snap = mezo_stand.snapshot_db(live, tmp_dir / "fp.db")
+        digest = hashlib.sha256(snap.read_bytes()).hexdigest()
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+    return digest, live
 
 
 def case(title, ok, detail, differ=False):
@@ -74,8 +101,12 @@ def write(db, d, body, extra=()):
     f = os.path.join(d, "note.md")
     with open(f, "w", encoding="utf-8") as fh:
         fh.write(body)
+    # env закреплён за стендом (карточка #613, записка #5096): без него MEZO_CONTAINER
+    # ВЫЗЫВАЮЩЕГО доезжает до write-message.py и живой случай 14.09 (OPSSRE предупреждена
+    # держать переменную снятой, записка #5202) перестаёт быть нужной осторожностью.
     r = subprocess.run([sys.executable, WRITE, "--db", db, "--role", "PROTO", "--file", f, *extra],
-                       capture_output=True, text=True, encoding="utf-8")
+                       capture_output=True, text=True, encoding="utf-8",
+                       env=mezo_stand.stand_env(d))
     return (r.stdout or "") + (r.stderr or ""), r.returncode
 
 
@@ -93,6 +124,7 @@ def main() -> int:
     ok = True
     d, db = build()
     STATE = "СОСТОЯНИЕ РОЛИ. Достаточно длинный текст, чтобы не сработала защита от обвала."
+    fp_before, live_path = live_fingerprint()
 
     out, code = write(db, d, "обычная записка без всяких ручек")
     m1, p1 = counts(db)
@@ -127,6 +159,13 @@ def main() -> int:
     ok &= case("⑥ подсказка об отставании МОЛЧИТ, когда память свежа",
                "НЕ ПОДТВЕРЖДАЛАСЬ" not in out4,
                "признак, который горит всегда, перестаёт значить что-либо", differ=True)
+
+    fp_after, _ = live_fingerprint()
+    ok &= case("⑦ MEZO_CONTAINER живого выставлен — живая база ПОБАЙТНО ТА ЖЕ",
+               fp_after == fp_before,
+               f"живая база {live_path}: отпечаток "
+               + ("не изменился" if fp_after == fp_before else "ИЗМЕНИЛСЯ — испытуемый писал мимо своей песочницы"),
+               differ=True)
 
     print()
     print(f"{'✅ МЕРА ② ПРИНЯТА' if ok else '🔴 НЕ ПРИНЯТА'} — случаев {CASES}, "

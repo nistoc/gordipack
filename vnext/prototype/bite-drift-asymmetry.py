@@ -45,7 +45,8 @@ def run(rt, tpl):
     r = subprocess.run([sys.executable, GUARD,
                         "--runtime", str(tmp / "rt"), "--repo", str(tmp / "repo"),
                         "--vnext-runtime", str(rt), "--vnext-template", str(tpl)],
-                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+                       capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       env=mezo_stand.stand_env(tmp))  # карточка #613: env закреплён за стендом
     mezo_stand.release(tmp)  # уборка отложена до исхода прогона
     return (r.stdout or "") + (r.stderr or ""), r.returncode
 

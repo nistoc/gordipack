@@ -85,7 +85,8 @@ def write(db, d, body):
     with open(f, "w", encoding="utf-8") as fh:
         fh.write(body)
     r = subprocess.run([sys.executable, WRITE, "--db", db, "--role", "PROTO", "--file", f],
-                       capture_output=True, text=True, encoding="utf-8")
+                       capture_output=True, text=True, encoding="utf-8",
+                       env=mezo_stand.stand_env(d))  # карточка #613: env закреплён за стендом
     con = sqlite3.connect(db)
     row = con.execute("SELECT id, timestamp, body_md FROM messages ORDER BY id DESC "
                       "LIMIT 1").fetchone()

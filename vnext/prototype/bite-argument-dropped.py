@@ -40,8 +40,11 @@ def case(title, ok, detail, differ=False):
 
 
 def run(d):
+    # env закреплён за стендом (карточка #613): без него GUARD наследует MEZO_CONTAINER
+    # вызывающего вместо своей песочницы d.
     r = subprocess.run([sys.executable, str(GUARD), "--dir", d],
-                       capture_output=True, text=True, encoding="utf-8")
+                       capture_output=True, text=True, encoding="utf-8",
+                       env=mezo_stand.stand_env(d))
     return (r.stdout or "") + (r.stderr or "")
 
 

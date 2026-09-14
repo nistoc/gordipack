@@ -100,8 +100,11 @@ def build(cursor_at, to_whom=None):
 
 
 def run(db, *args):
+    # env закреплён за стендом (карточка #613): корень стенда — каталог, где лежит db
+    # (build() кладёт s.db прямо в mezo_stand.new(), другого пути к нему здесь нет).
     r = subprocess.run([sys.executable, CLI, "--db", db, *args],
-                       capture_output=True, text=True, encoding="utf-8")
+                       capture_output=True, text=True, encoding="utf-8",
+                       env=mezo_stand.stand_env(Path(db).parent))
     return (r.stdout or "") + (r.stderr or "")
 
 

@@ -59,27 +59,27 @@ DB = mezo_paths.default_db(__file__)
 # прямо в корне (раскладка контура, собранного из образца). Имена репозиториев берутся
 # С ДИСКА. Возвращаем ВСЕ найденные, а не первый: два каталога координации — это тоже факт,
 # и лучше увидеть оба, чем судить по одному.
-def _по_признаку(корень, имя):
-    найденные = []
-    свой = корень / имя
-    if свой.is_dir():
-        найденные.append(свой)
+def _by_marker(root, name):
+    found = []
+    own = root / name
+    if own.is_dir():
+        found.append(own)
     try:
-        соседи = sorted(d for d in корень.iterdir() if d.is_dir())
+        siblings = sorted(d for d in root.iterdir() if d.is_dir())
     except OSError:
-        соседи = []
-    for репо in соседи:
-        кандидат = репо / ".mezosync" / имя
-        if кандидат.is_dir():
-            найденные.append(кандидат)
-    return найденные
+        siblings = []
+    for repo in siblings:
+        candidate = repo / ".mezosync" / name
+        if candidate.is_dir():
+            found.append(candidate)
+    return found
 
 
-def _каталоги_координации(корень):
-    return _по_признаку(корень, "coordination")
+def _coordination_dirs(root):
+    return _by_marker(root, "coordination")
 
 
-def _папки_моста(корень):
+def _bridge_dirs(root):
     """Мост ищется ОТДЕЛЬНО, а не отсчитывается от каталога координации.
 
     🩸 Первая редакция починки #248 брала `COORDINATION.parent / "bridges"` — и когда
@@ -89,19 +89,19 @@ def _папки_моста(корень):
     только начал переписку) и наоборот. Выводить один из другого — та же ошибка «нашли
     по соседству», ради которой вся эта карточка и заведена.
     """
-    return _по_признаку(корень, "bridges")
+    return _by_marker(root, "bridges")
 
 
-ГДЕ_ИСКАЛИ = ("<корень контура>/coordination либо "
+WHERE_SEARCHED = ("<корень контура>/coordination либо "
               "<корень контура>/<любой репозиторий>/.mezosync/coordination")
-COORDINATIONS = _каталоги_координации(mezo_paths.container_root(__file__))
+COORDINATIONS = _coordination_dirs(mezo_paths.container_root(__file__))
 # ⚠️ None, а НЕ первый кандидат: «не нашли» обязано отличаться от «нашли». Прежняя редакция
 # отдавала несуществующий путь, и дальше он вёл себя как пустой каталог — то есть как чистый.
 COORDINATION = COORDINATIONS[0] if COORDINATIONS else None
 # Законный контур без каталога координации: гасит ОТКАЗ в жёлтое одним явным словом.
 # ⚖️ Без такого выхода отказ стал бы вечно-красным-без-вины у того, кто каталогом
 # не пользуется, — а вечно-красный учит не верить красному (надгробие FREEZE_UTC ниже).
-def _объявлен_отказ_от_координации():
+def _coordination_opt_out_declared():
     """→ (объявлено ли, ЧЕМ именно). Два носителя, и это названо вслух.
 
     🩸 ЗАЯВКА СОСЕДЕЙ (через @COORD, записка #3766), и она про наш же класс. Объявление
@@ -126,19 +126,19 @@ def _объявлен_отказ_от_координации():
     ⚖️ И третье, их же ход, повёрнутый сюда: печатаем, ЧЕМ объявлено. Иначе доля
     носителя растёт молча, и в день расхождения двух мест никто не узнает момента.
     """
-    из_среды = (os.environ.get("MEZO_NO_COORDINATION") or "").strip().lower() == "yes"
-    файл = mezo_paths.container_root(__file__) / ".mezo-no-coordination"
-    из_файла = файл.is_file()
-    if из_среды and из_файла:
-        return True, f"переменной окружения И файлом {файл.name}"
-    if из_файла:
-        return True, f"файлом {файл}"
-    if из_среды:
+    from_env = (os.environ.get("MEZO_NO_COORDINATION") or "").strip().lower() == "yes"
+    file = mezo_paths.container_root(__file__) / ".mezo-no-coordination"
+    from_file = file.is_file()
+    if from_env and from_file:
+        return True, f"переменной окружения И файлом {file.name}"
+    if from_file:
+        return True, f"файлом {file}"
+    if from_env:
         return True, "переменной окружения MEZO_NO_COORDINATION (живёт один вызов)"
     return False, ""
 
 
-БЕЗ_КООРДИНАЦИИ, ЧЕМ_ОБЪЯВЛЕНО = _объявлен_отказ_от_координации()
+NO_COORDINATION, DECLARED_BY = _coordination_opt_out_declared()
 # ⚰️ FREEZE_UTC (отсечка по mtime) УБРАНА 2026-07-26: проверка ⑦ теперь по СОДЕРЖИМОМУ (git),
 # а не по времени файла — см. блок «замороженные md» ниже. mtime двигало любое копирование
 # (git checkout @opssre #2793, восстановление из бэкапа) без правки содержимого → вечно-красный
@@ -149,7 +149,7 @@ RESULTS = []
 # ЗЕЛЁНЫЕ копит имена проверок, прошедших без слова — печатаются ОДНОЙ строкой перед итогом
 # вместо отдельной строки на каждую: полный текст остаётся доступен флагом --full.
 FULL = False
-ЗЕЛЁНЫЕ = []
+GREENS = []
 
 
 def tool(name):
@@ -175,7 +175,7 @@ def check(name, ok, detail="", force_print=False):
     повисло бы без подписи, что печаталось зелёным."""
     RESULTS.append((name, ok, detail))
     if ok and not FULL and not force_print:
-        ЗЕЛЁНЫЕ.append(name)
+        GREENS.append(name)
         return
     mark = "✅" if ok else "⛔"
     print(f"{mark} {name}" + (f" — {detail}" if detail and not ok else ""))
@@ -250,14 +250,14 @@ def sub_guard(name, script, skip, *extra, script_path=None):
     # («⛔ чтение ленты — значит зовущие её ноты не дойдут…») вместо числа «2 из 6 активных».
     # ⇒ Ищем ЛЮБОЙ знак вердикта, а последним средством берём ПЕРВУЮ строку, не последнюю:
     # оба проверенных гарда печатают вердикт сверху, совет снизу. Это замер, а не вкус.
-    итог = next((l for l in reversed(lines) if "ИТОГО" in l), None)
-    красные = [l for l in lines if "🔴" in l]
-    вердикт = next((l for l in lines if "🔴" in l or "⛔" in l), None)
-    check(name, False, итог or вердикт or (lines[0] if lines else ""))
-    for l in красные[:6]:
-        if l is not итог:
+    totals_line = next((l for l in reversed(lines) if "ИТОГО" in l), None)
+    red_lines = [l for l in lines if "🔴" in l]
+    verdict_line = next((l for l in lines if "🔴" in l or "⛔" in l), None)
+    check(name, False, totals_line or verdict_line or (lines[0] if lines else ""))
+    for l in red_lines[:6]:
+        if l is not totals_line:
             print(f"      {l.strip()}")
-    if len(красные) > 6:
+    if len(red_lines) > 6:
         # 🔴 ПЕЧАТАЕМ СПОСОБ ПОЗВАТЬ, А НЕ ИМЯ ФАЙЛА (замер @STUD #3394, 08.08 11:07 UTC).
         # Здесь стояло `target.name` — голое имя. Роль читает вывод инструмента и действует
         # по нему НЕМЕДЛЕННО: @STUD прочла «полный вывод: guard-phoenix-time.py», пошла звать
@@ -265,7 +265,7 @@ def sub_guard(name, script, skip, *extra, script_path=None):
         # 🎯 Класс: подсказка в выводе — это ПРИКАЗ, даже если рядом нет слова «python».
         # ⚠️ И полный путь всё это время лежал в `target`, в той же строке: не хватало не
         # данных, а понимания, что печатаем мы не имя, а команду.
-        print(f"      … ещё {len(красные) - 6} красных строк — полный вывод: "
+        print(f"      … ещё {len(red_lines) - 6} красных строк — полный вывод: "
               f"python {target}")
 
 
@@ -309,6 +309,19 @@ def main():
     # ⑪ заглушка, обещающая действие — включён 23.07 15:40 UTC, когда STUD расставил подписи
     # (до этого держался вне набора: привычное красное хуже отсутствующего).
     sub_guard("заглушки", "guard-stub-expectations.py", skip)
+    # ⑪½ ПРИЁМКИ ЗОВУТ ИНСТРУМЕНТЫ КОНТУРА СО СРЕДОЙ ВЫЗЫВАЮЩЕГО — карточка #613, замер
+    #    2026-09-14 (разбор дерева: 210 вызовов subprocess с sys.executable в приёмках обоих
+    #    каталогов). ⚠️ БЕЗ env= испытуемый инструмент стенда наследует MEZO_CONTAINER
+    #    ВЫЗЫВАЮЩЕГО — у кого он указывает на живой контур, у того `--db` направляет только
+    #    базу, а соседи/зеркало/meta испытуемого едут в живое. Прецедент 13.09 (записки
+    #    #5093/#5096): копия приёмки с MEZO_CONTAINER живого записала meta Atlas.
+    # 🎯 Инструмент — vnext-tools/check-acceptance-env.py (зона @PROTO, зовём по пути, как
+    #    метку-под-UTC). Известный долг — реестр acceptance-env-debt.txt рядом с проверкой:
+    #    провал только на НОВОМ вызове без закреплённой среды, долг печатается числом.
+    #    Законный случай у самого вызова прощается комментарием `# env: caller — <причина>`.
+    #    Приёмка проверки: bite-acceptance-env.py.
+    sub_guard("приёмки: env закреплённого стенда", None, skip,
+              script_path=tool("check-acceptance-env.py"))
     # ⑬ метка-под-UTC — локальное время, подписанное словом «UTC», в сохранённой памяти и ЗАПИСКАХ.
     # Включён 2026-08-06 14:08 UTC. Инструмент в зоне @PROTO (vnext-tools), зову по пути.
     # 🪤 ЗАЧЕМ ЗДЕСЬ, А НЕ «когда вспомнят»: проверка существовала с 26.07 и ловила только тех, кто
@@ -435,11 +448,11 @@ def main():
             # а от пустого нет. У роли, которая сутки работала и писала в ленту, в реестре
             # не было строки вовсе.
             if not alive:
-                зарегистрировано = conn.execute("SELECT COUNT(*) FROM roles").fetchone()[0]
+                registered_count = conn.execute("SELECT COUNT(*) FROM roles").fetchone()[0]
                 print("⚠️ память: ЖИВЫХ РОЛЕЙ В РЕЕСТРЕ НЕТ — проверка не сделана, "
                       "это НЕ «кандидатов ноль»."
-                      + (f" Записей в реестре {зарегистрировано}, живых среди них ни одной."
-                         if зарегистрировано else " Реестр ролей пуст вовсе — так рождается"
+                      + (f" Записей в реестре {registered_count}, живых среди них ни одной."
+                         if registered_count else " Реестр ролей пуст вовсе — так рождается"
                          " свежий контур."))
                 print("   👉 Заведи роль в реестре (role-lifecycle), иначе всё, что считается "
                       "ПО РОЛЯМ, будет молча считаться по пустоте.")
@@ -726,34 +739,34 @@ def main():
     # ⛔ И ПРОДОЛЖАЕМ, А НЕ ВЫХОДИМ: этот блок стои́т внутри main(), после него ещё восемь
     #    проверок. Первая редакция починки писала здесь `return` — он погасил бы их МОЛЧА,
     #    и это был бы тот же класс в новом месте: итог назвал бы меньше проверок, чем есть.
-    исход_вынесен = True
-    if COORDINATIONS and БЕЗ_КООРДИНАЦИИ:
+    outcome_recorded = True
+    if COORDINATIONS and NO_COORDINATION:
         # ⚡ ОБЪЯВЛЕНИЕ СПОРИТ С НАХОДКОЙ — отдельный исход, а не тихое продолжение
         #    (оборотная сторона долгого носителя, названа @COORD, записка #3766).
         #    Каталог НАЙДЕН, а отказ от него объявлен ⇒ объявление пережило свою причину.
         #    Тихо продолжать нельзя: так рождается вечно-жёлтая проверка при живом
         #    предмете, а вечно-жёлтое учит не смотреть вовсе.
         print(f"   ⚠️ ОБЪЯВЛЕНИЕ СПОРИТ С НАХОДКОЙ: отказ от каталога согласования "
-              f"объявлен ({ЧЕМ_ОБЪЯВЛЕНО}), а каталог НАЙДЕН — {len(COORDINATIONS)} шт. "
+              f"объявлен ({DECLARED_BY}), а каталог НАЙДЕН — {len(COORDINATIONS)} шт. "
               f"👉 Объявление пережило свою причину: снимите его, иначе оно однажды "
               f"погасит настоящую проверку")
-    if not COORDINATIONS and БЕЗ_КООРДИНАЦИИ:
+    if not COORDINATIONS and NO_COORDINATION:
         counted("замороженные md")
         print(f"   ⚠️ замороженные md: каталога координации нет, и это объявлено явно "
-              f"({ЧЕМ_ОБЪЯВЛЕНО}) — проверка НЕ ПОСТАВЛЕНА, а не пройдена")
+              f"({DECLARED_BY}) — проверка НЕ ПОСТАВЛЕНА, а не пройдена")
         frozen, repo, git_ok, touched = [], None, False, []
     elif not COORDINATIONS:
         check("замороженные md", False,
-              f"каталог координации НЕ НАЙДЕН. Искал по признаку: {ГДЕ_ИСКАЛИ}. "
+              f"каталог координации НЕ НАЙДЕН. Искал по признаку: {WHERE_SEARCHED}. "
               "Проверка неприкосновенности замороженных md НЕ ВЫПОЛНЯЛАСЬ — это отказ, "
               "а не чистота. 👉 Если контур каталогом не пользуется, скажи это вслух: "
               "MEZO_NO_COORDINATION=yes на один вызов ЛИБО файл .mezo-no-coordination в корне контура — и отказ станет жёлтым «не поставлена»")
         frozen, repo, git_ok, touched = [], None, False, []
     else:
-        исход_вынесен = False
-        frozen = [p for каталог in COORDINATIONS
-                  for p in (list(каталог.glob("sync.*.md"))
-                            + list((каталог / "phoenix").glob("*.md")))
+        outcome_recorded = False
+        frozen = [p for coord_dir in COORDINATIONS
+                  for p in (list(coord_dir.glob("sync.*.md"))
+                            + list((coord_dir / "phoenix").glob("*.md")))
                   if p.name != "sync.rules.md"]
         repo = COORDINATION.parents[1]  # …/atlas.archs (coordination → .mezosync → atlas.archs)
         touched, git_ok = [], True
@@ -769,7 +782,7 @@ def main():
                 touched.append(line[3:].strip().strip('"').replace("\\", "/").split("/")[-1])
         except (OSError, subprocess.SubprocessError):
             git_ok = False
-    if исход_вынесен:
+    if outcome_recorded:
         # ⚠️ Исход уже назван выше (каталога нет). Без этой ветки сюда пришло бы `git_ok=False`
         #    и добавило ВТОРУЮ запись — зелёную, поверх только что вынесенного отказа.
         pass
@@ -929,12 +942,12 @@ def main():
     # каталоге он тоже молчал бы зелёным — то есть контур не узнал бы, что ему пишут.
     # 🎯 Тот же порядок, что у нашего COORD с миграцией: заявка называла одно место, мест было два.
     # Починка по заявке буквально оставила бы половину, и проверка после неё была бы зелёной.
-    _мосты = _папки_моста(mezo_paths.container_root(__file__))
-    BRIDGES = _мосты[0] if _мосты else None
+    _bridges = _bridge_dirs(mezo_paths.container_root(__file__))
+    BRIDGES = _bridges[0] if _bridges else None
     if BRIDGES is None:
         counted("мост соседей")
         print("   ⚠️ мост соседей: папки моста НЕ НАЙДЕНО. Искал по признаку: "
-              + ГДЕ_ИСКАЛИ.replace("coordination", "bridges")
+              + WHERE_SEARCHED.replace("coordination", "bridges")
               + ". Записки соседей НЕ ПРОВЕРЯЛИСЬ — это не «их нет», а «смотреть негде»")
     added = {}
     if BRIDGES and BRIDGES.exists():
@@ -959,35 +972,35 @@ def main():
     # в инструмент соседа и заставляло его мерить чужое (находка контура tapas 19.08).
     # ⛔ ГРАНИЦА, названная прямо: письмо, где первой строки такого вида нет (67 старых),
     # судится ПО-ПРЕЖНЕМУ. Молчать о них было бы хуже: неизвестное авторство — не «наше».
-    _своё_имя = None
+    _own_name = None
     try:
         import sqlite3 as _s3
         _c3 = _s3.connect(str(mezo_paths.live_db()))
         _r3 = _c3.execute("SELECT value FROM meta WHERE key = 'group_name'").fetchone()
         _c3.close()
-        _своё_имя = (_r3[0] if _r3 else "") or None
+        _own_name = (_r3[0] if _r3 else "") or None
     except Exception:                                      # noqa: BLE001
-        _своё_имя = None
+        _own_name = None
 
-    def _наше_письмо(файл) -> bool:
+    def _is_our_letter(file) -> bool:
         """Первая строка называет автором роль НАШЕГО контура ⇒ письмо написали мы."""
-        if not _своё_имя:
+        if not _own_name:
             return False       # имени не знаем — не гадаем, судим как прежде
         try:
-            with файл.open(encoding="utf-8", errors="replace") as fh:
-                первая = fh.readline()
+            with file.open(encoding="utf-8", errors="replace") as fh:
+                first_line = fh.readline()
         except OSError:
             return False
-        return f"контура {_своё_имя}".lower() in первая.lower()
+        return f"контура {_own_name}".lower() in first_line.lower()
 
     unannounced = []
-    наших_писем = 0
+    our_letters_count = 0
     if BRIDGES and BRIDGES.exists():
         for f in sorted(BRIDGES.glob("*/*.md")):
             if f.name == "INDEX.md":       # указатель правится при каждой записке, о нём не сообщают
                 continue
-            if _наше_письмо(f):
-                наших_писем += 1
+            if _is_our_letter(f):
+                our_letters_count += 1
                 continue       # своё письмо разбирать не просим: его писала наша же рука
             # РАННЯЯ из двух дат, и это третья приёмка той же правки. Git-дата — момент КОММИТА:
             # 21 КБ для @PROTO легли в 15:12, а закоммичены в 17:19 — по ней записка выглядела
@@ -1077,7 +1090,7 @@ def main():
     # ⚡ КРАТКИЙ РЕЖИМ (карточка #593): вместо построчной печати каждого отвеченного вопроса
     # копим счёт — сколько отвечено и от каких соседей — печатаем ОДНОЙ строкой после
     # обоих циклов ниже (не FULL).
-    мост_отвечено, мост_соседи = 0, set()
+    bridge_answered, bridge_neighbors = 0, set()
     try:
         links = conn.execute("SELECT target_group, target_db_path FROM cross_links").fetchall()
     except sqlite3.OperationalError:
@@ -1090,7 +1103,7 @@ def main():
     #     умозрительным;
     #   ② у двух мостов РАЗНЫЕ соглашения об именах (ниже), и плоский обход применял
     #     правило одного к файлам другого.
-    def _папки(group: str) -> list:
+    def _neighbor_dirs(group: str) -> list:
         """Папки моста, относящиеся к этому соседу. Имя папки содержит его имя ОТДЕЛЬНЫМ
         словом: «atlas-aia» и «aia-stud-exchange» — про aia, «atlas-tapas» — нет.
         ⚖️ Признак не идеален: сосед с именем, совпадающим со словом в имени чужой папки,
@@ -1099,8 +1112,8 @@ def main():
         return [d for d in sorted(BRIDGES.iterdir())
                 if d.is_dir() and group in d.name.split("-")] if BRIDGES and BRIDGES.exists() else []
 
-    def _наши(group: str) -> set:
-        return {f.name for d in _папки(group) for f in d.glob("*.md")}
+    def _box_files(group: str) -> set:
+        return {f.name for d in _neighbor_dirs(group) for f in d.glob("*.md")}
 
     # ── СКОЛЬКО РАЗ ОТВЕЧАЛИ ОДНИМ ФАЙЛОМ (карточка #245) ──────────────────────────
     # 🪤 «ОТВЕТ ЕСТЬ» НЕ ЗНАЧИТ «ОТВЕТ ОДИН». Имя файла ответа задано ТЕМОЙ вопроса ⇒
@@ -1113,19 +1126,19 @@ def main():
     # ответ, дополняющий первый, — норма. Плохо ровно то, что первый исчезает беззвучно.
     # ⛔ Историю читаем ТОЛЬКО В СВОЁМ репозитории: у соседа мы вправе прочесть файлы его
     # исходящей папки, но не его историю (правило no-scan-external-contours).
-    _записи_кеш = {}
+    _records_cache = {}
 
-    def _записи() -> dict:
+    def _records() -> dict:
         """{путь от корня репозитория: [часы записей, новые первыми]} · три исхода, не два:
         прочитано · истории нет (не репозиторий) · не смогли прочесть. Последние два
         НЕ равны «записан один раз» и говорятся вслух."""
-        if _записи_кеш:
-            return _записи_кеш
-        корень = (next((p for p in [BRIDGES, *BRIDGES.parents] if (p / ".git").exists()), None)
+        if _records_cache:
+            return _records_cache
+        root = (next((p for p in [BRIDGES, *BRIDGES.parents] if (p / ".git").exists()), None)
               if BRIDGES else None)
-        if корень is None:
-            _записи_кеш["__нет__"] = "папка моста вне репозитория — число записей неизвестно"
-            return _записи_кеш
+        if root is None:
+            _records_cache["__нет__"] = "папка моста вне репозитория — число записей неизвестно"
+            return _records_cache
         try:
             # ⚠️ ВРЕМЯ — В UTC, И ЭТО НЕ ОФОРМЛЕНИЕ. Первая редакция печатала «%ad» как
             # есть — то есть локальное время автора записи БЕЗ ЗОНЫ, ровно тот дефект,
@@ -1137,39 +1150,39 @@ def main():
             # не совпадает ни с чем, история молча не находится — и строка сказала бы
             # «записан один раз» про переписанный файл. На живом мосте имена латиницей,
             # поэтому дефект был невидим; поймала приёмка, где имена русские.
-            r = subprocess.run(["git", "-C", str(корень), "-c", "core.quotepath=false",
+            r = subprocess.run(["git", "-C", str(root), "-c", "core.quotepath=false",
                                 "log", "--format=%x00%ad",
                                 "--date=format-local:%d.%m %H:%M", "--name-only", "--",
                                 str(BRIDGES)], capture_output=True, text=True,
                                encoding="utf-8", errors="replace", timeout=60,
                                env=dict(os.environ, TZ="UTC"))
         except (OSError, subprocess.SubprocessError) as e:                # noqa: BLE001
-            _записи_кеш["__нет__"] = f"историю прочесть не удалось ({e.__class__.__name__})"
-            return _записи_кеш
+            _records_cache["__нет__"] = f"историю прочесть не удалось ({e.__class__.__name__})"
+            return _records_cache
         if r.returncode != 0:
-            _записи_кеш["__нет__"] = f"историю прочесть не удалось (код {r.returncode})"
-            return _записи_кеш
-        час = ""
+            _records_cache["__нет__"] = f"историю прочесть не удалось (код {r.returncode})"
+            return _records_cache
+        record_time = ""
         for line in (r.stdout or "").splitlines():
             if line.startswith("\x00"):
-                час = line[1:].strip()
+                record_time = line[1:].strip()
             elif line.strip():
-                _записи_кеш.setdefault(line.strip().rsplit("/", 1)[-1], []).append(час)
-        _записи_кеш.setdefault("__ok__", True)
-        return _записи_кеш
+                _records_cache.setdefault(line.strip().rsplit("/", 1)[-1], []).append(record_time)
+        _records_cache.setdefault("__ok__", True)
+        return _records_cache
 
-    def _сколько_раз(имя: str) -> str:
+    def _how_many_times(name: str) -> str:
         """Строка-предупреждение, если ответ переписывали. Иначе пусто (встречный случай:
         одна запись — обычное дело, лишней строки не заводим)."""
-        карта = _записи()
-        if "__нет__" in карта:
-            return (f"   ⚠️ сколько раз записан — НЕ ЗНАЮ: {карта['__нет__']}. "
+        records = _records()
+        if "__нет__" in records:
+            return (f"   ⚠️ сколько раз записан — НЕ ЗНАЮ: {records['__нет__']}. "
                     "Это не «записан однажды»")
-        часы = карта.get(имя, [])
-        if len(часы) < 2:
+        times = records.get(name, [])
+        if len(times) < 2:
             return ""
-        return (f"   ⚠️ ОТВЕТ ПЕРЕПИСЫВАЛСЯ: записей {len(часы)}, последняя {часы[0]} UTC · "
-                f"первая {часы[-1]} UTC. Второй ответ ложится ПОД ТЕМ ЖЕ ИМЕНЕМ и неотличим "
+        return (f"   ⚠️ ОТВЕТ ПЕРЕПИСЫВАЛСЯ: записей {len(times)}, последняя {times[0]} UTC · "
+                f"первая {times[-1]} UTC. Второй ответ ложится ПОД ТЕМ ЖЕ ИМЕНЕМ и неотличим "
                 f"от правки — прежние редакции целы в истории, но не на виду у соседа")
 
     # 🪤 СЛИЧЕНИЕ ТЕМ ЖИВЁТ ЗДЕСЬ, А НЕ ВНУТРИ ОДНОЙ ИЗ ВЕТОК. Первая редакция держала его
@@ -1186,16 +1199,16 @@ def main():
 
     # Имя СВОЕЙ группы — из записи контура, не впечатано: инструмент общий, и впечатанное
     # имя сделало бы «адресовано нам» синонимом «адресовано контуру-донору».
-    наша_группа = ""
+    our_group = ""
     try:
         _row = conn.execute("SELECT value FROM meta WHERE key = 'group_name'").fetchone()
-        наша_группа = (_row[0] if _row else "") or ""
+        our_group = (_row[0] if _row else "") or ""
     except sqlite3.OperationalError:
-        наша_группа = ""
+        our_group = ""
 
     def _answers_to(topic: str, group: str) -> list:
         """Наши ответы ЭТОМУ соседу, чья тема содержит эту или содержится в ней."""
-        return [o for o in sorted(_наши(group)) if o.startswith("answer.")
+        return [o for o in sorted(_box_files(group)) if o.startswith("answer.")
                 and (_topic(o) in topic or topic in _topic(o))]
 
     for group, dbp in links:
@@ -1223,14 +1236,14 @@ def main():
             # ⚖️ ВИД ИМЕНИ РАЗЛИЧАЕТСЯ ТАМ ЖЕ, ГДЕ ЕГО УЖЕ ЧИТАЕТ `_topic`: по числу точек.
             # Одна граница, названная один раз, — иначе две редакции разъедутся молча.
             # Признак сверен со ВСЕМИ файлами мостов на 22.08: расхождений ноль.
-            def _вопрос_соседа(name: str) -> bool:
-                второе = name.split(".")[1] if name.count(".") >= 2 else ""
+            def _is_neighbor_question(name: str) -> bool:
+                second = name.split(".")[1] if name.count(".") >= 2 else ""
                 if name.count(".") >= 3:                  # новое имя: второе слово — КОМУ
-                    return bool(наша_группа) and второе.startswith(наша_группа)
-                return второе.startswith(group)           # старое имя: второе слово — АВТОР
+                    return bool(our_group) and second.startswith(our_group)
+                return second.startswith(group)           # старое имя: второе слово — АВТОР
 
-            legacy = [f for d in _папки(group) for f in sorted(d.glob("ask.*.md"))
-                      if _вопрос_соседа(f.name)]
+            legacy = [f for d in _neighbor_dirs(group) for f in sorted(d.glob("ask.*.md"))
+                      if _is_neighbor_question(f.name)]
             if legacy:
                 answered = 0
                 for f in legacy:
@@ -1242,8 +1255,8 @@ def main():
                     # у нового — адресат (мы). Одного мало: тема осталась бы с приклеенным
                     # именем и не связалась с ответом.
                     topic = f.name[len("ask."):-3]
-                    имена = [group] + ([наша_группа] if наша_группа else [])
-                    for pref in [и + р for и in имена for р in ("-", ".")]:
+                    names = [group] + ([our_group] if our_group else [])
+                    for pref in [nm + sep for nm in names for sep in ("-", ".")]:
                         if topic.startswith(pref):
                             topic = topic[len(pref):]
                     hit = _answers_to(topic, group)
@@ -1253,10 +1266,10 @@ def main():
                         # тем…» печатается СРАЗУ только при --full или когда среди ответов
                         # есть переписанный (предупреждению ниже нужна привязка к имени —
                         # иначе оно повиснет без подписи). Иначе — счёт, строка после цикла.
-                        предупреждения = [(_о, _сколько_раз(_о)) for _о in hit]
-                        мост_отвечено += 1
-                        мост_соседи.add(group)
-                        if FULL or any(_с for _, _с in предупреждения):
+                        warnings = [(_name, _how_many_times(_name)) for _name in hit]
+                        bridge_answered += 1
+                        bridge_neighbors.add(group)
+                        if FULL or any(_note for _, _note in warnings):
                             # ⚖️ ОТВЕЧЕННЫЙ ВОПРОС ОБЯЗАН ЗВУЧАТЬ ТАК ЖЕ, как у соседа со своей
                             # папкой. Прежде здесь стояло молчаливое `continue`: работа сделана,
                             # а прогон о ней не говорил ни слова — и роль читала общую строку
@@ -1265,9 +1278,9 @@ def main():
                                   f"{' · '.join(hit)}")
                             print("   ⚖️ Сверены ИМЕНА тем. Полон ли ответ по существу, "
                                   "машина не знает.")
-                            for _о, _с in предупреждения:
-                                if _с:
-                                    print(_с)
+                            for _name, _note in warnings:
+                                if _note:
+                                    print(_note)
                         continue
                     age_h = (datetime.now(timezone.utc).timestamp() - f.stat().st_mtime) / 3600
                     waiting.append((age_h, group, f.name))
@@ -1296,8 +1309,8 @@ def main():
                 # Правило, снявшее адресата, переехало вместе с кодом и стало своей
                 # противоположностью. Адресат нужен ИМЕННО ЗДЕСЬ, а тема — для связывания
                 # вопроса с ответом ниже.
-                кому = ask.name.split(".")[1] if ask.name.count(".") >= 2 else ""
-                if наша_группа and not кому.startswith(наша_группа):
+                to_whom = ask.name.split(".")[1] if ask.name.count(".") >= 2 else ""
+                if our_group and not to_whom.startswith(our_group):
                     continue
                 # 🪤 СВЕРЯЕТСЯ ТЕМА, А НЕ АДРЕСАТ. В имени файла второе слово — КОМУ он
                 # адресован: у вопроса к нам это «atlas», у ответа им — «tapas». Первая
@@ -1317,23 +1330,23 @@ def main():
                     # ⚡ КРАТКИЙ РЕЖИМ (карточка #593) — то же правило, что в ветке старого
                     # вида выше: пара строк печатается сразу только при --full или переписанном
                     # ответе, иначе — счёт, строка после цикла.
-                    предупреждения = [(_о, _сколько_раз(_о)) for _о in hit]
-                    мост_отвечено += 1
-                    мост_соседи.add(group)
-                    if FULL or any(_с for _, _с in предупреждения):
+                    warnings = [(_name, _how_many_times(_name)) for _name in hit]
+                    bridge_answered += 1
+                    bridge_neighbors.add(group)
+                    if FULL or any(_note for _, _note in warnings):
                         print(f"✅ мост соседей [{group}]: «{ask.name}» отвечен НАШИМ ответом ЕМУ ЖЕ — "
                               f"{' · '.join(hit)}")
                         print("   ⚖️ Сверены ИМЕНА тем. Полон ли ответ по существу, машина не знает.")
-                        for _о, _с in предупреждения:
-                            if _с:
-                                print(_с)
+                        for _name, _note in warnings:
+                            if _note:
+                                print(_note)
                     continue
                 age_h = (datetime.now(timezone.utc).timestamp() - ask.stat().st_mtime) / 3600
                 waiting.append((age_h, group, ask.name))
     # ⚡ КРАТКИЙ ИТОГ МОСТА (карточка #593): счёт из обеих веток цикла выше — одной строкой,
     # только когда не FULL (при --full каждый ответ уже назван построчно).
-    if not FULL and мост_отвечено:
-        print(f"✅ мост соседей: {мост_отвечено} вопросов отвечены (соседей {len(мост_соседи)})")
+    if not FULL and bridge_answered:
+        print(f"✅ мост соседей: {bridge_answered} вопросов отвечены (соседей {len(bridge_neighbors)})")
     # Красным — только просроченное: свежий вопрос не поломка, он только что пришёл.
     # Окно то же, что у проверки выше (48 ч): иначе первая же записка соседа красит контур.
     if waiting:
@@ -1405,8 +1418,8 @@ def main():
     # ⚡ Читателю «исключённых ноль» и «проверка этого не делает» неразличимы: одно молчание
     # на две разные беды. Ноль здесь — не пустота, а свидетельство, что признак отработал.
     if BRIDGES and BRIDGES.exists():
-        print(f"📤 мост: наших собственных писем {наших_писем} — разбора с них НЕ спрашиваем"
-              + (f" (первая строка называет автором роль контура «{_своё_имя}»)" if _своё_имя
+        print(f"📤 мост: наших собственных писем {our_letters_count} — разбора с них НЕ спрашиваем"
+              + (f" (первая строка называет автором роль контура «{_own_name}»)" if _own_name
                  else " ⚠️ имя контура не прочитано из базы — признак не работал, "
                       "исключено НИЧЕГО, и это не то же самое, что «исключать было нечего»"))
     if sect_lag:
@@ -1419,8 +1432,8 @@ def main():
     # ⚡ КРАТКИЙ ИТОГ (карточка #593): имена, накопленные check() вместо построчной печати,
     # сводятся в одну строку ПЕРЕД итогом. Имена дословно те же, что печатались бы
     # отдельными строками при --full — порядок сохранён (ЗЕЛЁНЫЕ копится по ходу прогона).
-    if not FULL and ЗЕЛЁНЫЕ:
-        print(f"✅ прошли {len(ЗЕЛЁНЫЕ)}: " + " · ".join(ЗЕЛЁНЫЕ))
+    if not FULL and GREENS:
+        print(f"✅ прошли {len(GREENS)}: " + " · ".join(GREENS))
     bad = [n for n, ok, _ in RESULTS if not ok]
     print(f"\n{'⛔ КРАСНЫХ: ' + str(len(bad)) + ' — ' + ', '.join(bad) if bad else '✅ ВСЕ ГАРДЫ ЗЕЛЁНЫЕ'}"
           f" ({len(RESULTS)} проверок)")
