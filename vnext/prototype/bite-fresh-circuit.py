@@ -98,6 +98,65 @@ def case(title, verdict, detail, differ=False):
     return verdict
 
 
+def copy_pack_subdir(pack: pathlib.Path, name: str, dest_dir: pathlib.Path,
+                     ignore_names=("__pycache__", "pack-rules.db")) -> list[str]:
+    """Копия ОДНОГО подкаталога пакета (`rules`/`schema`/`scripts`/`templates`/`vnext`) из
+    `pack` в `dest_dir / name` — ЕДИНЫЙ помощник для ВСЕХ мест, где приёмка копирует пакет
+    (возврат COORD по приёмке карточки #633, 15.09).
+
+    ⚡ НАХОДКА COORD. Рабочая копия пакета на диске может нести файл, которого НЕТ в git —
+    владелец прямо велел его ХРАНИТЬ, не коммитить и не удалять (пример: живой
+    `schema/mezosync_v6.sql`). Простой `shutil.copytree` тащит такой файл в копию приёмки,
+    и копия перестаёт быть тем, что получает СОСЕД (тот берёт пакет ЧЕРЕЗ git — clone/pull,
+    неотслеживаемого файла у него нет и не будет). Живой случай: `mezosync_v6.sql` уже несёт
+    таблицы памяти статикой в самой схеме — поломка ⑯ (init-group не применяет шаги схемы)
+    переставала краситься: таблицы приехали НЕ ОТ ШАГОВ, а от файла схемы, которого сосед
+    не увидит вовсе.
+    ⇒ Копия ЛЮБОГО подкаталога пакета берёт ТОЛЬКО файлы, отслеживаемые git (`git ls-files`),
+    — КОГДА `pack` является рабочей копией git (есть `.git`). Git недоступен, или `pack` —
+    не рабочая копия, — копируем ЦЕЛИКОМ, как раньше, и говорим об этом строкой: молчаливый
+    откат к старому поведению был бы неотличим от намеренного решения.
+
+    Возвращает список путей (relative to `pack`, вида `schema/mezosync_v6.sql`), которые НЕ
+    поехали в копию из-за фильтра — пусто, если фильтр не применялся или ничего не отсеял.
+    """
+    src = pack / name
+    if not src.is_dir():
+        return []
+    dest = dest_dir / name
+    if not (pack / ".git").exists():
+        shutil.copytree(src, dest, ignore=shutil.ignore_patterns(*ignore_names))
+        print(f"ℹ️ копия пакета: {pack} — не рабочая копия git (нет .git), {name}/ скопирован "
+              f"ЦЕЛИКОМ, как раньше")
+        return []
+    r = subprocess.run(["git", "-C", str(pack), "ls-files", name],
+                       capture_output=True, text=True, timeout=30)
+    if r.returncode != 0:
+        shutil.copytree(src, dest, ignore=shutil.ignore_patterns(*ignore_names))
+        print(f"ℹ️ копия пакета: git ls-files отказал (код {r.returncode}) — {name}/ скопирован "
+              f"ЦЕЛИКОМ, как раньше")
+        return []
+    tracked = {line.strip() for line in r.stdout.splitlines() if line.strip()}
+    skipped: list[str] = []
+    for root, dirs, files in os.walk(src):
+        dirs[:] = [d for d in dirs if d not in ignore_names]
+        for fname in files:
+            if fname in ignore_names:
+                continue
+            fp = pathlib.Path(root) / fname
+            rel = fp.relative_to(pack).as_posix()
+            if rel in tracked:
+                target = dest_dir / pathlib.Path(rel)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(fp, target)
+            else:
+                skipped.append(rel)
+    for rel in skipped:
+        print(f"ℹ️ копия пакета: {rel} не отслеживается git — сборка приёмки его не берёт: "
+              f"сосед получает пакет из git")
+    return skipped
+
+
 def build_pack_copy_with_rules_db(dest: pathlib.Path) -> tuple[bool, str]:
     """Временная копия пакета (карточка #608, шаг 3) — С БАЗОЙ ПРАВИЛ, даже когда её нет
     в самом клоне (сейчас нет — её кладёт PROTO отдельным ходом; см. отчёт задачи).
@@ -116,10 +175,7 @@ def build_pack_copy_with_rules_db(dest: pathlib.Path) -> tuple[bool, str]:
     if not builder.exists():
         return False, f"в пакете нет сборщика базы правил ({builder})"
     for name in ("rules", "schema", "scripts", "templates", "vnext"):
-        src = PACK / name
-        if src.is_dir():
-            shutil.copytree(src, dest / name,
-                            ignore=shutil.ignore_patterns("__pycache__", "pack-rules.db"))
+        copy_pack_subdir(PACK, name, dest)
     if not (dest / "scripts").is_dir():
         return False, "у пакета нет scripts/ — копировать нечего"
     live_scripts = mezo_paths.live_scripts()
@@ -562,10 +618,7 @@ def main() -> int:
         # пользы), чтобы поломки ниже не задели ⑪..⑮ выше (те уже держат СВОИ копии).
         pack_633 = tmp / "pack-633"
         for name in ("rules", "schema", "scripts", "templates", "vnext"):
-            src633 = PACK / name
-            if src633.is_dir():
-                shutil.copytree(src633, pack_633 / name,
-                                ignore=shutil.ignore_patterns("__pycache__", "pack-rules.db"))
+            copy_pack_subdir(PACK, name, pack_633)
 
         # ── ⑯ свежий контур (уже построен ВЫШЕ как `mez`): версия схемы v6, таблицы памяти
         # (архив · записи · индекс поиска · история версий памяти · чужие отметки) на месте;
@@ -640,10 +693,7 @@ def main() -> int:
         # проверяем в изоляции, тем же приёмом, что уже показал случай ⑲.
         pack_640 = tmp / "pack-640"
         for name in ("rules", "schema", "scripts", "templates", "vnext"):
-            src640 = PACK / name
-            if src640.is_dir():
-                shutil.copytree(src640, pack_640 / name,
-                                ignore=shutil.ignore_patterns("__pycache__", "pack-rules.db"))
+            copy_pack_subdir(PACK, name, pack_640)
         step_640_path = pack_640 / "scripts" / "migrations" / "20260905-phoenix-history-archive.py"
         step_640_src = step_640_path.read_text(encoding="utf-8")
         step_640_anchor = "    marks_to_seed = ATLAS_REBIRTH_MARKS if is_atlas else ()\n"
