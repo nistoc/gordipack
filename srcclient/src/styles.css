@@ -527,6 +527,12 @@ code { background: var(--surface2); padding: 1px 5px; border-radius: 4px; }
   color: var(--muted); font-size: 0.75rem; min-width: 3.4rem;
   text-transform: uppercase; letter-spacing: 0.03em;
 }
+/* Подпись под фильтром: что именно на графике он меняет. Цвета слов — те же, что у
+   столбцов и линии, чтобы подпись читалась как легенда, а не как отдельный текст. */
+.filterbar__hint { font-size: 0.75rem; margin: -2px 0 8px; max-width: 110ch; line-height: 1.4; }
+.hint--good { color: var(--good); }
+.hint--warn { color: var(--warn); }
+.hint--info { color: var(--info); }
 .fchip {
   background: var(--surface2); color: var(--text);
   border: 1px solid var(--border); border-radius: 12px;

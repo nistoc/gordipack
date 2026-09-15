@@ -224,21 +224,52 @@ export function HistoryPage({ refreshMs }: { refreshMs: number }) {
       </div>
 
       {/* ── закрытые статусы (влияют на «Поток» и «По ролям») ──────────────── */}
+      {/*
+        Подпись под фильтром — по находке владельца 15.09: подсказка при наведении не
+        читалась, и выбор «наоборот» (отмечены открытые статусы) давал график, где
+        взятие в работу считалось закрытием. Подпись называет, КАКИЕ ЦВЕТА графика
+        зависят от фильтра, — в тех же словах, что легенда и итог под фильтрами.
+      */}
       {view !== 'status' && (
-        <div className="filterbar" data-group="history-closed-bar">
-          <span className="filterbar__label">Закрытые</span>
-          {statusUniverse.map((s) => (
-            <button
-              key={s}
-              className={`fchip ${closedSet.has(s) ? 'fchip--on' : ''}`}
-              onClick={() => toggleClosed(s)}
-              data-control={`history-closed-${s}`}
-              title="статус считается «закрытым» — переход в него = «закрыто», карточка в нём не входит в «открыто»"
-            >
-              {statusRu(s)}
-            </button>
-          ))}
-        </div>
+        <>
+          <div className="filterbar" data-group="history-closed-bar">
+            <span className="filterbar__label">Считать закрытыми</span>
+            {statusUniverse.map((s) => (
+              <button
+                key={s}
+                className={`fchip ${closedSet.has(s) ? 'fchip--on' : ''}`}
+                onClick={() => toggleClosed(s)}
+                data-control={`history-closed-${s}`}
+                title="статус считается «закрытым» — переход в него = «закрыто», карточка в нём не входит в «открыто»"
+              >
+                {statusRu(s)}
+              </button>
+            ))}
+            {closedRaw !== null && (
+              <button
+                className="fchip"
+                onClick={() => setClosedRaw(null)}
+                data-control="history-closed-default"
+                title={`вернуть набор по умолчанию: ${DEFAULT_CLOSED_STATUSES.map(statusRu).join(' · ')}`}
+              >
+                ↺ по умолчанию
+              </button>
+            )}
+          </div>
+          <div className="filterbar__hint muted" data-group="history-closed-hint">
+            Отмеченные статусы считаются завершёнными. Переход карточки в такой статус —{' '}
+            <span className="hint--good">
+              {view === 'flow' ? 'зелёный столбец «закрыто»' : 'зелёная полоса «закрыто за период»'}
+            </span>
+            ; карточки в неотмеченных статусах —{' '}
+            <span className="hint--warn">
+              {view === 'flow' ? 'оранжевая линия «открыто»' : 'оранжевая полоса «открыто сейчас»'}
+            </span>
+            . Поэтому фильтр меняет зелёное и, как следствие, оранжевое;{' '}
+            <span className="hint--info">синие «новых»</span> от него не зависят.
+            По умолчанию: {DEFAULT_CLOSED_STATUSES.map(statusRu).join(' · ')}.
+          </div>
+        </>
       )}
 
       {/* ── какие статусы показывать (влияет на «По статусам») ────────────── */}
