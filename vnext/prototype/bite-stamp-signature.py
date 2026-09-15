@@ -30,11 +30,14 @@
 
 ⛔ Живой базы не касается: своя песочница.
 """
+import importlib.util
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -44,6 +47,49 @@ import mezo_stand  # noqa: E402 — временный каталог убира
 SCRIPTS = str(mezo_target.scripts_root())
 WRITE = os.path.join(SCRIPTS, "write-message.py")
 CASES = DIFFER = 0
+
+# ═══ ПРЕДЛОЖЕНИЕ AIA 03 (карточка #644): огороженные блоки и круговое сравнение часа ═══
+# 🩸 ПОВОД (замер AIA на живой базе их контура, пакет d32e621 = нашему коду).
+# ① строки-кандидаты для суда часа в шапке брались первыми восемью непустыми ПОДРЯД,
+#    не различая огороженный блок (```…```) — пример метки внутри блока судился как
+#    настоящая подпись, и тревога приходила на текст, ОБЪЯСНЯЮЩИЙ правило.
+# ② круговое сравнение (через полночь) стояло только в ветви заголовка; ветвь шапки
+#    тела давала 1436 минут вместо 4 на метке 23:58 при записи в 00:02 следующих суток.
+BREAKS = {
+    "fence-skip": ("    lines = _candidate_lines(body, 8)",
+                   '    lines = [l for l in body.split("\\n") if l.strip()][:8]'),
+    "circular-body": ("h, mi = map(int, m2.group(2).split(\":\"))\n"
+                       "            d = _stamp_mismatch(h, mi, circular=True)",
+                       "h, mi = map(int, m2.group(2).split(\":\"))\n"
+                       "            d = _stamp_mismatch(h, mi, circular=False)"),
+}
+
+
+def _prepare_target(porcha_key):
+    """Без порчи — испытуемый WRITE как есть. С порчей — копия РЯДОМ с соседями
+    (mezo_stand.copy_tool: write-message.py тянет dryrun/mezo_refs/refs_check) во
+    временном стенде, с ОТКАЧЕННЫМ дефектом; путь подменяется на неё ОДНИМ местом."""
+    if not porcha_key:
+        return WRITE, None
+    stand = mezo_stand.new("bite-stamp-porcha-")
+    copy_path = mezo_stand.copy_tool(WRITE, stand)
+    text = copy_path.read_text(encoding="utf-8")
+    old, new = BREAKS[porcha_key]
+    if old not in text:
+        raise SystemExit(f"⛔ порчу «{porcha_key}» НЕ УДАЛОСЬ навести: образец не найден в коде")
+    copy_path.write_text(text.replace(old, new, 1), encoding="utf-8")
+    print(f"🧪 НАРОЧНАЯ ПОЛОМКА «{porcha_key}» ВЗВЕДЕНА\n")
+    return str(copy_path), stand
+
+
+def _load_module(path):
+    """Загрузить write-message.py отдельным модулем — звать check_header_times
+    НАПРЯМУЮ, без похода через subprocess и базу: эти случаи — про ОДНУ функцию."""
+    sys.path.insert(0, str(Path(path).resolve().parent))
+    spec = importlib.util.spec_from_file_location("write_message_under_test", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def case(title, ok, detail, differ=False):
@@ -95,6 +141,14 @@ def write(db, d, body):
 
 
 def main() -> int:
+    global WRITE
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--porcha", choices=sorted(BREAKS), default=None,
+                    help="нарочная поломка: откатить одну из двух правок предложения AIA 03")
+    a = ap.parse_args()
+    WRITE, _porcha_stand = _prepare_target(a.porcha)
+
     if not os.path.exists(WRITE):
         raise SystemExit(f"⛔ НЕ ЗАПУСТИЛАСЬ: {WRITE} не найден — приёмке нечего испытывать.")
     ok = True
@@ -186,9 +240,57 @@ def main() -> int:
                "чистая шапка не шумит; строка «сверен» доказывает, что проверка ШЛА",
                differ=True)
 
+    # ⑫–⑮ ЧЕТЫРЕ ПРОБЫ AIA (предложение 03, карточка #644) — check_header_times
+    # напрямую, без похода через базу: случаи про ОДНУ функцию, а не про запись.
+    wm = _load_module(WRITE)
+
+    # ⑫ пример метки ВНУТРИ огороженного блока с чужим часом — не судится вовсе.
+    # Живой класс: тревога приходит РОВНО на текст, объясняющий, как метку писать.
+    NOW_A = "2026-09-15 08:59"
+    body_fenced = ("разбор формы метки в шапке\n\n"
+                   "```\n"
+                   "2026-09-15 23:58 UTC · ПРИМЕР. Так роль пишет шапку.\n"
+                   "```\n\n"
+                   "дальше обычный текст записки без своей метки\n")
+    w, c = wm.check_header_times(body_fenced, NOW_A)
+    ok &= case("⑫ AIA-проба: пример метки внутри огороженного блока — не судится",
+               c == 0 and len(w) == 0,
+               f"проверено {c} · тревог {len(w)} (ожидание AIA: 0 · 0)", differ=True)
+
+    # ⑬ метка СНАРУЖИ, час сходится — судится, тревоги нет.
+    NOW_B = "2026-09-15 09:00"
+    body_ok = f"[PROTO {NOW_B[11:16]} UTC] час сходится\n\nтело записки\n"
+    w, c = wm.check_header_times(body_ok, NOW_B)
+    ok &= case("⑬ AIA-проба: метка снаружи, час сходится — проверено 1, тревог нет",
+               c == 1 and len(w) == 0,
+               f"проверено {c} · тревог {len(w)} (ожидание AIA: 1 · 0)", differ=True)
+
+    # ⑭ метка снаружи, РЕАЛЬНОЕ расхождение 179 минут — проверка НЕ ОСЛЕПЛА
+    # круговым сравнением (179 мин — не вблизи полуночи, круг результат не меняет).
+    NOW_C = "2026-09-15 12:00"
+    body_diff = "2026-09-15 09:01 UTC · PROTO. Все метки UTC.\n\nтело записки\n"
+    w, c = wm.check_header_times(body_diff, NOW_C)
+    ok &= case("⑭ AIA-проба: метка снаружи, расхождение 179 мин — проверка НЕ ОСЛЕПЛА",
+               c == 1 and len(w) == 1,
+               f"проверено {c} · тревог {len(w)} (ожидание AIA: 1 · 1)", differ=True)
+
+    # ⑮ метка 23:58, запись 00:02 — КРУГОВОЕ сравнение спасает (4 мин, не 1436).
+    NOW_D = "2026-09-15 00:02"
+    body_midnight = "2026-09-15 23:58 UTC · PROTO. Все метки UTC.\n\nтело записки\n"
+    w, c = wm.check_header_times(body_midnight, NOW_D)
+    ok &= case("⑮ AIA-проба: метка 23:58 при записи 00:02 — круг спасает (4 мин, не 1436)",
+               c == 1 and len(w) == 0,
+               f"проверено {c} · тревог {len(w)} (ожидание AIA: 1 · 0)", differ=True)
+
     print()
     print(f"{'✅ МЕХАНИЗМ ВРЕМЕНИ ПРИНЯТ' if ok else '🔴 НЕ ПРИНЯТ'} — случаев {CASES}, "
           f"различающих {DIFFER}, испытан {mezo_target.label()}")
+    if a.porcha and not ok:
+        print("✅ так и надо: под порчей случаи краснеют — они судят предмет, а не форму")
+        return 0
+    if a.porcha and ok:
+        print("⚠️ ПОРЧА ВЗВЕДЕНА, А ВСЁ ПРОШЛО ПРИЁМКУ — случаи НЕ РАЗЛИЧАЮТ этот дефект")
+        return 1
     return 0 if ok else 1
 
 

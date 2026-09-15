@@ -244,12 +244,40 @@ HDR_LINE = re.compile(r"^[ \t]*(\d{4}-\d{2}-\d{2})[ \t]+(\d{2}:\d{2})(?::\d{2})?
 HDR_TITLE = re.compile(r"\[[A-ZА-Я]{2,10}[ \t]+(\d{2}:\d{2})[ \t]*UTC\]")
 
 
+def _candidate_lines(body: str, limit: int = 8):
+    """Строки-кандидаты для суда часа в шапке — В ОБХОД огороженных блоков (```…```).
+
+    🩸 ПРЕДЛОЖЕНИЕ AIA 03 (карточка #644, замер их живой базы 2026-09-15): граница
+    блока — ПЕРЕКЛЮЧАТЕЛЬ сбора, а не конец сбора. Прежде первые восемь непустых строк
+    брались ПОДРЯД, не различая блок: пример метки внутри ```…``` судился как настоящая
+    подпись. Из последних 400 записок живой ленты три несли метку внутри такого блока
+    в первых восьми строках — одна из трёх ОБЪЯСНЯЛА, как метку писать, и тревога
+    приходила ровно на текст правила.
+    """
+    result, fenced = [], False
+    for line in body.split("\n"):
+        if line.strip().startswith("```"):
+            fenced = not fenced
+            continue
+        if fenced or not line.strip():
+            continue
+        result.append(line)
+        if len(result) >= limit:
+            break
+    return result
+
+
 def check_header_times(body: str, now_utc: str):
     """Сверить АВТОРСКИЕ метки часа в шапке (первые строки + заголовок) с временем записи.
 
     → (предупреждения, сколько меток сверено). Порог 45 минут: меньшее — обычный разрыв
     «начал писать → отправил»; большее — почти всегда местное время под буквами UTC.
     Строка с ЧУЖОЙ датой не судится: это ссылка на прошлое, а не метка этого часа.
+
+    🩸 ПРЕДЛОЖЕНИЕ AIA 03: сравнение часа — КРУГОВОЕ (через полночь) в ОБЕИХ ветвях,
+    заголовка и шапки тела. Время суток циклично одинаково в обеих; вторая ветвь не
+    унаследовала круг при заведении и давала 1436 минут вместо 4 на метке 23:58 при
+    записи в 00:02 следующих суток.
     """
     now_h, now_m = int(now_utc[11:13]), int(now_utc[14:16])
     warns, checked = [], 0
@@ -258,7 +286,7 @@ def check_header_times(body: str, now_utc: str):
         d = abs(h * 60 + m - (now_h * 60 + now_m))
         return min(d, 1440 - d) if circular else d
 
-    lines = [l for l in body.split("\n") if l.strip()][:8]
+    lines = _candidate_lines(body, 8)
     for i, line in enumerate(lines):
         if i == 0:
             m = HDR_TITLE.search(line)
@@ -275,7 +303,7 @@ def check_header_times(body: str, now_utc: str):
                 continue
             checked += 1
             h, mi = map(int, m2.group(2).split(":"))
-            d = _stamp_mismatch(h, mi, circular=False)
+            d = _stamp_mismatch(h, mi, circular=True)
             if d >= 45:
                 warns.append(f"⚠️ час в шапке тела ({m2.group(2)} UTC) расходится с временем "
                              f"записи ({now_utc[11:16]} UTC) на ~{d} мин")

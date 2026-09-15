@@ -556,6 +556,274 @@ def main() -> int:
                       f"код сборки {r13.returncode} (ждём 0 — сборка не обязана упасть); "
                       f"записей опоры {len(base_map3)} (ждём 0)", differ=True)
 
+        # ═══ НОВЫЕ СЛУЧАИ ⑯–⑲ (карточка #633 — накат шагов схемы при сборке; карточка #640 —
+        # различитель контура у отметок пересоздания и их перенос соседям). Своя ЛЁГКАЯ копия
+        # пакета (без базы правил — она не нужна этим случаям, а строить её тут — цена без
+        # пользы), чтобы поломки ниже не задели ⑪..⑮ выше (те уже держат СВОИ копии).
+        pack_633 = tmp / "pack-633"
+        for name in ("rules", "schema", "scripts", "templates", "vnext"):
+            src633 = PACK / name
+            if src633.is_dir():
+                shutil.copytree(src633, pack_633 / name,
+                                ignore=shutil.ignore_patterns("__pycache__", "pack-rules.db"))
+
+        # ── ⑯ свежий контур (уже построен ВЫШЕ как `mez`): версия схемы v6, таблицы памяти
+        # (архив · записи · индекс поиска · история версий памяти · чужие отметки) на месте;
+        # find-phoenix.py отвечает БЕЗ отказа «накати шаг» (карточка #633: до правки init-group
+        # не накатывал ни одного шага схемы — контур рождался без этих таблиц вовсе).
+        con16 = sqlite3.connect(str(mez / "mezosync.db"))
+        ver16 = con16.execute("SELECT version FROM schema_version").fetchone()
+        tabs16 = {row[0] for row in con16.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        con16.close()
+        want_tables_633 = {"phoenix_archive", "phoenix_records", "phoenix_records_fts",
+                           "phoenix_history_archive", "role_rebirths_foreign"}
+        fp16 = subprocess.run(
+            [sys.executable, str(mez / "scripts" / "find-phoenix.py"),
+             "--role", "COORD", "--actor", "COORD", "проверка карточки 633"],
+            capture_output=True, text=True, encoding="utf-8", timeout=60, env=env)
+        fpout16 = (fp16.stdout or "") + (fp16.stderr or "")
+        ok &= case("⑯ свежий контур: версия схемы v6, таблицы памяти на месте, find-phoenix.py "
+                  "отвечает БЕЗ отказа «накати шаг» (карточка #633)",
+                  bool(ver16) and ver16[0] == "v6" and want_tables_633 <= tabs16
+                  and "накати шаг" not in fpout16 and fp16.returncode in (0, 2),
+                  f"версия {ver16}; таблиц не хватает {sorted(want_tables_633 - tabs16)}; "
+                  f"find-phoenix код {fp16.returncode}, последняя строка: "
+                  f"{fpout16.strip().splitlines()[-1] if fpout16.strip() else ''}", differ=True)
+
+        # ── КОНТРОЛЬ ⑯ нарочной поломкой: init-group.py перестаёт применять список шагов
+        # схемы (строка «considered = […]» обнулена) — старый дефект карточки #633
+        # (контур без таблиц памяти) обязан вернуться. Поломка — КОПИЯ init-group.py рядом
+        # со своим именем файла внутри pack_633/scripts/ (сам pack_633 остаётся исправен —
+        # он ещё нужен случаям ⑰/⑱ ниже).
+        ig_src = (pack_633 / "scripts" / "init-group.py").read_text(encoding="utf-8")
+        ig_anchor = "    considered = [s for s in schema_step_order.STEPS if s in on_disk]\n"
+        if ig_src.count(ig_anchor) != 1:
+            sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: строка «considered = […]» не найдена дословно в "
+                     "init-group.py — испытуемое изменилось, поломка ⑯ бьёт мимо")
+        ig_poisoned = pack_633 / "scripts" / "init-group-no-schema-steps.py"
+        ig_poisoned.write_text(
+            ig_src.replace(ig_anchor, "    considered = []  # ПОЛОМКА: список шагов не применяется\n"),
+            encoding="utf-8")
+        mez16p = tmp / ".mezosync-633-poison"
+        r16p = subprocess.run(
+            [sys.executable, str(ig_poisoned), "--name", "bite633poison", "--path", str(mez16p),
+             "--roles", "coord"],
+            capture_output=True, text=True, encoding="utf-8", timeout=300, env=env)
+        tabs16p = set()
+        if (mez16p / "mezosync.db").exists():
+            con16p = sqlite3.connect(str(mez16p / "mezosync.db"))
+            tabs16p = {row[0] for row in con16p.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            con16p.close()
+        ok &= case("⑯ ПОЛОМКА (init-group не применяет шаги схемы) КРАСИТ случай ⑯ — таблиц "
+                  "памяти снова нет",
+                  r16p.returncode == 0 and not (want_tables_633 & tabs16p),
+                  f"код сборки {r16p.returncode} (ждём 0 — сборка не обязана упасть); таблицы "
+                  f"памяти, ошибочно найденные: {sorted(want_tables_633 & tabs16p)} (ждём "
+                  f"пусто — старый дефект #633 обязан вернуться)", differ=True)
+
+        # ── ⑰ свежий контур: отметок Atlas в role_rebirths 0 (карточка #640 — засев только
+        # в САМ контур Atlas по meta.group_name, а не в любую базу подряд).
+        con17 = sqlite3.connect(str(mez / "mezosync.db"))
+        n17 = con17.execute("SELECT count(*) FROM role_rebirths").fetchone()[0]
+        con17.close()
+        ok &= case("⑰ свежий контур из пакета: отметок пересоздания контура Atlas в "
+                  "role_rebirths 0 (карточка #640)",
+                  n17 == 0, f"role_rebirths {n17} (ждём 0 — контур не Atlas)", differ=True)
+
+        # ── КОНТРОЛЬ ⑰ нарочной поломкой: различитель контура (`if is_atlas else ()`) снят
+        # в КОПИИ шага 20260905 — 18 отметок Atlas обязаны вернуться. Шаг гоним НАПРЯМУЮ на
+        # СВОЕЙ синтетической копии базы (как случай ⑲ для шага 20260915), А НЕ через полную
+        # сборку контура: полная сборка следом накатывает и шаг 20260915 (карточка #640 ②),
+        # а он САМ убирает всё под тем же автором/источником в role_rebirths_foreign —
+        # находка этого прогона (не баг: два шага честно делают каждый своё, но ВМЕСТЕ они
+        # маскируют поломку ИМЕННО этого шага в role_rebirths). Различитель этого шага
+        # проверяем в изоляции, тем же приёмом, что уже показал случай ⑲.
+        pack_640 = tmp / "pack-640"
+        for name in ("rules", "schema", "scripts", "templates", "vnext"):
+            src640 = PACK / name
+            if src640.is_dir():
+                shutil.copytree(src640, pack_640 / name,
+                                ignore=shutil.ignore_patterns("__pycache__", "pack-rules.db"))
+        step_640_path = pack_640 / "scripts" / "migrations" / "20260905-phoenix-history-archive.py"
+        step_640_src = step_640_path.read_text(encoding="utf-8")
+        step_640_anchor = "    marks_to_seed = ATLAS_REBIRTH_MARKS if is_atlas else ()\n"
+        if step_640_src.count(step_640_anchor) != 1:
+            sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: строка различителя контура не найдена дословно в "
+                     "20260905-phoenix-history-archive.py — испытуемое изменилось, поломка "
+                     "⑰ бьёт мимо")
+        step_640_poisoned = pack_640 / "scripts" / "migrations" / "20260905-phoenix-history-archive-no-guard.py"
+        step_640_poisoned.write_text(
+            step_640_src.replace(step_640_anchor, "    marks_to_seed = ATLAS_REBIRTH_MARKS  # ПОЛОМКА: различитель снят\n"),
+            encoding="utf-8")
+        db17p = tmp / "atlas-guard-17-poison.db"
+        con17p = sqlite3.connect(str(db17p))
+        con17p.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+        con17p.execute("INSERT INTO meta(key,value) VALUES ('group_name','bite617poison')")
+        con17p.execute("""CREATE TABLE phoenix_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT, section TEXT, body TEXT,
+            body_chars INTEGER, saved_at TEXT, actor TEXT, reason TEXT, prev_chars INTEGER)""")
+        con17p.execute("CREATE TABLE schema_migrations (version TEXT PRIMARY KEY, applied_at TEXT, note TEXT)")
+        con17p.commit(); con17p.close()
+        r17p = subprocess.run([sys.executable, str(step_640_poisoned), "--db", str(db17p)],
+                              capture_output=True, text=True, encoding="utf-8", timeout=60, env=env)
+        con17p = sqlite3.connect(str(db17p))
+        n17p = con17p.execute("SELECT count(*) FROM role_rebirths").fetchone()[0]
+        con17p.close()
+        ok &= case("⑰ ПОЛОМКА (различитель контура снят в копии шага 20260905) КРАСИТ случай "
+                  "⑰ — контур чужого имени получает все 18 отметок Atlas",
+                  r17p.returncode == 0 and n17p == 18,
+                  f"код {r17p.returncode} (ждём 0); role_rebirths {n17p} (ждём 18 — старый "
+                  f"дефект #640 обязан вернуться)", differ=True)
+
+        # ── ⑱ список порядка (schema_step_order.STEPS) покрывает все файлы migrations/ новее
+        # базовой отметки и наоборот (карточка #633) — проверено уже КОСВЕННО случаем ⑯
+        # (сборка `mez` наверху отчиталась «🎉» безо всякого ⚠️ о расхождении списка и диска);
+        # здесь — ПРЯМАЯ поломка: один шаг убран из СПИСКА (файл на диске остаётся), и сборка
+        # обязана и предупредить об этом громко, и не применить убранный шаг.
+        # ⚖️ Убираем шаг ПОСЛЕ вехи v6 (20260913-role-rights-revoked-by), не один из шагов
+        # ПОД вехой: убрать шаг из окна вехи 20260907-milestone-v6 попутно уронило бы саму
+        # веху (её собственная сверка «набор шагов под отметкой» — не то, что тут проверяем)
+        # и смешало бы две разные причины отказа в одном случае.
+        order_path = pack_633 / "scripts" / "schema_step_order.py"
+        order_src = order_path.read_text(encoding="utf-8")
+        order_anchor = '    "20260913-role-rights-revoked-by",\n'
+        if order_src.count(order_anchor) != 1:
+            sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: строка «20260913-role-rights-revoked-by» не найдена "
+                     "дословно в schema_step_order.py — испытуемое изменилось, поломка ⑱ бьёт мимо")
+        order_path.write_text(order_src.replace(order_anchor, "", 1), encoding="utf-8")
+        mez18p = tmp / ".mezosync-633-order-poison"
+        r18p = subprocess.run(
+            [sys.executable, str(pack_633 / "scripts" / "init-group.py"),
+             "--name", "bite633orderpoison", "--path", str(mez18p), "--roles", "coord"],
+            capture_output=True, text=True, encoding="utf-8", timeout=300, env=env)
+        out18p = (r18p.stdout or "") + (r18p.stderr or "")
+        applied18p = False
+        if (mez18p / "mezosync.db").exists():
+            con18p = sqlite3.connect(str(mez18p / "mezosync.db"))
+            applied18p = bool(con18p.execute(
+                "SELECT 1 FROM schema_migrations WHERE version='20260913-role-rights-revoked-by'"
+            ).fetchone())
+            con18p.close()
+        ok &= case("⑱ ПОЛОМКА (шаг убран из schema_step_order.STEPS, файл на диске остался) "
+                  "КРАСИТ случай ⑱ — громкое предупреждение с именем шага, сборка «с отказами», "
+                  "убранный шаг НЕ применён",
+                  r18p.returncode == 0 and "20260913-role-rights-revoked-by" in out18p
+                  and "НЕТ в schema_step_order.STEPS" in out18p
+                  and "собрана с отказами" in out18p and not applied18p,
+                  f"код сборки {r18p.returncode} (ждём 0 — отказ не fatal); имя шага в выводе: "
+                  f"{'20260913-role-rights-revoked-by' in out18p}; предупреждение в выводе: "
+                  f"{'НЕТ в schema_step_order.STEPS' in out18p}; голос «с отказами»: "
+                  f"{'собрана с отказами' in out18p}; шаг всё же применился вопреки поломке: "
+                  f"{applied18p} (ждём False)", differ=True)
+
+        # ── ⑲ шаг 20260915-foreign-rebirth-marks.py на КОПИИ базы с засеянными чужими
+        # отметками (карточка #640 ②): 18 строк с автором tool:20260905-phoenix-history-
+        # archive, ОДНА из них под переведённым именем вида COORD-A (случай AIA), плюс одна
+        # СВОЯ отметка контура (source='rebirth-mark') — переносит РОВНО чужие 18, своя
+        # остаётся, role_rebirths_foreign = 18.
+        db19 = tmp / "foreign-marks-19.db"
+        con19 = sqlite3.connect(str(db19))
+        con19.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+        con19.execute("INSERT INTO meta(key,value) VALUES ('group_name','bite619')")
+        con19.execute("""CREATE TABLE phoenix_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT, section TEXT, body TEXT,
+            body_chars INTEGER, saved_at TEXT, actor TEXT, reason TEXT, prev_chars INTEGER)""")
+        con19.execute("CREATE TABLE schema_migrations (version TEXT PRIMARY KEY, applied_at TEXT, note TEXT)")
+        con19.commit(); con19.close()
+        step_905 = PACK / "scripts" / "migrations" / "20260905-phoenix-history-archive.py"
+        step_915 = PACK / "scripts" / "migrations" / "20260915-foreign-rebirth-marks.py"
+        subprocess.run([sys.executable, str(step_905), "--db", str(db19)],
+                       capture_output=True, text=True, encoding="utf-8", timeout=60, env=env)
+        con19 = sqlite3.connect(str(db19))
+        foreign_roles_19 = [("CHROME", "2026-08-29 09:39:08"), ("CHROME", "2026-08-29 09:59:21"),
+                            ("CHROME", "2026-08-30 21:59:37"), ("COORD-A", "2026-08-30 21:56:08"),
+                            ("COORD-A", "2026-08-30 21:58:38"), ("CORE", "2026-08-29 10:43:06"),
+                            ("CORE", "2026-08-30 21:59:08"), ("ING", "2026-08-30 22:04:47"),
+                            ("OPSSRE", "2026-08-29 09:30:41"), ("OPSSRE", "2026-08-30 22:05:32"),
+                            ("PROTO", "2026-08-30 09:54:19"), ("PROTO", "2026-08-30 22:33:19"),
+                            ("RCC", "2026-08-30 22:01:49"), ("STUD", "2026-08-29 09:31:50"),
+                            ("STUD", "2026-08-30 22:41:00"), ("TAXO", "2026-08-29 09:38:19"),
+                            ("TAXO", "2026-08-29 09:50:34"), ("TAXO", "2026-08-30 22:03:26")]
+        for role19, at19 in foreign_roles_19:
+            con19.execute("INSERT INTO role_rebirths(role, at, source, noted_by) VALUES (?,?,?,?)",
+                          (role19, at19, "transcript:seed19", "tool:20260905-phoenix-history-archive"))
+        con19.execute("INSERT INTO role_rebirths(role, at, source, noted_by) VALUES (?,?,?,?)",
+                      ("BITE619ROLE", "2026-09-10 08:00:00", "rebirth-mark", "BITE619ROLE"))
+        con19.commit(); con19.close()
+        r19 = subprocess.run([sys.executable, str(step_915), "--db", str(db19)],
+                             capture_output=True, text=True, encoding="utf-8", timeout=60, env=env)
+        con19 = sqlite3.connect(str(db19))
+        n_foreign19 = con19.execute("SELECT count(*) FROM role_rebirths_foreign").fetchone()[0]
+        own_left19 = con19.execute(
+            "SELECT count(*) FROM role_rebirths WHERE source='rebirth-mark'").fetchone()[0]
+        coord_a_moved19 = con19.execute(
+            "SELECT count(*) FROM role_rebirths_foreign WHERE role='COORD-A'").fetchone()[0]
+        con19.close()
+        ok &= case("⑲ шаг 20260915 на копии базы с чужими отметками: переносит ровно 18 "
+                  "(включая переведённое имя COORD-A), своя отметка остаётся",
+                  r19.returncode == 0 and n_foreign19 == 18 and own_left19 == 1
+                  and coord_a_moved19 == 2,
+                  f"код {r19.returncode}; role_rebirths_foreign {n_foreign19} (ждём 18); "
+                  f"своя отметка осталась: {own_left19} (ждём 1); COORD-A перенесено "
+                  f"{coord_a_moved19} (ждём 2)", differ=True)
+
+        # ── КОНТРОЛЬ ⑲ нарочной поломкой: различитель заменён С «автор + источник» НА «имя
+        # роли из перечня ролей Atlas» — переведённая строка (COORD-A) под таким различителем
+        # не считается чужой (её имени нет в перечне ролей Atlas) и остаётся на месте: вместо
+        # 18 перенесётся только 16.
+        db19p = tmp / "foreign-marks-19-poison.db"
+        con19p = sqlite3.connect(str(db19p))
+        con19p.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+        con19p.execute("INSERT INTO meta(key,value) VALUES ('group_name','bite619poison')")
+        con19p.execute("""CREATE TABLE phoenix_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT, section TEXT, body TEXT,
+            body_chars INTEGER, saved_at TEXT, actor TEXT, reason TEXT, prev_chars INTEGER)""")
+        con19p.execute("CREATE TABLE schema_migrations (version TEXT PRIMARY KEY, applied_at TEXT, note TEXT)")
+        con19p.commit(); con19p.close()
+        subprocess.run([sys.executable, str(step_905), "--db", str(db19p)],
+                       capture_output=True, text=True, encoding="utf-8", timeout=60, env=env)
+        con19p = sqlite3.connect(str(db19p))
+        for role19, at19 in foreign_roles_19:
+            con19p.execute("INSERT INTO role_rebirths(role, at, source, noted_by) VALUES (?,?,?,?)",
+                           (role19, at19, "transcript:seed19", "tool:20260905-phoenix-history-archive"))
+        con19p.execute("INSERT INTO role_rebirths(role, at, source, noted_by) VALUES (?,?,?,?)",
+                       ("BITE619ROLE", "2026-09-10 08:00:00", "rebirth-mark", "BITE619ROLE"))
+        con19p.commit(); con19p.close()
+        step_915_src = step_915.read_text(encoding="utf-8")
+        step_915_anchor = (
+            '    candidates = conn.execute(\n'
+            '        "SELECT id, role, at, source, noted_by, noted_at FROM role_rebirths "\n'
+            '        "WHERE noted_by = ? AND source LIKE ? ORDER BY role, at",\n'
+            '        (FOREIGN_NOTED_BY, FOREIGN_SOURCE_LIKE)).fetchall()\n'
+        )
+        if step_915_src.count(step_915_anchor) != 1:
+            sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: блок запроса candidates не найден дословно в "
+                     "20260915-foreign-rebirth-marks.py — испытуемое изменилось, поломка ⑲ "
+                     "бьёт мимо")
+        atlas_role_names = ("CHROME", "COORD", "CORE", "ING", "OPSSRE", "PROTO", "RCC", "STUD", "TAXO")
+        poisoned_query = (
+            '    candidates = conn.execute(\n'
+            '        "SELECT id, role, at, source, noted_by, noted_at FROM role_rebirths "\n'
+            '        "WHERE role IN (' + ",".join(f"\'{r}\'" for r in atlas_role_names) + ') '
+            'ORDER BY role, at").fetchall()  # ПОЛОМКА: различитель по имени роли\n'
+        )
+        step_915_poisoned = pack_633 / "scripts" / "migrations" / "20260915-foreign-rebirth-marks-by-role-name.py"
+        step_915_poisoned.write_text(step_915_src.replace(step_915_anchor, poisoned_query, 1),
+                                     encoding="utf-8")
+        r19p = subprocess.run([sys.executable, str(step_915_poisoned), "--db", str(db19p)],
+                              capture_output=True, text=True, encoding="utf-8", timeout=60, env=env)
+        con19p = sqlite3.connect(str(db19p))
+        n_foreign19p = con19p.execute("SELECT count(*) FROM role_rebirths_foreign").fetchone()[0]
+        coord_a_moved19p = con19p.execute(
+            "SELECT count(*) FROM role_rebirths_foreign WHERE role='COORD-A'").fetchone()[0]
+        con19p.close()
+        ok &= case("⑲ ПОЛОМКА (различитель по имени роли вместо автора/источника) КРАСИТ "
+                  "случай ⑲ — переведённая строка COORD-A остаётся, перенесено 16, не 18",
+                  r19p.returncode == 0 and n_foreign19p == 16 and coord_a_moved19p == 0,
+                  f"код {r19p.returncode}; role_rebirths_foreign {n_foreign19p} (ждём 16 — "
+                  f"COORD-A под этим различителем не считается чужой); COORD-A перенесено "
+                  f"{coord_a_moved19p} (ждём 0)", differ=True)
+
     finally:
         mezo_stand.release(tmp)  # уборка отложена до исхода прогона
 

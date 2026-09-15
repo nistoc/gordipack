@@ -278,6 +278,85 @@ def main():
                                                    body, re.M)}
     print(f"  ✅ Инструменты: {copied} скриптов + {linked} звеньев (замером) → {tools_dir}")
 
+    # 6б. ШАГИ СХЕМЫ СВЕРХ БАЗОВОЙ ОТМЕТКИ (карточка #633). 🪤 НАЙДЕНО COORD 2026-09-14 при
+    # приёмке карточки #632: сборка кладёт базу ИЗ ФАЙЛА СХЕМЫ и на этом останавливается —
+    # шаги migrations/, накатанные на эталонном контуре ПОСЛЕ базовой отметки, свежий контур
+    # не получал вовсе: таблиц памяти (архив, записи, индекс поиска) в нём не было, и поиск
+    # по памяти отказывал первой же роли трижды подряд.
+    # ⚖️ ПОРЯДОК — ЯВНЫЙ СПИСОК (schema_step_order.py), НЕ АЛФАВИТ ИМЁН ФАЙЛОВ: по алфавиту
+    # …phoenix-records-autoincrement встаёт раньше …phoenix-records, от которого зависит.
+    # Список — порядок, в котором шаги применены в живом контуре Atlas (замер 2026-09-15).
+    # ⚡ Зовём КОПИИ шагов из tools_dir/migrations (то, что реально приехало ЭТОМУ контуру),
+    # не шаблонные SCRIPT_DIR/migrations — тот же приём, что у опоры правил пакета (7б″):
+    # потребитель получает то, что получил, а не то, что запущено из шаблона.
+    import subprocess as _sp_mig
+    import schema_step_order
+    migr_dir = tools_dir / "migrations"
+    on_disk = {p.stem for p in migr_dir.glob("*.py")} if migr_dir.is_dir() else set()
+    listed = set(schema_step_order.STEPS)
+    # ⚖️ СРАВНЕНИЕ — ТОЛЬКО СРЕДИ ФАЙЛОВ ПОСЛЕ БАЗОВОЙ ВЕХИ. migrations/ хранит ВСЮ историю
+    # шагов, включая те, что давно влиты в САМ ФАЙЛ СХЕМЫ статикой CREATE TABLE (schema_
+    # step_order.STEPS их сознательно не перечисляет — см. докстроку модуля). Без этой
+    # отсечки сверка звала бы «отставшим» весь хвост допотопных файлов на каждой сборке.
+    # Веха базовой схемы — из имени SCHEMA_FILE ('mezosync_v5.sql' → 'v5'); её дата — из
+    # одноимённого файла шага-вехи в migrations/ ('20260828-milestone-v5.py' → '20260828').
+    base_milestone = "v" + "".join(ch for ch in SCHEMA_FILE.stem.split("_v")[-1] if ch.isdigit())
+    base_milestone_files = sorted(migr_dir.glob(f"*-milestone-{base_milestone}.py")) if migr_dir.is_dir() else []
+    base_date = base_milestone_files[0].name[:8] if base_milestone_files else None
+    on_disk_since_base = {s for s in on_disk
+                          if base_date is None or not (len(s) >= 8 and s[:8].isdigit()) or s[:8] > base_date}
+    # ⛔ ФАЙЛ ШАГА В migrations/ (ПОСЛЕ БАЗОВОЙ ВЕХИ), КОТОРОГО НЕТ В СПИСКЕ (и наоборот), —
+    # ГРОМКОЕ ПРЕДУПРЕЖДЕНИЕ С ИМЕНЕМ: список, отставший молча, хуже пустого — он выглядит
+    # полным до первой проверки.
+    extra_on_disk = sorted(on_disk_since_base - listed)
+    missing_on_disk = sorted(listed - on_disk)
+    if extra_on_disk:
+        print(f"  ⚠️ В migrations/ ЕСТЬ файлы, которых НЕТ в schema_step_order.STEPS: "
+              f"{', '.join(extra_on_disk)} — список отстал, они применены НЕ БУДУТ")
+        soft_failures.append(f"schema_step_order.py отстал от migrations/: "
+                             f"{', '.join(extra_on_disk)}")
+    if missing_on_disk:
+        print(f"  ⚠️ В schema_step_order.STEPS есть шаги, которых НЕТ в migrations/: "
+              f"{', '.join(missing_on_disk)} — список забежал вперёд файлов")
+        soft_failures.append(f"schema_step_order.py называет шаги без файла: "
+                             f"{', '.join(missing_on_disk)}")
+
+    considered = [s for s in schema_step_order.STEPS if s in on_disk]
+    step_conn = sqlite3.connect(str(db_path))
+    already_have = {r[0] for r in step_conn.execute("SELECT version FROM schema_migrations")}
+    step_conn.close()
+    applied_now = 0
+    # ⚖️ MEZO_ROLE НЕ ВЫСТАВЛЯЕМ подпроцессу шага нарочно: если бы мы передали среду СБОРЩИКА
+    # как есть, а вызывающий init-group.py процесс сам был бы позван с MEZO_ROLE=<чужая роль>,
+    # автор в журнале схемы (schema_journal._who) записал бы ЧУЖУЮ роль исполнителем шага,
+    # которого она не применяла. Явно снимаем переменную — автором ляжет tool:<имя файла шага>.
+    step_env = dict(os.environ)
+    step_env.pop("MEZO_ROLE", None)
+    for step in considered:
+        journal_name = schema_step_order.journal_version(step)
+        if journal_name in already_have:
+            continue                          # уже в журнале — список применяет, чего НЕТ
+        step_file = migr_dir / f"{step}.py"
+        r = _sp_mig.run([sys.executable, str(step_file), "--db", str(db_path)],
+                        capture_output=True, text=True, timeout=120, env=step_env)
+        step_out = ((r.stdout or "") + (r.stderr or "")).strip()
+        last_line = next((ln for ln in step_out.splitlines()[::-1] if ln.strip()), "")
+        if r.returncode != 0:
+            sys.exit(f"⛔ СБОРКА ОСТАНОВЛЕНА: шаг схемы «{step}» отказал (код {r.returncode}):\n"
+                     f"     {last_line[:300]}\n"
+                     f"     Дальнейшие шаги схемы НЕ применялись — без молчаливого "
+                     f"продолжения. Прогони шаг сам для полного вывода: python {step_file} "
+                     f"--db {db_path}")
+        applied_now += 1
+        print(f"  ✅ шаг схемы «{step}»: {last_line[:150]}")
+    step_conn = sqlite3.connect(str(db_path))
+    ver_row = step_conn.execute("SELECT version, steps_after_milestone FROM schema_version").fetchone()
+    step_conn.close()
+    ver_name = ver_row[0] if ver_row and ver_row[0] else "?"
+    ver_after = ver_row[1] if ver_row else "?"
+    print(f"  ✅ шаги схемы: применено {applied_now} из {len(considered)} · версия схемы "
+          f"{ver_name} · сверх отметки {ver_after}")
+
     # 7б′. ОТПЕЧАТКИ ПОЛОЖЕННОГО — «с чем сравнивать потом». Без них обновлятор не может
     # отличить «файл правил ты» от «файл правил источник» и вынужден либо затирать чужую
     # работу молча, либо отказываться обновлять вовсе. Первое мы обещали не делать (и год

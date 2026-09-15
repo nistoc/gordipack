@@ -49,18 +49,30 @@ def _gh(*args):
 # владелец координатора словом (как уже менялись зоны CHROME/OPSSRE/PROTO по roster.json),
 # литерал остался бы верен вчера и ошибался бы молча сегодня, отказывая НАСТОЯЩЕМУ
 # координатору и пропуская самозванца с именем COORD, если оно освободится.
+# 🩸 КАРТОЧКА #645 (та же находка AIA, следующий слой): первая правка убрала литерал
+# из ОТВЕТА, но не из ПОВЕДЕНИЯ — при 0 или >1 найденных ролях писатель ВСЁ РАВНО
+# судился именем «COORD» (только предупреждение в stderr). В контуре БЕЗ роли COORD
+# это судит писателя по чужому имени: настоящий координатор получает отказ, а роль
+# по имени «COORD» (если заведут) прошла бы. Теперь при неоднозначности — ОТКАЗ,
+# а не тихая (или полу-громкая) подстановка.
 def _find_coordinator(db_path=None):
-    """(имя, источник) — координатор контура ИЗ ДАННЫХ, не литералом.
+    """(имя_или_None, пояснение) — координатор контура ИЗ ДАННЫХ.
 
     Источник данных — `roles.lifecycle_reason`: единственное МЕСТО КОНТУРА, где роль
     названа координатором СТРУКТУРНО (полем таблицы, а не прозой правила). Правило свода
     role-roster-and-zones несёт то же самое, но текстом markdown — разбирать его регуляркой
     ради одного слова означало бы завести ВТОРОЙ, более хрупкий путь к тому же факту.
-    Находит РОВНО ОДНУ живую роль — иначе (нашлось 0 или больше 1, база недоступна) падает
-    на запасной литерал «COORD» и ГОВОРИТ ОБ ЭТОМ, откуда взять верное.
+    Находит РОВНО ОДНУ живую роль — имя, источник «roles.lifecycle_reason». Иначе
+    (нашлось 0, нашлось больше 1, база недоступна) — имя None, а пояснение называет,
+    ЧТО НАЙДЕНО (сколько и какие) и КАК назвать координатора в контуре: писателя
+    подставлять НЕЛЬЗЯ, литерал здесь и был дефектом.
     """
     import mezo_paths
     import sqlite3
+    how_to_name = (
+        "назвать координатора в контуре: вписать слово «координатор» в "
+        "roles.lifecycle_reason РОВНО ОДНОЙ живой роли, либо спросить "
+        "python <s>/set-rule.py --key role-roster-and-zones --show")
     try:
         db = db_path or mezo_paths.live_db(__file__)
         con = sqlite3.connect(f"file:{Path(db).as_posix()}?mode=ro", uri=True, timeout=3)
@@ -70,21 +82,21 @@ def _find_coordinator(db_path=None):
                 "AND lifecycle_reason LIKE '%координатор%'").fetchall()
         finally:
             con.close()
-        if len(rows) == 1:
-            return rows[0][0].upper(), "roles.lifecycle_reason (таблица ролей контура)"
-    except Exception:  # noqa: BLE001 — отказ базы откатывает к запасному пути, не роняет писателя
-        pass
-    return "COORD", (
-        "ЗАПАСНОЙ ЛИТЕРАЛ: не нашёл РОВНО ОДНУ живую роль-координатора в "
-        "roles.lifecycle_reason (база недоступна, роль не одна или не названа вовсе). "
-        "Верный источник: python <s>/set-rule.py --key role-roster-and-zones --show, "
-        "либо таблица roles (столбец lifecycle_reason)")
+    except Exception as e:  # noqa: BLE001 — база недоступна: координатора НЕ НАШЛИ, не литерал
+        return None, (f"база координатора недоступна ({e.__class__.__name__}) — "
+                       f"найдено 0 ролей. {how_to_name}")
+    names = sorted(r[0].upper() for r in rows)
+    if len(names) == 1:
+        return names[0], "roles.lifecycle_reason (таблица ролей контура)"
+    found = ("найдено 0 живых ролей-координаторов" if not names
+             else f"найдено {len(names)}: {', '.join(names)}")
+    return None, f"{found} в roles.lifecycle_reason. {how_to_name}"
 
 
 def _writer_gate(role, db_path=None):
     coordinator, source = _find_coordinator(db_path)
-    if not source.startswith("roles.lifecycle_reason"):
-        print(f"⚠️ координатор взят {source}", file=sys.stderr)
+    if coordinator is None:
+        sys.exit(f"⛔ координатор контура НЕ ОПРЕДЕЛЁН ОДНОЗНАЧНО: {source}")
     if (role or "").upper() != coordinator:
         sys.exit(f"⛔ писатель канала ОДИН — координатор {coordinator} (правило «один "
                  f"писатель на канал»; канал публичный). Отдай текст {coordinator} "

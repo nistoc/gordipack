@@ -65,6 +65,16 @@ def is_cta(tags_json):
         return False
 
 
+def is_ackable(tags_json):
+    """Предмет подтверждения ШИРЕ, чем «объявление»: то же самое, что судят читатель
+    и «--ack» — объявление (ALL) ИЛИ призыв (CTA). Иначе записка с CTA без ALL не
+    попадает в инбокс и «--ack» отвечает «не объявление — пропуск», а «--status» ждёт
+    её вечно (предложение AIA 02, карточка #644, замер их живой базы 2026-09-15:
+    семь таких записок «ждали» навсегда). «--status» по-прежнему считает призывы
+    СВОИМ прежним предикатом (is_cta) — расширение касается только подтверждения."""
+    return is_broadcast(tags_json) or is_cta(tags_json)
+
+
 def main():
     p = argparse.ArgumentParser(description="Читать/подтверждать broadcast-объявления")
     # R15a довезён 27.07: скрипт стоит в шапке пробуждения, а канон уже учит форме БЕЗ --db ⇒
@@ -112,7 +122,7 @@ def _inbox(conn, role, show_all):
 
     shown = []
     for mid, writer, ts, body, tags, prio in rows:
-        if not is_broadcast(tags):
+        if not is_ackable(tags):
             continue
         if writer.upper() == role.upper():
             continue  # свои не показываем
@@ -146,7 +156,7 @@ def _ack(conn, role, ids):
         # ⚡ Через ВИД: объявление всем живёт месяцами, и после переноса старых записок
         # в архив запрос к живой таблице переставал находить их МОЛЧА (карточка #538 шаг ③).
         row = conn.execute("SELECT tags FROM messages_all WHERE id = ?", (mid,)).fetchone()
-        if not row or not is_broadcast(row[0]):
+        if not row or not is_ackable(row[0]):
             print(f"  ⚠️ #{mid} не broadcast — пропуск")
             continue
         conn.execute(
@@ -158,7 +168,7 @@ def _ack(conn, role, ids):
 
 def _status(conn):
     # известные роли группы — из отметок прочитанного, таблица read_cursors (нормализуем к UPPER)
-    roles = {r[0].upper() for r in conn.execute("SELECT reader_role FROM read_cursors")}
+    roles_all = {r[0].upper() for r in conn.execute("SELECT reader_role FROM read_cursors")}
     ctas = [(mid, w, ts) for mid, w, ts, tags in conn.execute(
         "SELECT id, writer_role, timestamp, tags FROM messages "
         "ORDER BY timestamp ASC, id ASC") if is_cta(tags)]
@@ -166,6 +176,24 @@ def _status(conn):
     if not ctas:
         print("✅ Нет CTA-broadcast'ов.")
         return
+
+    # ⚡ КРУГ ОЖИДАЕМЫХ — БЕЗ СНЯТЫХ РОЛЕЙ (предложение AIA 02, карточка #644): курсор
+    # снятой роли остаётся в read_cursors навсегда, и «ждём» держало имя, которое
+    # никогда не ответит (у AIA — 11 таких вечных строк). Источник снятия — НАШ:
+    # таблица roles, lifecycle='closed' (так у нас сняты EYE и GRF); их отдельный модуль
+    # реестра ролей НЕ переносится. Базы без таблицы roles — круг КАК ПРЕЖДЕ, и это
+    # называется словами: снятых узнать неоткуда, не «их нет».
+    try:
+        closed = {r[0].upper() for r in conn.execute(
+            "SELECT role FROM roles WHERE lifecycle='closed'")}
+        roles = roles_all - closed
+        excluded = sorted(roles_all & closed)
+        if excluded:
+            print(f"исключены из круга ожидаемых (roles.lifecycle='closed'): "
+                  f"{', '.join(excluded)}")
+    except sqlite3.OperationalError:
+        roles = roles_all
+        print("ℹ️ таблицы roles нет — снятых ролей узнать неоткуда, круг как прежде")
 
     for mid, writer, ts in ctas:
         acked = {r[0].upper() for r in conn.execute(

@@ -197,10 +197,23 @@ def main() -> int:
              and {"role_rebirths", "phoenix_history_archive"} <= tables and in_journal == 1,
              r.stdout.strip().splitlines()[-1] if r.stdout.strip() else r.stderr[-300:])
         n_reb = conn.execute("SELECT count(*) FROM role_rebirths").fetchone()[0]
-        case("⓪-бис отметки пересоздания засеяны (18, у 9 ролей, у каждой источник)",
-             n_reb == 18 and conn.execute("SELECT count(DISTINCT role) FROM role_rebirths").fetchone()[0] == 9
-             and conn.execute("SELECT count(*) FROM role_rebirths WHERE source NOT LIKE 'transcript:%'").fetchone()[0] == 0,
-             f"отметок {n_reb}")
+        # ⚡ КАРТОЧКА #640: шаг 20260905 засевает 18 отметок пересоздания КОНТУРА ATLAS
+        # только в контур Atlas (meta.group_name == 'atlas', тот же различитель, что у
+        # самого шага схемы) — в контуре из пакета GORDI (любое другое имя контура, или
+        # его отсутствие в meta) их 0, и это ОЖИДАЕМОЕ поведение шага, не провал приёмки.
+        group_row = conn.execute("SELECT value FROM meta WHERE key='group_name'").fetchone()
+        group_name = group_row[0] if group_row else None
+        is_atlas_circuit = group_name == "atlas"
+        if is_atlas_circuit:
+            case("⓪-бис в контуре Atlas отметки пересоздания засеяны (18, у 9 ролей, у каждой источник)",
+                 n_reb == 18 and conn.execute("SELECT count(DISTINCT role) FROM role_rebirths").fetchone()[0] == 9
+                 and conn.execute("SELECT count(*) FROM role_rebirths WHERE source NOT LIKE 'transcript:%'").fetchone()[0] == 0,
+                 f"контур {group_name!r} · отметок {n_reb}")
+        else:
+            case(f"⓪-бис в контуре НЕ Atlas (имя {group_name!r}) шаг не засевает чужих "
+                 f"отметок Atlas (0)",
+                 n_reb == 0,
+                 f"контур {group_name!r} · отметок {n_reb}")
         # ⚡ КАРТОЧКА #628: копия живой базы несёт РЕАЛЬНЫЙ архив роли (save-phoenix.py —
         # по счёту версий, прежние прогоны fold — по возрасту): у PROTO 73 версии ДО этого
         # опыта. «archived» ниже обязан быть тем, что унесла ИМЕННО эта свёртка — чистим
