@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { api } from './api';
 import { usePolling } from './usePolling';
+import { useUrlEnum } from './useUrlState';
 import type { Health, Overview } from './types';
 import { SourceBar } from './components/SourceBar';
 import { StatCard } from './components/MeasureValue';
@@ -23,8 +24,13 @@ const TABS: Array<{ id: Tab; title: string }> = [
   { id: 'schema', title: 'Схема' },
 ];
 
+const TAB_IDS: readonly Tab[] = TABS.map((t) => t.id);
+
 export default function App() {
-  const [tab, setTab] = useState<Tab>('tasks');
+  // Открытая вкладка живёт В АДРЕСЕ (?page=…), как фильтры страниц: иначе перезагрузка
+  // возвращала на «Задачи», а фильтры «Динамики задач» из адреса оставались без своей
+  // страницы. Смена вкладки — шаг истории: «назад» возвращает на прежнюю вкладку.
+  const [tab, setTab] = useUrlEnum<Tab>('page', TAB_IDS, 'tasks', 'push');
   const [generation, setGeneration] = useState(0);
 
   // Состояние сервиса опрашиваем чаще, чем данные: по нему видно,
