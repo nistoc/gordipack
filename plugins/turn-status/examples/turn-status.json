@@ -1,0 +1,18 @@
+{
+  "enabled": true,
+  "oneLine": true,
+  "maxChars": 600,
+  "cutMark": " ...[обрезано]",
+  "activateOnly": { "markerPath": ".mezosync/mezosync.db" },
+  "sources": [
+    {
+      "name": "непрочитанные записки",
+      "command": "python",
+      "args": ["C:/github/.onto/onto-archs/tools/unread-notes.py", "--session-id", "{sessionId}"],
+      "timeoutMs": 4000,
+      "maxChars": 400,
+      "onFailure": "loud",
+      "failMessage": "Счёт непрочитанных записок не пришёл ({output}). Пока он молчит, смотреть вручную: python C:/github/.onto/.mezosync/scripts/read-messages.py --role <ТВОЯ РОЛЬ>"
+    }
+  ]
+}

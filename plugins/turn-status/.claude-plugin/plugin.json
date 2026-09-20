@@ -1,0 +1,10 @@
+{
+  "name": "turn-status",
+  "displayName": "A number the turn brings",
+  "version": "0.1.0",
+  "description": "Runs a command you configure before each turn and puts its short answer into that turn, so a number the agent would otherwise have to remember to go and look up arrives on its own.",
+  "author": { "name": "Ideator Lab", "url": "https://github.com/ideator-lab" },
+  "keywords": ["hooks", "context", "multi-agent", "userpromptsubmit"],
+  "license": "Apache-2.0",
+  "repository": "https://github.com/ideator-lab/claude-plugins"
+}

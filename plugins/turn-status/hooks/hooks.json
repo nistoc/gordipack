@@ -1,0 +1,12 @@
+{
+  "description": "Puts the freshly measured answer of a configured command into every turn.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/status.js"], "timeout": 10 }
+        ]
+      }
+    ]
+  }
+}
