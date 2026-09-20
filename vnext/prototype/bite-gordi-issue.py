@@ -17,11 +17,16 @@ r"""bite-gordi-issue.py — приёмка гейта писателя кана�
   ④ ГЛАВНЫЙ ВСТРЕЧНЫЙ: координатор в данных — ДРУГАЯ роль (не «COORD») → эта
      роль пишет, а буквальный «COORD» — уже НЕТ (доказывает, что источник данных
      ДЕЙСТВУЕТ, а не разбор данных ради проформы поверх старого литерала)          РАЗЛИЧАЮЩИЙ
+  ⑤ ⑤-бис РЕГИСТР КИРИЛЛИЦЫ: причина роли написана с заглавной и прописными —
+     слово всё равно найдено (возврат COORD 2026-09-15: запрос LIKE сворачивает
+     регистр только у латиницы и такую причину не видел вовсе)                   РАЗЛИЧАЮЩИЙ
 
 НАРОЧНАЯ ПОЛОМКА (--porcha revert-to-literal): _writer_gate возвращён к литералу «COORD» —
 ждём красным РОВНО ④ (роль-координатор из данных «TAXO» перестаёт писать, а «COORD» —
 роль, переставшая быть координатором — снова пишет); ① ② ③ целы, потому что в них
 координатор данных СОВПАДАЕТ с «COORD» и литерал их не различает.
+ВТОРАЯ НАРОЧНАЯ ПОЛОМКА (--porcha revert-to-like): слово ищется запросом LIKE вместо
+casefold() — ждём красным РОВНО ⑤ и ⑤-бис; ①–④ целы (там причина записана строчными).
 
 ⛔ Живой базы не касается: работает на КОПИИ (backup API) в своём временном контейнере
 (структура `<конт>/.mezosync/mezosync.db`, опознаётся `MEZO_CONTAINER`). Сеть (`gh`) не
@@ -67,8 +72,10 @@ def call_tool(tool: Path, container: Path, *args):
 def main() -> int:
     import argparse
     ap = argparse.ArgumentParser()
-    ap.add_argument("--porcha", choices=["revert-to-literal"],
-                    help="нарочная поломка: вернуть проверку писателя к литералу «COORD»")
+    ap.add_argument("--porcha", choices=["revert-to-literal", "revert-to-like"],
+                    help="нарочная поломка: revert-to-literal — вернуть проверку писателя "
+                         "к литералу «COORD»; revert-to-like — вернуть отбор слова запросом "
+                         "LIKE, слепым к заглавной кириллице")
     a = ap.parse_args()
 
     live_tool = Path(__file__).resolve().parent.parent / ".mezosync" / "scripts" / "gordi-issue.py"
@@ -113,6 +120,24 @@ def main() -> int:
                   "снова подставляется литерал «COORD» БЕЗ отказа. Ждём красным РОВНО ③ и "
                   "③-бис; ①②④ целы (там всегда ровно одна роль, путь через литерал не "
                   "задействован)\n")
+
+        if a.porcha == "revert-to-like":
+            # 🎯 Порча возвращает ВТОРУЮ половину карточки #645: регистр слова больше
+            # не сворачивается — ровно так вела себя прежняя выборка запросом LIKE
+            # (в SQLite он сворачивает регистр только у латиницы). Краснеют РОВНО
+            # ⑤ и ⑤-бис (причина с заглавной кириллицы); ①–④ целы: там причина
+            # записана строчными, и слепой к регистру поиск её находит.
+            text = tool.read_text(encoding="utf-8")
+            old = '\n'.join([
+                '    names = sorted(role.upper() for role, reason in rows',
+                '                   if "координатор" in (reason or "").casefold())'])
+            new = '\n'.join([
+                '    names = sorted(role.upper() for role, reason in rows',
+                '                   if "координатор" in (reason or ""))'])
+            assert text.count(old) == 1, f"поломка НЕ ЛЕГЛА: найдено {text.count(old)}"
+            tool.write_text(text.replace(old, new), encoding="utf-8")
+            print("🧪 НАРОЧНАЯ ПОЛОМКА «revert-to-like»: регистр слова больше не сворачивается. "
+                  "Ждём красным РОВНО ⑤ и ⑤-бис; ①–④ целы\n")
 
         # ① координатор из данных (сейчас — COORD) пишет
         code1, out1 = call_tool(tool, container, "--role", "COORD", "--title", "t",
@@ -182,6 +207,24 @@ def main() -> int:
              code4a == 0 and code4b != 0 and "координатор TAXO" in out4b,
              f"TAXO код {code4a} · COORD код {code4b} · координатор назван TAXO в отказе: "
              f"{'да' if 'координатор TAXO' in out4b else 'НЕТ'}", differ=True)
+
+        # ⑤ и ⑤-бис РЕГИСТР КИРИЛЛИЦЫ (возврат COORD по карточке #645, 2026-09-15):
+        # причина роли начинается с заглавной — обычное начало фразы. Запрос LIKE такую
+        # причину НЕ находил, и координатор становился «не найден» на ровном месте.
+        for mark, reason in (("⑤", "Координатор контура; проба заглавной"),
+                             ("⑤-бис", "КООРДИНАТОР КОНТУРА; ПРОБА ПРОПИСНЫХ")):
+            con = sqlite3.connect(str(db))
+            con.execute("UPDATE roles SET lifecycle_reason='рядовая зона контура' "
+                        "WHERE role='TAXO'")
+            con.execute("UPDATE roles SET lifecycle_reason=? WHERE role='COORD'", (reason,))
+            con.commit()
+            con.close()
+            code5, out5 = call_tool(tool, container, "--role", "COORD", "--title", "t",
+                                    "--body-file", str(body_file), "--dry-run")
+            case(f"{mark} причина «{reason[:28]}…» — слово найдено, писатель пропущен",
+                 code5 == 0 and "⟨ВХОЛОСТУЮ⟩" in out5,
+                 f"код {code5} · отказ: {'нет' if code5 == 0 else out5.strip()[:120]}",
+                 differ=True)
 
         print("")
         print(f"ИТОГ: {PASSED} из {CASES} · различающих {DIFFER}")

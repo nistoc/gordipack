@@ -69,23 +69,31 @@ def _find_coordinator(db_path=None):
     """
     import mezo_paths
     import sqlite3
+    set_rule = (Path(__file__).resolve().parent / "set-rule.py").as_posix()
     how_to_name = (
         "назвать координатора в контуре: вписать слово «координатор» в "
         "roles.lifecycle_reason РОВНО ОДНОЙ живой роли, либо спросить "
-        "python <s>/set-rule.py --key role-roster-and-zones --show")
+        f"python {set_rule} --key role-roster-and-zones --show")
     try:
         db = db_path or mezo_paths.live_db(__file__)
         con = sqlite3.connect(f"file:{Path(db).as_posix()}?mode=ro", uri=True, timeout=3)
         try:
             rows = con.execute(
-                "SELECT role FROM roles WHERE lifecycle='alive' "
-                "AND lifecycle_reason LIKE '%координатор%'").fetchall()
+                "SELECT role, lifecycle_reason FROM roles WHERE lifecycle='alive' "
+                "AND lifecycle_reason IS NOT NULL").fetchall()
         finally:
             con.close()
     except Exception as e:  # noqa: BLE001 — база недоступна: координатора НЕ НАШЛИ, не литерал
         return None, (f"база координатора недоступна ({e.__class__.__name__}) — "
                        f"найдено 0 ролей. {how_to_name}")
-    names = sorted(r[0].upper() for r in rows)
+    # 🪤 ВТОРАЯ ПОЛОВИНА ТОЙ ЖЕ БЕДЫ, нашла COORD приёмкой 2026-09-15 (карточка #645):
+    # в SQLite LIKE сворачивает регистр ТОЛЬКО у латиницы, у кириллицы — нет. Роль,
+    # у которой причина начинается с заглавной («Координатор контура…»), не находилась
+    # вовсе, и инструмент отказывал словами «вписать слово «координатор»» — то есть
+    # велел вписать уже вписанное. Поэтому живые роли берутся запросом, а слово ищется
+    # здесь, через casefold(): он сворачивает регистр любого письма.
+    names = sorted(role.upper() for role, reason in rows
+                   if "координатор" in (reason or "").casefold())
     if len(names) == 1:
         return names[0], "roles.lifecycle_reason (таблица ролей контура)"
     found = ("найдено 0 живых ролей-координаторов" if not names
