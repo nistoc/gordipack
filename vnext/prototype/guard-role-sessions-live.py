@@ -100,6 +100,11 @@ def main() -> int:
         elif record.archived:
             findings.append((role, sid, "сессия В АРХИВЕ"))
 
+    if not rows:
+        # Ноль записанных — не «все живы»: сверять было нечего, и это печатается своими словами.
+        print(f"ℹ️ ни у одной роли номер сессии не записан — сверять нечего "
+              f"(хранилище: {store.path})")
+        return 0
     if not findings:
         print(f"✅ session_id живы у всех {len(rows)} ролей, у кого он записан "
               f"(хранилище: {store.path})")
