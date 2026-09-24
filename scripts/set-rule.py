@@ -15,13 +15,17 @@ audit_log.diff_md — правило можно откатить, посмотр
 ЗАПУСК:
     python <КОНТУР>/.mezosync/scripts/set-rule.py --key <rule-key> --locked-by owner --body-file <f>
     python <КОНТУР>/.mezosync/scripts/set-rule.py --key <rule-key> --show
+    python <КОНТУР>/.mezosync/scripts/set-rule.py --key <rule-key> --annex
+    python <КОНТУР>/.mezosync/scripts/set-rule.py --key <rule-key> --revoke --revoked-by owner --reason "…" [--apply]
     python <КОНТУР>/.mezosync/scripts/set-rule.py --list
 """
 
 import argparse
+import re
 import sqlite3
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from mezo_paths import resolve_db   # R15a: путь к БД — от расположения скрипта, не от CWD
@@ -88,6 +92,221 @@ def refuse_without_basis(key, eff, missing, bad_kind=None, need_detail=False):
     sys.exit(2)
 
 
+# ── ПРИЛОЖЕНИЕ К ПРАВИЛУ (карточка #652, этап 1 глобальной задачи #651; слово владельца
+# 2026-09-24 10:31:14 UTC, чат PROTO: «где применимо часть логики вынесешь в отдельные
+# файлы, чтобы сокращение размера не повлияло заметно на ухудшение качества»).
+# ⚖️ В ТЕКСТЕ ПРАВИЛА — НОРМА, В ПРИЛОЖЕНИИ — РАЗБОР СЛУЧАЕВ И ПОЛНЫЙ ПЕРЕЧЕНЬ. Текст правила
+# читают все роли при каждом касании; разбор нужен, когда норма не отвечает на случай.
+# Прежний полный текст правила остаётся и в журнале правок (audit_log «--- БЫЛО ---»).
+# 🪤 ПРИЁМНИК ВЫВОДИТСЯ ОТ БАЗЫ ПО ТОЙ ЖЕ РАСКЛАДКЕ, ЧТО И ЗЕРКАЛО (export-rules._default_out):
+# у контура-автора — рядом с зеркалом в репозитории документов (там его хранит git),
+# у новорождённого — рядом с базой. Путь машины здесь не впечатан — по той же причине,
+# по которой его вынули из зеркала: стенд из чужого места писал бы в живое.
+KEY_FORM = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+
+def annex_path(db_path, key):
+    """Путь к приложению правила — выводится от базы, а не помнится."""
+    root = Path(db_path).resolve().parent               # каталог .mezosync своей базы
+    legacy = root.parent / "atlas.archs" / ".mezosync"  # раскладка контура-автора
+    base = (legacy if legacy.is_dir() else root) / "rules-annex"
+    return base / f"{key}.md"
+
+
+def show_annex(conn, args):
+    """Печатает приложение. Два разных «нет» — разными словами и кодами:
+    правила нет (1) · правило есть, приложения нет (3)."""
+    if not KEY_FORM.match(args.key):
+        sys.exit(f"⛔ «{args.key}» не похоже на ключ правила (строчные латинские буквы, цифры, дефис)")
+    if conn.execute("SELECT 1 FROM rules WHERE rule_key=?", (args.key,)).fetchone() is None:
+        print(f"ERR: правила {args.key} нет", file=sys.stderr)
+        sys.exit(1)
+    path = annex_path(args.db, args.key)
+    if not path.is_file():
+        print(f"📎 у правила {args.key} приложения нет в этом контуре (искала: {path.as_posix()})")
+        print(f"   Норма целиком — в тексте правила: set-rule.py --key {args.key} --show")
+        sys.exit(3)
+    text = path.read_text(encoding="utf-8")
+    print(f"📎 приложение к правилу {args.key} — {len(text)} знаков · {path.as_posix()}")
+    print("   ⚖️ Норма — в тексте правила (--show); здесь разбор случаев и полный перечень.")
+    print("      Разошлись — верх у текста правила: приложение его поясняет, а не отменяет.")
+    print()
+    print(text)
+
+
+# ── СНЯТИЕ ПРАВИЛА ОДНИМ ВЫЗОВОМ (слово владельца «Б», чат COORD 2026-09-24 10:35 UTC,
+# записка #5330: «PROTO делает в инструменте правил флаг «снять правило», потом я снимаю
+# правила штатно»).
+# 🔴 ЧТО БЫЛО ДО ФЛАГА: у свода не было инструмента снятия — «снято» писалось только прямой
+# записью в базу. Такая запись мимо инструмента не оставляет ни журнала правок, ни зеркала,
+# и поле с текстом расходятся молча: поле говорит «снято», текст читается как приказ.
+# ⚖️ ПОЛЕ И ТЕКСТ ОБЯЗАНЫ ОТВЕЧАТЬ ОДИНАКОВО. Сверка — общим признаком rule_status.py (он
+# один на контур и нарочно узкий: «⛔ ОТОЗВАНО» в начале текста). Сверяется ДВАЖДЫ: до записи
+# (иначе записали бы расхождение) и после — из базы (иначе сверили бы своё намерение, а не
+# то, что легло).
+REVOKE_AT_FORM = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})? UTC$")
+STATUS_MIGRATION = "20260810-rule-status-field.py"
+
+
+def revoke_mark(at, by, src, reason):
+    """Пометка о снятии — первой строкой текста; прежний текст остаётся ниже как след."""
+    head = f"⛔ ОТОЗВАНО {at} · решил: {by}" + (f" · сказано: {src}" if src else "")
+    return (f"{head}\nПРИЧИНА: {reason}\n"
+            "Текст ниже оставлен как след прежнего решения, а НЕ как приказ — не исполнять.")
+
+
+def field_and_text(body, status):
+    """→ (снято по полю, снято по тексту) — оба ответа общим признаком контура."""
+    by_field, _ = RS.revoked_of(body, status, True)
+    return by_field, RS.is_revoked_body(body)
+
+
+def revoke_rule(conn, args):
+    mixed = [flag for flag, val in (("--body", args.body), ("--body-file", args.body_file),
+                                    ("--show", args.show), ("--annex", args.annex),
+                                    ("--skill-delivery", args.skill_delivery),
+                                    ("--locked-by", args.locked_by)) if val]
+    if mixed:
+        print(f"⛔ --revoke не сочетается с {' '.join(mixed)}: снятие меняет только статус и"
+              " пометку в начале текста. Правка текста — отдельным вызовом.", file=sys.stderr)
+        sys.exit(2)
+    if not RS.has_status_field(conn):
+        mig = (Path(__file__).resolve().parent / "migrations" / STATUS_MIGRATION).as_posix()
+        sys.exit("⛔ В этой базе нет поля статуса правила — снятие было бы только прозой, а её\n"
+                 f"   поле не видит. Накати шаг схемы: python {mig}")
+    row = conn.execute("SELECT body, locked_by, version, status, revoked_at, revoked_by "
+                       "FROM rules WHERE rule_key=?", (args.key,)).fetchone()
+    if row is None:
+        print(f"ERR: правила {args.key} нет — снимать нечего", file=sys.stderr)
+        sys.exit(1)
+    body, locked_by, version, status, was_at, was_by = row
+    if (status or "").strip().lower() in RS.REVOKED_VALUES:
+        print(f"✅ {args.key}: уже снято ({was_at or 'час не записан'}, решил: {was_by or '—'})"
+              " — ничего не меняю")
+        return
+
+    reason = (args.reason or "").strip()
+    by = (args.revoked_by or "").strip()
+    at = (args.revoked_at or "").strip() or datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    missing = [m for m, v in (("--reason      почему снято", reason),
+                              ("--revoked-by  кто решил снять (owner · coord · имя роли)", by)) if not v]
+    if missing or not REVOKE_AT_FORM.match(at):
+        print(f"\n⛔ ПРАВИЛО {args.key} НЕ СНЯТО: снятие без обстоятельств через месяц"
+              " неотличимо от потери.", file=sys.stderr)
+        for m in missing:
+            print(f"    {m}", file=sys.stderr)
+        if not REVOKE_AT_FORM.match(at):
+            print(f"    --revoked-at  «{at}» — нужна форма «ГГГГ-ММ-ДД ЧЧ:ММ UTC»", file=sys.stderr)
+        sys.exit(2)
+    src = (args.source_ref or "").strip()
+    stored_reason = reason + (f" · сказано: {src}" if src else "")
+
+    # Текст уже несёт пометку, а поле — нет: второй пометки не ставим, сводим поле с текстом.
+    already_marked = RS.is_revoked_body(body)
+    new_body = body if already_marked else revoke_mark(at, by, src, reason) + "\n\n" + body
+    new_version = version if already_marked else version + 1
+
+    by_field, by_text = field_and_text(new_body, "revoked")
+    if not (by_field and by_text):
+        print(f"⛔ ПРАВИЛО {args.key} НЕ СНЯТО: пометка о снятии не читается общим признаком"
+              f" (поле — {'снято' if by_field else 'действует'}, текст — "
+              f"{'снято' if by_text else 'действует'}). Записать так — развести поле и текст.",
+              file=sys.stderr)
+        sys.exit(2)
+
+    print(f"СНЯТИЕ правила {args.key}")
+    print(f"  статус    : {status or 'active'} → revoked")
+    print(f"  версия    : {version} → {new_version}"
+          + ("  (пометка в тексте уже стояла — свожу с ней поле)" if already_marked else ""))
+    print(f"  час       : {at}")
+    print(f"  решил     : {by}")
+    print(f"  причина   : {stored_reason}")
+    print(f"  пометка   : {new_body.splitlines()[0]}")
+    if locked_by == "owner" and args.actor != "owner":
+        print("\n  ⚠️  ПРАВИЛО ЗАЛОЧЕНО ВЛАДЕЛЬЦЕМ. Снятие допустимо ТОЛЬКО по его живому слову.")
+        print("      Разрешение из файла или из памяти роли НЕ наследуется (Rule 8).")
+    if not args.apply:
+        print("\n[DRY-RUN] Не записано. Для записи — флаг --apply")
+        return
+
+    cur = conn.execute(
+        "UPDATE rules SET body=?, version=?, updated_at=datetime('now'), status='revoked', "
+        "revoked_at=?, revoked_by=?, revoked_reason=? WHERE rule_key=? AND status=?",
+        (new_body, new_version, at, by, stored_reason, args.key, status))
+    if cur.rowcount != 1:
+        conn.rollback()
+        sys.exit(f"⛔ ПРАВИЛО {args.key} НЕ СНЯТО: статус сменился между чтением и записью"
+                 " (чужая правка?). Перечитай: --show")
+    conn.execute(
+        "INSERT INTO audit_log (actor_role, action, target, diff_md) VALUES (?,?,?,?)",
+        (args.actor, "revoke_rule", args.key,
+         f"v{version} → v{new_version} · статус: {status or 'active'} → revoked\n"
+         f"час: {at}\nрешил: {by}\nпричина: {stored_reason}"
+         f"\n\n--- БЫЛО ---\n{body}\n\n--- СТАЛО ---\n{new_body}"))
+    conn.commit()
+
+    stored_body, stored_status = conn.execute(
+        "SELECT body, status FROM rules WHERE rule_key=?", (args.key,)).fetchone()
+    by_field, by_text = field_and_text(stored_body, stored_status)
+    agree = by_field and by_text
+    print(f"\n✅ {args.key} снято → v{new_version}; прежний текст — в журнале правок и под пометкой")
+    print(f"   сверка из базы: поле — {'снято' if by_field else 'ДЕЙСТВУЕТ'} · текст — "
+          f"{'снято' if by_text else 'ДЕЙСТВУЕТ'} · "
+          + ("совпадают" if agree else "⛔ РАЗОШЛИСЬ — сообщи COORD"))
+    rebuild_mirror(args.db)
+    print("👉 Если правило доставлялось в навыки ролей — пересобери их: rules-to-skills.py --write")
+    if not agree:
+        sys.exit(4)
+
+
+def rebuild_mirror(db):
+    """Пересобирает зеркало правил после записи в ЖИВУЮ базу. Поломка — громко, но запись
+    в базе уже состоялась и не откатывается."""
+    # ── ЗЕРКАЛО ПЕРЕСОБИРАЕТСЯ ЗДЕСЬ ЖЕ, А НЕ «ПОСТАРАЕМСЯ ПОТОМ»
+    # Слово владельца 2026-08-07 13:47 UTC: «файл-зеркало с правилами оставляем как есть,
+    # просто постараемся обновлять его при каждом обновлении правил в БД».
+    # ⚠️ «Постараемся» — ровно та форма, которая уже подвела: генератор существовал, работал
+    # и звался РУКАМИ, а последний раз его позвали 27.07. Зеркало отстало на ОДИННАДЦАТЬ суток
+    # и три ревизии реестра ролей — самого читаемого правила канона — и нашлось это случайно.
+    # 📌 Класс дня (@STUD): назвать риск и закрыть риск — разные работы, и первая мешает
+    # заметить, что второй не было. Намерение владельца исполняется ЗДЕСЬ: правка правила
+    # и пересборка зеркала — одно действие, разойтись им нечем.
+    # ⛔ Пересборка НЕ смеет отменить уже сделанную запись: правило в БД — источник правды,
+    # зеркало — производное. Поломка генератора обязана быть ГРОМКОЙ и не стоить записи.
+    # 🔴 НО СНАЧАЛА — ЧЕЙ ЭТО ПРОГОН. Зеркало пишется по ЖЁСТКОМУ пути в atlas.archs
+    # (export-rules.py: OUT). Значит правка правила в БД-ПЕСОЧНИЦЕ перезаписала бы ЖИВОЙ
+    # файл содержимым песочницы — тестовыми правилами приёмки в том числе.
+    # ⚠️ Комментарий ниже утверждал, что явная передача --db это лечит. Она лечит ИСТОЧНИК
+    # (собираем из той базы, куда писали) и НЕ лечит ПРИЁМНИК: он один на все базы.
+    # Найдено своей же приёмкой 08.08 10:47 UTC — ровно перед тем, как я бы это и сделал.
+    live_db = str(resolve_db(None, __file__))
+    if Path(db).resolve() != Path(live_db).resolve():
+        print(f"🪞 зеркало НЕ пересобрано — БАЗА НЕ ЖИВАЯ: {db}")
+        print(f"   живая: {live_db}. Производное живого репо не собирают из песочницы.")
+        return
+
+    gen = Path(__file__).resolve().parent / "export-rules.py"
+    if not gen.exists():
+        print(f"⚠️ зеркало НЕ пересобрано: не найден {gen}", file=sys.stderr)
+        return
+    # ⚠️ --db ПЕРЕДАЁТСЯ ЯВНО, и это не педантизм: без него генератор резолвит БД
+    # по умолчанию (R15a) и пересобрал бы зеркало из ЖИВОЙ базы, пока правило писалось
+    # в другую (например, в копию под укус). Поймано укусом сразу: правило легло в копию,
+    # зеркало не изменилось ни на байт — и выглядело это как «всё сошлось».
+    # 📌 Ровно сегодняшний класс: два действия рядом читают РАЗНЫЕ источники, а вместе
+    # выглядят одним. Молчаливая правка живого зеркала во время чужого прогона — цена.
+    r = subprocess.run([sys.executable, str(gen), "--db", str(db), "--apply"],
+                       capture_output=True, text=True, encoding="utf-8")
+    if r.returncode == 0:
+        tail = [l for l in (r.stdout or "").splitlines() if l.strip()]
+        print("🪞 " + (tail[-1].strip() if tail else "зеркало пересобрано"))
+    else:
+        print(f"⚠️ ЗЕРКАЛО НЕ ПЕРЕСОБРАНО (код {r.returncode}). Правило в БД ЗАПИСАНО.",
+              file=sys.stderr)
+        print((r.stdout or "") + (r.stderr or ""), file=sys.stderr)
+        print(f"   позови руками: python {gen} --apply", file=sys.stderr)
+
+
 def main():
     ap = argparse.ArgumentParser()
     # R15a довезён 27.07: set-rule стоит в шапке КАНОНА, где --db уже убран из примеров ⇒
@@ -109,6 +328,17 @@ def main():
     ap.add_argument("--skill-delivery", dest="skill_delivery", choices=["yes", "no", "unset"],
                     help="доставлять ли правило до подсказок ролей: yes · no · "
                          "unset (вернуть в «не решено»). Тела правила НЕ трогает")
+    ap.add_argument("--annex", action="store_true",
+                    help="показать приложение к правилу: разбор случаев и полный перечень, "
+                         "вынесенные из текста правила")
+    ap.add_argument("--revoke", action="store_true",
+                    help="снять правило: статус «снято», час, кто решил, причина, пометка о снятии "
+                         "в начале текста, журнал правок и зеркало — одним вызовом")
+    ap.add_argument("--reason", help="для --revoke: почему снято (обязательно)")
+    ap.add_argument("--revoked-by", dest="revoked_by",
+                    help="для --revoke: кто решил снять — owner · coord · имя роли (обязательно)")
+    ap.add_argument("--revoked-at", dest="revoked_at",
+                    help="для --revoke: час решения «ГГГГ-ММ-ДД ЧЧ:ММ UTC»; без него — текущий час UTC")
     ap.add_argument("--show", action="store_true")
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--apply", action="store_true", help="без него — dry-run диффа")
@@ -165,6 +395,13 @@ def main():
         print("ERR: нужен --key", file=sys.stderr)
         sys.exit(1)
 
+    if args.revoke:
+        revoke_rule(conn, args)
+        return
+    if args.annex:
+        show_annex(conn, args)
+        return
+
     if args.skill_delivery:
         # ── РЕШЕНИЕ О ДОСТАВКЕ (карточка #526, шаг 20260904-rule-skill-delivery) ──
         # ⚖️ ПОЧЕМУ ЭТО ОТДЕЛЬНАЯ ВЕТКА, А НЕ ЕЩЁ ОДНО ПОЛЕ ОБЩЕГО ПУТИ. Общий путь
@@ -219,6 +456,15 @@ def main():
         else:
             print("  🔴 ОСНОВАНИЕ НЕ ЗАПОЛНЕНО — правило старше отказа (08.08 10:44 UTC).")
             print("     Задним числом не восстанавливаем: заполнится при следующем касании.")
+        if RS.has_status_field(conn):
+            st = conn.execute("SELECT status, revoked_at, revoked_by FROM rules WHERE rule_key=?",
+                              (args.key,)).fetchone()
+            if (st[0] or "").strip().lower() in RS.REVOKED_VALUES:
+                print(f"  статус ........ СНЯТО {st[1] or ''} · решил: {st[2] or '—'}")
+        annex = annex_path(args.db, args.key)
+        if annex.is_file():
+            print(f"  приложение .... разбор случаев, {len(annex.read_text(encoding='utf-8'))} знаков:"
+                  f" set-rule.py --key {args.key} --annex")
         print()
         print(old[0])
         return
@@ -315,49 +561,8 @@ def main():
     conn.commit()
     print(f"\n✅ {args.key} → v{new_version} (🔒{locked_by}); старый текст сохранён в audit_log")
 
-    # ── ЗЕРКАЛО ПЕРЕСОБИРАЕТСЯ ЗДЕСЬ ЖЕ, А НЕ «ПОСТАРАЕМСЯ ПОТОМ»
-    # Слово владельца 2026-08-07 13:47 UTC: «файл-зеркало с правилами оставляем как есть,
-    # просто постараемся обновлять его при каждом обновлении правил в БД».
-    # ⚠️ «Постараемся» — ровно та форма, которая уже подвела: генератор существовал, работал
-    # и звался РУКАМИ, а последний раз его позвали 27.07. Зеркало отстало на ОДИННАДЦАТЬ суток
-    # и три ревизии реестра ролей — самого читаемого правила канона — и нашлось это случайно.
-    # 📌 Класс дня (@STUD): назвать риск и закрыть риск — разные работы, и первая мешает
-    # заметить, что второй не было. Намерение владельца исполняется ЗДЕСЬ: правка правила
-    # и пересборка зеркала — одно действие, разойтись им нечем.
-    # ⛔ Пересборка НЕ смеет отменить уже сделанную запись: правило в БД — источник правды,
-    # зеркало — производное. Поломка генератора обязана быть ГРОМКОЙ и не стоить записи.
-    # 🔴 НО СНАЧАЛА — ЧЕЙ ЭТО ПРОГОН. Зеркало пишется по ЖЁСТКОМУ пути в atlas.archs
-    # (export-rules.py: OUT). Значит правка правила в БД-ПЕСОЧНИЦЕ перезаписала бы ЖИВОЙ
-    # файл содержимым песочницы — тестовыми правилами приёмки в том числе.
-    # ⚠️ Комментарий ниже утверждал, что явная передача --db это лечит. Она лечит ИСТОЧНИК
-    # (собираем из той базы, куда писали) и НЕ лечит ПРИЁМНИК: он один на все базы.
-    # Найдено своей же приёмкой 08.08 10:47 UTC — ровно перед тем, как я бы это и сделал.
-    live_db = str(resolve_db(None, __file__))
-    if Path(args.db).resolve() != Path(live_db).resolve():
-        print(f"🪞 зеркало НЕ пересобрано — БАЗА НЕ ЖИВАЯ: {args.db}")
-        print(f"   живая: {live_db}. Производное живого репо не собирают из песочницы.")
-        return
-
-    gen = Path(__file__).resolve().parent / "export-rules.py"
-    if not gen.exists():
-        print(f"⚠️ зеркало НЕ пересобрано: не найден {gen}", file=sys.stderr)
-    else:
-        # ⚠️ --db ПЕРЕДАЁТСЯ ЯВНО, и это не педантизм: без него генератор резолвит БД
-        # по умолчанию (R15a) и пересобрал бы зеркало из ЖИВОЙ базы, пока правило писалось
-        # в другую (например, в копию под укус). Поймано укусом сразу: правило легло в копию,
-        # зеркало не изменилось ни на байт — и выглядело это как «всё сошлось».
-        # 📌 Ровно сегодняшний класс: два действия рядом читают РАЗНЫЕ источники, а вместе
-        # выглядят одним. Молчаливая правка живого зеркала во время чужого прогона — цена.
-        r = subprocess.run([sys.executable, str(gen), "--db", str(args.db), "--apply"],
-                           capture_output=True, text=True, encoding="utf-8")
-        if r.returncode == 0:
-            tail = [l for l in (r.stdout or "").splitlines() if l.strip()]
-            print("🪞 " + (tail[-1].strip() if tail else "зеркало пересобрано"))
-        else:
-            print(f"⚠️ ЗЕРКАЛО НЕ ПЕРЕСОБРАНО (код {r.returncode}). Правило в БД ЗАПИСАНО.",
-                  file=sys.stderr)
-            print((r.stdout or "") + (r.stderr or ""), file=sys.stderr)
-            print(f"   позови руками: python {gen} --apply", file=sys.stderr)
+    # Зеркало — тем же действием, что и запись (разбор причин — в rebuild_mirror).
+    rebuild_mirror(args.db)
 
 
 if __name__ == "__main__":
