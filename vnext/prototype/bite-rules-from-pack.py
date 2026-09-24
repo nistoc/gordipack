@@ -48,6 +48,12 @@ UTC): ㊼/поломка — --show на «изменено с обеих сто
 инструментов контура (.mezosync/scripts), а эта приёмка осталась в vnext-tools и находит
 его через mezo_target.py (тот же образец, что у bite-update-tools-rev.py) — по умолчанию
 живой контур, через MEZO_SCRIPTS_ROOT — любая копия.
+
+НАХОДКА PROTO (24.09.2026, случай ⑰б): gordi-issue.py судит писателя РАНЬШЕ тела письма
+(карточка #645) — на общем стенде без mezosync.db это OperationalError, не отказ по
+телу. ⑰б получил свой подстенд с согласованным снимком живой базы
+(mezo_stand.snapshot_db); общий root снимка не получает. Встречный случай — поломка (С)
+сразу после ⑰б: пустой раздел под заголовком письма ловит РОВНО ⑰б, не ⑰а.
 """
 from __future__ import annotations
 
@@ -367,6 +373,24 @@ def patch_merge_dry_run_label(src: str):
     файл set-rule.py возьмёт)."""
     old = 'body_file_label=str(file_path)))\n'
     new = 'body_file_label="<сведённый текст из --file>"))  # ПОЛОМКА (Л)\n'
+    return src.replace(old, new), src.count(old)
+
+
+def patch_propose_section_empty(src: str):
+    """(С) НАХОДКА PROTO 24.09.2026, случай ⑰б: раздел «## ПРЕДЛОЖЕНИЕ» письма остаётся
+    ЗАГОЛОВКОМ, но текст под ним пропадает. Ищет её РОВНО ⑰б: случай ⑰а смотрит на
+    заголовок подстрокой («## ПРЕДЛОЖЕНИЕ» в тексте есть — и остаётся), а gordi-issue.py
+    смотрит текст ПОД заголовком (её же проверка непустоты разделов) и на пустом теле
+    отказывает — что и доказывает: ⑰б судит ТЕЛО, а не только наличие базы координатора."""
+    old = (
+        '        f"## ПРЕДЛОЖЕНИЕ\\n"\n'
+        '        f"заменить текст правила «{key}» в наборе «{row[\'rule_set\']}» на текст контура. "\n'
+        '        f"Цена: строк добавится {added}, уберётся {removed_n} (по построчному различию).\\n"\n'
+    )
+    new = (
+        '        f"## ПРЕДЛОЖЕНИЕ\\n"\n'
+        '        f""  # ПОЛОМКА (С): текст раздела пропал, заголовок остался\n'
+    )
     return src.replace(old, new), src.count(old)
 
 
@@ -886,17 +910,61 @@ def main() -> int:
               sections_ok and no_machine_paths,
               f"разделы есть: {sections_ok}; путей машины нет: {no_machine_paths}")
 
+    # ⚠️ НАХОДКА PROTO (24.09.2026): gordi-issue.py судит ПИСАТЕЛЯ раньше тела письма
+    # (_writer_gate → _find_coordinator, карточка #645) — на стенде БЕЗ mezosync.db это
+    # не отказ по телу, а OperationalError «база координатора недоступна», и ⑰б красил
+    # бы по ЧУЖОЙ причине, не по той, ради которой написан («испытываем не то, что
+    # чиним»). Свой ПОДСТЕНД с согласованным снимком живой базы (mezo_stand.snapshot_db —
+    # резервное копирование sqlite, не голый файл: карточка #505, WAL честно перенесён)
+    # даёт координатора найтись, писатель — настоящий, а дальше судит уже ТЕЛО (поломка
+    # (С) ниже — встречный случай на это). Общему root снимок НЕ достаётся: случаи ⑱ и
+    # далее идут по нему как раньше, без базы вовсе.
+    gordi_stand = mezo_stand.new("bite-rfp-gordi-")
+    (gordi_stand / ".mezosync").mkdir(parents=True, exist_ok=True)
+    mezo_stand.snapshot_db(live_db, gordi_stand / ".mezosync" / "mezosync.db")
     dry = subprocess.run(
         [sys.executable, str(GORDI_ISSUE_PY), "create", "--role", "COORD",
          "--title", "тест приёмки bite-rules-from-pack", "--body-file", str(out_file),
          "--dry-run"],
-        cwd=str(root), env=mezo_stand.stand_env(root), capture_output=True, text=True,
-        encoding="utf-8")
+        cwd=str(gordi_stand), env=mezo_stand.stand_env(gordi_stand), capture_output=True,
+        text=True, encoding="utf-8")
     ok &= case("⑰б тело предложения принимает холостой прогон gordi-issue.py (свои "
               "разделы он находит настоящими, не выдуманными)",
               dry.returncode == 0 and "разделы полны" in dry.stdout,
               f"код {dry.returncode}; вывод: {(dry.stdout or dry.stderr).strip()[:200]}")
     conn7.close(); pack_conn7.close()
+
+    # ── ⑰б ПОЛОМКА (С): раздел «ПРЕДЛОЖЕНИЕ» пуст ПОД заголовком ────────────────────────
+    # Встречный случай: доказывает, что ⑰б судит именно ТЕЛО письма, а не только наличие
+    # базы координатора. ⑰а эту поломку не видит (её проверка ищет заголовок подстрокой),
+    # gordi-issue.py — ловит (её проверка смотрит текст под заголовком).
+    mod_c = load_rfp(patch=patch_propose_section_empty, name="rfp_bite_17b_c")
+    conn7c = sqlite3.connect(f"file:{circuit_db7.as_posix()}?mode=ro", uri=True)
+    pack_conn7c = mod_c.open_pack_db(pack_dir7)
+    out_file_c = root / "proposal-break-c.md"
+    mod_c.propose(conn7c, pack_conn7c, pack_dir7, PREFIX + "local-changed",
+                  "у нас переписано понятнее", str(out_file_c), None)
+    proposal_text_c = out_file_c.read_text(encoding="utf-8")
+    sections_ok_c = all(f"## {s}" in proposal_text_c for s in ("ЗАМЕР", "КЛАСС", "ПРЕДЛОЖЕНИЕ"))
+    dry_c = subprocess.run(
+        [sys.executable, str(GORDI_ISSUE_PY), "create", "--role", "COORD",
+         "--title", "тест приёмки bite-rules-from-pack, поломка (С)", "--body-file",
+         str(out_file_c), "--dry-run"],
+        cwd=str(gordi_stand), env=mezo_stand.stand_env(gordi_stand), capture_output=True,
+        text=True, encoding="utf-8")
+    # ⚖️ Ненулевого кода МАЛО: отказ по посторонней причине (координатор не найден, нет
+    # файла тела) тоже ненулевой — и случай прошёл бы, ничего не доказав. Требуется отказ
+    # ИМЕННО по пустому разделу, названному по имени (правка PROTO при установке, 24.09).
+    refusal_c = dry_c.stderr or ""
+    empty_refusal_c = "пустые разделы" in refusal_c and "ПРЕДЛОЖЕНИЕ" in refusal_c
+    ok &= case("⑰б ПОЛОМКА (С) «раздел ПРЕДЛОЖЕНИЕ пуст под заголовком» ловит только ⑰б: "
+              "⑰а (заголовок подстрокой) её не видит, gordi-issue.py отказывает по пустому разделу",
+              sections_ok_c and dry_c.returncode != 0 and empty_refusal_c,
+              f"⑰а-проверка под поломкой (ждём не тронута — заголовки есть): {sections_ok_c}; "
+              f"код холостого прогона {dry_c.returncode} (под верным кодом ⑰б — 0; поломка "
+              f"обязана его сдвинуть); отказ по пустому разделу ПРЕДЛОЖЕНИЕ: {empty_refusal_c}; "
+              f"вывод: {refusal_c.strip()[:160]}")
+    conn7c.close(); pack_conn7c.close()
 
     # ── ㉒ возврат приёмщика: --apply без --actor у --adopt отказывает ДО связи с базой ──
     circuit_db8, pack_dir8, _, _ = build_state_fixture(root / "actor-gate", mod.text_sha)
