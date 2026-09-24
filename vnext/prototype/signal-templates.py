@@ -65,6 +65,7 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import mezo_paths  # noqa: E402
+import mezo_sessions  # noqa: E402 — сверка адреса/session_id с хранилищем сессий приложения (карточка #649)
 
 # ⏰ Сколько адрес считается годным. Он умирает вместе с чатом, а строка о нём переживает чат
 # и выглядит свежей — поэтому старый адрес печатник называет старым ВСЛУХ и печатать
@@ -436,19 +437,28 @@ def main() -> int:
     if a.list:
         try:
             rows = conn.execute(
-                "SELECT role, address, noted_at, noted_by, source, session_id FROM role_sessions "
-                "ORDER BY role").fetchall()
+                "SELECT role, address, noted_at, noted_by, source, session_id, transcript_id "
+                "FROM role_sessions ORDER BY role").fetchall()
         except sqlite3.OperationalError:
-            # копия старше шага 20260913 — колонки session_id ещё нет
-            rows = [(*r, None) for r in conn.execute(
-                "SELECT role, address, noted_at, noted_by, source FROM role_sessions "
-                "ORDER BY role").fetchall()]
+            try:
+                # копия старше шага 20260924 — колонки transcript_id ещё нет
+                rows = [(*r, None) for r in conn.execute(
+                    "SELECT role, address, noted_at, noted_by, source, session_id "
+                    "FROM role_sessions ORDER BY role").fetchall()]
+            except sqlite3.OperationalError:
+                # копия старше шага 20260913 — колонки session_id тоже ещё нет
+                rows = [(*r, None, None) for r in conn.execute(
+                    "SELECT role, address, noted_at, noted_by, source FROM role_sessions "
+                    "ORDER BY role").fetchall()]
         if not rows:
             print("Реестр ПУСТ. Свой адрес каждая роль записывает сама:")
-            print('   signal-templates.py --role <СВОЯ> --set-address "<адрес из перечня сессий>"')
+            print('   имя [различитель] — строка «This session is …» из ListAgents; '
+                  'session_id — get_session("self") → sessionId:')
+            print('   signal-templates.py --role <СВОЯ> --set-address "<имя [различитель]>" '
+                  '--session-id "<sessionId>"')
             return 0
         print(f"РЕЕСТР АДРЕСОВ — {len(rows)} · короткий адрес годен {VALID_HOURS} ч с часа записи")
-        for role, addr, when, actor, src, sid in rows:
+        for role, addr, when, actor, src, sid, tid in rows:
             age = age_hours(when)
             # 🔴 ЗДЕСЬ БЫЛ «✅» — И ОН ЧИТАЛСЯ КАК «ЖИВ». Инструмент не видит перечень живых
             # сессий этой машины: он умеет сказать только «моложе {ГОДЕН_ЧАСОВ} ч» либо
@@ -458,6 +468,7 @@ def main() -> int:
                      else "⌛ СТАР" if age is not None else "⚪ возраст неизвестен")
             print(f"   {label:<26} {role:<8} {addr:<28} "
                   f"{('sid: ' + sid) if sid else '(session_id не записан)':<28} "
+                  f"{('tid: ' + tid) if tid else '(transcript_id не записан)':<28} "
                   f"записан {when} UTC ({'?' if age is None else f'{age:.1f} ч назад'}) "
                   f"рукой {actor}, путь {src}")
         print("⚖️ Адрес умирает вместе с чатом роли. Старый печатник не подставляет — говорит вслух.")
@@ -476,7 +487,8 @@ def main() -> int:
             print(f"⛔ АДРЕС БЕЗ РАЗЛИЧИТЕЛЯ В СКОБКАХ: «{a.set_address.strip()}»")
             print(f"   Одно имя носят НЕСКОЛЬКО разговоров — короткий адрес указывает на них")
             print(f"   на все сразу, и промах молчалив: отправка скажет «успешно» и уедет")
-            print(f"   не туда. Нужна полная форма из перечня сессий: «имя [различитель]».")
+            print(f"   не туда. Полную форму «имя [различитель]» даёт строка «This session is …» "
+                  f"из ListAgents (точный вызов, не перечень наугад).")
             return 2
         # ⚖️ session_id — ДРУГОЙ признак, форма другая («local_…», не «имя [код]»): различитель
         # в скобках к нему не применим. Единственная защита — непустота: пустая строка
@@ -495,13 +507,25 @@ def main() -> int:
         # ⚡ КЛАСС: поле, которое не может быть неверным по построению, ничего не сообщает —
         # а выглядит доказательством. Здесь «self» значит РОВНО «так сказал вызывающий».
         actor = os.environ.get("MEZO_ROLE", "").upper() or role
+        # ⚖️ has_transcript_id — есть ли у ЭТОЙ базы шаг 20260924-role-sessions-transcript-id.py.
+        # Копия без него по-прежнему обязана писать адрес/session_id как раньше — новый столбец
+        # только ДОБАВЛЯЕТСЯ к записи, его отсутствие не вправе остановить старый путь.
+        has_transcript_id = True
         try:
             previous = conn.execute(
-                "SELECT address, session_id, noted_at, noted_by, source, note "
+                "SELECT address, session_id, noted_at, noted_by, source, note, transcript_id "
                 "FROM role_sessions WHERE role = ?", (role,)).fetchone()
         except sqlite3.OperationalError:
-            sys.exit("⛔ НЕ ЗАПУСТИЛСЯ: колонки session_id в базе нет — сначала шаг схемы "
-                     "20260913-role-sessions-session-id.py")
+            has_transcript_id = False
+            try:
+                previous = conn.execute(
+                    "SELECT address, session_id, noted_at, noted_by, source, note "
+                    "FROM role_sessions WHERE role = ?", (role,)).fetchone()
+                if previous is not None:
+                    previous = (*previous, None)   # transcript_id ещё не заведён — колонки нет
+            except sqlite3.OperationalError:
+                sys.exit("⛔ НЕ ЗАПУСТИЛСЯ: колонки session_id в базе нет — сначала шаг схемы "
+                         "20260913-role-sessions-session-id.py")
         if previous is None and not a.set_address:
             print(f"⛔ У РОЛИ {role} В РЕЕСТРЕ ЕЩЁ НЕТ СТРОКИ — записать ТОЛЬКО session_id "
                   f"некуда: адрес обязателен при ПЕРВОЙ записи (--set-address, столбец address "
@@ -511,33 +535,131 @@ def main() -> int:
             return 2
         new_address = a.set_address.strip() if a.set_address else previous[0]
         new_sid = a.session_id.strip() if a.session_id is not None else (previous[1] if previous else None)
+        new_tid = previous[6] if previous else None   # переносится, пока сверка не даст своего
+
+        # ═══ 🌉 СВЕРКА С ХРАНИЛИЩЕМ СЕССИЙ ПРИЛОЖЕНИЯ (карточка #649) ═══════════════════
+        # До этой правки валидатор проверял только ФОРМУ адреса (различитель в скобках) —
+        # живую ли сессию он называет, не проверял никто. Два пути, оба обязаны сойтись
+        # с хранилищем (mezo_sessions.py):
+        #   есть --session-id .... сверяется САМ session_id: архивный/неизвестный — отказ
+        #                          с перечнем живых сессий контура; найден и жив —
+        #                          transcript_id заполняется САМ, из хранилища, не вводом
+        #   только --set-address . сверяется ИМЯ (часть адреса до « [») с заголовками живых
+        #                          сессий контура: ровно одно совпадение — её session_id и
+        #                          transcript_id берутся сами; иначе — отказ с перечнем
+        # Хранилища НЕТ (машина без него, песочница, снятая переменная) — запись ВСЁ РАВНО
+        # проходит: отсутствие проверяющего инструмента не повод отказать в старом пути
+        # (запись со слов роли, без проверки), просто об этом сказано вслух.
+        our_cwd = None
+        try:
+            our_cwd = str(mezo_paths.container_root(__file__))
+        except SystemExit:
+            our_cwd = None      # каталог контура отсюда не виден — сверка по cwd невозможна
+
+        store = mezo_sessions.read_store()
+        if not store.found:
+            print(f"⚠️ СВЕРИТЬ НЕЧЕМ: {store.error} — адрес записан без проверки")
+        else:
+            name_part = (a.set_address.strip().split(" [", 1)[0] if a.set_address
+                        else (previous[0].split(" [", 1)[0] if previous and previous[0] else None))
+            if a.session_id is not None:
+                sid_clean = a.session_id.strip()
+                record = mezo_sessions.find_by_session_id(store, sid_clean)
+                if record is None or record.archived:
+                    why = "В АРХИВЕ" if record is not None else "НЕ НАЙДЕН"
+                    print(f"⛔ SESSION_ID «{sid_clean}» {why} В ХРАНИЛИЩЕ СЕССИЙ ПРИЛОЖЕНИЯ.")
+                    if our_cwd is None:
+                        print("   каталог контура отсюда не виден — перечень живых сессий той "
+                              "же рабочей директории напечатать нечем.")
+                    else:
+                        live = mezo_sessions.live_sessions_for_cwd(store, our_cwd)
+                        if live:
+                            print(f"   живые (не архивные) сессии с тем же рабочим каталогом "
+                                  f"({our_cwd}):")
+                            for r in live:
+                                print(f"      session_id {r.session_id} · «{r.title}»")
+                        else:
+                            print(f"   живых сессий с тем же рабочим каталогом ({our_cwd}) "
+                                  f"не найдено")
+                    return 2
+                if name_part is not None and (record.title or "") != name_part:
+                    print(f"⛔ ИМЯ АДРЕСА «{name_part}» НЕ СОВПАДАЕТ С ЗАГОЛОВКОМ ЭТОЙ СЕССИИ: "
+                          f"«{record.title}»")
+                    print("   заголовок чата — это и есть имя в адресе; печатник не пишет "
+                          "строку, расходящуюся с тем, что видно в приложении.")
+                    return 2
+                new_tid = record.transcript_id
+            elif a.set_address:
+                if our_cwd is None:
+                    print("⚠️ СВЕРИТЬ ИМЯ НЕЧЕМ: каталог контура отсюда не виден — запись "
+                          "проходит без сверки с хранилищем сессий приложения.")
+                else:
+                    live = mezo_sessions.live_sessions_for_cwd(store, our_cwd)
+                    matches = [r for r in live if (r.title or "") == name_part]
+                    if len(matches) == 1:
+                        new_sid = matches[0].session_id
+                        new_tid = matches[0].transcript_id
+                    else:
+                        verdict = "НЕ НАЙДЕНО СРЕДИ" if not matches else "НЕОДНОЗНАЧНО СРЕДИ"
+                        print(f"⛔ ИМЯ «{name_part}» {verdict} живых сессий с рабочим "
+                              f"каталогом {our_cwd}:")
+                        for r in live:
+                            print(f"      session_id {r.session_id} · «{r.title}»")
+                        if not live:
+                            print("      (живых сессий с этим рабочим каталогом не найдено)")
+                        return 2
+        # ═══ конец сверки ═══════════════════════════════════════════════════════════════
+
         conn.execute("BEGIN")
         # ⚡ ПЕРЕЗАПИСЬ ПЕЧАТАЕТ, ЧТО БЫЛО — читая прежнюю строку В ТОЙ ЖЕ транзакции, что и
         # запись новой, и откладывая её в role_sessions_history: адрес умирает вместе с чатом,
         # и молчаливая перезапись стёрла бы единственный след того, каким он был.
         if previous is not None:
+            if has_transcript_id:
+                conn.execute(
+                    "INSERT INTO role_sessions_history (role, address, session_id, noted_at, "
+                    "noted_by, source, note, transcript_id, superseded_by) "
+                    "VALUES (?,?,?,?,?,?,?,?,?)",
+                    (role, previous[0], previous[1], previous[2], previous[3], previous[4],
+                     previous[5], previous[6], actor))
+            else:
+                conn.execute(
+                    "INSERT INTO role_sessions_history (role, address, session_id, noted_at, "
+                    "noted_by, source, note, superseded_by) VALUES (?,?,?,?,?,?,?,?)",
+                    (role, previous[0], previous[1], previous[2], previous[3], previous[4],
+                     previous[5], actor))
+        if has_transcript_id:
             conn.execute(
-                "INSERT INTO role_sessions_history (role, address, session_id, noted_at, "
-                "noted_by, source, note, superseded_by) VALUES (?,?,?,?,?,?,?,?)",
-                (role, previous[0], previous[1], previous[2], previous[3], previous[4], previous[5], actor))
-        conn.execute(
-            "INSERT INTO role_sessions (role, address, session_id, noted_at, noted_by, source) "
-            "VALUES (?, ?, ?, datetime('now'), ?, ?) "
-            "ON CONFLICT(role) DO UPDATE SET address = excluded.address, "
-            "session_id = excluded.session_id, noted_at = datetime('now'), "
-            "noted_by = excluded.noted_by, source = excluded.source",
-            (role, new_address, new_sid, actor, a.source))
+                "INSERT INTO role_sessions (role, address, session_id, noted_at, noted_by, "
+                "source, transcript_id) VALUES (?, ?, ?, datetime('now'), ?, ?, ?) "
+                "ON CONFLICT(role) DO UPDATE SET address = excluded.address, "
+                "session_id = excluded.session_id, noted_at = datetime('now'), "
+                "noted_by = excluded.noted_by, source = excluded.source, "
+                "transcript_id = excluded.transcript_id",
+                (role, new_address, new_sid, actor, a.source, new_tid))
+        else:
+            conn.execute(
+                "INSERT INTO role_sessions (role, address, session_id, noted_at, noted_by, source) "
+                "VALUES (?, ?, ?, datetime('now'), ?, ?) "
+                "ON CONFLICT(role) DO UPDATE SET address = excluded.address, "
+                "session_id = excluded.session_id, noted_at = datetime('now'), "
+                "noted_by = excluded.noted_by, source = excluded.source",
+                (role, new_address, new_sid, actor, a.source))
         conn.commit()
         if previous is not None:
             before_text = f"session_id {previous[1]}" if previous[1] else previous[0]
             print(f"🔁 ПЕРЕЗАПИСАН: было {before_text} · {previous[2]} UTC · путь {previous[4]} · "
                   f"записал {previous[3]} (прежняя строка сохранена в role_sessions_history)")
         print(f"✅ роль {role}: адрес {new_address}"
-              + (f" · session_id {new_sid}" if new_sid else "") + f" (путь «{a.source}»)")
+              + (f" · session_id {new_sid}" if new_sid else "")
+              + (f" · transcript_id {new_tid}" if new_tid else "") + f" (путь «{a.source}»)")
         print(f"   короткий адрес годен {VALID_HOURS} ч — потом печатник попросит подтвердить, "
               f"что чат тот же")
         if new_sid:
             print(f"   session_id ПЕРЕЖИВАЕТ возобновление чата — подтверждать заново не нужно")
+        if new_tid:
+            print(f"   transcript_id ЗАПОЛНЕН СВЕРКОЙ с хранилищем сессий приложения — им хук "
+                  f"опознаёт роль по записи разговора")
         if a.source != "self":
             print(f"   ⚠️ путь «{a.source}»: сама роль {role} этого адреса НЕ подтверждала — "
                   f"если сигнал не дойдёт, признака недоставки не будет")
@@ -617,8 +739,9 @@ def main() -> int:
         print(f"   Адрес умирает вместе с чатом, а строка о нём — нет. Отправив по старому,")
         print(f"   ты получишь «успешно отправлено» и никакой доставки: признака недоставки")
         print(f"   у отправки НЕТ (замер карточки #548).")
-        print(f"   👉 попроси {to_role} обновить адрес в ленте — или запиши сам, если видишь её")
-        print(f"      в перечне сессий: signal-templates.py --role {to_role} --set-address \"…\"")
+        print(f"   👉 попроси {to_role} обновить адрес в ленте — или запиши сам, если видишь")
+        print(f"      её строку «This session is …» в ListAgents: signal-templates.py "
+              f"--role {to_role} --set-address \"…\"")
         return 2
 
     template = TEMPLATES[a.kind]

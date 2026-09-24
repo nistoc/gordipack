@@ -46,6 +46,9 @@ STEPS = (
     "20260913-role-sessions-session-id",
     "20260913-role-rights-revoked-by",
     "20260915-foreign-rebirth-marks",
+    # Добавлен карточкой #649 (2026-09-24): второй идентификатор чата — запись разговора,
+    # по ней хук опознаёт роль; подробно — в описании самого шага.
+    "20260924-role-sessions-transcript-id",
 )
 
 import re as _re
