@@ -25,8 +25,12 @@
     (встречный случай ⑩)                                                    РАЗЛИЧАЮЩИЙ
   ⑫ guard-role-sessions-live.py: хранилища нет → «сверить нечем», а не
     «всё хорошо»                                                            РАЗЛИЧАЮЩИЙ
+  ⑬ хранилища НЕТ, у роли ЕСТЬ прежний transcript_id, номер сессии НОВЫЙ →
+    transcript_id СБРОШЕН, а не перенесён от прежнего чата (возврат COORD
+    по ②, 24.09)                                                            РАЗЛИЧАЮЩИЙ
 
-НАРОЧНЫЕ ПОЛОМКИ (--porcha), каждая — на СВОЕЙ копии, живых файлов не касаются:
+НАРОЧНЫЕ ПОЛОМКИ (--break; прежнее имя --porcha — синоним), каждая — на СВОЕЙ копии,
+живых файлов не касаются:
   drop-archive-check ....... signal-templates.py перестаёт отказывать архивной сессии
                              (проверка `record.archived` снята) → ждём красным РОВНО ⑤,
                              остальные — как на чистом прогоне
@@ -34,10 +38,12 @@
                              заголовком сессии → ждём красным РОВНО ⑦
   empty-instead-of-missing . mezo_sessions.read_store() у ОТСУТСТВУЮЩЕГО хранилища
                              отвечает НАЙДЕННЫМ ПУСТЫМ (found=True, sessions=())
-                             вместо found=False → ждём красным РОВНО ⑨ и ⑫: оба места
-                             читают хранилище через один и тот же mezo_sessions.py,
+                             вместо found=False → ждём красным РОВНО ⑨, ⑫ и ⑬: все три
+                             места читают хранилище через один и тот же mezo_sessions.py,
                              поломка их не различает
-Прогон БЕЗ --porcha — чистый (ожидается ✅ по всем случаям). Прогон С --porcha портит
+  carry-transcript ......... signal-templates.py снова ПЕРЕНОСИТ прежний transcript_id
+                             при смене номера сессии без хранилища → ждём красным РОВНО ⑬
+Прогон БЕЗ --break — чистый (ожидается ✅ по всем случаям). Прогон С --break портит
 ОДНУ копию перед сборкой стенда и печатает случаи ④–⑫ ещё раз — красные строки этого
 прогона сравниваются РУКОЙ (или сверяющим прогоном снаружи) с перечнем выше: поломка
 доказана, если красных ровно столько, сколько названо, и не более.
@@ -77,7 +83,8 @@ STEP_FILE = LIVE_CONTAINER / ".mezosync" / "scripts" / "migrations" / \
 EXPECTED_FLIPS = {
     "drop-archive-check": {"⑤"},
     "drop-title-check": {"⑦"},
-    "empty-instead-of-missing": {"⑨", "⑫"},
+    "empty-instead-of-missing": {"⑨", "⑫", "⑬"},
+    "carry-transcript": {"⑬"},
 }
 
 CASE_TITLES = {
@@ -90,8 +97,9 @@ CASE_TITLES = {
     "⑩": "⑩ guard: архивный session_id роли — находка поимённо",
     "⑪": "⑪ guard: живой session_id роли — НЕ находка (встречный случай ⑩)",
     "⑫": "⑫ guard: хранилища нет → «сверить нечем», не «всё хорошо»",
+    "⑬": "⑬ хранилища нет, номер сессии новый → прежний transcript_id сброшен, не перенесён",
 }
-CASE_ORDER = ["④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩", "⑪", "⑫"]
+CASE_ORDER = ["④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑬", "⑩", "⑪", "⑫"]
 
 CASES = DIFFER = PASSED = 0
 
@@ -188,7 +196,7 @@ def build_environment(stand: Path, tag: str, signal_tool: Path, guard_tool: Path
     """Полный независимый стенд: контейнер (для MEZO_CONTAINER) + копия живой БД с
     накатанным шагом схемы + подложное хранилище + копии двух испытуемых инструментов
     СО ВСЕМИ соседями (mezo_stand.copy_tool копирует их транзитивно). `tag` отделяет
-    один вызов от другого — чистый прогон и прогон под --porcha используют РАЗНЫЕ стенды."""
+    один вызов от другого — чистый прогон и прогон под --break используют РАЗНЫЕ стенды."""
     root = stand / tag
     root.mkdir(parents=True)
 
@@ -220,6 +228,11 @@ def build_environment(stand: Path, tag: str, signal_tool: Path, guard_tool: Path
     conn.execute("INSERT INTO role_sessions (role, address, noted_at, noted_by, source, "
                 "session_id) VALUES (?,?,datetime('now'),?,?,?)",
                 ("TESTROLE_ARCHIVED", "TESTROLE-A [222222]", "TEST", "self", "local_archived"))
+    # роль для ⑬: у неё УЖЕ есть номер записи разговора прежнего чата
+    conn.execute("INSERT INTO role_sessions (role, address, noted_at, noted_by, source, "
+                "session_id, transcript_id) VALUES (?,?,datetime('now'),?,?,?,?)",
+                ("TESTROLE13", "TESTROLE-A [131313]", "TEST", "self", "local_old_13",
+                 "transcript-old-13"))
     conn.commit()
     conn.close()
 
@@ -248,7 +261,7 @@ def mutate(path: Path, old: str, new: str) -> None:
     path.write_text(text.replace(old, new), encoding="utf-8")
 
 
-def apply_porcha(tag: str, src_dir: Path) -> None:
+def apply_break(tag: str, src_dir: Path) -> None:
     if tag == "drop-archive-check":
         mutate(src_dir / "signal-templates.py",
               "                if record is None or record.archived:\n",
@@ -264,6 +277,10 @@ def apply_porcha(tag: str, src_dir: Path) -> None:
               '                            error=f"хранилище сессий приложения не найдено ({store_path})")\n',
               '    if not store_path.is_dir():\n'
               '        return SessionStore(found=True, path=store_path, sessions=(), error=None)\n')
+    elif tag == "carry-transcript":
+        mutate(src_dir / "signal-templates.py",
+              "            if previous is not None and new_sid != previous[1] and new_tid is not None:\n",
+              "            if False:\n")
     else:
         raise ValueError(tag)
 
@@ -398,6 +415,16 @@ def eval_signal_cases(e: SimpleNamespace) -> dict:
                and "СВЕРИТЬ НЕЧЕМ" in txt9,
                f"код {code9} · session_id={sid9} · transcript_id={tid9} · "
                f"«сверить нечем»: {'да' if 'СВЕРИТЬ НЕЧЕМ' in txt9 else 'НЕТ'}")
+
+    # ⑬ встречный к ⑨ (возврат COORD): у роли ЕСТЬ прежний transcript_id — в ⑨ его нет,
+    # и пустое поле там получалось от пустой строки, а не от сброса.
+    code13, txt13 = run_signal(e.signal, e.db, "TESTROLE13",
+                               ["--session-id", "local_new_13", "--source", "self"], e.env_missing)
+    sid13 = role_field(e.db, "TESTROLE13", "session_id")
+    tid13 = role_field(e.db, "TESTROLE13", "transcript_id")
+    out["⑬"] = (code13 == 0 and sid13 == "local_new_13" and tid13 is None
+               and "сброшен" in txt13,
+               f"код {code13} · session_id={sid13} · transcript_id={tid13} (прежний transcript-old-13)")
     return out
 
 
@@ -424,7 +451,7 @@ def eval_guard_cases(e: SimpleNamespace) -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--porcha", choices=sorted(EXPECTED_FLIPS),
+    ap.add_argument("--break", "--porcha", dest="break_name", choices=sorted(EXPECTED_FLIPS),
                     help="нарочная поломка — портит ОДНУ копию файла перед сборкой стенда; "
                          "какой случай должен покраснеть РОВНО от неё — см. шапку файла")
     a = ap.parse_args()
@@ -436,14 +463,14 @@ def main() -> int:
     for name in ("mezo_paths.py", "mezo_sessions.py", "signal-templates.py",
                 "guard-role-sessions-live.py"):
         shutil.copy2(TOOLS_DIR / name, src_dir / name)
-    if a.porcha:
-        apply_porcha(a.porcha, src_dir)
-        print(f"🧪 НАРОЧНАЯ ПОЛОМКА «{a.porcha}» ВЛОЖЕНА. Ждём красным РОВНО "
-              f"{', '.join(sorted(EXPECTED_FLIPS[a.porcha]))}, остальные случаи — как на "
+    if a.break_name:
+        apply_break(a.break_name, src_dir)
+        print(f"🧪 НАРОЧНАЯ ПОЛОМКА «{a.break_name}» ВЛОЖЕНА. Ждём красным РОВНО "
+              f"{', '.join(sorted(EXPECTED_FLIPS[a.break_name]))}, остальные случаи — как на "
               f"чистом прогоне (сверка красных строк с этим списком — рукой вызывающего).\n")
 
     ok = True
-    if not a.porcha:
+    if not a.break_name:
         ok &= run_migration_cases(stand)
 
     env_obj = build_environment(stand, "run", src_dir / "signal-templates.py",

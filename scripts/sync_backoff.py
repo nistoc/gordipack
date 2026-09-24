@@ -31,6 +31,9 @@
    размен — разгон и заводят ради тишины. Именно поэтому сброс сделан по ЛЮБОЙ чужой записке:
    первая же строка в ленте возвращает роль к частому опросу.
 
+📌 24.09: будильники сверок убираются (записка #5312). Чтение ленты печатает строку сна,
+   только пока правило sync-sleep-backoff действует; иначе — счёт нового (news_line).
+
 ⛔ ПАРАМЕТРЫ ЖИВУТ ТОЛЬКО ЗДЕСЬ. Менять шаг, начало и потолок — правкой этих трёх строк,
    и они меняются СРАЗУ У ВСЕХ. Ради этого всё и затевалось.
 """
@@ -57,8 +60,8 @@ def _table(conn):
     # 🪤 `CREATE TABLE IF NOT EXISTS` НИЧЕГО НЕ ДЕЛАЕТ С СУЩЕСТВУЮЩЕЙ ТАБЛИЦЕЙ. Дописать
     # столбец в текст выше — значит завести его только у тех, кто начинает с чистой базы;
     # у живого контура таблица уже есть, и столбца там не появится никогда. Молча.
-    столбцы = {r[1] for r in conn.execute("PRAGMA table_info(sync_backoff)")}
-    if "last_bridge_mtime" not in столбцы:
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(sync_backoff)")}
+    if "last_bridge_mtime" not in columns:
         # Без NOT NULL намеренно: пустое значение означает «моста ещё не читали», и оно
         # должно ОТЛИЧАТЬСЯ от нуля, который значил бы «прочитали, там пусто».
         # 🪤 ПЕРВАЯ РЕДАКЦИЯ МЕНЯЛА СХЕМУ МОЛЧА — и сторож журнала схемы закричал «схему
@@ -67,25 +70,25 @@ def _table(conn):
         # делает ответ о версии схемы уверенным и неверным (правило migrations-under-watch).
         # Канонический шаг — migrations/20260822-sync-backoff-bridge-mtime.py; эта ветка —
         # страховка контура, обновившего инструменты раньше, чем прогнали шаги.
-        в_журнал = None
+        journal = None
         if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
                         "AND name='schema_migrations'").fetchone():
             try:
-                import schema_journal as в_журнал
+                import schema_journal as journal
             except ImportError:
-                в_журнал = None                      # стенд без журнала — записывать некуда
-        if в_журнал is not None and not conn.in_transaction:
+                journal = None                      # стенд без журнала — записывать некуда
+        if journal is not None and not conn.in_transaction:
             conn.execute("BEGIN")
         conn.execute("ALTER TABLE sync_backoff ADD COLUMN last_bridge_mtime REAL")
-        if в_журнал is not None:
-            в_журнал.record_step(
+        if journal is not None:
+            journal.record_step(
                 conn, "20260822-sync-backoff-bridge-mtime",
                 "отметка последнего виденного чужого файла обмена (карточка #242); "
                 "применено правкой на ходу при обращении к ритму")
             conn.commit()
 
 
-def _чужое_в_мосте(conn, db_path) -> tuple:
+def _foreign_bridge_head(conn, db_path) -> tuple:
     """Самая свежая метка времени ЧУЖОГО файла моста → (метка, исход).
 
     🎯 РАДИ ЧЕГО. Ритм считал новизну только по ленте — а сосед пишет ФАЙЛОМ в мост.
@@ -105,48 +108,48 @@ def _чужое_в_мосте(conn, db_path) -> tuple:
       чтение упало). Свести третий ко второму значило бы объявить тишину оттого, что
       не сумели посмотреть, — правило `read-failure-blocks-write` ровно про это.
     """
-    места, метка, сбоев = [], 0.0, 0
-    наша = ""
+    places, mark, failures = [], 0.0, 0
+    our_group = ""
     try:
         _r = conn.execute("SELECT value FROM meta WHERE key = 'group_name'").fetchone()
-        наша = (_r[0] if _r else "") or ""
+        our_group = (_r[0] if _r else "") or ""
     except sqlite3.OperationalError:
-        наша = ""
-    свои = Path(db_path).parent.parent          # <контур>/.mezosync/mezosync.db
+        our_group = ""
+    own_root = Path(db_path).parent.parent          # <контур>/.mezosync/mezosync.db
     try:
-        for d in свои.glob("*/.mezosync/bridges/*"):
-            if d.is_dir() and not (наша and d.name.startswith(наша + "-")):
-                места.append(d)
+        for d in own_root.glob("*/.mezosync/bridges/*"):
+            if d.is_dir() and not (our_group and d.name.startswith(our_group + "-")):
+                places.append(d)
     except OSError:
-        сбоев += 1
+        failures += 1
     try:
-        соседи = conn.execute("SELECT target_db_path FROM cross_links").fetchall()
+        neighbours = conn.execute("SELECT target_db_path FROM cross_links").fetchall()
     except sqlite3.OperationalError:
-        соседи = []
-    for (dbp,) in соседи:
-        контейнер = Path(dbp).parent.parent
+        neighbours = []
+    for (dbp,) in neighbours:
+        container = Path(dbp).parent.parent
         # 🪤 ПУСТОЙ ОБХОД НЕСУЩЕСТВУЮЩЕГО ПУТИ НЕ БРОСАЕТ ОШИБКУ — он молча даёт ноль
         # находок, и «путь соседа протух» выглядит как «у соседа ничего нет». Сосед
         # ЗАПИСАН в cross_links: раз записан, а каталога нет — мы не сумели посмотреть,
         # и это третий исход, а не второй. Поймано случаем ⑦ приёмки.
-        if not контейнер.is_dir():
-            сбоев += 1
+        if not container.is_dir():
+            failures += 1
             continue
         try:
-            места += [d for d in контейнер.glob("*/.mezosync/bridges/*") if d.is_dir()]
+            places += [d for d in container.glob("*/.mezosync/bridges/*") if d.is_dir()]
         except OSError:
-            сбоев += 1
-    for d in места:
+            failures += 1
+    for d in places:
         try:
             for f in d.glob("*.md"):
-                метка = max(метка, f.stat().st_mtime)
+                mark = max(mark, f.stat().st_mtime)
         except OSError:
-            сбоев += 1
-    if сбоев and метка == 0.0:
+            failures += 1
+    if failures and mark == 0.0:
         return 0.0, "не смог"
-    if not места:
+    if not places:
         return 0.0, "смотреть некуда"
-    return метка, "прочитано"
+    return mark, "прочитано"
 
 
 def next_sleep(db_path, role: str, prev_sec: int = None) -> dict:
@@ -165,13 +168,13 @@ def next_sleep(db_path, role: str, prev_sec: int = None) -> dict:
     # Новизну считаем по ЧУЖИМ запискам: своя свежая записка — не повод будить себя чаще.
     head = conn.execute("SELECT COALESCE(MAX(id), 0) FROM messages WHERE writer_role <> ?",
                         (role,)).fetchone()[0]
-    bridge_head, мост_исход = _чужое_в_мосте(conn, db_path)
+    bridge_head, bridge_outcome = _foreign_bridge_head(conn, db_path)
 
     if row is None:
         # Первый вызов роли — НЕ тишина: мы ещё ничего не наблюдали. Объявить тишину здесь
         # значило бы начать разгон с пустого места, ни разу не посмотрев в ленту.
         sleep, streak, quiet, new_count = START_SEC, 0, False, 0
-        новое_в_мосте = 0
+        bridge_new = 0
         reason = "первый опрос: начинаем с начала, тишина ещё не наблюдалась"
     else:
         prev_sleep, prev_streak, seen, seen_bridge = row
@@ -182,10 +185,10 @@ def next_sleep(db_path, role: str, prev_sec: int = None) -> dict:
             (seen, role)).fetchone()[0]
         # ⚖️ Мост участвует в признаке тишины НАРАВНЕ с лентой: письмо соседа — такая же
         # новость, как записка коллеги, и молчать на неё до 50 минут нельзя.
-        новое_в_мосте = 1 if (мост_исход == "прочитано"
+        bridge_new = 1 if (bridge_outcome == "прочитано"
                               and bridge_head > (seen_bridge or 0)) else 0
-        quiet = new_count == 0 and not новое_в_мосте
-        if мост_исход == "не смог":
+        quiet = new_count == 0 and not bridge_new
+        if bridge_outcome == "не смог":
             # ⛔ «НЕ СМОГ ПРОЧИТАТЬ» ≠ «ТАМ ПУСТО». Разогнать сон здесь значило бы объявить
             # тишину оттого, что не сумели посмотреть. Держим прежний сон и говорим вслух.
             sleep, streak, quiet = prev_sleep, prev_streak, False
@@ -201,12 +204,12 @@ def next_sleep(db_path, role: str, prev_sec: int = None) -> dict:
             sleep, streak = START_SEC, 0
             # ⚖️ Названо, ЧТО именно разбудило: без этого роль, увидев сброс при пустой
             # ленте, решит, что механизм врёт, — и перестанет ему верить.
-            откуда = []
+            sources = []
             if new_count:
-                откуда.append(f"{new_count} чужих записок в ленте")
-            if новое_в_мосте:
-                откуда.append("новый файл в мосте соседей")
-            reason = (f"НЕ тишина: {' и '.join(откуда)} с прошлого опроса ⇒ "
+                sources.append(f"{new_count} чужих записок в ленте")
+            if bridge_new:
+                sources.append("новый файл в мосте соседей")
+            reason = (f"НЕ тишина: {' и '.join(sources)} с прошлого опроса ⇒ "
                       f"сброс к {START_SEC // 60} мин")
 
     # ⛔ Отметку моста двигаем ТОЛЬКО когда его прочитали. Иначе неудачное чтение стёрло бы
@@ -221,20 +224,20 @@ def next_sleep(db_path, role: str, prev_sec: int = None) -> dict:
         pools = active_pool_tracks(conn)
         if pools and sleep > POOL_MAX_SEC:
             ph = ",".join("?" * len(pools))
-            моя = conn.execute(
+            mine = conn.execute(
                 f"SELECT 1 FROM backlog WHERE role=? AND parent_track IN ({ph}) "
                 f"AND status IN ('open','in_progress','blocked','awaiting_word','in_review') "
                 f"LIMIT 1", (role, *pools)).fetchone()
-            if моя:
-                живые, _ = live_and_overdue(conn, pool_open_ids(conn, pools))
-                if живые:
+            if mine:
+                live_leases, _ = live_and_overdue(conn, pool_open_ids(conn, pools))
+                if live_leases:
                     sleep = POOL_MAX_SEC
-                    reason += (f" · ПУЛ ЖИВ (объявлений {len(живые)}): потолок участницы "
+                    reason += (f" · ПУЛ ЖИВ (объявлений {len(live_leases)}): потолок участницы "
                                f"{POOL_MAX_SEC // 60} мин")
     except Exception as exc:                                       # noqa: BLE001
         reason += f" · ⚠️ пул-потолок НЕ посчитан ({exc.__class__.__name__}) — сон прежний"
 
-    bridge_to_save = bridge_head if мост_исход == "прочитано" else None
+    bridge_to_save = bridge_head if bridge_outcome == "прочитано" else None
     conn.execute("INSERT INTO sync_backoff (role, sleep_sec, quiet_streak, last_seen_id, "
                  "last_bridge_mtime, updated_at) VALUES (?,?,?,?,?, datetime('now')) "
                  "ON CONFLICT(role) DO UPDATE SET sleep_sec=excluded.sleep_sec, "
@@ -246,8 +249,8 @@ def next_sleep(db_path, role: str, prev_sec: int = None) -> dict:
     conn.commit()
     conn.close()
     return {"sleep_sec": sleep, "minutes": sleep // 60, "quiet": quiet, "streak": streak,
-            "new_count": new_count, "reason": reason, "bridge": мост_исход,
-            "bridge_new": bool(новое_в_мосте),
+            "new_count": new_count, "reason": reason, "bridge": bridge_outcome,
+            "bridge_new": bool(bridge_new),
             "start_min": START_SEC // 60, "step_min": STEP_SEC // 60, "max_min": MAX_SEC // 60}
 
 
@@ -261,6 +264,84 @@ def line(db_path, role: str) -> str:
                 "Это НЕ «спи сколько хочешь» — позови sync-backoff.py руками")
     return (f"⏱ СЛЕДУЮЩИЙ СИНК ЧЕРЕЗ {r['minutes']} МИН — {r['reason']}. "
             f"[начало {r['start_min']} · шаг {r['step_min']} · потолок {r['max_min']} мин]")
+
+
+# ═══ 24.09 (план «убрать будильники», выбор владельца «Весь план», записка #5312) ═══
+# Будильников сверок больше нет — роли зовут друг друга напрямую, и «через сколько спать»
+# спрашивать некому. Полезная половина остаётся: сколько нового пришло с прошлого чтения
+# (чужие записки и письма соседей в мосте). Строка сна печатается, ПОКА правило
+# sync-sleep-backoff действует: пакет общий, у соседей правило может жить дальше.
+RHYTHM_RULE = "sync-sleep-backoff"
+
+
+def rhythm_rule_active(db_path) -> bool:
+    """Действует ли правило разгона сна в своде этой базы. Нет правила или нет таблицы
+    правил — «не действует»: ритма без правила не бывает."""
+    try:
+        conn = sqlite3.connect(f"file:{Path(db_path).as_posix()}?mode=ro", uri=True, timeout=10)
+        try:
+            row = conn.execute("SELECT status FROM rules WHERE rule_key=?",
+                               (RHYTHM_RULE,)).fetchone()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return False
+    return bool(row) and row[0] == "active"
+
+
+def news(db_path, role: str) -> dict:
+    """Сколько нового с прошлого чтения: чужие записки и чужие письма в мосте. Сон не
+    считается и не меняется; отметки прошлого чтения двигаются так же, как в next_sleep."""
+    role = (role or "").upper()
+    if not role:
+        raise ValueError("роль не названа: счёт нового ведётся ПО РОЛИ")
+    conn = sqlite3.connect(str(db_path), timeout=10)
+    _table(conn)
+    row = conn.execute("SELECT last_seen_id, last_bridge_mtime FROM sync_backoff WHERE role=?",
+                       (role,)).fetchone()
+    head = conn.execute("SELECT COALESCE(MAX(id), 0) FROM messages WHERE writer_role <> ?",
+                        (role,)).fetchone()[0]
+    bridge_head, bridge_outcome = _foreign_bridge_head(conn, db_path)
+    first = row is None
+    seen, seen_bridge = (0, None) if first else row
+    new_count = 0 if first else conn.execute(
+        "SELECT COUNT(*) FROM messages WHERE id > ? AND writer_role <> ?",
+        (seen, role)).fetchone()[0]
+    bridge_new = (not first and bridge_outcome == "прочитано"
+                  and bridge_head > (seen_bridge or 0))
+    bridge_to_save = bridge_head if bridge_outcome == "прочитано" else None
+    conn.execute("INSERT INTO sync_backoff (role, sleep_sec, quiet_streak, last_seen_id, "
+                 "last_bridge_mtime, updated_at) VALUES (?,?,0,?,?, datetime('now')) "
+                 "ON CONFLICT(role) DO UPDATE SET last_seen_id=excluded.last_seen_id, "
+                 "last_bridge_mtime=COALESCE(excluded.last_bridge_mtime, "
+                 "sync_backoff.last_bridge_mtime), updated_at=excluded.updated_at",
+                 (role, START_SEC, head, bridge_to_save))
+    conn.commit()
+    conn.close()
+    return {"first": first, "new_count": new_count, "bridge": bridge_outcome,
+            "bridge_new": bool(bridge_new)}
+
+
+def news_line(db_path, role: str) -> str:
+    """Одна строка о новом с прошлого чтения — без сна и без «следующей сверки»."""
+    try:
+        r = news(db_path, role)
+    except Exception as exc:                                       # noqa: BLE001
+        return f"⚠️ новое с прошлого чтения НЕ ПОСЧИТАНО ({exc.__class__.__name__}: {exc})"
+    if r["first"]:
+        return "📬 с прошлого чтения: первое чтение — счёт нового начнётся со следующего"
+    # ⚖️ Три исхода моста, и «не смог» не равен «нового нет» — как в next_sleep.
+    bridge_word = {"прочитано": "есть новое" if r["bridge_new"] else "нового нет",
+                   "смотреть некуда": "мостов нет",
+                   "не смог": "НЕ ПРОЧИТАН — проверь пути соседей в cross_links"}[r["bridge"]]
+    return (f"📬 с прошлого чтения: чужих записок {r['new_count']} · "
+            f"письма соседей в мосте: {bridge_word}")
+
+
+def reader_line(db_path, role: str) -> str:
+    """Что печатает чтение ленты в конце: строку сна, пока правило ритма действует,
+    иначе — только счёт нового."""
+    return line(db_path, role) if rhythm_rule_active(db_path) else news_line(db_path, role)
 
 
 def reset(db_path, role: str) -> None:

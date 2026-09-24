@@ -308,10 +308,16 @@ def build(conn, role, полный=False, full=False, db_path=None):
     def ритм(out):
         st = conn.execute(
             "SELECT status FROM rules WHERE rule_key='sync-alarm-in-chat'").fetchone()
-        if not st or st[0] != "active":
-            out.append("⏰ РИТМ: правило sync-alarm-in-chat "
-                       + ("ОТОЗВАНО" if st else "НЕ НАЙДЕНО")
-                       + " — ритм спроси у владельца, прежнему стандарту не верь")
+        if st and st[0] != "active":
+            # 24.09 (выбор владельца «Весь план», записка #5312): правило снято решением,
+            # а не потеряно — «спроси владельца» здесь звало бы его заново решать решённое.
+            out.append("⏰ РИТМ: будильника сверок нет — правило sync-alarm-in-chat снято, роли "
+                       "зовут друг друга напрямую; при пробуждении — адрес и лента целиком")
+            out.append(f"   пометка о снятии: python {S}/set-rule.py --key sync-alarm-in-chat --show")
+            return
+        if not st:
+            out.append("⏰ РИТМ: правила sync-alarm-in-chat в своде НЕТ — ритм спроси у владельца, "
+                       "прежнему стандарту не верь")
             return
         out.append(("_HINT_", "role-brief-ритм",
                     "⏰ РИТМ (слово владельца 29.08): будильник ВНУТРИ чата; наказ — ФАЙЛОМ; "

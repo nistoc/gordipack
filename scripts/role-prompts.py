@@ -13,6 +13,12 @@
 и не меняет; период ритма НЕ печатается числом из головы — берётся правило свода
 sync-alarm-in-chat (именное слово владельца сильнее, это сказано в самом промпте);
 рукописная копия вывода протухает, как любой наказ, — зови в момент пересоздания.
+
+📌 24.09 (выбор владельца «Весь план», чат OPSSRE ~09:44 UTC, записка #5312): будильники
+сверок убираются — роли зовут друг друга напрямую. Файл-поручение нужен промпту ТОЛЬКО
+для шага «заведи будильник», поэтому он ищется лишь пока правило sync-alarm-in-chat
+действует. Правило снято или его в своде нет — файл не ищется, отказа нет, шаг ритма
+заменён строкой о том, почему будильника нет. У соседей с живым правилом всё по-прежнему.
 """
 import argparse
 import os
@@ -78,9 +84,10 @@ def counts(conn, role):
             f"SELECT id, title FROM backlog WHERE role=? AND parent_track IN ({ph}) "
             f"AND status IN ('open','in_progress','blocked','awaiting_word','in_review') "
             f"ORDER BY id", (role, *pools)).fetchall()
+    # Три исхода, а не два: «снято» и «в своде нет» — разные ответы роли (см. rhythm_block).
     rule_row = conn.execute(
         "SELECT status FROM rules WHERE rule_key='sync-alarm-in-chat'").fetchone()
-    return backlog_debt, bloated, cards, (rule_row and rule_row[0] == "active")
+    return backlog_debt, bloated, cards, (rule_row[0] if rule_row else None)
 
 
 # ═══ Карточка #463 (заявка @COORD, слово владельца 30.08 10:06 UTC «починить выбор файла
@@ -214,10 +221,21 @@ def main():
     if not db.exists():
         sys.exit(f"⛔ ПАРА НЕ СОБРАНА: базы нет ({db}) — это не «пустые промпты»")
     conn = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
-    backlog_debt, bloated, cards, rhythm_active = counts(conn, role)
+    backlog_debt, bloated, cards, rhythm_status = counts(conn, role)
+    rhythm_active = rhythm_status == "active"
     group_name = group_label(conn)
     conn.close()
-    if a.prompt_file:
+    if not rhythm_active:
+        # Будильника не будет — и файл-поручение ему не нужен. Отказ «файла нет» здесь
+        # остановил бы пробуждение ролей из-за предмета, которого больше нет.
+        state_word = "снято" if rhythm_status else "в своде нет"
+        print(f"📁 файл-поручение не ищется: правило ритма sync-alarm-in-chat {state_word} — "
+              f"будильник не заводится", file=sys.stderr)
+        if a.prompt_file or a.no_prompt_file:
+            print("   доводы --prompt-file и --no-prompt-file без действующего правила ритма "
+                  "ничего не меняют", file=sys.stderr)
+        mandate_file, file_report = None, []
+    elif a.prompt_file:
         # Названный рукой путь сильнее любого отбора — но он ОБЯЗАН существовать:
         # молча принять несуществующий значило бы вернуть ту же заглушку другим путём.
         mandate_file, file_report = a.prompt_file.replace("\\", "/"), [
@@ -228,7 +246,7 @@ def main():
         mandate_file, file_report = choose_mandate(mandate_files(role))
     for line in file_report:
         print(line, file=sys.stderr)
-    if mandate_file is None:
+    if mandate_file is None and rhythm_active:
         if not a.no_prompt_file:
             sys.exit(
                 "⛔ ПАРА НЕ СОБРАНА: у роли нет исполнимого файла-поручения (см. выше).\n"
@@ -265,6 +283,14 @@ def main():
             "Задачу-расписание\n"
             "   вне чата НЕ заводи. Правило целиком:\n"
             f"   python {S}/set-rule.py --key sync-alarm-in-chat --show\n")
+    elif rhythm_status:
+        # Правило СНЯТО — владелец решил, спрашивать заново не о чем. Лента целиком
+        # остаётся (шаг 3): будильник подбирал записки, теперь их приносит сигнал-указатель.
+        rhythm_block = (
+            "Шаг 4 — будильник сверок НЕ заводи: правило sync-alarm-in-chat снято, роли зовут\n"
+            "   друг друга напрямую (сигнал несёт указатель на записку, тело — в ленте).\n"
+            "   Пометка о снятии и её основание:\n"
+            f"   python {S}/set-rule.py --key sync-alarm-in-chat --show\n")
     else:
         rhythm_block = ("ритм: правила sync-alarm-in-chat в своде этого контура нет — "
                         "спроси владельца, заводить ли сверки\n")
@@ -298,7 +324,7 @@ def main():
 Шаг 3 — лента (долг ~{backlog_debt} записок): читай ЦЕЛИКОМ, подтверждай --ack; длинно —
    сужай ЗАПРОС (--limit порциями), не вывод:
    python {S}/read-messages.py --role {role}
-{rhythm_block}Шаг 4-бис — адрес сессии, КАЖДОЕ пробуждение (правило rhythm-survives-rebirth п.①: имя
+{rhythm_block}Шаг 4-бис — адрес сессии, КАЖДОЕ пробуждение (правило rhythm-survives-rebirth п.⓪: имя
    сессии принадлежит процессу, возобновлённый чат получает НОВОЕ — прежняя запись
    реестра указывает в пустоту). Узнай СТОЙКИЙ идентификатор вызовом приложения
    get_session("self") (поле sessionId вида local_…: он переживает возобновление, в

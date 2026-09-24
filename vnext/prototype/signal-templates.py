@@ -559,6 +559,13 @@ def main() -> int:
         store = mezo_sessions.read_store()
         if not store.found:
             print(f"⚠️ СВЕРИТЬ НЕЧЕМ: {store.error} — адрес записан без проверки")
+            # Номер записи разговора принадлежит ЧАТУ. Сменился номер сессии — прежний номер
+            # записи уже чужой, и хук опознал бы роль по записи другого чата. Сверить нечем ⇒
+            # пусто, а не перенос (возврат COORD по ②, карточка #649).
+            if previous is not None and new_sid != previous[1] and new_tid is not None:
+                new_tid = None
+                print("   номер записи разговора (transcript_id) сброшен: прежний принадлежал "
+                      "другому чату, свежий взять неоткуда")
         else:
             name_part = (a.set_address.strip().split(" [", 1)[0] if a.set_address
                         else (previous[0].split(" [", 1)[0] if previous and previous[0] else None))

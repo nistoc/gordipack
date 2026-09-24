@@ -549,6 +549,48 @@ def sleeping_addressees(conn, names_list):
             if silent_hours is None or silent_hours >= SILENCE_HOURS]
 
 
+# ── АДРЕСАТ НЕДОСТИЖИМ СИГНАЛОМ (план «убрать будильники», 24.09, записка #5312) ─────
+# Будильники сверок убраны: записку, адресованную роли, теперь приносит ей СИГНАЛ-указатель
+# в чат, а не будильник. Сигнал доходит только туда, где записан живой номер сессии.
+# Пишущий об этом не знал — и записка пролежала бы до ручного пробуждения молча.
+# ⚖️ ПРЕДУПРЕЖДЕНИЕ, А НЕ ОТКАЗ, как у спящего: записка обязана лечь в ленту.
+# Номер сессии сверяется с хранилищем сессий приложения (mezo_sessions, карточка #649).
+def unreachable_addressees(conn, names_list, writer_role):
+    """→ (перечень [(роль, почему)], путь хранилища) или (None, причина), когда сверить нечем.
+
+    Три беды названы порознь — лечатся они по-разному: «не записан» чинит сама роль
+    записью адреса, «в архиве» и «не найден» — пробуждение её чата владельцем."""
+    names_list = [r for r in names_list
+                  if r not in SPECIAL_ADDRESSEES and r != (writer_role or "").upper()]
+    if not names_list:
+        return [], None
+    try:
+        import mezo_sessions
+    except ImportError as exc:
+        return None, f"помощника чтения хранилища сессий нет рядом ({exc.name})"
+    store = mezo_sessions.read_store()
+    if not store.found:
+        return None, f"хранилища сессий приложения нет ({store.path})"
+    try:
+        recorded = dict(conn.execute(
+            f"SELECT role, session_id FROM role_sessions WHERE role IN "
+            f"({','.join('?' * len(names_list))})", names_list).fetchall())
+    except sqlite3.OperationalError:
+        return None, "в базе нет реестра адресов ролей (role_sessions.session_id)"
+    result = []
+    for role in names_list:
+        session_id = (recorded.get(role) or "").strip()
+        if not session_id:
+            result.append((role, "номер сессии не записан — сигнал отправить некуда"))
+            continue
+        record = mezo_sessions.find_by_session_id(store, session_id)
+        if record is None:
+            result.append((role, f"сессия {session_id[:14]}… не найдена в хранилище приложения"))
+        elif record.archived:
+            result.append((role, f"сессия {session_id[:14]}… в архиве"))
+    return result, store.path
+
+
 def main():
     # ⚰️ БЫЛО: «Записать сообщение в mezosync.db + md-канал». Заявка @RCC 2026-08-13 10:06 UTC,
     # первым же прогоном после воскрешения: печатная форма расходилась с тем, чему учит решето.
@@ -973,6 +1015,8 @@ def main():
     # и блок, вставленный ниже, сдвинул бы его молча — учащая поверхность отстала бы
     # от механизма в тот же час, когда механизм появился.
     _sleeping = sleeping_addressees(conn, (_to_names or []) + (_cc_names or [])) if msg_id else []
+    _unreachable, _store_note = (unreachable_addressees(
+        conn, (_to_names or []) + (_cc_names or []), args.role) if msg_id else ([], None))
     # ═══ 2.2 (28.08): СТАТУС РОЛИ — ТЕМ ЖЕ ВЫЗОВОМ. Отправка записки и есть событие
     # «чем занята роль»; отдельная кнопка статуса мертва замером (PROTO 22 дня, TAXO 20).
     # Только ЗАПИСЬ ноты: чтение ленты, --poll и --ack статус НЕ трогают — иначе он
@@ -1001,6 +1045,16 @@ def main():
         print("   берётся свежий из двух. Записка ВСЁ РАВНО ЗАПИСАНА — спящий дочитает её,")
         print("   когда его запустят. Это предупреждение о СРОКЕ ответа, а не об отправке.")
         print("   👉 Молчание такого адресата НЕ значит согласия: голоса за него не подавай.")
+
+    if _unreachable is None:
+        # Сверить нечем — сказано вслух: молчание здесь читалось бы как «все достижимы».
+        print(f"📡 достижимость адресатов сигналом НЕ сверена: {_store_note}")
+    elif _unreachable:
+        print("📡 АДРЕСАТ НЕДОСТИЖИМ СИГНАЛОМ — записка пролежит до ручного пробуждения его чата:")
+        for addressee_role, why in _unreachable:
+            print(f"   {addressee_role:9} {why}")
+        print("   Записка ЗАПИСАНА. 👉 Скажи владельцу, чей чат разбудить; роль, проснувшись,")
+        print("   записывает адрес своей рукой (signal-templates.py --set-address … --session-id …).")
 
     if msg_id is not None:
         print(f"OK #{msg_id} [{args.role}] tags={tags_json} priority={args.priority}")
