@@ -23,19 +23,25 @@ bite-r16.py — R16: «пока батч не подтверждён, ридер
       📌 Класс в карту: УКУС, НОРМАЛИЗУЮЩИЙ СОСТОЯНИЕ ПЕРЕД ЗАМЕРОМ, СЛЕП К ОШИБКАМ
          НАКОПЛЕННОГО СОСТОЯНИЯ. «Чистая исходная позиция» — не гигиена, а потеря условия.
 
+⚠️ ДОПОЛНЕНО 2026-09-24 (находка PROTO ≈10:14 UTC): стенды строились из давней копии
+   ~/.mezosync-sandbox, а отмотка отметки прочитанного писала прямо в неё. Чинено: один
+   снимок живой базы за прогон, раскладка стенда как у контура, читающий по умолчанию —
+   mezo_target.script, подпроцессы — со средой стенда (mezo_stand.stand_env); --sandbox снят.
+
 РЕЖИМЫ РАЗВЕДЕНЫ НАРОЧНО (просьба COORD: «либо параметризовать ДО, либо назвать в шапке,
 что это демонстрация, а не тест»). Здесь сделано и то и другое:
 
-    verify  (по умолчанию) — РЕГРЕССИЯ на ЛЮБОЙ врезке. Проверяет свойства целевого ридера,
+    verify  (по умолчанию) — РЕГРЕССИЯ на ЛЮБОЙ копии. Проверяет свойства целевого ридера,
                              ничего не знает про «до». Годится для чужого кода.
     demo    --baseline P    — ДЕМОНСТРАЦИЯ боли на явно указанной ДО-версии.
                              Предусловие проверяется: если P уже несёт R16 — rc=2, а не рассказ.
 
-Работает на ВРЕМЕННОЙ ПОЛНОЙ КОПИИ песочницы (накопленное состояние сохраняется).
-Живой субстрат не открывается вовсе. Предусловие не выполнено — выход с кодом 2.
+Стенды строятся из ОДНОГО снимка живой базы за весь прогон (накопленное состояние
+сохраняется; 74 МБ не копируются на каждый стенд по отдельности). Живая база открывается
+ТОЛЬКО НА ЧТЕНИЕ для этого снимка. Предусловие не выполнено — выход с кодом 2.
 
-    python bite-r16.py                          # регрессия по копии живого ридера в песочнице
-    python bite-r16.py --target <путь к ридеру>  # регрессия по чужой врезке
+    python bite-r16.py                              # регрессия по испытуемому читающему (mezo_target)
+    python bite-r16.py --target <путь к читающему>   # регрессия по чужой копии
     python bite-r16.py demo --baseline <до-версия read-messages.py>
 """
 import argparse
@@ -48,12 +54,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
+import mezo_target  # noqa: E402 — какая копия читающего испытывается по умолчанию
+import mezo_paths  # noqa: E402 — путь живой базы для ОДНОГО снимка за весь прогон
 
 ROLE = "PROTO"
 
 
-def run(script, args, cwd=None):
+def run(script, args, root, cwd=None):
+    """Подпроцесс — ВСЕГДА со средой стенда (mezo_stand.stand_env(root)): без неё испытуемый
+    инструмент наследует MEZO_CONTAINER вызывающего и рискует уйти в чужой контур
+    (карточка #613, проверяет check-acceptance-env.py)."""
     p = subprocess.run([sys.executable, str(script), *args], cwd=cwd,
+                       env=mezo_stand.stand_env(root),
                        capture_output=True, text=True, encoding="utf-8", errors="replace")
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
@@ -93,41 +105,33 @@ def state(db, role):
     return cur, total, stale, head, unread
 
 
-def workbench(sandbox):
-    """Полная копия песочницы во временный каталог: опыт не портит песочницу
-    и НЕ нормализует её состояние."""
-    src_db = sandbox / "mezosync.db"
-    if not src_db.exists():
-        die(f"нет песочницы: {src_db}",
-            "подними её: python vnext/sandbox/bootstrap.py")
+def sample_db(root):
+    """ОДИН снимок живой базы на весь прогон (находка PROTO 24.09): 74 МБ не снимаем
+    девять раз — стенды свойств берут копию уже снятого образца, см. workbench()."""
+    return mezo_stand.snapshot_db(mezo_paths.live_db(), root / "mezosync.db")
+
+
+def workbench(sample):
+    """Стенд одного свойства: копия УЖЕ СНЯТОГО образца (не живой базы — см. sample_db) в
+    раскладке контура: <корень>/.mezosync/mezosync.db. Та же раскладка, что у настоящего
+    контура, — тогда поиск контейнера по расположению читающего сходится с MEZO_CONTAINER,
+    который стенду ставит mezo_stand.stand_env (см. with_reader и run)."""
     tmp = mezo_stand.new("bite-r16-")
-    shutil.copy2(src_db, tmp / "mezosync.db")
-    for extra in ("mezosync.db-wal", "mezosync.db-shm"):
-        if (sandbox / extra).exists():
-            shutil.copy2(sandbox / extra, tmp / extra)
+    (tmp / ".mezosync").mkdir(parents=True, exist_ok=True)
+    shutil.copy2(sample, tmp / ".mezosync" / "mezosync.db")
     return tmp
 
 
-def with_deps(reader, tmp):
-    """Ридер уезжает в стенд ВМЕСТЕ СО ВСЕМИ соседями-модулями, а не с перечнем руками.
-
-    🪤 Прежде здесь лежал перечень из ОДНОГО имени (mezo_paths) — и он протух молча:
-    читалка стала импортировать urgency и sync_backoff, стенд падал на импорте, и провал
-    ЗАВИСИМОСТИ выглядел провалом СВОЙСТВА (⚠️ у шести свойств из девяти разом).
-    Урок тот же, что у переноса шаблона (#148): «список писала рука, замыкание знает код».
-    Считать замыкание импортов честнее, но соседних .py немного — копируем ВСЕХ:
-    стенд, собранный целиком, не может отстать от читалки по построению."""
-    dest = tmp / reader.name
-    shutil.copy2(reader, dest)
-    for dep in reader.parent.glob("*.py"):
-        if dep.name != reader.name:
-            shutil.copy2(dep, tmp / dep.name)
-    return dest
+def with_reader(target, tmp):
+    """Читающий уезжает в стенд ВМЕСТЕ со всеми соседями-модулями — mezo_stand.copy_tool
+    (транзитивный разбор импортов, без ручного перечня), в <корень>/.mezosync/scripts/ —
+    той же раскладке, что у workbench() даёт базе."""
+    return mezo_stand.copy_tool(target, tmp / ".mezosync" / "scripts")
 
 
-def read_twice(reader, db, limit=3):
-    _, o1 = run(reader, ["--db", str(db), "--role", ROLE, "--limit", str(limit)])
-    _, o2 = run(reader, ["--db", str(db), "--role", ROLE, "--limit", str(limit)])
+def read_twice(reader, db, root, limit=3):
+    _, o1 = run(reader, ["--db", str(db), "--role", ROLE, "--limit", str(limit)], root)
+    _, o2 = run(reader, ["--db", str(db), "--role", ROLE, "--limit", str(limit)], root)
     return (o1, halves(o1)), (o2, halves(o2))
 
 
@@ -143,33 +147,41 @@ def readable(out, where):
     return True
 
 
+def require_readable(out, where):
+    """Как readable(), но для demo: без токена сравнивать «до/после» не на чем — это отказ
+    демонстрации (rc=2), а не измеренное свойство."""
+    if not readable(out, where):
+        die(f"{where}: ридер не выдал токена — демонстрацию показать не на чем")
+
+
 # ──────────────────────────────────────────────────────────────────────────────
-def verify(target, sandbox):
+def verify(target, sample):
     """РЕГРЕССИЯ: проверяем СВОЙСТВА целевого ридера. Про «до» ничего не знаем и не спрашиваем.
 
-    ⚠️ Каждое свойство ставится на СВОЁМ стенде (своя копия песочницы). Иначе P2 тратит
-    непрочитанные ноты и P3 нечем ставить — а проверка, которая не поставилась из-за
-    предыдущей проверки, это связанность опытов, а не результат."""
-    cur, total, stale, head, unread = state(sandbox / "mezosync.db", ROLE)
+    ⚠️ Каждое свойство ставится на СВОЁМ стенде (своя копия снятого образца). Иначе P2
+    тратит непрочитанные ноты и P3 нечем ставить — а проверка, которая не поставилась
+    из-за предыдущей проверки, это связанность опытов, а не результат."""
+    cur, total, stale, head, unread = state(sample, ROLE)
     if cur is None:
-        die(f"роли {ROLE} нет в read_cursors песочницы")
+        die(f"роли {ROLE} нет в read_cursors снятого образца")
     if unread < 1:
         # ⚠️ ПРИЁМКА НЕ ИМЕЕТ ПРАВА ЗАВИСЕТЬ ОТ МОМЕНТА СНИМКА (найдено 2026-08-09):
-        # песочница v3 пересобирается из живой базы, и если роль в этот час дочитала
-        # ленту до головы — долга нет, и прежний код отказывался ставиться. То есть
-        # приёмка требовала, чтобы МИР оказался удобным. Различающий случай — предмет
-        # приёмки, ей его и готовить: отматываем курсор В ПЕСОЧНИЦЕ (не в живой!) назад.
+        # если роль в этот час дочитала ленту до головы — долга нет, и прежний код
+        # отказывался ставиться. То есть приёмка требовала, чтобы МИР оказался удобным.
+        # Различающий случай — предмет приёмки, ей его и готовить: отматываем курсор
+        # В ОБРАЗЦЕ (копии, снятой этим прогоном) — не в живой базе.
         if head < 5:
-            die(f"в песочнице почти пуста лента (голова #{head}) — стендам не из чего строиться")
+            die(f"в образце почти пустая лента (голова #{head}) — стендам не из чего строиться")
         back = min(40, head - 1)
-        con = sqlite3.connect(str(sandbox / "mezosync.db"))
+        con = sqlite3.connect(str(sample))
         con.execute("UPDATE read_cursors SET last_read_id = ? WHERE reader_role = ?",
                     (head - back, ROLE))
         con.commit()
         con.close()
-        cur, total, stale, head, unread = state(sandbox / "mezosync.db", ROLE)
-        print(f"⚠️ долга у {ROLE} не было — отметка прочитанного отмотана в ПЕСОЧНИЦЕ на {back} назад "
-              f"(→ {cur}); живая база не тронута, песочница пересоздаётся строителем")
+        cur, total, stale, head, unread = state(sample, ROLE)
+        print(f"⚠️ долга у {ROLE} не было — отметка прочитанного отмотана В СНЯТОМ ОБРАЗЦЕ на "
+              f"{back} назад (→ {cur}); живая база не тронута — стенды берут копию уже "
+              f"отмотанного образца")
     print(f"[регрессия R16] цель: {target}")
     print(f"   состояние роли {ROLE}: отметка {cur} · голова #{head} · непрочитано {unread} · "
           f"открытых батчей {total} (из них ПРОТУХШИХ {stale}) — НЕ стираем\n")
@@ -178,22 +190,22 @@ def verify(target, sandbox):
     stands = []
 
     # P1 — идемпотентная выдача
-    tmp1 = workbench(sandbox); stands.append(tmp1)
-    db1, r1 = tmp1 / "mezosync.db", with_deps(target, tmp1)
-    (o1, t1), (_, t2) = read_twice(r1, db1)
+    tmp1 = workbench(sample); stands.append(tmp1)
+    db1, r1 = tmp1 / ".mezosync" / "mezosync.db", with_reader(target, tmp1)
+    (o1, t1), (_, t2) = read_twice(r1, db1, tmp1)
     ok1 = (t1 == t2 and None not in t1) if readable(o1, "P1") else None
     print(f"P1 идемпотентная выдача: вызов1 {t1[0]}-{t1[1]} · вызов2 {t2[0]}-{t2[1]} "
           f"→ {'✅ тот же' if ok1 else '🔴 РАЗНЫЕ (R16 нет)' if ok1 is False else '⚠️ не поставлено'}")
     verdicts.append(ok1)
 
     # P2 — гашение одноразовое (свой стенд: ack двигает курсор)
-    tmp2 = workbench(sandbox); stands.append(tmp2)
-    db2, r2 = tmp2 / "mezosync.db", with_deps(target, tmp2)
-    _, o2 = run(r2, ["--db", str(db2), "--role", ROLE, "--limit", "3"])
+    tmp2 = workbench(sample); stands.append(tmp2)
+    db2, r2 = tmp2 / ".mezosync" / "mezosync.db", with_reader(target, tmp2)
+    _, o2 = run(r2, ["--db", str(db2), "--role", ROLE, "--limit", "3"], tmp2)
     if readable(o2, "P2"):
         tok = halves(o2)
-        rc_a, _ = run(r2, ["--db", str(db2), "--role", ROLE, "--ack", f"{tok[0]}-{tok[1]}"])
-        rc_b, _ = run(r2, ["--db", str(db2), "--role", ROLE, "--ack", f"{tok[0]}-{tok[1]}"])
+        rc_a, _ = run(r2, ["--db", str(db2), "--role", ROLE, "--ack", f"{tok[0]}-{tok[1]}"], tmp2)
+        rc_b, _ = run(r2, ["--db", str(db2), "--role", ROLE, "--ack", f"{tok[0]}-{tok[1]}"], tmp2)
         ok2 = rc_a == 0 and rc_b != 0
         print(f"P2 гашение одноразовое: ack rc={rc_a} · повтор rc={rc_b} "
               f"→ {'✅ второй отклонён' if ok2 else '🔴 токен переиспользуем'}")
@@ -204,8 +216,8 @@ def verify(target, sandbox):
 
     # P3 — протухший батч НЕ перевыдаётся. Регрессия на находку COORD (#2748), которую
     # прежняя версия укуса показать не могла: она стирала read_batches перед замером.
-    tmp3 = workbench(sandbox); stands.append(tmp3)
-    db3, r3 = tmp3 / "mezosync.db", with_deps(target, tmp3)
+    tmp3 = workbench(sample); stands.append(tmp3)
+    db3, r3 = tmp3 / ".mezosync" / "mezosync.db", with_reader(target, tmp3)
     con = sqlite3.connect(str(db3))
     con.execute("DELETE FROM read_batches WHERE role=? AND last_id>?", (ROLE, cur))
     con.execute("INSERT OR REPLACE INTO read_batches (token, role, last_id, issued_at) "
@@ -214,7 +226,7 @@ def verify(target, sandbox):
     con.close()
     print(f"   [P3 подготовка] в стенд добавлен ПРОТУХШИЙ батч last_id={max(cur-5,1)} "
           f"при отметке {cur} — условие опыта, названное вслух")
-    _, o3 = run(r3, ["--db", str(db3), "--role", ROLE, "--limit", "3"])
+    _, o3 = run(r3, ["--db", str(db3), "--role", ROLE, "--limit", "3"], tmp3)
     t3 = halves(o3)
     m = re.search(r"#(\d+)…#(\d+)", o3)
     span = f"{m.group(1)}…{m.group(2)}" if m else "?"
@@ -233,8 +245,8 @@ def verify(target, sandbox):
     # ⚠️ ГРАНИЦА, названная честно: в живой БД на момент находки таких ролей 0 — R16 сам
     # почти не даёт появиться второму актуальному батчу (повторный вызов перевыдаёт первый).
     # Это замечание к КОНСТРУКЦИИ, а не тревога о работающем контуре.
-    tmp4 = workbench(sandbox); stands.append(tmp4)
-    db4, r4 = tmp4 / "mezosync.db", with_deps(target, tmp4)
+    tmp4 = workbench(sample); stands.append(tmp4)
+    db4, r4 = tmp4 / ".mezosync" / "mezosync.db", with_reader(target, tmp4)
     con = sqlite3.connect(str(db4))
     hd = con.execute("SELECT MAX(id) FROM messages").fetchone()[0]
     back = hd - 40
@@ -251,7 +263,7 @@ def verify(target, sandbox):
     con.close()
     print(f"   [P4 подготовка] отметка отмотана на {back} (непрочитано {len(ids)}); открыты ДВА "
           f"актуальных батча: ПОЛНЫЙ last_id={ids[-1]} (09:00) и КОРОТКИЙ last_id={ids[9]} (09:05)")
-    _, o4 = run(r4, ["--db", str(db4), "--role", ROLE, "--limit", "50"])
+    _, o4 = run(r4, ["--db", str(db4), "--role", ROLE, "--limit", "50"], tmp4)
     t4 = halves(o4)
     m4 = re.search(r"#(\d+)…#(\d+)", o4)
     shown = int(m4.group(2)) - back if m4 else -1
@@ -268,15 +280,15 @@ def verify(target, sandbox):
     print("\n── свойства, названные непроверенными (@TAXO #2759)")
 
     # P5 — пустой батч: читать нечего ⇒ токен не выдаётся и батч не заводится
-    tmp5 = workbench(sandbox); stands.append(tmp5)
-    db5, r5 = tmp5 / "mezosync.db", with_deps(target, tmp5)
+    tmp5 = workbench(sample); stands.append(tmp5)
+    db5, r5 = tmp5 / ".mezosync" / "mezosync.db", with_reader(target, tmp5)
     con = sqlite3.connect(str(db5))
     hd5, = con.execute("SELECT MAX(id) FROM messages").fetchone()
     con.execute("UPDATE read_cursors SET last_read_id=? WHERE reader_role=?", (hd5, ROLE))
     con.execute("DELETE FROM read_batches WHERE role=?", (ROLE,))
     con.commit()
     con.close()
-    _, o5 = run(r5, ["--db", str(db5), "--role", ROLE, "--limit", "5"])
+    _, o5 = run(r5, ["--db", str(db5), "--role", ROLE, "--limit", "5"], tmp5)
     con = sqlite3.connect(f"file:{db5}?mode=ro", uri=True)
     n5, = con.execute("SELECT COUNT(*) FROM read_batches WHERE role=?", (ROLE,)).fetchone()
     con.close()
@@ -286,16 +298,16 @@ def verify(target, sandbox):
     verdicts.append(ok5)
 
     # P6 — смена --limit между вызовами: перевыдача не зависит от лимита
-    tmp6 = workbench(sandbox); stands.append(tmp6)
-    db6, r6 = tmp6 / "mezosync.db", with_deps(target, tmp6)
+    tmp6 = workbench(sample); stands.append(tmp6)
+    db6, r6 = tmp6 / ".mezosync" / "mezosync.db", with_reader(target, tmp6)
     con = sqlite3.connect(str(db6))
     hd6, = con.execute("SELECT MAX(id) FROM messages").fetchone()
     con.execute("UPDATE read_cursors SET last_read_id=? WHERE reader_role=?", (hd6 - 30, ROLE))
     con.execute("DELETE FROM read_batches WHERE role=?", (ROLE,))
     con.commit()
     con.close()
-    _, a6 = run(r6, ["--db", str(db6), "--role", ROLE, "--limit", "3"])
-    _, b6 = run(r6, ["--db", str(db6), "--role", ROLE, "--limit", "30"])
+    _, a6 = run(r6, ["--db", str(db6), "--role", ROLE, "--limit", "3"], tmp6)
+    _, b6 = run(r6, ["--db", str(db6), "--role", ROLE, "--limit", "30"], tmp6)
     span_a = re.search(r"#(\d+)…#(\d+)", a6)
     span_b = re.search(r"#(\d+)…#(\d+)", b6)
     ok6 = (halves(a6) == halves(b6)) and (span_a and span_b and span_a.group(0) == span_b.group(0))
@@ -306,8 +318,8 @@ def verify(target, sandbox):
     verdicts.append(ok6)
 
     # P7 — два ПАРАЛЛЕЛЬНЫХ вызова из разных процессов: батч должен быть один
-    tmp7 = workbench(sandbox); stands.append(tmp7)
-    db7, r7 = tmp7 / "mezosync.db", with_deps(target, tmp7)
+    tmp7 = workbench(sample); stands.append(tmp7)
+    db7, r7 = tmp7 / ".mezosync" / "mezosync.db", with_reader(target, tmp7)
     con = sqlite3.connect(str(db7))
     hd7, = con.execute("SELECT MAX(id) FROM messages").fetchone()
     con.execute("UPDATE read_cursors SET last_read_id=? WHERE reader_role=?", (hd7 - 20, ROLE))
@@ -317,7 +329,7 @@ def verify(target, sandbox):
     procs = [subprocess.Popen(
         [sys.executable, str(r7), "--db", str(db7), "--role", ROLE, "--limit", "5"],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-        encoding="utf-8", errors="replace") for _ in range(2)]
+        encoding="utf-8", errors="replace", env=mezo_stand.stand_env(tmp7)) for _ in range(2)]
     outs = [p.communicate()[0] for p in procs]
     con = sqlite3.connect(f"file:{db7}?mode=ro", uri=True)
     n7, = con.execute("SELECT COUNT(*) FROM read_batches WHERE role=?", (ROLE,)).fetchone()
@@ -330,22 +342,22 @@ def verify(target, sandbox):
 
     # P8 — НОВЫЕ ноты, пришедшие между чтениями, в перевыданный батч не входят.
     # @TAXO знала это из кода (:259-264) и честно пометила как непроверенное. Меряем.
-    tmp8 = workbench(sandbox); stands.append(tmp8)
-    db8, r8 = tmp8 / "mezosync.db", with_deps(target, tmp8)
+    tmp8 = workbench(sample); stands.append(tmp8)
+    db8, r8 = tmp8 / ".mezosync" / "mezosync.db", with_reader(target, tmp8)
     con = sqlite3.connect(str(db8))
     hd8, = con.execute("SELECT MAX(id) FROM messages").fetchone()
     con.execute("UPDATE read_cursors SET last_read_id=? WHERE reader_role=?", (hd8 - 6, ROLE))
     con.execute("DELETE FROM read_batches WHERE role=?", (ROLE,))
     con.commit()
     con.close()
-    _, a8 = run(r8, ["--db", str(db8), "--role", ROLE, "--limit", "10"])
+    _, a8 = run(r8, ["--db", str(db8), "--role", ROLE, "--limit", "10"], tmp8)
     con = sqlite3.connect(str(db8))
     con.execute("INSERT INTO messages (writer_role, timestamp, body_md, tags, priority, resolved) "
                 "VALUES ('COORD', datetime('now'), 'нота, пришедшая МЕЖДУ чтениями', NULL, 'normal', 0)")
     con.commit()
     new_id, = con.execute("SELECT MAX(id) FROM messages").fetchone()
     con.close()
-    _, b8 = run(r8, ["--db", str(db8), "--role", ROLE, "--limit", "10"])
+    _, b8 = run(r8, ["--db", str(db8), "--role", ROLE, "--limit", "10"], tmp8)
     sp_a = re.search(r"#(\d+)…#(\d+)", a8)
     sp_b = re.search(r"#(\d+)…#(\d+)", b8)
     ok8 = (halves(a8) == halves(b8)) and sp_b and int(sp_b.group(2)) < new_id
@@ -362,8 +374,8 @@ def verify(target, sandbox):
     # ⇒ ответ выглядит как «всё прочитано». Это тихая потеря видимости по ШТАТНОМУ пути,
     # а не по редкому: «маленький вызов → полный → ack полного» — самый частый паттерн
     # контура (@STUD #2698). Свойство: после перевыдачи остаток обязан быть НАЗВАН.
-    tmp9 = workbench(sandbox); stands.append(tmp9)
-    db9, r9 = tmp9 / "mezosync.db", with_deps(target, tmp9)
+    tmp9 = workbench(sample); stands.append(tmp9)
+    db9, r9 = tmp9 / ".mezosync" / "mezosync.db", with_reader(target, tmp9)
     con = sqlite3.connect(str(db9))
     hd9, = con.execute("SELECT MAX(id) FROM messages").fetchone()
     con.execute("UPDATE read_cursors SET last_read_id=? WHERE reader_role=?", (hd9 - 30, ROLE))
@@ -379,10 +391,10 @@ def verify(target, sandbox):
     # и форма у самой команды ack («за этим батчем ещё N») — валидные способы назвать остаток,
     # (в) при перевыдаче совет `--limit K` НЕ печатается НАМЕРЕННО: до ack он бесполезен, любой
     # лимит вернёт тот же батч. ⇒ этот совет в перевыдаче — теперь ДЕФЕКТ подачи, а не норма.
-    _, a9 = run(r9, ["--db", str(db9), "--role", ROLE, "--limit", "3"])
+    _, a9 = run(r9, ["--db", str(db9), "--role", ROLE, "--limit", "3"], tmp9)
     hint = re.search(r"Нужен весь хвост сразу — --limit (\d+)", a9)
     advised = hint.group(1) if hint else "30"
-    _, b9 = run(r9, ["--db", str(db9), "--role", ROLE, "--limit", advised])
+    _, b9 = run(r9, ["--db", str(db9), "--role", ROLE, "--limit", advised], tmp9)
     got = len(re.findall(r"^--- #", b9, re.M))
     named = bool(re.search(r"за ним ещё \d+ нот|за этим батчем ещё \d+ нот|УПЁРСЯ В ЛИМИТ"
                           r"|ПЕРЕВЫДАН", b9, re.I))
@@ -401,7 +413,10 @@ def verify(target, sandbox):
           f"{how} → {'✅' if ok9 else '🔴 роль выполнила совет и осталась без пути дальше'}")
     verdicts.append(ok9)
 
-    print("\n   стенды оставлены для разбора:")
+    # Судьбу стендов решает mezo_stand.finish() по исходу ВСЕГО прогона, а не этот вызов:
+    # прежняя строка «оставлены для разбора» печаталась и при успехе, за ней следовало
+    # «убрано временных каталогов» — вывод противоречил сам себе (правка PROTO 24.09).
+    print("\n   стенды свойств (при успехе всего прогона убираются, при провале остаются для разбора):")
     for s in stands:
         print("   ·", s)
     names = ("P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9")
@@ -422,9 +437,20 @@ def verify(target, sandbox):
 # лечим не обещанием, а проверкой: портим ридер известным способом и требуем красного.
 MUTANTS = {
     # M1 — снять R16 целиком: перевыдачи нет, каждый вызов рождает новый токен.
+    # ⚠️ ПЕРЕПРИВЯЗАНО 2026-09-24 (находка PROTO): одной замены стало мало. С 2026-08-09
+    # (карточка #150) у идемпотентности появилась ВТОРАЯ, независимая опора — замок в
+    # базе (ux_batch_race: UNIQUE(role, last_id) WHERE acked_at IS NULL): при снятом
+    # `if not args.all:` второй вызов на ТОТ ЖЕ хвост всё равно получал ТОТ ЖЕ токен —
+    # не перевыдачей, а через `except sqlite3.IntegrityError` (там читается уже вставленный
+    # чужой токен, «кто-то опередил»). P1 честно не краснел: свойство «два вызова — один
+    # токен» и правда держалось, просто другой опорой, не той, которую снимает мутация.
+    # Добавлена вторая замена: INSERT → INSERT OR REPLACE — тогда снята и эта опора,
+    # второй вызов получает СВОЙ свежий токен, и P1 отличает «R16 снят» от «R16 держится».
     "M1-нет-перевыдачи": ([
         ("    reissue = None\n    if not args.all:",
          "    reissue = None\n    if False:"),
+        ('"INSERT INTO read_batches (token, role, last_id, shown_max) "',
+         '"INSERT OR REPLACE INTO read_batches (token, role, last_id, shown_max) "'),
     ], "P1"),
     # M2 — ПЕРВАЯ версия R16 у COORD: перевыдаём самый свежий открытый батч БЕЗ проверки
     # «новее курсора». Именно это дало бы укороченный древний диапазон = тихую потерю видимости.
@@ -453,14 +479,17 @@ MUTANTS = {
 }
 
 
-def selftest(target, sandbox):
-    """Проверяем ЧУВСТВИТЕЛЬНОСТЬ укуса: на испорченном ридере он обязан краснеть,
-    и краснеть ИМЕННО тем свойством, которое сломано."""
+def selftest(target, sample):
+    """Проверяем ЧУВСТВИТЕЛЬНОСТЬ приёмки: на испорченном ридере она обязана провалиться,
+    и провалиться ИМЕННО тем свойством, которое сломано."""
     src = target.read_text(encoding="utf-8")
     tmpdir = mezo_stand.new("bite-r16-mutants-")
-    dep = target.parent / "mezo_paths.py"
-    if dep.exists():
-        shutil.copy2(dep, tmpdir / "mezo_paths.py")
+    # Соседи ИСХОДНОГО читающего — ВСЕ, транзитивно (mezo_stand.neighbours_of), а не один
+    # mezo_paths.py руками: у читающего их больше (sync_backoff, urgency, lease, …), и
+    # неполный список валит стенд на импорте — провал ЗАВИСИМОСТИ выглядит провалом
+    # СВОЙСТВА, а не порчей, которую испытываем.
+    for dep in mezo_stand.neighbours_of(target):
+        shutil.copy2(dep, tmpdir / dep.name)
     all_ok = True
     for name, (edits, expect) in MUTANTS.items():
         print(f"\n{'='*72}\n[нарочная поломка {name}] ожидаем 🔴 по {expect}\n{'='*72}")
@@ -473,7 +502,7 @@ def selftest(target, sandbox):
             mutated = mutated.replace(needle, repl, 1)
         mpath = tmpdir / f"read-messages-{name}.py"
         mpath.write_text(mutated, encoding="utf-8")
-        rc = verify(mpath, sandbox)
+        rc = verify(mpath, sample)
         got = getattr(verify, "last", {})
         good = rc != 0 and got.get(expect) is False
         all_ok &= good
@@ -488,20 +517,20 @@ def selftest(target, sandbox):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-def demo(baseline, target, sandbox):
+def demo(baseline, target, sample):
     """ДЕМОНСТРАЦИЯ боли. Не тест: показывает «до» и «после» рядом.
     Предусловие «baseline действительно ДО» ПРОВЕРЯЕТСЯ — иначе rc=2."""
-    tmp = workbench(sandbox)
-    db = tmp / "mezosync.db"
-    base = with_deps(baseline, tmp)
+    tmp = workbench(sample)
+    db = tmp / ".mezosync" / "mezosync.db"
+    base = with_reader(baseline, tmp)
     cur, total, stale, head, unread = state(db, ROLE)
     if unread < 2:
-        die(f"в песочнице нечего читать роли {ROLE} (непрочитанных {unread})")
+        die(f"в образце нечего читать роли {ROLE} (непрочитанных {unread})")
     print(f"[демонстрация R16] baseline: {baseline}")
     print(f"   состояние {ROLE}: отметка {cur} · непрочитано {unread} · "
           f"открытых батчей {total} (протухших {stale})\n")
 
-    (o1, t1), (o2, t2) = read_twice(base, db)
+    (o1, t1), (o2, t2) = read_twice(base, db, tmp)
     require_readable(o1, "baseline")
     if t1 == t2:
         die("указанный baseline УЖЕ несёт R16 — это не «до»-версия",
@@ -512,13 +541,13 @@ def demo(baseline, target, sandbox):
     print("── ДО (baseline): два вызова подряд")
     print(f"   вызов 1 → {t1[0]}-{t1[1]}")
     print(f"   вызов 2 → {t2[0]}-{t2[1]}   (ДРУГОЙ — прежний батч обесценен)")
-    rc, out = run(base, ["--db", str(db), "--role", ROLE, "--ack", f"{t1[0]}-{t2[1]}"])
+    rc, out = run(base, ["--db", str(db), "--role", ROLE, "--ack", f"{t1[0]}-{t2[1]}"], tmp)
     print(f"   ack СКЛЕЙКОЙ из разных вызовов → rc={rc}: {out.strip().splitlines()[0]}")
     print("   ⇒ роль всё делала аккуратно; половинки просто пришли из разных выводов.\n")
 
-    tmp2 = workbench(sandbox)
-    db2, tgt = tmp2 / "mezosync.db", with_deps(target, tmp2)
-    (p1, c1), (p2, c2) = read_twice(tgt, db2)
+    tmp2 = workbench(sample)
+    db2, tgt = tmp2 / ".mezosync" / "mezosync.db", with_reader(target, tmp2)
+    (p1, c1), (p2, c2) = read_twice(tgt, db2, tmp2)
     require_readable(p1, "target")
     print("── ПОСЛЕ (целевой ридер): два вызова подряд")
     print(f"   вызов 1 → {c1[0]}-{c1[1]}")
@@ -531,21 +560,27 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("mode", nargs="?", default="verify",
                     choices=["verify", "demo", "selftest"])
-    ap.add_argument("--sandbox", default=str(Path.home() / ".mezosync-sandbox"))
     ap.add_argument("--target", default=None,
-                    help="проверяемый ридер (по умолчанию — копия живого в песочнице)")
-    ap.add_argument("--baseline", default=None, help="ДО-версия ридера (только для demo)")
+                    help="проверяемый читающий (по умолчанию — mezo_target.script('read-messages.py'))")
+    ap.add_argument("--baseline", default=None, help="ДО-версия читающего (только для demo)")
     a = ap.parse_args()
+    # --sandbox снят 2026-09-24: раньше указывал на ~/.mezosync-sandbox как на источник
+    # стендов, и это и была находка PROTO (давняя копия, устаревшая схема). Источник
+    # стендов теперь один — снимок живой базы (sample_db), у него нет смысла в отдельном
+    # флаге: подменить его значило бы вернуть тот же класс беды под другим именем.
 
-    sandbox = Path(a.sandbox).resolve()
-    target = Path(a.target).resolve() if a.target else sandbox / "scripts" / "read-messages.py"
+    target = Path(a.target).resolve() if a.target else mezo_target.script("read-messages.py")
     if not target.exists():
-        die(f"нет целевого ридера: {target}")
+        die(f"нет целевого читающего: {target}")
+    print(f"испытан: {mezo_target.label()}")
+
+    sample_root = mezo_stand.new("bite-r16-sample-")
+    sample = sample_db(sample_root)
 
     if a.mode == "verify":
-        return verify(target, sandbox)
+        return verify(target, sample)
     if a.mode == "selftest":
-        return selftest(target, sandbox)
+        return selftest(target, sample)
     if not a.baseline:
         die("demo требует --baseline <ДО-версия read-messages.py>",
             "именно этого не хватало прежней версии приёмки: точка отсчёта бралась молча "
@@ -553,7 +588,7 @@ def main():
     bp = Path(a.baseline).resolve()
     if not bp.exists():
         die(f"нет baseline: {bp}")
-    return demo(bp, target, sandbox)
+    return demo(bp, target, sample)
 
 
 if __name__ == "__main__":
