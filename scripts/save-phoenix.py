@@ -16,6 +16,7 @@ import re
 import sqlite3
 import dryrun          # холостой прогон (13.08)
 import sys
+import time            # #656: предел ожидания занятой базы при копии для предпросмотра
 from collections import Counter
 from pathlib import Path
 
@@ -825,6 +826,14 @@ def main():
     """, (actor, f"phoenix.{role}.{args.section}", diff_note))
 
     conn.commit()
+    # 🎯 КАРТОЧКА #656: в холостом прогоне копия для предпросмотра записей снимается ДО
+    # закрытия — новое тело видит только это соединение, закрытие его отбросит.
+    preview = None
+    if args.dry_run:
+        try:
+            preview = records_preview_copy(conn, args.db, role, args.section)
+        except (Exception, SystemExit) as e:
+            preview = _one_line(e)
     conn.close()
     # 🎯 Размер печатается ДВУМЯ числами, «было → стало». Прежняя строка «OK … (0 chars)»
     # читалась глазом как подтверждение: ноль стоял в той же строке, что и «OK», и не
@@ -840,7 +849,8 @@ def main():
     # вовсе и отставал у всех 7 ролей реестра: записи помнили вчерашнее тело, а «--собрать»
     # молчаливо расходился с живым текстом. Строка о записях — ПОСЛЕ «OK» (это отдельный,
     # вторичный шаг над уже сохранённым телом, а не условие его сохранения).
-    rebuild_records(args.db, role, args.section, actor)
+    # ⚡ КАРТОЧКА #656: в холостом прогоне — на копии в памяти, живая база не открывается.
+    rebuild_records(args.db, role, args.section, actor, dry=args.dry_run, preview=preview)
     # ⚖️ Строка о пороге стои́т ПОСЛЕ «OK», а не вместо него: запись прошла, и об этом
     # сказано первым словом. И она САМА говорит, что не является отказом, — иначе роль
     # прочтёт красное как запрет и начнёт резать формулировки: этой ошибкой (@ING 31.08,
@@ -923,7 +933,7 @@ def _records_summary_line(text, first_parse):
     return "\n".join(lines)
 
 
-def rebuild_records(db_path, role, section, actor):
+def rebuild_records(db_path, role, section, actor, dry=False, preview=None):
     """Пересобрать слой `phoenix_records` раздела role/section ПОСЛЕ того, как тело
     сохранено (карточка #525, часть А, пункт 2). См. пояснение блоком выше файла функции.
 
@@ -931,7 +941,15 @@ def rebuild_records(db_path, role, section, actor):
     соединение main() к этому моменту уже закрыто. Отказ печатает предупреждение и
     НЕ меняет код возврата save-phoenix.py: caller (main()) не смотрит на исход этой
     функции вообще, она вызывается ради побочного эффекта и печати.
+
+    ⚡ dry=True (карточка #656): пересборка идёт на `preview` — копии базы в памяти от
+    records_preview_copy(); живая база не открывается ВОВСЕ. Не удалось снять копию —
+    `preview` несёт причину строкой: предупреждение и выход, никогда не шаг к живой базе.
+    Строка-итог та же, что у настоящего прогона: она описывает НОВОЕ тело.
     """
+    if dry and not isinstance(preview, sqlite3.Connection):
+        print(f"⚠️ записи раздела: предпросмотр НЕ собран: {preview} — {DRY_TAIL}")
+        return
     # ⚖️ ПУТЬ ВЫЧИСЛЯЕТСЯ, А НЕ ВПИСАН ЛИТЕРАЛОМ МАШИНЫ — тем же приёмом, каким
     # volume_limit() находит guard-phoenix-volume.py: три уровня вверх от расположения
     # ЭТОГО файла. Дополнение к карточке #525 (слово COORD 2026-09-07): соседняя подсказка
@@ -939,13 +957,17 @@ def rebuild_records(db_path, role, section, actor):
     # та же ловушка не заводится вовсе, «пересобери рукой» ниже зовёт {файл}, а не второй,
     # переписанный вручную путь.
     file = vnext_tool("memory-records.py")
+    if not file.exists() and dry:
+        preview.close()
+        print(f"⚠️ записи раздела: предпросмотр НЕ собран: файла нет: {file} — {DRY_TAIL}")
+        return
     if not file.exists():
         print(f"⚠️ записи раздела НЕ пересобраны: файла нет: {file} — сохранение прошло, "
               f"пересобери рукой (когда файл появится): python {file.as_posix()} "
               f"--role {role} --section {section} --пересобрать")
         return
 
-    conn2 = None
+    conn2 = preview if dry else None
     buffer = io.StringIO()
     first_parse = False
     outcome = None
@@ -956,7 +978,8 @@ def rebuild_records(db_path, role, section, actor):
         mr = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mr)
 
-        conn2 = sqlite3.connect(str(db_path))
+        if conn2 is None:
+            conn2 = sqlite3.connect(str(db_path))
         if not mr.has_table(conn2):
             print("ℹ️ слой записей памяти не заведён (шаг схемы 20260904-phoenix-records)"
                   " — пересборка пропущена")
@@ -972,6 +995,9 @@ def rebuild_records(db_path, role, section, actor):
             else:
                 mr.parse(conn2, role, section, actor)
     except (Exception, SystemExit) as e:
+        if dry:
+            print(f"⚠️ записи раздела: предпросмотр НЕ собран: {_one_line(e)} — {DRY_TAIL}")
+            return
         print(f"⚠️ записи раздела НЕ пересобраны: {_one_line(e)} — сохранение прошло, "
               f"пересобери рукой: python {file.as_posix()} "
               f"--role {role} --section {section} --пересобрать")
@@ -993,6 +1019,70 @@ def rebuild_records(db_path, role, section, actor):
                     or os.environ.get("MEZO_VERBOSE_RECORDS") == "1")
     if full_needed:
         print(text)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ⚡ КАРТОЧКА #656 — ПРЕДПРОСМОТР ЗАПИСЕЙ В ХОЛОСТОМ ПРОГОНЕ.
+#
+# БЕДА (находка ING, записка #5349, 2026-09-24): тело писалось на холостом соединении
+# (commit() пустой, на закрытии откат), а следом rebuild_records() открывала СВОЁ обычное
+# соединение, и memory-records.py делала НАСТОЯЩИЙ commit. ⇒ холостой прогон ПИСАЛ
+# phoenix_records живой базы по ПРЕЖНЕМУ телу, печатал «новых 0» (шесть пар из шести)
+# и объявлял «НИЧЕГО НЕ ЗАПИСАНО».
+# Класс: второе соединение внутри пишущего инструмента не наследует холостой режим первого.
+#
+# ПОЧЕМУ КОПИЯ В ПАМЯТИ, А НЕ ТО ЖЕ ХОЛОСТОЕ СОЕДИНЕНИЕ (как предлагала карточка):
+# пересборка сама открывает транзакцию командой BEGIN (memory-records.py rebuild() и
+# parse()), а на холостом соединении транзакция уже открыта записью тела — SQLite отвечает
+# «cannot start a transaction within a transaction» (проба 2026-09-25 14:44 UTC), и
+# предпросмотр не состоялся бы вовсе. И второе: пустой commit() холостого соединения
+# обходят «with conn:» и executescript — они сохраняют по-настоящему (проба 14:40 UTC).
+# Копии всё равно: что бы ни делала пересборка, всё остаётся в памяти и пропадает с ней.
+# Цена: копия живой базы (74,8 МБ) в память — 0,09 с (замер 2026-09-25 14:44 UTC).
+# ═══════════════════════════════════════════════════════════════════════════════
+
+DRY_TAIL = "холостой прогон — живая база не тронута"
+PREVIEW_BUSY_SECONDS = 10    # дольше ждать занятую базу не стоит: предпросмотр — не сохранение
+
+
+def records_preview_copy(dry_conn, db_path, role, section):
+    """Копия базы В ПАМЯТИ, где тело раздела role/section уже новое, — для предпросмотра
+    пересборки записей в холостом прогоне (карточка #656).
+
+    Источник копии открывается ТОЛЬКО НА ЧТЕНИЕ (mode=ro) и видит прежнее, закоммиченное
+    тело; новая строка phoenix переносится из холостого соединения — его незакоммиченную
+    запись видит только оно само. Копия с самого холостого соединения не годится: у него
+    открыта запись, и копирование ждёт блокировку без конца (проба 2026-09-25 14:42 UTC).
+    → соединение с копией (одноразовое: закрывает rebuild_records). Отказ — исключением.
+    """
+    cursor = dry_conn.execute("SELECT * FROM phoenix WHERE role=? AND section=?",
+                              (role, section))
+    names = [d[0] for d in cursor.description]
+    row = cursor.fetchone()
+    if row is None:
+        raise RuntimeError(f"в холостом соединении нет раздела {role}/{section}")
+    started = time.monotonic()
+
+    def give_up_when_busy(status, remaining, total):
+        # Копирование повторяет попытку на занятой базе без конца — предпросмотр столько не ждёт.
+        if time.monotonic() - started > PREVIEW_BUSY_SECONDS:
+            raise TimeoutError(f"база занята дольше {PREVIEW_BUSY_SECONDS} с")
+
+    source = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)
+    copy = sqlite3.connect(":memory:")
+    try:
+        source.backup(copy, progress=give_up_when_busy)
+    except BaseException:
+        copy.close()
+        raise
+    finally:
+        source.close()
+    setters = ", ".join(f"{n} = excluded.{n}" for n in names if n not in ("role", "section"))
+    copy.execute(f"INSERT INTO phoenix ({', '.join(names)}) "
+                 f"VALUES ({', '.join('?' for _ in names)}) "
+                 f"ON CONFLICT(role, section) DO UPDATE SET {setters}", row)
+    copy.commit()
+    return copy
 
 
 if __name__ == "__main__":
