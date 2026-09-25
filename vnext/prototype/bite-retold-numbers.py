@@ -190,6 +190,50 @@ def main() -> int:
                    f"код прежней редакции {r15.returncode} против 0 у нынешней — "
                    "разница и есть доказательство сужения", differ=True)
 
+    # ⑯ ЧИСЛО С РАЗРЯДНЫМ ПРОБЕЛОМ — ОДНО ЧИСЛО. Дословная живая строка памяти PROTO
+    #    (state, сохранено 2026-09-25 14:02 UTC): признак резал «122 606» до «правил 122».
+    live16 = "ЭТАП 1 — ТРИ ВОЛНЫ ЗАПИСАНЫ: тринадцать правил 122 606 → 34 229 знаков"
+    out, code = stand(tmp, "p", live16)
+    ok &= case("⑯ «правил 122 606 → 34 229 знаков» — молчит: размер в знаках, а не число правил",
+               code == 0, f"код {code}; число не режется на разрядной группе", differ=True)
+
+    # ⑰ ВСТРЕЧНЫЙ к ⑯: соседнее число БЕЗ разрядной группы гасить нельзя —
+    #    иначе ⑯ доказывал бы только, что признак замолкает рядом с любыми цифрами.
+    out, code = stand(tmp, "q", "правил 11 · 606 знаков в своде")
+    ok &= case("⑰ ВСТРЕЧНЫЙ: «правил 11 · 606 знаков» остался КРАСНЫМ — гасит только группа разрядов",
+               code == 1 and "правил 11" in out,
+               f"код {code}; гаситель узок: пробел и ровно три цифры сразу после числа",
+               differ=True)
+
+    # ⑱ ОБРАТНЫЙ ХОД к ⑯: без гасителя живая строка снова краснеет — зелень ⑯
+    #    иначе значила бы «сегодня не болит», а не «гаситель работает».
+    d18 = mezo_stand.new("bite-retold-whole-")
+    copy18 = mezo_stand.copy_tool(pathlib.Path(CHECK), d18)
+    text18 = copy18.read_text(encoding="utf-8")
+    old18 = 'WHOLE_AFTER = r"(?!\\s\\d{3}(?!\\d))"\n'
+    if text18.count(old18) != 1:
+        ok &= case("⑱ ОБРАТНЫЙ ХОД: без гасителя строка ⑯ краснеет", False,
+                   f"⛔ НЕ ЗАПУСТИЛСЯ: гаситель найден {text18.count(old18)} раз — проверка "
+                   "менялась, правь приёмку")
+    else:
+        copy18.write_text(text18.replace(old18, 'WHOLE_AFTER = r""\n'), encoding="utf-8")
+        db18 = os.path.join(tmp, "r.db")
+        con = sqlite3.connect(db18)
+        con.execute("CREATE TABLE phoenix (role TEXT, section TEXT, saved_at TEXT, body TEXT)")
+        con.execute("CREATE TABLE backlog (id INTEGER PRIMARY KEY, role TEXT, status TEXT)")
+        con.execute("CREATE TABLE rules (id INTEGER PRIMARY KEY, body TEXT)")
+        con.execute("CREATE TABLE schema_migrations (version TEXT PRIMARY KEY)")
+        con.execute("INSERT INTO phoenix VALUES ('T','state','2026-08-09 12:00', ?)", (live16,))
+        for _ in range(5):
+            con.execute("INSERT INTO rules (body) VALUES ('живое правило')")
+        con.commit(); con.close()
+        r18 = subprocess.run([sys.executable, str(copy18), "--db", db18],
+                             capture_output=True, text=True, encoding="utf-8",
+                             env=mezo_stand.stand_env(tmp))  # карточка #613
+        ok &= case("⑱ ОБРАТНЫЙ ХОД: без гасителя строка ⑯ краснеет",
+                   r18.returncode == 1 and "правил 122" in (r18.stdout or ""),
+                   f"код редакции без гасителя {r18.returncode} против 0 у нынешней", differ=True)
+
     print()
     print(f"{'✅ ПРИЗНАК ПРИНЯТ' if ok else '🔴 ПРИЗНАК НЕ ПРИНЯТ'} — случаев {CASES}, "
           f"различающих {DIFFER}, у каждого различающего встречный")
