@@ -34,6 +34,10 @@ meta.pack_rule_sets ("universal" + взятый домен), а rules-from-pack.
 при этом НЕ открывается на запись ни разу). Если строитель базы сейчас не работает (его
 дорабатывают) — случай печатает «неприменим: в пакете нет базы правил» и не красит остальную
 приёмку. Делается ПОСЛЕДНИМ.
+⚖️ С 25.09 (слово владельца 06:46:49 UTC «Новые — без будильников») пакет снимает правила
+ритма сверок ПРИ СБОРКЕ, и ⑫ ждёт «снято у вас» = числу правил, снятых пакетом (ожидание
+читается из rules/universal.sql), а шесть прочих чисел — нулями; ⑫-встречный снимает в копии
+контура ещё одно правило и требует, чтобы суждение ⑫ это заметило.
 
 СЛУЧАИ ⑬/⑭ (карточка #608, повторная приёмка Н1, возврат PROTO 2026-09-14 10:08 UTC):
 ⑬ — init-group.py с ОТНОСИТЕЛЬНЫМ --path (процесс запущен с рабочим каталогом-РОДИТЕЛЕМ
@@ -68,6 +72,7 @@ import mezo_stand  # noqa: E402 — временный каталог убира
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import pathlib
@@ -96,6 +101,61 @@ def case(title, verdict, detail, differ=False):
     print(f"{'✅' if verdict else '🔴'} {title}")
     print(f"   {detail}")
     return verdict
+
+
+# ── случай ⑫: что пакет снимает при сборке, что снято в контуре, что говорит сверка ──────
+# 🪤 Точка с запятой встречается ВНУТРИ строк причины снятия («…не заводить; вернуть…»),
+# поэтому оператор не режется по «;» — ищется ближайший «WHERE rule_key IN (…)» после
+# «SET status = 'revoked'».
+BIRTH_REVOKE = re.compile(
+    r"UPDATE\s+rules\s+SET\s+status\s*=\s*'revoked'.*?WHERE\s+rule_key\s+IN\s*\(([^)]*)\)",
+    re.S | re.I)
+SUMMARY_ZEROS = ("новых 0", "изменено в пакете 0", "уточнено у вас 0", "с обеих сторон 0",
+                 "опоры нет 0", "снято в пакете 0")
+
+
+def birth_revoked_keys(pack: pathlib.Path) -> set:
+    """Ключи правил, которые пакет снимает ПРИ СБОРКЕ (блок в rules/universal.sql)."""
+    text = (pack / "rules" / "universal.sql").read_text(encoding="utf-8")
+    keys = set()
+    for m in BIRTH_REVOKE.finditer(text):
+        keys |= set(re.findall(r"'([^']+)'", m.group(1)))
+    return keys
+
+
+def revoked_rule_keys(db: pathlib.Path) -> set:
+    """Ключи правил контура, у которых статус не «действует»."""
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        if "status" not in [r[1] for r in con.execute("PRAGMA table_info(rules)")]:
+            return set()
+        return {r[0] for r in con.execute(
+            "SELECT rule_key FROM rules WHERE COALESCE(status, 'active') <> 'active'")}
+    finally:
+        con.close()
+
+
+def revoke_one_more(db: pathlib.Path):
+    """Снять в КОПИИ контура ещё одно действующее правило; вернуть его ключ (None — нечего)."""
+    con = sqlite3.connect(str(db))
+    try:
+        row = con.execute("SELECT rule_key FROM rules WHERE COALESCE(status, 'active') = 'active' "
+                          "ORDER BY rule_key LIMIT 1").fetchone()
+        if row is None:
+            return None
+        con.execute("UPDATE rules SET status = 'revoked', revoked_at = '2026-09-25 00:00 UTC', "
+                    "revoked_by = 'owner', revoked_reason = 'проба приёмки: встречный к ⑫' "
+                    "WHERE rule_key = ?", (row[0],))
+        con.commit()
+        return row[0]
+    finally:
+        con.close()
+
+
+def summary_matches_birth(out: str, retired_here: int) -> bool:
+    """Сверка с пакетом: шесть чисел — нули, «снято у вас» — ровно retired_here."""
+    return (all(z in out for z in SUMMARY_ZEROS)
+            and re.search(rf"снято у вас {retired_here}(?!\d)", out) is not None)
 
 
 def copy_pack_subdir(pack: pathlib.Path, name: str, dest_dir: pathlib.Path,
@@ -355,21 +415,48 @@ def main() -> int:
             r12 = subprocess.run(
                 [sys.executable, str(mez2 / "scripts" / "rules-from-pack.py"),
                  "--db", str(mez2 / "mezosync.db"), "--source", str(pack_copy), "--summary"],
-                capture_output=True, text=True, encoding="utf-8", timeout=120, env=env)
+                capture_output=True, text=True, encoding="utf-8", timeout=120,
+                env=mezo_stand.stand_env(tmp))
             out12 = (r12.stdout or "") + (r12.stderr or "")
-            # ⚖️ ВОЗВРАТ PROTO: ждём ВСЕ СЕМЬ чисел строки нулями, а не три — «новых» и
-            # «опоры нет» тоже обязаны быть 0 (до правки на доменной сборке было «новых 3 ·
-            # опоры нет 3»: чужой набор пакета и перекрытое universal-описание давали шум).
+            # ⚖️ ВОЗВРАТ PROTO: ждём ВСЕ СЕМЬ чисел строки, а не три — «новых» и «опоры нет»
+            # тоже обязаны быть 0 (до правки на доменной сборке было «новых 3 · опоры нет 3»:
+            # чужой набор пакета и перекрытое universal-описание давали шум).
             # ⚖️ ПОВТОРНЫЙ ВОЗВРАТ PROTO: «снято» разведено по сторонам — «снято в пакете» и
-            # «снято у вас» (retired-here: контур сам отключил правило) — оба тоже 0 у
-            # свежесобранного контура, там нечему быть снятым ни с чьей стороны.
+            # «снято у вас» (retired-here: у контура правило снято, пакет его держит).
+            # ⚖️ 25.09 (слово владельца 06:46:49 UTC «Новые — без будильников»): пакет снимает
+            # правила ритма сверок ПРИ СБОРКЕ — последним блоком rules/universal.sql, а база
+            # правил пакета статуса не хранит. Поэтому у новорождённого контура «снято у вас»
+            # равно числу правил, СНЯТЫХ ПАКЕТОМ ПРИ СБОРКЕ, а не нулю; шесть прочих чисел —
+            # нули, как прежде. Ожидание берётся из самого пакета, а не впечатано числом:
+            # пакет снимет ещё одно правило — случай узнает об этом сам.
+            birth_keys = birth_revoked_keys(pack_copy)
+            revoked_now = revoked_rule_keys(mez2 / "mezosync.db")
             ok &= case("⑫ rules-from-pack.py --summary в новом контуре: с пакетом, от "
-                      "которого контур только что пошёл, расхождений нет — ВСЕ СЕМЬ чисел 0",
-                      r12.returncode == 0 and "новых 0" in out12 and "изменено в пакете 0" in out12
-                      and "уточнено у вас 0" in out12 and "с обеих сторон 0" in out12
-                      and "опоры нет 0" in out12 and "снято в пакете 0" in out12
-                      and "снято у вас 0" in out12,
-                      f"код {r12.returncode}; строка: {out12.strip()[:220]}", differ=True)
+                      "которого контур только что пошёл, расхождений нет — шесть чисел 0, "
+                      "«снято у вас» ровно столько, сколько пакет снимает при сборке",
+                      r12.returncode == 0 and summary_matches_birth(out12, len(birth_keys))
+                      and revoked_now == birth_keys,
+                      f"код {r12.returncode}; снято пакетом при сборке: {sorted(birth_keys)} · "
+                      f"снято в контуре: {sorted(revoked_now)}; строка: {out12.strip()[:220]}",
+                      differ=True)
+            # ⑫-встречный: контур снял у себя ЕЩЁ одно правило — «снято у вас» выросло, и
+            # суждение ⑫ обязано это заметить. Без встречного ⑫ мог бы проходить оттого,
+            # что суждение принимает любое число снятых.
+            db12b = mezo_stand.snapshot_db(mez2 / "mezosync.db", tmp / "fresh-608-plus-one.db")
+            extra = revoke_one_more(db12b)
+            r12b = subprocess.run(
+                [sys.executable, str(mez2 / "scripts" / "rules-from-pack.py"),
+                 "--db", str(db12b), "--source", str(pack_copy), "--summary"],
+                capture_output=True, text=True, encoding="utf-8", timeout=120,
+                env=mezo_stand.stand_env(tmp))
+            out12b = (r12b.stdout or "") + (r12b.stderr or "")
+            ok &= case("⑫-встречный: контур снял у себя ещё одно правило — суждение ⑫ это "
+                      "замечает («снято у вас» на одно больше, чем снимает пакет)",
+                      extra is not None and r12b.returncode == 0
+                      and summary_matches_birth(out12b, len(birth_keys) + 1)
+                      and not summary_matches_birth(out12b, len(birth_keys)),
+                      f"снято дополнительно: {extra}; строка: {out12b.strip()[:220]}",
+                      differ=True)
 
             # ═══ НОВЫЙ СЛУЧАЙ ⑬ (карточка #608, повторная приёмка Н1, возврат PROTO
             # 2026-09-14 10:08 UTC): init-group.py с ОТНОСИТЕЛЬНЫМ --path — процесс запущен
