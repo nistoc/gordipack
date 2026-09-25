@@ -94,6 +94,81 @@ def run(seed, db):
 RULE = ("общее-правило", "НОРМА ЖИВЁТ ЗДЕСЬ. Дальше идёт разбор случая контура-донора, "
                             "который в посев не переносится", "active")
 
+# Таблица rules той формы, что у настоящего контура (колонки и ограничения схемы v6):
+# у неё проверка и берёт форму для посева — случаи ⑨ судят именно это.
+FULL_RULES_DDL = """CREATE TABLE rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, rule_key TEXT NOT NULL UNIQUE, body TEXT NOT NULL,
+    locked_by TEXT NOT NULL DEFAULT 'coord', version INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    basis TEXT, authorized TEXT, source_ref TEXT, expiry_kind TEXT, expiry_cond TEXT,
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'revoked', 'superseded')),
+    revoked_at TEXT, revoked_by TEXT, revoked_reason TEXT,
+    superseded_by INTEGER REFERENCES rules(id) ON DELETE SET NULL, skill_delivery TEXT,
+    CHECK (status <> 'revoked' OR (revoked_at IS NOT NULL AND revoked_by IS NOT NULL
+                                   AND revoked_reason IS NOT NULL)))"""
+RHYTHM_KEY = "ритм-правило"
+REVOKE_IN_SEED = ("UPDATE rules SET status = 'revoked', revoked_at = '2026-09-24 10:49 UTC', "
+                  "revoked_by = 'owner', revoked_reason = 'снято в контуре-доноре' "
+                  f"WHERE rule_key = '{RHYTHM_KEY}';\n")
+
+
+def stand_full(live_status: str, revoke_line: str):
+    """Живой свод с таблицей настоящей формы + посев, снимающий правило строкой UPDATE."""
+    d = mezo_stand.new("bite-seed-revoked-")
+    db = d / "live.db"
+    con = sqlite3.connect(str(db))
+    con.execute(FULL_RULES_DDL)
+    if live_status == "revoked":
+        con.execute("INSERT INTO rules (rule_key, body, locked_by, status, revoked_at, revoked_by,"
+                    " revoked_reason, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+                    (RHYTHM_KEY, "БУДИЛЬНИК ЗАВОДИТСЯ ПРИ ПРОБУЖДЕНИИ.", "owner", "revoked",
+                     "2026-09-24 10:49 UTC", "owner", "снято словом владельца", "2026-08-01 10:00"))
+    else:
+        con.execute("INSERT INTO rules (rule_key, body, locked_by, updated_at) VALUES (?,?,?,?)",
+                    (RHYTHM_KEY, "БУДИЛЬНИК ЗАВОДИТСЯ ПРИ ПРОБУЖДЕНИИ.", "owner", "2026-08-01 10:00"))
+    con.commit()
+    con.close()
+    seed = d / "seed.sql"
+    seed.write_text("-- посев\n-- ПОСЛЕДНИЙ ДОГОН ПОСЕВА: " + CATCHUP + "\n"
+                    "INSERT OR REPLACE INTO rules (rule_key, body, locked_by, version) VALUES\n"
+                    f"('{RHYTHM_KEY}',\n 'БУДИЛЬНИК ЗАВОДИТСЯ ПРИ ПРОБУЖДЕНИИ.',\n 'owner', 1);\n"
+                    + revoke_line, encoding="utf-8")
+    return seed, db
+
+
+def check_revoked_in_seed() -> bool:
+    ok = True
+    # ⑨ снято и у нас, и в посеве: посев применяется, «в посеве живое» НЕ говорится
+    seed9, db9 = stand_full("revoked", REVOKE_IN_SEED)
+    out9, code9 = run(seed9, db9)
+    ok &= case("⑨ посев снимает правило строкой UPDATE status — применяется; снятое у обоих "
+               "названо «снято и у вас, и в посеве», а не «в посеве живое»",
+               code9 == 0 and "НЕ ЗАПУСТИЛАСЬ" not in out9
+               and "снято и у вас, и в посеве" in out9 and "а в посеве живое" not in out9,
+               f"код {code9}; прежняя проверка падала здесь «no such column: status» — на своей "
+               f"урезанной таблице, которой нет ни у одного контура", differ=True)
+
+    # ⑨-бис снято только в посеве: названо отдельно — новый контур родится с ним снятым
+    seed9b, db9b = stand_full("active", REVOKE_IN_SEED)
+    out9b, code9b = run(seed9b, db9b)
+    ok &= case("⑨-бис правило снято в посеве, а у нас живое — названо отдельно",
+               "в посеве СНЯТО, а у вас живое" in out9b,
+               f"код {code9b}; это решение человека, как и обратный случай ⑦", differ=True)
+
+    # ⑨-тер ВСТРЕЧНЫЙ: снятие без причины настоящая схема не примет — и проверка тоже
+    no_reason = REVOKE_IN_SEED.replace(", revoked_reason = 'снято в контуре-доноре'", "")
+    seed9t, db9t = stand_full("revoked", no_reason)
+    out9t, code9t = run(seed9t, db9t)
+    # ⚖️ Отказ обязан быть ПО ОГРАНИЧЕНИЮ: прежняя проверка тоже давала здесь код 2, но по
+    # чужой причине («no such column: status») — случай, судящий только код, зеленел бы на ней.
+    ok &= case("⑨-тер ВСТРЕЧНЫЙ: снятие БЕЗ причины — отказ кодом 2 по ограничению схемы, "
+               "как у сборки контура",
+               code9t == 2 and "НЕ ЗАПУСТИЛАСЬ" in out9t and "CHECK constraint" in out9t,
+               f"код {code9t}; форма таблицы взята у контура вместе с её ограничениями — "
+               f"иначе посев прошёл бы проверку и уронил сборку", differ=True)
+    return ok
+
 
 def main() -> int:
     ok = True
@@ -212,6 +287,12 @@ def main() -> int:
                code8ter == 0 and "совпадают дословно 1" in out8ter,
                "тела раннего и позднего разные; «совпадают дословно 1» возможно, только "
                "если сличается ПОСЛЕДНЕЕ — то, что получит новый контур", differ=True)
+
+    # ── ⑨…⑨-тер СНЯТИЕ В ПОСЕВЕ (25.09): посев несёт в новый контур снятое правило строкой
+    # UPDATE rules SET status='revoked' … — слово владельца о двух правилах ритма.
+    # 🩸 Прежняя проверка применяла посев к СВОЕЙ урезанной таблице без status и падала
+    # «no such column», хотя настоящая сборка контура такой посев принимает.
+    ok &= check_revoked_in_seed()
 
     print()
     print(f"{'✅ ПРОВЕРКА ПОСЕВА ПРИНЯТА' if ok else '🔴 НЕ ПРИНЯТА'} — "

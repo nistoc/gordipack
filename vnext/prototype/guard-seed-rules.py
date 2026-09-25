@@ -46,15 +46,51 @@ import mezo_stand  # временный каталог убирается при
 CATCHUP_MARK = "ПОСЛЕДНИЙ ДОГОН ПОСЕВА:"
 
 
-def seed_as_database(seed_file: pathlib.Path) -> dict[str, str]:
-    """Применяем файл посева так же, как это делает сборка контура."""
+# 🩸 ОПЛАЧЕНО 25.09 (находка помощника PROTO по догону посева): таблица, к которой применялся
+# посев, была СВОЯ, урезанная — десять колонок, без status и revoked_*. Посев, несущий снятие
+# правила в новый контур (UPDATE rules SET status='revoked' …), ронял проверку «no such column»,
+# хотя настоящая сборка контура его принимает: у настоящей таблицы эти колонки есть.
+# ⚡ КЛАСС «испытываем не то, что чиним»: проверка сличала посев с таблицей, которой нет ни у
+# одного контура. Теперь форма таблицы берётся у сверяемой базы (она и есть образец формы:
+# схема пакета растёт из схемы контура-донора); своя форма — только если у той нет rules.
+RULES_TABLE_FALLBACK = """CREATE TABLE rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, rule_key TEXT NOT NULL UNIQUE, body TEXT NOT NULL,
+    locked_by TEXT NOT NULL DEFAULT 'coord', version INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    basis TEXT, authorized TEXT, source_ref TEXT, expiry_kind TEXT, expiry_cond TEXT,
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'revoked', 'superseded')),
+    revoked_at TEXT, revoked_by TEXT, revoked_reason TEXT,
+    superseded_by INTEGER REFERENCES rules(id) ON DELETE SET NULL, skill_delivery TEXT,
+    CHECK (status <> 'revoked' OR (revoked_at IS NOT NULL AND revoked_by IS NOT NULL
+                                   AND revoked_reason IS NOT NULL)))"""
+
+
+def rules_table_ddl(compare_db: pathlib.Path) -> str:
+    """CREATE TABLE rules сверяемой базы — только чтением; нет базы или таблицы — своя форма."""
+    try:
+        con = sqlite3.connect(f"file:{compare_db.as_posix()}?mode=ro", uri=True)
+        row = con.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='rules'").fetchone()
+        con.close()
+    except sqlite3.Error:
+        row = None
+    return row[0] if row and row[0] else RULES_TABLE_FALLBACK
+
+
+def seed_as_database(seed_file: pathlib.Path, compare_db: pathlib.Path) -> dict[str, tuple[str, str]]:
+    """Применяем файл посева так же, как это делает сборка контура: к таблице rules той же
+    формы, что у контура. → {ключ: (тело, статус)} — статус нужен, чтобы снятое в посеве
+    не называлось «в посеве живое»."""
     d = mezo_stand.new("seed-check-")
     con = sqlite3.connect(str(d / "seed.db"))
-    con.execute("""CREATE TABLE rules (id INTEGER PRIMARY KEY, rule_key TEXT UNIQUE, body TEXT,
-                   locked_by TEXT, version INT, basis TEXT, authorized TEXT, source_ref TEXT,
-                   expiry_kind TEXT, expiry_cond TEXT)""")
+    con.execute(rules_table_ddl(compare_db))
     con.executescript(seed_file.read_text(encoding="utf-8"))
-    rows = {r[0]: r[1] for r in con.execute("SELECT rule_key, body FROM rules")}
+    has_status = "status" in {r[1] for r in con.execute("PRAGMA table_info(rules)")}
+    # Пустой статус — действующее: у настоящей таблицы status NOT NULL DEFAULT 'active', пусто
+    # бывает только у формы без значения по умолчанию, и там оно значит «не снимали».
+    rows = {r[0]: (r[1], r[2]) for r in con.execute(
+        "SELECT rule_key, body, "
+        + ("COALESCE(status, 'active')" if has_status else "'active'") + " FROM rules")}
     con.close()
     return rows
 
@@ -94,21 +130,25 @@ def main() -> int:
     if not seed_file.exists():
         print(f"⛔ НЕ ЗАПУСТИЛАСЬ: посева нет — {seed_file}")
         return 2
+    compare_db = pathlib.Path(a.db) if a.db else mezo_paths.live_db()
     try:
-        seed = seed_as_database(seed_file)
+        seed = seed_as_database(seed_file, compare_db)
     except sqlite3.Error as e:
         print(f"⛔ НЕ ЗАПУСТИЛАСЬ: посев не применяется к чистой базе — {e}")
         print("   Это само по себе находка: сборка нового контура на нём ляжет.")
         return 2
 
-    con = sqlite3.connect(str(pathlib.Path(a.db) if a.db else mezo_paths.live_db()))
+    con = sqlite3.connect(str(compare_db))
     live_rules = {r[0]: (r[1], r[2], (r[3] or "")[:16]) for r in
              con.execute("SELECT rule_key, body, status, updated_at FROM rules")}
     con.close()
 
     if a.show:
         k = a.show
-        print(f"── ПОСЕВ ({len(seed.get(k, ''))} знаков)\n{seed.get(k, '(нет)')}")
+        seed_body, seed_status = seed.get(k, ("(нет)", ""))
+        print(f"── ПОСЕВ ({len(seed_body) if k in seed else 0} знаков"
+              + (f", в новом контуре — {seed_status}" if seed_status not in ("", "active") else "")
+              + f")\n{seed_body}")
         print(f"\n── ЖИВОЕ ({len(live_rules.get(k, ('',''))[0])} знаков)\n{live_rules.get(k, ('(нет)', ''))[0]}")
         return 0
 
@@ -132,13 +172,17 @@ def main() -> int:
         return 2
 
     poorer, richer, revoked, matched = [], [], [], 0
-    for k, body in sorted(seed.items()):
+    revoked_both, revoked_in_seed = [], []   # снятое посевом: у обоих · только в посеве
+    for k, (body, seed_status) in sorted(seed.items()):
         entry = live_rules.get(k)
         if not entry:
             continue
         live_body, status, edited_at = entry
         if status != "active":
-            revoked.append(k)
+            (revoked_both if seed_status != "active" else revoked).append(k)
+            continue
+        if seed_status != "active":
+            revoked_in_seed.append(k)
             continue
         if body.strip() == live_body.strip():
             matched += 1
@@ -164,6 +208,12 @@ def main() -> int:
         print(f"🟡 {k:30} посев {a_:5} · живое {b:5} — посев БОГАЧЕ, копировать живое нельзя")
     for k in revoked:
         print(f"⚠️ {k:30} у вас СНЯТО, а в посеве живое — решите, умолчание это или долг")
+    for k in revoked_in_seed:
+        print(f"⚠️ {k:30} в посеве СНЯТО, а у вас живое — новый контур родится с ним снятым; "
+              f"решите, умолчание это или долг")
+    if revoked_both:
+        print(f"ℹ️ снято и у вас, и в посеве (новый контур родится с ними снятыми): "
+              f"{len(revoked_both)} — " + " · ".join(revoked_both))
     if missing_from_seed:
         print(f"⚪ нет в посеве вовсе: {len(missing_from_seed)} — общее ли это, решает человек:")
         print("   " + " · ".join(missing_from_seed[:12]) + ("…" if len(missing_from_seed) > 12 else ""))
@@ -185,7 +235,8 @@ def main() -> int:
 
     print("-" * 84)
     print(f"совпадают дословно {matched} · 🔴 отстали {len(poorer)} · 🟡 богаче {len(richer)} "
-          f"· ⚠️ снятых у нас {len(revoked)} · ⚪ вне посева {len(missing_from_seed)}"
+          f"· ⚠️ снятых у нас {len(revoked)} · снятых только в посеве {len(revoked_in_seed)}"
+          f" · снятых у обоих {len(revoked_both)} · ⚪ вне посева {len(missing_from_seed)}"
           f" · дубли ключей: немых {len(silent_duplicates)} / объявленных "
           f"{len(duplicates) - len(silent_duplicates)}")
     if poorer:
