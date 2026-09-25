@@ -40,6 +40,7 @@ if not os.path.exists(CHECK):
 
 RULE_MD = "md-to-sqlite-phased-cutover"
 RULE_PUSH = "no-push-without-owner"
+RULE_FREEZE = "gitlab-push-frozen"   # наследник: запрет отправки вернулся 2026-09-25
 
 # ⚡ ВЕРСИЯ ПРАВИЛА ДЛЯ ПЕСОЧНИЦЫ БЕРЁТСЯ ИЗ ИСПЫТУЕМОГО, А НЕ ВПЕЧАТЫВАЕТСЯ ЗДЕСЬ.
 # 🩸 Оплачено 2026-09-04 15:26 UTC. Здесь стояло `push_version=2` — ровно та версия,
@@ -75,7 +76,7 @@ CHECK_VERSION = _check_version_from_target()
 cases, bad, differ = [], 0, 0
 
 
-def build_db(path, push_version=CHECK_VERSION, trace=True):
+def build_db(path, push_version=CHECK_VERSION, trace=True, frozen=None):
     """trace — есть ли у правила след в журнале решений этого контура.
 
     🪤 РАЗЛИЧЕНИЕ, ВВЕДЁННОЕ 18.08 ПРИ ЧИСТКЕ ПОСЕВА. «Правила нет» бывает ДВУХ родов:
@@ -95,6 +96,12 @@ def build_db(path, push_version=CHECK_VERSION, trace=True):
                     (RULE_PUSH, "надгробие: запрет снят", "owner", push_version))
     if trace:
         con.execute("INSERT INTO audit_log (target) VALUES (?)", (RULE_PUSH,))
+    if frozen is not None:
+        # правило-наследник запрета (2026-09-25) с полем статуса: 'active' либо 'revoked'
+        con.execute("ALTER TABLE rules ADD COLUMN status TEXT")
+        con.execute("INSERT INTO rules (rule_key, body, locked_by, version, status) "
+                    "VALUES (?,?,?,?,?)", (RULE_FREEZE, "запрет отправки в GitLab", "owner",
+                                           2, frozen))
     con.commit()
     con.close()
 
@@ -112,11 +119,11 @@ def build_src(root, unsaved_lines):
             f.write("\n".join(body) + "\n")
 
 
-def run(lines, push_version=CHECK_VERSION, trace=True):
+def run(lines, push_version=CHECK_VERSION, trace=True, frozen=None):
     tmp = str(mezo_stand.new("bite-presc-"))
     db = os.path.join(tmp, "c.db")
     root = os.path.join(tmp, "src")
-    build_db(db, push_version, trace)
+    build_db(db, push_version, trace, frozen)
     build_src(root, lines)
     r = subprocess.run([sys.executable, CHECK, "--db", db, "--root", root, "--only", "no-push-without-owner"],
                        capture_output=True, text=True, encoding="utf-8", errors="replace",
@@ -185,6 +192,20 @@ case("⑦-бис правила здесь НЕ БЫЛО ВОВСЕ — зелё
 out, code = run(['# разовое разрешение на push я сам дважды спутал — потрачено или нет'])
 case("⑧ проза о прошлом без предписания — ЗЕЛЁНОЕ", code == 0,
      f"код {code}: {out.strip()[:120]}", True)
+
+# ⑨ ⏸ ПРЕДПИСАНИЕ ВЕРНУЛОСЬ (слово владельца 2026-09-25 11:02:36 UTC, правило-наследник
+#    gitlab-push-frozen): та же строка, что краснеет в ⑤, не судится — и это СКАЗАНО строкой.
+#    Без паузы признак учил бы роли стирать действующий запрет владельца.
+out, code = run(['print("⛔ push — только по живому слову владельца")'], frozen="active")
+case("⑨ наследник действует — признак НЕ СУДИТ и говорит это словом",
+     code == 0 and "НЕ СУЖУ" in out and RULE_FREEZE in out and "unsaved.py:" not in out,
+     f"код {code}: {out.strip()[:160]}", True)
+
+# ⑩ ВСТРЕЧНЫЙ к ⑨: наследник СНЯТ (поле статуса 'revoked') — признак снова судит.
+#    Без этой пары ⑨ зеленел бы и у признака, ослепшего на всё сразу.
+out, code = run(['print("⛔ push — только по живому слову владельца")'], frozen="revoked")
+case("⑩ наследник снят — признак снова судит, та же строка КРАСНАЯ (встречный к ⑨)",
+     code == 1 and "unsaved.py" in out and "НЕ СУЖУ" not in out, f"код {code}", True)
 
 print("🔬 ПРИЁМКА: снятое ПРЕДПИСАНИЕ (второй вид предмета)")
 print(f"   испытуемый: {CHECK}")

@@ -648,7 +648,10 @@ def main():
 
     if not args.sync:
         # Путь СВОЙСТВОМ (@STUD #2864): относительная форма в рабочем выводе учит отозванному.
-        print(f"\n   Синхронизировать: python {Path(__file__).resolve().as_posix()} --sync   (затем commit+push)")
+        # ⚰️ 2026-09-25: хвост «(затем commit+push)» учил снятому — совет теперь по своду.
+        import rule_status
+        print(f"\n   Синхронизировать: python {Path(__file__).resolve().as_posix()} --sync   "
+              f"(затем commit; {rule_status.send_advice_for(__file__)})")
         check_against_template()
         sys.exit(1)
 
@@ -658,8 +661,12 @@ def main():
         (REPO / n).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(rt[n], REPO / n)
         print(f"   ✅ {n}")
-    print(f"\n✅ Скопировано в репо: {len(only_rt) + len(diff)}. Дальше: commit + push "
-          f"(стоячее разрешение владельца — ТОЛЬКО этот репо).")
+    # ⚰️ 2026-09-25: здесь печаталось «Дальше: commit + push (стоячее разрешение владельца —
+    # ТОЛЬКО этот репо)». Разрешение перекрыто словом владельца 2026-09-25 11:02:36 UTC
+    # (правило gitlab-push-frozen); совет теперь берётся из свода этой базы.
+    import rule_status
+    print(f"\n✅ Скопировано в репо: {len(only_rt) + len(diff)}. Дальше: commit; "
+          f"{rule_status.send_advice_for(__file__)}")
     if only_rp:
         print("⚠️  Лишние в репо НЕ удалял: удаление — решение человека, не скрипта.")
     # ⛔ ПОСЛЕ --sync тоже показываем, но НЕ синхронизируем: --sync означает «рантайм → репо»

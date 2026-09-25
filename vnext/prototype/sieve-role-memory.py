@@ -103,13 +103,34 @@ def _is_provenance(label: str, sec: str, line: str) -> bool:
     return (_LEDGER_ROW.match(line.strip()) is not None
             or _PROV_MARKERS.search(line) is not None)
 
+# ⏸ ФОРМЫ, ЧЬЁ ОСНОВАНИЕ ВЕРНУЛОСЬ: пока правило-наследник действует в своде, форма не судит.
+# 2026-09-25 11:02:36 UTC владелец вернул запрет отправки в GitLab (правило gitlab-push-frozen):
+# строки «push только по слову» в памяти ролей снова верны, и звать их кандидатами на
+# устаревание значило бы учить роль стирать действующий запрет. Форма оживёт сама, когда
+# правило снимут (после переезда на GitHub).
+SEND_BAN_FORM = "запрет отправки (снят владельцем 08.08 15:56 UTC)"
+PAUSED_WHILE = {SEND_BAN_FORM: "gitlab-push-frozen"}
+
+
+def _paused_forms(con):
+    """→ {метка формы: ключ правила} — формы, которые сейчас не судят (наследник действует)."""
+    try:
+        sys.path.insert(0, str(mezo_paths.live_scripts()))
+        import rule_status
+    except (SystemExit, Exception) as e:   # noqa: BLE001 — live_scripts зовёт sys.exit вне контура
+        print(f"⚠️ свод о паузах не спрошен ({' '.join(str(e).split())}) — сужу всеми формами")
+        return {}
+    return {label: key for label, key in PAUSED_WHILE.items()
+            if rule_status.rule_in_force(con, key)}
+
+
 # Формы — по одному предмету на строку, чтобы находку можно было назвать словом.
 FORMS = {
     "аварийная запись файлами (выход снят 08.08 16:53 UTC)":
         re.compile(r"--md\b|аварийн\w*\s+(?:opt-in|выход|запис)", re.I),
     "такт/таймер синка (ритм печатает механизм)":
         re.compile(r"кажд\w+\s+\d+[–\-]?\d*\s*мин|ставить таймер|подн\w+ такт|такт синка", re.I),
-    "запрет отправки (снят владельцем 08.08 15:56 UTC)":
+    SEND_BAN_FORM:
         re.compile(r"push\b[^.\n]{0,40}(?:только|нельзя|запрещ|по слову|не пуш)", re.I),
     # «спроси(?!л)»: повелительное — приказ, «спросил» — рассказ. Прежняя форма сматчила
     # рассказ PROTO о своём промахе («спросил „сколько записок" проверкой…») — вердикт УРОК.
@@ -196,6 +217,7 @@ def sieve(db: str, role: str, show_excused: bool, remeasure_days: int = 2) -> in
     rows = con.execute(
         "SELECT section, body, saved_at FROM phoenix WHERE UPPER(role)=? ORDER BY section",
         (role.upper(),)).fetchall()
+    paused = _paused_forms(con)
     con.close()
     if not rows:
         print(f"⛔ НЕ ЗАПУСТИЛОСЬ: сохранённой памяти роли {role} в базе нет — это третий исход, не «чисто»")
@@ -209,6 +231,9 @@ def sieve(db: str, role: str, show_excused: bool, remeasure_days: int = 2) -> in
 
     hits = excused = 0
     for label, rx in FORMS.items():
+        if label in paused:
+            print(f"⏸ {label}: НЕ СУЖУ — правило «{paused[label]}» действует, запрет снова в силе")
+            continue
         found = []
         for sec, body, _ in rows:
             for i, line in enumerate(body.splitlines(), 1):
