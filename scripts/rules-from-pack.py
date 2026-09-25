@@ -118,6 +118,20 @@ rules) — инструмент судил их по ТЕКСТУ пакета, 
 переписывается НИКОГДА — только по явному --annex-force. --show печатает одну строку:
 есть ли у ключа приложение в пакете вообще (доставлено оно уже в контур или нет — ответ
 на этот вопрос печатает --annex у set-rule.py).
+
+СРОК ПРАВИЛА (карточка #650). Вид и условие срока (expiry_kind/expiry_cond) пакет несёт в
+строке правила своего посева (`<пакет>/rules/universal.sql`, `rules/domain-specific/*.sql`);
+база правил пакета срока не хранит. --adopt берёт срок оттуда же, откуда его берёт сборка
+нового контура: исполняет файл посева в памяти и берёт срок, только если текст правила в
+посеве равен тексту из базы правил пакета (по отпечатку). Срок пакета ложится, когда у
+контура срок пуст или стоит заготовка сборки («до пересмотра владельцем нового контура» —
+её ставила сборка, а не решение контура). Свой срок контура --adopt не заменяет, а называет
+рядом со сроком пакета; заменить — тот же вызов с --expiry-from-pack. Срока в посеве нет —
+как прежде: новому ключу «бессрочно», у старого срок не трогаем. Список (режим по
+умолчанию) называет ключи «same», у которых срок пакета можно взять (у вас пусто или
+заготовка) или у вас свой, с готовой командой; --summary к своей строке добавляет вторую —
+только когда такие ключи есть (иначе вывод прежний). --adopt по ключу «same» меняет срок и
+основание — текст и версия правила остаются те же.
 """
 from __future__ import annotations
 
@@ -333,6 +347,200 @@ def needs_expiry_kind(conn, key) -> bool:
     row = conn.execute(
         "SELECT expiry_kind FROM rules WHERE rule_key=? AND status='active'", (key,)).fetchone()
     return row is None or not (row[0] or "").strip()
+
+
+# ── СРОК ПРАВИЛА ИЗ ПОСЕВА ПАКЕТА (карточка #650) ──────────────────────────────────
+# ПОВОД (замер 25.09): у контура, собранного из пакета, условный срок правил не совпадал со
+# сводом контура-донора ни у одного правила — посев вставлял правила без срока, и заготовка
+# сборки ставила всем «до пересмотра владельцем нового контура». --adopt срока не переносил
+# вовсе: новому ключу — «бессрочно», у старого оставалась та же заготовка.
+# ⚖ ОТКУДА СРОК: из посева пакета — того же файла, который исполняет сборка нового контура.
+# База правил пакета срока не хранит, и второй копии здесь не заводим. Файл исполняется в
+# памяти, как его исполняет сборка, но у строк правил основание непустое (значение по
+# умолчанию в разборе) — блок «происхождение при посеве» их не трогает, и виден ровно
+# ОБЪЯВЛЕННЫЙ срок. Заготовку сборки узнаём пробной строкой с пустым основанием: блок
+# заполняет её так же, как заполнил бы правило нового контура.
+SEED_EXPIRY_KNOWN = ("until_event", "до пересмотра владельцем нового контура")
+EXPIRY_NEEDS_COND = ("until_date", "until_event", "while_measured")
+SEED_PROBE_KEY = "zz-rules-from-pack-seed-probe"
+# set-rule.py не стирает поле пустым значением (пустое наследует прежнее), а строку из одного
+# пробела обрезает до пустоты и пишет NULL. Так вид «бессрочно» без условия ложится поверх
+# заготовки сборки, не оставляя её условия. Держится приёмкой bite-pack-rule-expiry.py (②а).
+CLEAR_COND = " "
+PACK_PARSE_DDL = """CREATE TABLE rules (id INTEGER PRIMARY KEY AUTOINCREMENT,
+ rule_key TEXT NOT NULL UNIQUE, body TEXT NOT NULL, locked_by TEXT NOT NULL DEFAULT 'coord',
+ version INTEGER NOT NULL DEFAULT 1, created_at TEXT, updated_at TEXT,
+ basis TEXT DEFAULT 'объявлено строкой посева', authorized TEXT, source_ref TEXT,
+ expiry_kind TEXT, expiry_cond TEXT, status TEXT NOT NULL DEFAULT 'active', revoked_at TEXT,
+ revoked_by TEXT, revoked_reason TEXT, superseded_by INTEGER, skill_delivery TEXT)"""
+_pack_expiry_cache: dict = {}
+
+
+def pack_sql_path(source: Path, rule_set: str) -> Path:
+    """Файл посева набора пакета: universal — rules/universal.sql, домен — rules/domain-specific/."""
+    return (source / "rules" / "universal.sql" if rule_set == "universal"
+            else source / "rules" / "domain-specific" / f"{rule_set}.sql")
+
+
+def _field(value):
+    value = (value or "").strip()
+    return value or None
+
+
+def load_pack_expiry(source: Path, rule_set: str):
+    """→ (объявленный срок {ключ: (вид, условие, отпечаток текста)}, заготовка сборки
+    (вид, условие) либо None, причина — почему срок не прочитан, либо None)."""
+    cache_key = (str(source), rule_set)
+    if cache_key in _pack_expiry_cache:
+        return _pack_expiry_cache[cache_key]
+    path = pack_sql_path(source, rule_set)
+    if not path.is_file():
+        result = ({}, None, f"в пакете нет файла посева {path.name}")
+    else:
+        mem = sqlite3.connect(":memory:")
+        try:
+            mem.execute(PACK_PARSE_DDL)
+            mem.execute("INSERT INTO rules (rule_key, body, basis) VALUES (?, '', NULL)",
+                        (SEED_PROBE_KEY,))
+            mem.executescript(path.read_text(encoding="utf-8"))
+            rows = mem.execute(
+                "SELECT rule_key, body, expiry_kind, expiry_cond FROM rules").fetchall()
+        except sqlite3.Error as e:
+            result = ({}, None, f"посев {path.name} не исполнился в памяти: {e}")
+        else:
+            declared, seed = {}, None
+            for key, body, kind, cond in rows:
+                kind, cond = _field(kind), _field(cond)
+                if key == SEED_PROBE_KEY:
+                    seed = (kind, cond) if kind else None
+                elif kind:
+                    declared[key] = (kind, cond, text_sha(body))
+            result = (declared, seed, None)
+        finally:
+            mem.close()
+    _pack_expiry_cache[cache_key] = result
+    return result
+
+
+def pack_expiry_for(source, row):
+    """Срок, который пакет несёт для ряда базы правил пакета: → ((вид, условие) | None,
+    заготовка сборки | None, причина | None). source=None — вызов без пакета под рукой:
+    срока нет и причины нет (прежнее поведение)."""
+    if source is None:
+        return None, None, None
+    declared, seed, reason = load_pack_expiry(Path(source), row["rule_set"])
+    if reason:
+        return None, seed, reason
+    got = declared.get(row["rule_key"])
+    if got is None:
+        return None, seed, "в посеве пакета срок этого правила не объявлен"
+    kind, cond, sha = got
+    if sha != row["text_sha"]:
+        return None, seed, ("текст правила в посеве не равен тексту из базы правил пакета — "
+                            "срок относится к другому тексту")
+    if kind in EXPIRY_NEEDS_COND and not cond:
+        return None, seed, f"в посеве у вида {kind} нет условия"
+    return (kind, cond), seed, None
+
+
+def contour_expiry(conn, key):
+    """(вид, условие) действующего правила контура; None — действующего правила нет."""
+    row = conn.execute("SELECT expiry_kind, expiry_cond FROM rules "
+                       "WHERE rule_key=? AND status='active'", (key,)).fetchone()
+    return None if row is None else (_field(row[0]), _field(row[1]))
+
+
+def expiry_is_seed(expiry, seed) -> bool:
+    """Срок контура пуст или это заготовка сборки из пакета — не решение самого контура."""
+    if expiry is None or not expiry[0]:
+        return True
+    return expiry == SEED_EXPIRY_KNOWN or (seed is not None and expiry == seed)
+
+
+def show_expiry(expiry) -> str:
+    if expiry is None or not expiry[0]:
+        return "пусто"
+    return expiry[0] + (f" — «{expiry[1]}»" if expiry[1] else "")
+
+
+def plan_adopt_expiry(conn, key, row, source, take_pack: bool = False):
+    """Срок при --adopt: → (аргументы срока для set-rule.py, строка для роли либо None).
+    take_pack (--expiry-from-pack) — срок пакета ложится и поверх СВОЕГО срока контура."""
+    pack, seed, reason = pack_expiry_for(source, row)
+    mine = contour_expiry(conn, key)
+    if pack is not None:
+        if mine == pack:
+            return [], f"срок: {show_expiry(pack)} — уже как в пакете"
+        take = ["--expiry-kind", pack[0], "--expiry-cond", pack[1] or CLEAR_COND]
+        if expiry_is_seed(mine, seed):
+            return take, f"срок: {show_expiry(pack)} — из пакета (у вас был: {show_expiry(mine)})"
+        if take_pack:
+            return take, (f"срок: {show_expiry(pack)} — из пакета по --expiry-from-pack "
+                          f"(у вас был свой: {show_expiry(mine)})")
+        return [], (f"📌 срок: у вас свой — {show_expiry(mine)}; пакет несёт {show_expiry(pack)}. "
+                    f"--adopt ваш срок не заменяет; взять срок пакета — тот же вызов с "
+                    f"--expiry-from-pack")
+    why = f" ({reason})" if reason else ""
+    extra = " · --expiry-from-pack: брать нечего" if take_pack else ""
+    if needs_expiry_kind(conn, key):
+        return ["--expiry-kind", "forever"], (
+            f"срок: forever — в пакете не объявлен{why}, у вас пусто{extra}"
+            if source is not None else None)
+    return [], (f"срок: ваш, не трогаю — {show_expiry(mine)}; в пакете не объявлен{why}{extra}"
+                if source is not None else None)
+
+
+def render_expiry_args(expiry_args) -> str:
+    """Аргументы срока для показа в команде set-rule.py (условие — строкой «срок» выше)."""
+    out = ""
+    i = 0
+    while i < len(expiry_args):
+        flag, value = expiry_args[i], expiry_args[i + 1]
+        if flag == "--expiry-cond":
+            value = '" "' if value == CLEAR_COND else "«условие пакета — строкой выше»"
+        out += f" {flag} {value}"
+        i += 2
+    return out
+
+
+def expiry_differences(conn, rows: list, source):
+    """Ключи «same» (текст как в пакете), у которых пакет несёт срок, а у вас другой:
+    → (можно взять — у вас пусто или заготовка сборки; у вас свой) — оба [(набор, ключ)]."""
+    take, own = [], []
+    if source is None:
+        return take, own
+    for r in rows:
+        if r["state"] != "same":
+            continue
+        pack, seed, _reason = pack_expiry_for(source, r)
+        if pack is None:
+            continue
+        mine = contour_expiry(conn, r["rule_key"])
+        if mine == pack:
+            continue
+        (take if expiry_is_seed(mine, seed) else own).append((r["rule_set"], r["rule_key"]))
+    return sorted(take), sorted(own)
+
+
+def _adopt_commands(pairs: list, db_path, extra: str) -> None:
+    for rule_set in sorted({s for s, _k in pairs}):
+        keys = " ".join(k for s, k in pairs if s == rule_set)
+        print(f"   python {Path(__file__).resolve()} --db {db_path} --adopt {keys} "
+              f"--rule-set {rule_set}{extra} --word \"<дословно: кто разрешил·когда·где>\" "
+              f"--actor <роль> --apply")
+
+
+def print_expiry_differences(take: list, own: list, db_path) -> None:
+    if take:
+        print(f"\n⏳ срок пакета можно взять у {len(take)} правил (текст как в пакете, у вас срок "
+              f"пуст или заготовка сборки): " + " · ".join(k for _s, k in take))
+        print("   взять (текст и версия правила останутся те же, сменятся срок и основание):")
+        _adopt_commands(take, db_path, "")
+    if own:
+        print(f"\n📌 срок у вас свой у {len(own)} правил (пакет несёт другой; --adopt свой не "
+              f"заменяет): " + " · ".join(k for _s, k in own))
+        print("   сравнить: тот же список ключей в --adopt без --apply; взять срок пакета поверх своего:")
+        _adopt_commands(own, db_path, " --expiry-from-pack")
 
 
 PACK_COLS = ("rule_set", "rule_key", "body", "locked_by", "text_sha",
@@ -718,27 +926,38 @@ def pick_removed_rule_set(rows_for_key: list, key: str, rule_set_hint):
 
 
 def render_set_rule_preview(db_path, key, basis, word, actor, needs_expiry: bool,
-                            body_file_label: str = "<тело правила пакета>") -> str:
+                            body_file_label: str = "<тело правила пакета>",
+                            expiry_args=None) -> str:
     """body_file_label — ЧТО именно ляжет в --body-file: у --adopt это текст пакета, у
     --merge — сведённый ВРУЧНУЮ текст из --file (возврат PROTO, замечание 2: холостой
-    --merge звал его «телом правила пакета», хотя пишет он совсем не пакетный текст)."""
+    --merge звал его «телом правила пакета», хотя пишет он совсем не пакетный текст).
+    expiry_args (карточка #650) — готовые аргументы срока (plan_adopt_expiry); при них
+    needs_expiry не смотрится."""
     word_display = word if (word or "").strip() else "<--word не задан>"
     actor_display = actor if (actor or "").strip() else "<--actor не задан>"
-    expiry = " --expiry-kind forever" if needs_expiry else ""
+    if expiry_args is not None:
+        expiry = render_expiry_args(expiry_args)
+    else:
+        expiry = " --expiry-kind forever" if needs_expiry else ""
     return (f'python {SET_RULE_PY} --db {db_path} --key {key} --body-file {body_file_label} '
             f'--basis "{basis}" --authorized-by "{word_display}" --source-ref "{word_display}"'
             f'{expiry} --actor "{actor_display}" --apply')
 
 
-def run_set_rule(db_path, key, body_file, basis, word, actor, needs_expiry: bool):
+def run_set_rule(db_path, key, body_file, basis, word, actor, needs_expiry: bool,
+                 expiry_args=None):
     """needs_expiry=True — set-rule.py потребует условие отмены явно (нечего наследовать:
     ключа у контура ещё нет, либо поле у него пустое) — ставим «бессрочно», самое
     нейтральное. needs_expiry=False — условие отмены НЕ трогаем, оно наследуется само
-    (иначе --adopt/--merge тихо стёрли бы уже поставленный кем-то срок годности)."""
+    (иначе --adopt/--merge тихо стёрли бы уже поставленный кем-то срок годности).
+    expiry_args (карточка #650) — готовые аргументы срока из plan_adopt_expiry (срок пакета
+    либо прежнее правило); при них needs_expiry не смотрится."""
     cmd = [sys.executable, str(SET_RULE_PY), "--db", str(db_path), "--key", key,
            "--body-file", str(body_file), "--basis", basis,
            "--authorized-by", word, "--source-ref", word, "--actor", actor]
-    if needs_expiry:
+    if expiry_args is not None:
+        cmd += list(expiry_args)
+    elif needs_expiry:
         cmd += ["--expiry-kind", "forever"]
     cmd += ["--apply"]
     cp = subprocess.run(cmd, env=subprocess_env(), capture_output=True, text=True,
@@ -836,7 +1055,8 @@ def cmd_show(conn, pack_conn, key, base_map, rule_set_hint, source: Path | None 
 # ── --adopt ──────────────────────────────────────────────────────────────────────────
 
 def adopt_keys(conn, db_path, pack_conn, base_map, keys, rule_set_hint, word, apply, actor,
-               source: Path | None = None, annex_force: bool = False) -> int:
+               source: Path | None = None, annex_force: bool = False,
+               expiry_from_pack: bool = False) -> int:
     by_key: dict = {}
     for row in load_pack_rows(pack_conn):
         by_key.setdefault(row["rule_key"], []).append(row)
@@ -854,15 +1074,23 @@ def adopt_keys(conn, db_path, pack_conn, base_map, keys, rule_set_hint, word, ap
     # (status≠'active'), — это возврат осознанно снятого правила, не обычное взятие.
     # --word здесь обязан явно называть это решение, а не быть общим словом про запись.
     retired_here = sorted(key for key in keys if circuit_is_retired(conn, key))
+    # КАРТОЧКА #650: срок каждого ключа решается ОДИН раз, до записи — показ и запись видят
+    # одно и то же решение (см. plan_adopt_expiry).
+    expiry_plan = {key: plan_adopt_expiry(conn, key, row, source, take_pack=expiry_from_pack)
+                   for key, row in plan}
 
     for key, row in plan:
         basis = (f"взято из пакета GORDI, коммит {row['pack_commit']}, "
                  f"версия от {row['pack_updated_at']}")
         tag = "ВЗЯЛ БЫ" if apply_gate(apply) else "БЕРУ"
         print(f"{tag}: {key} ← набор «{row['rule_set']}» · основание: {basis}")
+        expiry_args, expiry_line = expiry_plan[key]
+        if expiry_line:
+            print("   " + expiry_line)
         if apply_gate(apply):
             print("   " + render_set_rule_preview(db_path, key, basis, word, actor,
-                                                   needs_expiry=needs_expiry_kind(conn, key)))
+                                                   needs_expiry=needs_expiry_kind(conn, key),
+                                                   expiry_args=expiry_args))
             if source is not None:
                 msg = place_annex(source, db_path, key, apply=False, force=annex_force)
                 if msg:
@@ -892,7 +1120,8 @@ def adopt_keys(conn, db_path, pack_conn, base_map, keys, rule_set_hint, word, ap
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(row["body"])
             run_set_rule(db_path, key, body_file, basis, word, actor,
-                        needs_expiry=needs_expiry_kind(conn, key))
+                        needs_expiry=needs_expiry_kind(conn, key),
+                        expiry_args=expiry_plan[key][0])
         finally:
             os.unlink(body_file)
         if source is not None:
@@ -1107,6 +1336,11 @@ def cmd_summary(args) -> int:
           f"опоры нет {counts['no-base']} · снято в пакете {counts['removed']} · "
           f"снято у вас {counts['retired-here']} — "
           f"подробно: rules-from-pack.py")
+    # КАРТОЧКА #650: вторая строка — только когда есть что сказать про срок (иначе вывод прежний)
+    take, own = expiry_differences(conn, rows, source)
+    if take or own:
+        print(f"срок правил пакета: взять можно у {len(take)} · у вас свой у {len(own)} — "
+              f"подробно: rules-from-pack.py")
     return 0
 
 
@@ -1120,8 +1354,7 @@ def describe_source_occurrences(source: Path, rule_set: str, rule_key: str):
     САМ исходник (только чтение), называем число описаний и строку последнего.
     None — исходника .sql нет (например, собранная копия без него) или описание ровно одно
     (тогда говорить не о чем)."""
-    sql_path = (source / "rules" / "universal.sql" if rule_set == "universal"
-               else source / "rules" / "domain-specific" / f"{rule_set}.sql")
+    sql_path = pack_sql_path(source, rule_set)
     if not sql_path.exists():
         return None
     text = sql_path.read_text(encoding="utf-8")
@@ -1290,6 +1523,11 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--annex-force", dest="annex_force", action="store_true",
                     help="переписать чужое ДРУГОЕ содержимое приложения (по умолчанию — не "
                          "трогаем и говорим словами); касается --adopt/--merge/--annexes")
+    # КАРТОЧКА #650: по умолчанию --adopt свой срок контура не трогает (берёт срок пакета, только
+    # когда у контура пусто или заготовка сборки)
+    ap.add_argument("--expiry-from-pack", dest="expiry_from_pack", action="store_true",
+                    help="--adopt: взять срок (вид и условие) из посева пакета и тогда, когда "
+                         "у контура стоит свой срок, а не заготовка сборки")
     return ap
 
 
@@ -1302,6 +1540,8 @@ def main() -> int:
         sys.exit("⛔ --propose требует --why <одно предложение: что уточнение исправляет>")
     if args.propose and not args.out:
         sys.exit("⛔ --propose требует --out <файл для тела предложения>")
+    if args.expiry_from_pack and not args.adopt:
+        sys.exit("⛔ --expiry-from-pack — только вместе с --adopt")
 
     # ⚖️ ПИШУЩИЙ В КОНТУРЕ ВСЕГДА НАЗЫВАЕТ СЕБЯ (как backlog.py --actor, lease.py --role) —
     # проверка ДО любого соединения с базой: отказ обязан быть нулевым по последствиям.
@@ -1329,7 +1569,8 @@ def main() -> int:
     if args.adopt:
         return adopt_keys(conn, db_path, pack_conn, load_meta_map(conn, "pack_rules_base"),
                           args.adopt, args.rule_set, args.word, args.apply, args.actor,
-                          source=source, annex_force=args.annex_force)
+                          source=source, annex_force=args.annex_force,
+                          expiry_from_pack=args.expiry_from_pack)
     if args.merge:
         return merge_key(conn, db_path, pack_conn, load_meta_map(conn, "pack_rules_base"),
                          args.merge, args.rule_set, args.file, args.word, args.apply, args.actor,
@@ -1370,6 +1611,11 @@ def main() -> int:
                                   make_history_has(pack_conn), contour_sets,
                                   load_circuit_retired_keys(conn))
     print_listing(rows, only_yours, args.state, db_path)
+    # КАРТОЧКА #650: срок пакета у ключей, чей текст уже как в пакете (при отборе --state
+    # другого состояния блок не печатается — он только про «same»)
+    if args.state in (None, "same"):
+        take, own = expiry_differences(conn, rows, source)
+        print_expiry_differences(take, own, db_path)
     return 0
 
 
