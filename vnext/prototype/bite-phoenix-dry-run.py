@@ -168,7 +168,6 @@ def main() -> int:
     # второй набор — та же копия инструмента, но БЕЗ memory-records.py рядом (для ⑤)
     bare_tool = mezo_stand.copy_tool(tool, stand / "tools-bare")
 
-    env = mezo_stand.stand_env(container, PYTHONIOENCODING="utf-8")
     runs = []
 
     def save(tool_path, text, dry):
@@ -179,7 +178,8 @@ def main() -> int:
         if dry:
             cmd.append("--dry-run")
         r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
-                           errors="replace", env=env)
+                           errors="replace",
+                           env=mezo_stand.stand_env(container, PYTHONIOENCODING="utf-8"))
         out = (r.stdout or "") + (r.stderr or "")
         runs.append((("холостой" if dry else "настоящий") + f" · {tool_path.parent.name}", out))
         return r.returncode, out
