@@ -523,6 +523,29 @@ def main():
         (mezosync_dir.parent / dir_name).mkdir(parents=True, exist_ok=True)
         print(f"  ✅ Каталог {dir_name}: {mezosync_dir.parent / dir_name} — {purpose}")
 
+    # 7е. ПРИЛОЖЕНИЯ ПРАВИЛ — КОНТУР РОЖДАЕТСЯ С НИМИ, А НЕ СО ССЫЛКОЙ В ПУСТОТУ (карточка
+    # #652 этап 2, задача #651; записка #5337, находка COORD). 13 правил свода сократили
+    # текст и вынесли разбор случаев в rules/annex/<ключ>.md; сам текст правила (уже
+    # положенный шагом 3 выше, из universal.sql) кончается строкой «…— приложение:
+    # set-rule.py --key X --annex». Без этого шага ссылка у СВЕЖЕГО контура вела бы
+    # в пустоту — приложений он не видел никогда, ни разу не брав --adopt по этим ключам
+    # (ровно та беда у соседей, ради которой заведена вся задача #651).
+    # ⚖️ МЕСТО — mezo_paths.annex_dir(): та же функция, что найдёт --annex у уже
+    # положенного шагом 7 выше set-rule.py — не вторая раскладка рядом с первой.
+    annex_src_dir = REPO_ROOT / "rules" / "annex"
+    if annex_src_dir.is_dir():
+        import mezo_paths
+        annex_dst_dir = mezo_paths.annex_dir(str(db_path))
+        annex_dst_dir.mkdir(parents=True, exist_ok=True)
+        annexed = 0
+        for src in sorted(annex_src_dir.glob("*.md")):
+            (annex_dst_dir / src.name).write_bytes(src.read_bytes())
+            annexed += 1
+        print(f"  ✅ Приложения правил: {annexed} файлов → {annex_dst_dir}")
+    else:
+        print("  ℹ️ приложения правил не записаны: в пакете нет rules/annex/ "
+              "(шаблон старее этой возможности, либо она ещё не собрана)")
+
     # 8. ПРОБА СОБРАННОГО — «ГОТОВА» ГОВОРИТ ЗАПУСК, А НЕ СБОРЩИК (#145).
     # 🪤 Три дефекта подряд нашлись ТОЛЬКО потому, что я вызвал инструменты свежего
     # контура руками: отметка прочитанного в нижнем регистре (первая же команда падала), пустая версия

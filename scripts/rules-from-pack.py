@@ -73,6 +73,7 @@ rules) — инструмент судил их по ТЕКСТУ пакета, 
     python <инструменты контура>/rules-from-pack.py --propose acceptance-e2e \
         --why "пакет требует числа в замере, у нас голословно" --out proposal.md
     python <инструменты контура>/rules-from-pack.py --record-base --apply --actor COORD
+    python <инструменты контура>/rules-from-pack.py --annexes --apply --actor COORD
     python <инструменты контура>/rules-from-pack.py --summary
 
 ЗАПИСЬ ПРАВИЛА — ТОЛЬКО ЧЕРЕЗ set-rule.py (подпроцессом, тем же --db, своё основание и
@@ -90,9 +91,9 @@ rules) — инструмент судил их по ТЕКСТУ пакета, 
 подлинность инструмент по-прежнему проверить не может. --record-base --word НЕ спрашивает
 (объяснение — в шапке над `record_base`): совпавший текст ничьего решения не меняет.
 
---actor <имя роли> ОБЯЗАТЕЛЕН вместе с --apply у --adopt/--merge/--record-base — пишущий
-в контуре всегда называет СЕБЯ (как `backlog.py --actor`, `lease.py --role`), а не имя
-инструмента. Без --apply флаг не нужен. Пустой или отсутствующий --actor при --apply —
+--actor <имя роли> ОБЯЗАТЕЛЕН вместе с --apply у --adopt/--merge/--record-base/--annexes —
+пишущий в контуре всегда называет СЕБЯ (как `backlog.py --actor`, `lease.py --role`), а не
+имя инструмента. Без --apply флаг не нужен. Пустой или отсутствующий --actor при --apply —
 отказ ДО любого соединения с базой, ничего не тронуто.
 
 БЕЗ --apply НИЧЕГО НЕ ЗАПИСЫВАЕТСЯ — только показ того, что было бы сделано (включая
@@ -106,6 +107,17 @@ rules) — инструмент судил их по ТЕКСТУ пакета, 
 --adopt/--merge/--skip/--propose (им нужен ровно ОДИН текст) — если тексты в наборах
 совпадают, набор не важен; если разные — назови --rule-set явно (расширение сверх
 буквы контракта, понадобившееся для однозначной записи; см. отчёт).
+
+ПРИЛОЖЕНИЯ ПРАВИЛ (карточка #652 этап 2, задача #651). У части ключей пакета текст
+правила сокращён, а разбор случаев вынесен в `<пакет>/rules/annex/<ключ>.md` — норма
+кончается строкой «…— приложение: set-rule.py --key X --annex». --adopt и --merge
+кладут приложение ключа В КОНТУР тем же ходом, что и текст правила (--apply) или говорят,
+куда положили бы (без --apply) — местом, что найдёт --annex (mezo_paths.annex_path,
+общая функция с set-rule.py). Ключам, чей текст УЖЕ совпадает с пакетом (--adopt тут
+взять нечего), — отдельный ход --annexes. Чужое ДРУГОЕ содержимое приложения молча не
+переписывается НИКОГДА — только по явному --annex-force. --show печатает одну строку:
+есть ли у ключа приложение в пакете вообще (доставлено оно уже в контур или нет — ответ
+на этот вопрос печатает --annex у set-rule.py).
 """
 from __future__ import annotations
 
@@ -617,6 +629,47 @@ def record_base_for(base_map: dict, pairs) -> None:
         base_map[f"{rule_set}/{rule_key}"] = sha
 
 
+# ── ПРИЛОЖЕНИЯ ПРАВИЛ (карточка #652 этап 2, задача #651) ───────────────────────────
+# ПОВОД (записка #5337, находка COORD). 13 правил свода сократили текст, вынеся разбор
+# случаев в rules-annex/<ключ>.md, и в самом тексте правила осталась строка «… —
+# приложение: set-rule.py --key X --annex». У СОСЕДЕЙ (контур из init-group.py, контур,
+# ни разу не бравший эти ключи через --adopt) файла нет — ссылка ведёт в пустоту. Эти
+# правила уходят соседям через пакет; --adopt/--merge кладут приложение ключа ВМЕСТЕ
+# с текстом правила — тем же ходом, а не отдельным напоминанием, которое легко забыть.
+# ⚖️ МЕСТО — mezo_paths.annex_path(): ОДНА функция на set-rule.py (--annex/--show) и
+# этот инструмент (раскладка «легаси» решена там один раз, см. её докстроку).
+
+def place_annex(pack_root: Path, db_path, key: str, *, apply: bool, force: bool) -> str | None:
+    """Кладёт приложение ОДНОГО ключа из пакета в контур. None — у пакета для этого ключа
+    приложения нет вовсе (обычное дело — не у каждого правила оно есть): вызывающий тогда
+    ничего не печатает, шума на пустом месте не будет.
+
+    apply=False — ТОЛЬКО говорит, куда положил бы; возврат до первой строчки записи —
+    холостой прогон не пишет НИЧЕГО, ни этот файл, ни любой другой.
+    force=False и в контуре уже лежит ДРУГОЕ содержимое — не переписывает, называет
+    флаг согласия (--annex-force) и молчит дальше; одинаковое содержимое не спрашивает
+    ничего — там нечего терять.
+    """
+    src = pack_root / "rules" / "annex" / f"{key}.md"
+    if not src.is_file():
+        return None
+    want = src.read_text(encoding="utf-8")
+    dst = mezo_paths.annex_path(db_path, key)
+    if dst.is_file():
+        have = dst.read_text(encoding="utf-8")
+        if have == want:
+            return f"📎 приложение {key}: уже на месте, совпадает ({len(want)} зн.) — {dst}"
+        if not force:
+            return (f"⚠️ приложение {key}: В КОНТУРЕ ДРУГОЕ содержимое ({len(have)} зн. против "
+                    f"{len(want)} в пакете) — НЕ ПЕРЕЗАПИСАНО. {dst}\n"
+                    f"      Согласие поверх чужого текста — флагом --annex-force.")
+    if not apply:
+        return f"📎 приложение {key}: положил бы ({len(want)} зн.) → {dst}"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.write_text(want, encoding="utf-8")
+    return f"📎 приложение {key}: положено ({len(want)} зн.) → {dst}"
+
+
 def pick_rule_set(rows_for_key: list, key: str, rule_set_hint):
     """Один действующий (removed_at пуст) ряд пакета для ключа. Наборов несколько с
     РАЗНЫМ текстом — нужен --rule-set; с ОДИНАКОВЫМ — набор не важен, берём любой."""
@@ -755,13 +808,25 @@ def show_one(pack_conn, row, key, v_body, base_map, history_has) -> None:
     print_diff("опора → ваш", o_body, v_body)
 
 
-def cmd_show(conn, pack_conn, key, base_map, rule_set_hint) -> int:
+def cmd_show(conn, pack_conn, key, base_map, rule_set_hint, source: Path | None = None) -> int:
     v_body = load_circuit_rules(conn).get(key)
     rows = [r for r in load_pack_rows(pack_conn) if r["rule_key"] == key
             and (rule_set_hint is None or r["rule_set"] == rule_set_hint)]
     if not rows:
         sys.exit(f"⛔ ключа «{key}» нет в пакете" +
                  (f" в наборе «{rule_set_hint}»" if rule_set_hint else ""))
+    # КАРТОЧКА #652 этап 2, п.3: --show ОДНОЙ строкой говорит, есть ли у ключа приложение
+    # в пакете — не доставлено ли оно уже (это скажет --adopt/--merge), а ЕСТЬ ЛИ вообще
+    # что доставлять. source=None (вызов без пакета под рукой, например из старого теста)
+    # — строка тихо пропускается, это не отказ.
+    if source is not None:
+        annex_src = source / "rules" / "annex" / f"{key}.md"
+        if annex_src.is_file():
+            print(f"📎 приложение в пакете: есть, "
+                  f"{len(annex_src.read_text(encoding='utf-8'))} знаков — доставит "
+                  f"--adopt/--merge/--annexes, покажет set-rule.py --key {key} --annex")
+        else:
+            print("📎 приложение в пакете: нет")
     history_has = make_history_has(pack_conn)
     for row in rows:
         show_one(pack_conn, row, key, v_body, base_map, history_has)
@@ -770,7 +835,8 @@ def cmd_show(conn, pack_conn, key, base_map, rule_set_hint) -> int:
 
 # ── --adopt ──────────────────────────────────────────────────────────────────────────
 
-def adopt_keys(conn, db_path, pack_conn, base_map, keys, rule_set_hint, word, apply, actor) -> int:
+def adopt_keys(conn, db_path, pack_conn, base_map, keys, rule_set_hint, word, apply, actor,
+               source: Path | None = None, annex_force: bool = False) -> int:
     by_key: dict = {}
     for row in load_pack_rows(pack_conn):
         by_key.setdefault(row["rule_key"], []).append(row)
@@ -797,6 +863,10 @@ def adopt_keys(conn, db_path, pack_conn, base_map, keys, rule_set_hint, word, ap
         if apply_gate(apply):
             print("   " + render_set_rule_preview(db_path, key, basis, word, actor,
                                                    needs_expiry=needs_expiry_kind(conn, key)))
+            if source is not None:
+                msg = place_annex(source, db_path, key, apply=False, force=annex_force)
+                if msg:
+                    print("   " + msg)
     if owner_locked:
         print(f"⚠️ ЗАЛОЧЕНО ВЛАДЕЛЬЦЕМ (в пакете или у контура): {', '.join(owner_locked)} — "
               f"--word обязан быть словом ИМЕННО владельца; инструмент подлинность не проверяет.")
@@ -825,6 +895,10 @@ def adopt_keys(conn, db_path, pack_conn, base_map, keys, rule_set_hint, word, ap
                         needs_expiry=needs_expiry_kind(conn, key))
         finally:
             os.unlink(body_file)
+        if source is not None:
+            msg = place_annex(source, db_path, key, apply=True, force=annex_force)
+            if msg:
+                print("   " + msg)
 
     # ⚡ ОПОРА ОБНОВЛЯЕТСЯ ТОЛЬКО У ВЗЯТЫХ КЛЮЧЕЙ — строка ниже единственная, кто это решает
     adopted_pairs = [(row["rule_set"], key, row["text_sha"]) for key, row in plan]
@@ -838,7 +912,7 @@ def adopt_keys(conn, db_path, pack_conn, base_map, keys, rule_set_hint, word, ap
 # ── --merge ──────────────────────────────────────────────────────────────────────────
 
 def merge_key(conn, db_path, pack_conn, base_map, key, rule_set_hint, file_path, word, apply,
-              actor) -> int:
+              actor, source: Path | None = None, annex_force: bool = False) -> int:
     rows = [r for r in load_pack_rows(pack_conn) if r["rule_key"] == key]
     if not rows:
         sys.exit(f"⛔ ключа «{key}» нет в пакете вовсе — сводить не с чем")
@@ -861,6 +935,10 @@ def merge_key(conn, db_path, pack_conn, base_map, key, rule_set_hint, file_path,
         print("   " + render_set_rule_preview(db_path, key, basis, word, actor,
                                                needs_expiry=needs_expiry_kind(conn, key),
                                                body_file_label=str(file_path)))
+        if source is not None:
+            msg = place_annex(source, db_path, key, apply=False, force=annex_force)
+            if msg:
+                print("   " + msg)
     if owner_locked:
         print("⚠️ ЗАЛОЧЕНО ВЛАДЕЛЬЦЕМ — --word обязан быть словом ИМЕННО владельца; "
               "инструмент подлинность не проверяет.")
@@ -873,6 +951,10 @@ def merge_key(conn, db_path, pack_conn, base_map, key, rule_set_hint, file_path,
                         "любая запись правила требует --word")
     run_set_rule(db_path, key, file_path, basis, word, actor,
                 needs_expiry=needs_expiry_kind(conn, key))
+    if source is not None:
+        msg = place_annex(source, db_path, key, apply=True, force=annex_force)
+        if msg:
+            print("   " + msg)
 
     record_base_for(base_map, [(row["rule_set"], key, row["text_sha"])])
     save_meta_map(conn, "pack_rules_base", base_map)
@@ -911,6 +993,42 @@ def skip_key(conn, pack_conn, skip_map, key, rule_set_hint, word, apply) -> int:
     save_meta_map(conn, "pack_rules_skipped", skip_map)
     conn.commit()
     print("\n✅ отказ записан — вернётся к обычному сравнению, как только пакет сменит текст")
+    return 0
+
+
+# ── --annexes ────────────────────────────────────────────────────────────────────────
+# КАРТОЧКА #652 этап 2, задача #651, п.3: путь для правил, чей ключ УЖЕ совпадает с
+# пакетом (state=same) — --adopt здесь взять нечего (текст и так тот же), а приложения
+# контур всё равно не увидит без этого хода: например, контур собран ДО того, как пакет
+# обзавёлся приложениями, и с тех пор текст этих ключей не менялся ни у кого.
+# ⚖️ --word НЕ СПРАШИВАЕМ — тем же доводом, что у --record-base чуть ниже: у ключа
+# «same» ничьё решение не меняется, текст и так тот же, что в пакете. --actor по-прежнему
+# нужен (кто клал приложения) — проверяется в main(), тем же местом, что у --record-base.
+
+def cmd_annexes(conn, db_path, pack_conn, source: Path, base_map, skip_map, contour_sets,
+                retired_keys, apply, actor, force) -> int:
+    circuit_rules = load_circuit_rules(conn)
+    pack_rows = load_pack_rows(pack_conn)
+    rows, _ = build_rows(circuit_rules, pack_rows, base_map, skip_map,
+                         make_history_has(pack_conn), contour_sets, retired_keys)
+    same_keys = sorted(r["rule_key"] for r in rows if r["state"] == "same")
+    if not same_keys:
+        print("(ключей в состоянии «same» нет — класть приложения не для чего)")
+        return 0
+    printed = 0
+    for key in same_keys:
+        msg = place_annex(source, db_path, key, apply=apply, force=force)
+        if msg:
+            print(msg)
+            printed += 1
+    if not printed:
+        print(f"(проверено ключей «same»: {len(same_keys)} — ни у одного из них в пакете "
+              f"нет приложения)")
+    if not apply:
+        print("\n[ХОЛОСТОЙ ПРОГОН] Не записано. Для записи — флаг --apply (и --actor).")
+    else:
+        print(f"\n✅ приложения проверены (актёр: {actor}) — ключей «same» {len(same_keys)}, "
+              f"строк напечатано {printed}")
     return 0
 
 
@@ -1149,6 +1267,11 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--propose", metavar="KEY")
     mode.add_argument("--record-base", dest="record_base", action="store_true",
                       help="записать опору всем ключам, чей текст СЕЙЧАС равен тексту пакета")
+    # КАРТОЧКА #652 этап 2, п.3: приложения для ключей «same» — --adopt тут взять нечего
+    mode.add_argument("--annexes", action="store_true",
+                      help="положить недостающие приложения ключам, чьё правило в контуре "
+                           "УЖЕ совпадает с пакетом (state=same); без --apply — только "
+                           "куда положил бы")
     mode.add_argument("--summary", action="store_true",
                       help="одна строка итога без списка, для чужого вызова")
     ap.add_argument("--file", default=None, help="файл со сведённым текстом (нужен с --merge)")
@@ -1161,8 +1284,12 @@ def build_parser() -> argparse.ArgumentParser:
                          "(--adopt/--merge/--skip)")
     ap.add_argument("--actor", default=None,
                     help="кто пишет в audit_log контура — своё имя роли; ОБЯЗАТЕЛЕН вместе "
-                         "с --apply у --adopt/--merge/--record-base, без --apply не нужен")
+                         "с --apply у --adopt/--merge/--record-base/--annexes, без --apply "
+                         "не нужен")
     ap.add_argument("--apply", action="store_true", help="без него — холостой прогон")
+    ap.add_argument("--annex-force", dest="annex_force", action="store_true",
+                    help="переписать чужое ДРУГОЕ содержимое приложения (по умолчанию — не "
+                         "трогаем и говорим словами); касается --adopt/--merge/--annexes")
     return ap
 
 
@@ -1178,7 +1305,7 @@ def main() -> int:
 
     # ⚖️ ПИШУЩИЙ В КОНТУРЕ ВСЕГДА НАЗЫВАЕТ СЕБЯ (как backlog.py --actor, lease.py --role) —
     # проверка ДО любого соединения с базой: отказ обязан быть нулевым по последствиям.
-    if args.apply and (args.adopt or args.merge or args.record_base) \
+    if args.apply and (args.adopt or args.merge or args.record_base or args.annexes) \
             and not (args.actor or "").strip():
         sys.exit(
             "⛔ ЗАПИСЬ НЕ СДЕЛАНА — нужен --actor <имя роли>: пишущий в контуре всегда "
@@ -1188,7 +1315,7 @@ def main() -> int:
     if args.summary:
         return cmd_summary(args)
 
-    is_write = bool(args.adopt or args.merge or args.skip or args.record_base)
+    is_write = bool(args.adopt or args.merge or args.skip or args.record_base or args.annexes)
     db_path = mezo_paths.resolve_db(args.db, __file__, must_exist=True, readonly=not is_write)
     conn = sqlite3.connect(
         f"file:{Path(db_path).as_posix()}?mode={'rw' if is_write else 'ro'}", uri=True)
@@ -1198,13 +1325,15 @@ def main() -> int:
 
     if args.show:
         return cmd_show(conn, pack_conn, args.show, load_meta_map(conn, "pack_rules_base"),
-                        args.rule_set)
+                        args.rule_set, source=source)
     if args.adopt:
         return adopt_keys(conn, db_path, pack_conn, load_meta_map(conn, "pack_rules_base"),
-                          args.adopt, args.rule_set, args.word, args.apply, args.actor)
+                          args.adopt, args.rule_set, args.word, args.apply, args.actor,
+                          source=source, annex_force=args.annex_force)
     if args.merge:
         return merge_key(conn, db_path, pack_conn, load_meta_map(conn, "pack_rules_base"),
-                         args.merge, args.rule_set, args.file, args.word, args.apply, args.actor)
+                         args.merge, args.rule_set, args.file, args.word, args.apply, args.actor,
+                         source=source, annex_force=args.annex_force)
     if args.skip:
         return skip_key(conn, pack_conn, load_meta_map(conn, "pack_rules_skipped"),
                         args.skip, args.rule_set, args.word, args.apply)
@@ -1216,6 +1345,16 @@ def main() -> int:
             print(note)
         return record_base(conn, pack_rows, load_meta_map(conn, "pack_rules_base"),
                            args.apply, args.actor, contour_sets)
+    if args.annexes:
+        pack_rows = load_pack_rows(pack_conn)
+        contour_sets, via_meta = resolve_contour_rule_sets(conn, load_circuit_rules(conn), pack_rows)
+        note = rule_sets_note(contour_sets, via_meta)
+        if note:
+            print(note)
+        return cmd_annexes(conn, db_path, pack_conn, source, load_meta_map(conn, "pack_rules_base"),
+                           load_meta_map(conn, "pack_rules_skipped"), contour_sets,
+                           load_circuit_retired_keys(conn), args.apply, args.actor,
+                           args.annex_force)
     if args.propose:
         return propose(conn, pack_conn, source, args.propose, args.why, args.out, args.rule_set)
 

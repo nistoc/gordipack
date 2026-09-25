@@ -29,6 +29,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from mezo_paths import resolve_db   # R15a: путь к БД — от расположения скрипта, не от CWD
+from mezo_paths import annex_path   # карточка #652: место приложения ищет ОДНА функция,
+                                     # общая с rules-from-pack.py (см. mezo_paths.annex_dir) —
+                                     # раньше жила здесь же, теперь у неё второй читатель
 import rule_status as RS            # отзыв правила — ОДИН признак на контур (карточка #89)
 
 # ── ВИДЫ УСЛОВИЯ ОТМЕНЫ (слово владельца 2026-08-08 10:29 и 10:40 UTC)
@@ -102,15 +105,11 @@ def refuse_without_basis(key, eff, missing, bad_kind=None, need_detail=False):
 # у контура-автора — рядом с зеркалом в репозитории документов (там его хранит git),
 # у новорождённого — рядом с базой. Путь машины здесь не впечатан — по той же причине,
 # по которой его вынули из зеркала: стенд из чужого места писал бы в живое.
+# ⚡ САМА ФУНКЦИЯ annex_path() ПЕРЕЕХАЛА В mezo_paths.py (доставка приложений соседям,
+# карточка #651 этап 2): rules-from-pack.py кладёт приложение тем же способом при
+# --adopt/--merge/--annexes, и месту полагается быть ОДНИМ на обоих читателей, а не
+# списанным дважды. Здесь — только импорт (см. шапку файла).
 KEY_FORM = re.compile(r"^[a-z0-9][a-z0-9-]*$")
-
-
-def annex_path(db_path, key):
-    """Путь к приложению правила — выводится от базы, а не помнится."""
-    root = Path(db_path).resolve().parent               # каталог .mezosync своей базы
-    legacy = root.parent / "atlas.archs" / ".mezosync"  # раскладка контура-автора
-    base = (legacy if legacy.is_dir() else root) / "rules-annex"
-    return base / f"{key}.md"
 
 
 def show_annex(conn, args):
