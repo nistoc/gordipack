@@ -24,6 +24,7 @@ import tempfile
 from pathlib import Path
 
 import mezo_paths
+import mezo_stand  # копия живой базы — ТОЛЬКО через snapshot_db (карточка #505/#659)
 import mezo_target
 
 GUARD = mezo_target.script("guard-all.py")
@@ -55,7 +56,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         # ① Нормальная копия: строка с объёмом и ростом из базы.
         db = Path(tmp) / "a.db"
-        shutil.copy(LIVE_DB, db)
+        mezo_stand.snapshot_db(LIVE_DB, db)
         ln = volume_line(run_guard(db))
         m = re.search(r"объём (\d+) симв по (\d+) ролям", ln)
         case("① строка печатает объём и рост из базы", bool(m) and "рост" in ln, ln[:110])
@@ -75,7 +76,7 @@ def main() -> int:
 
         # ③ Потерянная база сравнения — сказано вслух; контур из-за этого НЕ краснеет.
         db3 = Path(tmp) / "b.db"
-        shutil.copy(LIVE_DB, db3)
+        mezo_stand.snapshot_db(LIVE_DB, db3)
         con = sqlite3.connect(db3)
         con.execute("DELETE FROM meta WHERE key='memory_volume_baseline'")
         con.commit(); con.close()

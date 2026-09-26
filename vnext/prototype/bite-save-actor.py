@@ -28,6 +28,7 @@ import tempfile
 from pathlib import Path
 
 import mezo_paths
+import mezo_stand  # копия живой базы — ТОЛЬКО через snapshot_db (карточка #505/#659)
 import mezo_target
 
 SAVER = mezo_target.script("save-phoenix.py")
@@ -72,7 +73,7 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory() as tmp:
         db = Path(tmp) / "probe.db"
-        shutil.copy2(LIVE_DB, db)
+        mezo_stand.snapshot_db(LIVE_DB, db)
         f = Path(tmp) / "s.md"
 
         # ① ПРАВКА ЧУЖОЙ СЕКЦИИ С --actor: журнал называет ИСПОЛНИТЕЛЯ, цель — роль/секция.

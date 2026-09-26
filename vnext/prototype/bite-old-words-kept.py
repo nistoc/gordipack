@@ -227,16 +227,33 @@ def main() -> int:
         #    сменился НАМЕРЕННО, отпечаток перенесён тем же ходом (PROTO). Замер памяти ролей:
         #    165 → 164 прежних слова, разница — «ворота» внутри «разворота» в памяти PROTO.
         MEASURE_FINGERPRINT = "3259d38f"
-        expected_tail = ("правило plain-words v6 · слов в признаке 16 · "
-                         f"отпечаток признака {MEASURE_FINGERPRINT} (цитаты и уроки среди них "
+        MEASURE_WORDS_COUNT = 16
+        # ⚡ ПРАВКА (карточка #659, приёмка отстала от продукта — не продукт сломан).
+        # Версия правила plain-words — ЖИВОЕ число: растёт при КАЖДОЙ правке ТЕКСТА
+        # правила, не только при смене словаря признака (см. докстринг yardstick() в
+        # measure-old-words.py, карточка #265 — «версия правила без числа слов признака
+        # сказала бы неправду»: версия и отпечаток НАМЕРЕННО разведены и МОГУТ разойтись
+        # законно). 24.09.2026 текст правила сократили словом владельца (карточка #652,
+        # этап 1 карточки #651; rules/annex/plain-words.md называет час и цитату) — версия
+        # ушла v6 → v7, а словарь признака НЕ ТРОНУТ: отпечаток остался 3259d38f, слов
+        # в признаке — те же 16. Пришить номер версии литералом — растить приёмку, которая
+        # протухает при каждой правке ТЕКСТА правила, даже когда словарь не менялся ни на
+        # слово. Сверяем версию НЕ литералом, а СОВПАДЕНИЕМ с тем же измерением yardstick()
+        # внутри процесса (та же живая база, что видит --short-подпроцесс) — так случай
+        # ловит НАСТОЯЩЕЕ расхождение (CLI разошёлся с библиотечной функцией, тот самый
+        # класс «число без своей мерки лжёт»), а не безобидный законный рост номера.
+        expected_tail = (f"{mow.yardstick(mow.mezo_paths.live_db())} (цитаты и уроки среди них "
                          "законны — разбор поимённо)")
         r7 = subprocess.run([sys.executable, str(MOW_PATH), "--short"],
                             capture_output=True, text=True, encoding="utf-8", errors="replace")
         out7 = (r7.stdout or "").strip()
         m7 = re.match(r"^прежних слов в памятях: \d+ у \d+ ролей, (.*)$", out7)
         tail7 = m7.group(1) if m7 else out7
-        ok &= case(f"⑦ мерка прежняя (отпечаток {MEASURE_FINGERPRINT}) и --short как до правки",
-                   r7.returncode == 0 and MEASURE_FINGERPRINT in out7 and tail7 == expected_tail,
+        ok &= case(f"⑦ мерка прежняя (отпечаток {MEASURE_FINGERPRINT}, слов в признаке "
+                   f"{MEASURE_WORDS_COUNT}) и --short совпадает с yardstick() библиотеки",
+                   r7.returncode == 0 and MEASURE_FINGERPRINT in out7
+                   and f"слов в признаке {MEASURE_WORDS_COUNT}" in out7
+                   and tail7 == expected_tail,
                    f"код {r7.returncode}; хвост строки без чисел памяти ролей: {tail7!r} "
                    f"(ждём {expected_tail!r})")
 
@@ -254,11 +271,17 @@ def main() -> int:
                    real_report.kept_exists and listed > 0
                    and real_report.kept_records_count == listed
                    and not real_report.corrupted_lines
-                   and len(real_report.stale_records) == 0
-                   and real_report.kept >= real_report.kept_records_count,
+                   # протухшие О ФАЙЛАХ ЭТОГО КОНТУРА — ноль; записи о файлах, которых здесь нет
+                   # вовсе (absent_records ⊂ stale_records), проверить негде — вычитаем
+                   and len(real_report.stale_records) - len(getattr(real_report, 'absent_records', [])) == 0
+                   # …и покрыть они ничего не могут — из ожидания «оставлено» их тоже вычитаем
+                   # (карточка #659, 26.09)
+                   and real_report.kept >= real_report.kept_records_count
+                   - len(getattr(real_report, 'absent_records', [])),
                    f"строк данных в файле {listed}, разобрано записей {real_report.kept_records_count} "
                    f"(ждём столько же); кривых {len(real_report.corrupted_lines)} (ждём 0); не нашли "
-                   f"своей строки {len(real_report.stale_records)} (ждём 0); разобрано и оставлено "
+                   f"своей строки {len(real_report.stale_records)}, из них о файлах, которых здесь нет: "
+                   f"{len(getattr(real_report, 'absent_records', []))} (ждём разницу 0); разобрано и оставлено "
                    f"{real_report.kept} (ждём не меньше числа записей — каждая покрывает хоть одно слово)")
 
         # ⑨ ПОЛОМКА (а) обязана покрасить случаи ③ и ④

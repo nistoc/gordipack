@@ -27,6 +27,7 @@ import tempfile
 from pathlib import Path
 
 import mezo_paths    # пути машины ВЫВОДЯТСЯ, не впечатаны (#153 · #157 · #168)
+import mezo_stand    # копия живой базы — ТОЛЬКО через snapshot_db (карточка #505/#659)
 import mezo_target   # какую копию испытываем: живую или шаблон (#146 · #148)
 
 # ⚰️ ЗДЕСЬ СТОЯЛИ ДВА АБСОЛЮТНЫХ ПУТИ МАШИНЫ АВТОРА (снято 2026-08-10 18:49 UTC).
@@ -108,8 +109,8 @@ def main() -> int:
         tmp = Path(tmp)
         clean = tmp / "clean.db"
         dirty = tmp / "dirty.db"
-        shutil.copy2(LIVE_DB, clean)
-        shutil.copy2(LIVE_DB, dirty)
+        mezo_stand.snapshot_db(LIVE_DB, clean)
+        mezo_stand.snapshot_db(LIVE_DB, dirty)
         MARK = "ЗОНДПРОБЫ"
         make_clean(clean)          # чистота ДЕЛАЕТСЯ, а не предполагается — см. ниже
         make_clean(dirty)

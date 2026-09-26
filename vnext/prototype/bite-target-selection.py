@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 import mezo_paths  # пути машины выводятся, не впечатаны (#153)
+import mezo_stand  # копия живой базы — ТОЛЬКО через snapshot_db (карточка #505/#659)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 BITE_ALL = os.path.join(HERE, "bite-all.py")
@@ -56,7 +57,7 @@ def copy_scripts(tmp, name, break_files=()):
     корень = os.path.join(tmp, name, ".mezosync")
     dst = os.path.join(корень, "scripts")
     shutil.copytree(LIVE, dst)
-    shutil.copyfile(mezo_paths.live_db(), os.path.join(корень, "mezosync.db"))
+    mezo_stand.snapshot_db(mezo_paths.live_db(), os.path.join(корень, "mezosync.db"))
     for f in break_files:
         with open(os.path.join(dst, f), "w", encoding="utf-8") as fh:
             fh.write("import sys\nsys.exit('НАРОЧНО СЛОМАН В КОПИИ')\n")

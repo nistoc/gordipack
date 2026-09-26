@@ -14,6 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_paths  # пути машины ВЫВОДЯТСЯ, не впечатаны (карточка #208)
+import mezo_stand  # копия живой базы — ТОЛЬКО через snapshot_db (карточка #505/#659)
 
 import shutil
 import sqlite3
@@ -59,7 +60,7 @@ def main():
             """
             seq[0] += 1
             p = tmp / f"mezosync-{seq[0]}.db"
-            shutil.copy2(LIVE_DB, p)
+            mezo_stand.snapshot_db(LIVE_DB, p)
             return p
 
         db = fresh_db()

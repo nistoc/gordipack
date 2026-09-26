@@ -163,6 +163,9 @@ class CommentsReport:
     stale_records: list[KeptRecord]
     corrupted_lines: list[tuple[int, str]]
     unreviewed_items: list["UnreviewedItem"]
+    # записи о файлах, которых в обойдённых каталогах НЕТ ВОВСЕ: проверить их здесь нельзя —
+    # это не «строка не нашлась», а «файла нет в этом контуре» (карточка #659, 26.09)
+    absent_records: list[KeptRecord] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass
@@ -286,6 +289,7 @@ def in_comments(roots=None, kept_path: pathlib.Path | None = None) -> CommentsRe
     root_specs = [_normalize_root(r) for r in (roots if roots is not None else default_roots())]
     per_dir: dict[str, DirStats] = {}
     unreviewed_items: list[UnreviewedItem] = []
+    seen_files: set[str] = set()   # имена файлов, которые обход ВИДЕЛ — для различения ниже
 
     for root, top_label, sub_label in root_specs:
         root_path = pathlib.Path(root).resolve()
@@ -296,6 +300,7 @@ def in_comments(roots=None, kept_path: pathlib.Path | None = None) -> CommentsRe
             label = top_label
             if sub_label is not None and p.resolve().parent != root_path:
                 label = sub_label
+            seen_files.add(p.name)
             stats = per_dir[label]
             src = p.read_text(encoding="utf-8", errors="replace")
             spans = pwc.editable_spans(src)
@@ -326,12 +331,21 @@ def in_comments(roots=None, kept_path: pathlib.Path | None = None) -> CommentsRe
     total = sum(s.total for s in per_dir.values())
     unreviewed = sum(s.unreviewed for s in per_dir.values())
     kept = sum(s.kept for s in per_dir.values())
-    stale = [r for r in records if not r.matched]
+    # ⚖️ ДВА РАЗНЫХ «НЕ НАШЛИ» (карточка #659, 26.09). Счёт протухших НЕ меняется: любая
+    # незасчитанная запись — протухшая (в том числе о призрачном файле — случай ② приёмки:
+    # иначе «не разобрано» занижалось бы). Но среди них ОТДЕЛЬНО называются записи о файлах,
+    # которых в обойдённых каталогах нет вовсе: список ведётся у эталона по ОБОИМ его каталогам,
+    # а у контура, собранного из пакета, часть файлов эталона не лежит по устройству (например,
+    # split-history-table.py — инструмент эталона, в пакет не входит). Здесь их проверить нельзя,
+    # и живой прогон (случай ⑧ приёмки) не красит контур за чужую раскладку — он их вычитает.
+    stale = [r for r in records if not r.matched]            # как и прежде: призрачный файл — тоже протухшая запись
+    absent = [r for r in stale if r.file not in seen_files]   # ПОДМНОЖЕСТВО протухших: файла здесь нет вовсе
 
     return CommentsReport(
         total=total, unreviewed=unreviewed, kept=kept, per_dir=per_dir,
         kept_path=kept_path, kept_exists=kept_exists, kept_records_count=len(records),
         stale_records=stale, corrupted_lines=corrupted, unreviewed_items=unreviewed_items,
+        absent_records=absent,
     )
 
 
@@ -366,6 +380,12 @@ def render_comments_report(report: CommentsReport) -> list[str]:
                        f"«{rec.phrase[:60]}» · {rec.reason}")
         if len(report.stale_records) > 10:
             out.append(f"      … ещё {len(report.stale_records) - 10}")
+    if report.absent_records:
+        out.append(f"   ℹ️ Из них о файлах, которых в обойдённых каталогах нет вовсе: "
+                   f"{len(report.absent_records)} — здесь не проверяемы (файл эталона, "
+                   "не вошедший в этот контур):")
+        for rec in report.absent_records[:10]:
+            out.append(f"      {report.kept_path.name}:{rec.lineno} · {rec.file} · {rec.reason}")
     return out
 
 

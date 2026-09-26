@@ -24,6 +24,7 @@ import tempfile
 from pathlib import Path
 
 import mezo_paths
+import mezo_stand  # копия живой базы — ТОЛЬКО через snapshot_db (карточка #505/#659)
 import mezo_target
 
 DBQ = mezo_target.script("db-q.py")
@@ -51,7 +52,7 @@ def main() -> int:
     CASES.clear()
     with tempfile.TemporaryDirectory() as tmp:
         db = Path(tmp) / "copy.db"
-        shutil.copy(LIVE_DB, db)
+        mezo_stand.snapshot_db(LIVE_DB, db)
         before = digest(db)
 
         rc, out, err = run(db, "SELECT role FROM roles LIMIT 2")

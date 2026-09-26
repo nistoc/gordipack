@@ -31,6 +31,7 @@ import tempfile
 from pathlib import Path
 
 import mezo_paths    # пути машины ВЫВОДЯТСЯ, не впечатаны (#153 · #157 · #168)
+import mezo_stand    # копия живой базы — ТОЛЬКО через snapshot_db (карточка #505/#659)
 import mezo_target   # какую копию испытываем: живую или шаблон (#146 · #148)
 
 # ⛔ ПУТИ ЗДЕСЬ НЕ ВПЕЧАТАНЫ, и на то две оплаченные причины:
@@ -96,7 +97,7 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory() as tmp:
         db = Path(tmp) / "probe.db"
-        shutil.copy2(LIVE_DB, db)
+        mezo_stand.snapshot_db(LIVE_DB, db)
         seed(db, unread=7)
 
         # ① ФОРМА ИЗ ЗАЯВКИ: `--limit 0`. Отклоняется, и отказ виден КОДОМ ВОЗВРАТА.

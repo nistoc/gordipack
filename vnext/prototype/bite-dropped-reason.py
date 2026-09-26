@@ -28,6 +28,7 @@ import tempfile
 from pathlib import Path
 
 import mezo_paths
+import mezo_stand  # копия живой базы — ТОЛЬКО через snapshot_db (карточка #505/#659)
 import mezo_target
 
 BACKLOG = mezo_target.script("backlog.py")
@@ -58,7 +59,7 @@ def main() -> int:
     CASES.clear()
     with tempfile.TemporaryDirectory() as tmp:
         db = Path(tmp) / "copy.db"
-        shutil.copy(LIVE_DB, db)
+        mezo_stand.snapshot_db(LIVE_DB, db)
 
         # Фикстурная карточка — своя, а не живой номер: живые номера закрываются этапами
         # и приёмка, впечатавшая номер, начала бы падать от чужой работы.

@@ -26,6 +26,7 @@ import tempfile
 from pathlib import Path
 
 import mezo_paths
+import mezo_stand  # копия живой базы — ТОЛЬКО через snapshot_db (карточка #505/#659)
 import mezo_target
 
 READER = mezo_target.script("read-messages.py")
@@ -87,7 +88,7 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory() as tmp:
         db = Path(tmp) / "probe.db"
-        shutil.copy2(LIVE_DB, db)
+        mezo_stand.snapshot_db(LIVE_DB, db)
         base = seed(db)
 
         # ① БЕЗ ОСНОВАНИЯ — ОТКАЗ, И ОТКАЗ ВИДЕН КОДОМ ВОЗВРАТА. Молчаливый проход и есть

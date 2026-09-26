@@ -202,6 +202,23 @@ def stage_case3(snapshot_fn=mezo_stand.snapshot_db, label=""):
 
     db_path = mezo / "mezosync.db"
     snapshot_fn(mezo_paths.live_db(__file__), db_path)     # семя стенда — уже ЧЕРЕЗ snapshot_db
+    # ⚡ ПРАВКА (карточка #659). Опыт целиком стоит на «живая база работает в режиме WAL»
+    # (см. докстринг файла) — держащий читатель ниже (BEGIN + SELECT, без commit) в
+    # НЕ-WAL (rollback-journal) базе честно берёт разделяемую блокировку и НЕ отпускает
+    # её до конца опыта, а release лизинга (отдельный процесс, lease.py, timeout=5) тогда
+    # обязан упасть «database is locked» — не по вине lease.py и не по вине снимка, а
+    # потому что сам стенд оказался не в том режиме, который весь опыт предполагает.
+    # Замерено впрямую: schema/mezosync_v3.sql и новее (файл СОБИРАЕТСЯ из живой базы,
+    # vnext/tools/gen-schema.py) не несут «PRAGMA journal_mode = WAL» — она была только
+    # в рукописных v1/v2 и потерялась при переходе на автосборку; свежий контур пакета
+    # (в отличие от давно живого контура Atlas) рождается НЕ в WAL. Чинить это в
+    # init-group.py/gen-schema.py — вопрос ЗА пределами этой приёмки (общий для ВСЕХ
+    # контуров, не только для стенда case③); здесь опыт делает СВОЙ стенд WAL сам —
+    # ровно тем способом, каким это и раньше делала schema v1/v2, — и перестаёт зависеть
+    # от режима источника.
+    _wal_con = sqlite3.connect(str(db_path))
+    _wal_con.execute("PRAGMA journal_mode=WAL")
+    _wal_con.close()
     checkpoint(db_path)                                    # чистое состояние перед опытом
 
     env = mezo_stand.stand_env(root, MEZO_ROLE="COORD")
@@ -305,13 +322,18 @@ _TAINT_RANK = {"WEAK": 1, "LIVE": 2}
 
 
 def _mezo_alias(tree):
-    alias, imported = None, {}
+    # ⚡ ПРАВКА (карточка #659): следим за алиасом ОБОИХ модулей (mezo_paths И
+    # mezo_stand), не только mezo_paths — см. довод у "snapshot_db" в _taint() ниже.
+    # Имена функций двух модулей не пересекаются (DIRECT_LIVE_FUNCS/WEAK_ROOT_FUNCS —
+    # только mezo_paths, "snapshot_db" — только mezo_stand), поэтому один плоский набор
+    # алиасов и один плоский словарь `imported` безопасны для обоих сразу.
+    alias, imported = set(), {}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for a in node.names:
-                if a.name == "mezo_paths":
-                    alias = a.asname or "mezo_paths"
-        elif isinstance(node, ast.ImportFrom) and node.module == "mezo_paths":
+                if a.name in ("mezo_paths", "mezo_stand"):
+                    alias.add(a.asname or a.name)
+        elif isinstance(node, ast.ImportFrom) and node.module in ("mezo_paths", "mezo_stand"):
             for a in node.names:
                 imported[a.asname or a.name] = a.name
     return alias, imported
@@ -325,10 +347,21 @@ def _taint(node, env, alias, imported):
     if isinstance(node, ast.Call):
         f = node.func
         fname = None
-        if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and f.value.id == alias:
+        if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and f.value.id in alias:
             fname = f.attr
         elif isinstance(f, ast.Name) and f.id in imported:
             fname = imported[f.id]
+        # ⚡ ПРАВКА (карточка #659, ложная находка bite-save-alongside.py:59 — единственная
+        # общая находка живого контура и пакета). mezo_stand.snapshot_db(...) — тот самый
+        # ОДНИМ ОБЩИЙ способ снять живую базу, который эта же приёмка требует ото ВСЕХ
+        # (карточка #505/#624); его РЕЗУЛЬТАТ — новый обособленный файл, а не живая база,
+        # и читать его read_bytes()/etc — ровно то, ради чего snapshot_db заведён. Разбор
+        # раньше НЕ отслеживал алиас mezo_stand вовсе и падал в общий разбор по аргументам
+        # ниже — а там живой ПЕРВЫЙ аргумент (src) красил и РЕЗУЛЬТАТ вызова, будто это
+        # тоже живая база. Замерено впрямую: без этой строки любой корректный вызов
+        # snapshot_db(LIVE, …) остаётся ложно "LIVE".
+        if fname == "snapshot_db":
+            return None
         if fname in DIRECT_LIVE_FUNCS:
             return "LIVE"
         if fname in WEAK_ROOT_FUNCS:

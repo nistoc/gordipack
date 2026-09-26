@@ -28,6 +28,7 @@ import tempfile
 from pathlib import Path
 
 import mezo_paths
+import mezo_stand  # копия живой базы — ТОЛЬКО через snapshot_db (карточка #505/#659)
 import mezo_target
 
 READER = mezo_target.script("read-messages.py")
@@ -88,7 +89,7 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory() as tmp:
         db = Path(tmp) / "probe.db"
-        shutil.copy2(LIVE_DB, db)
+        mezo_stand.snapshot_db(LIVE_DB, db)
         # ⚠️ Соединение ЗАКРЫВАЕМ явно: на Windows открытая ручка не даёт снести временный
         # каталог, и приёмка падает уборкой — исход «НЕ ЗАПУСТИЛАСЬ», который легко принять
         # за поломку испытуемого. Поймано первым же прогоном этого файла.
