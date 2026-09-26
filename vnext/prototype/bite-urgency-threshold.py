@@ -50,6 +50,12 @@ def build(path: str, rows, links=()):
                    resolved INTEGER, broadcast INTEGER, addressed_by TEXT)""")
     con.execute("""CREATE TABLE message_thread (message_id INTEGER, reply_to INTEGER,
                    thread_id INTEGER, kind TEXT, linked_by TEXT)""")
+    # 🩹 ДОГОН (коммит 13dbd27 «Пять инструментов догнали контур: общий вид ленты…»,
+    # 05.09): замер читает messages_all (живая лента + перенесённая история), а не
+    # голую messages — иначе перенос старых записок в архив выглядел бы у него как
+    # их исчезновение. Песочница знает только «живую» половину — вид тут прозрачный
+    # синоним messages, что для этой приёмки то же самое, раз архива она не сеет.
+    con.execute("CREATE VIEW messages_all AS SELECT * FROM messages")
     for mid, role, hours, prio, body in rows:
         con.execute("INSERT INTO messages (id, writer_role, timestamp, priority, body_md)"
                     " VALUES (?,?,?,?,?)", (mid, role, stamp(hours), prio, body))

@@ -122,6 +122,10 @@ def main() -> int:
         tool = sandbox / "signal-templates.py"
         shutil.copy2(live_tool, tool)
         shutil.copy2(pathlib.Path(__file__).resolve().parent / "mezo_paths.py", sandbox / "mezo_paths.py")
+        # 🩹 ДОГОН: печатник с карточки #649 (коммит 5c67fd9) зовёт mezo_sessions при ИМПОРТЕ —
+        # без копии рядом в песочнице падает ModuleNotFoundError на КАЖДОМ вызове (код 1 везде,
+        # включая случаи ⑰⑱). Копия та же, что уже была заведена для mezo_paths.py строкой выше.
+        shutil.copy2(pathlib.Path(__file__).resolve().parent / "mezo_sessions.py", sandbox / "mezo_sessions.py")
         # 🧪 НАРОЧНЫЕ ПОЛОМКИ. Ожидание каждой стои́т ЗДЕСЬ, в коде, и печатается ДО
         # случаев — чтобы исход сверяли с названным заранее, а не подгоняли объяснение
         # под увиденное. Неподтвердившееся ожидание — находка, и записывается как было.
@@ -189,6 +193,15 @@ def main() -> int:
                     "VALUES ('STUD', 'atlas-old [000000]', datetime('now','-30 hours'), 'STUD', 'self')")
         # свежая записка PROTO к COORD — чтобы номер в тексте брался из живой базы
         note_id = con.execute("SELECT max(id) FROM messages WHERE writer_role='PROTO'").fetchone()[0]
+        # 🩹 ДОГОН: случаю ② нужна СВОЯ записка ОТ COORD К PROTO — приёмка строит фикстуру
+        # сама (как и role_sessions выше), а не берёт «раньше/сейчас» из среды. Без этой
+        # строки на пустой от COORD ленте случай ② получает код 2 «НЕЧЕГО СИГНАЛИТЬ» и
+        # красится по пустой ленте, а не по имени отправителя — не то, что он проверяет.
+        con.execute("INSERT INTO messages (writer_role, body_md) VALUES "
+                    "('COORD', 'фикстура случая ②: записка COORD к PROTO')")
+        coord_note_id = con.execute("SELECT last_insert_rowid()").fetchone()[0]
+        con.execute("INSERT INTO message_addressee (message_id, role, kind, linked_by) "
+                    "VALUES (?, 'PROTO', 'to', 'field')", (coord_note_id,))
         # карточка с ЧУЖИМ держателем: взятие от CHROME
         card = con.execute("SELECT max(id) FROM backlog").fetchone()[0]
         con.execute("INSERT INTO backlog_events (backlog_id, at, actor_role, event_type, body_md) "
