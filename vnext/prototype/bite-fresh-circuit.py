@@ -62,6 +62,11 @@ rules-from-pack.py КОДОМ на шаге опоры (7б″) раньше ш�
 починки разом: голос итога честен, а подсказки печатаются при любом исходе. ТРЕТЬЯ временная
 копия пакета — export-rules.py в ней цел, портится только rules-from-pack.py. Поломка ⑮ —
 soft_failures.append у отказа опоры снят обратно.
+
+⑳ (карточка #661, 26.09) — свежий контур рождается в режиме WAL: судим по PRAGMA journal_mode
+самой базы и по строке сборки «Режим журнала: wal». Поломка ⑳ — копия init-group.py, которая
+спрашивает режим, но не просит WAL (сборка до карточки): база в журнале отката, сборка говорит
+«НЕ переключён».
 """
 import sys
 from pathlib import Path
@@ -284,6 +289,19 @@ def main() -> int:
         ok &= case("③ контур знает свою версию (журнал не пуст)",
                    bool(ver and ver[0]),
                    f"schema_version → {ver}; пустая версия = контур не знает себя", differ=True)
+
+        # ⑳ СВЕЖИЙ КОНТУР В РЕЖИМЕ WAL (карточка #661, 26.09). Файлы схемы v3+ собираются из
+        # живой базы и прагму режима не несут; без неё контур рождался в журнале отката, и
+        # читатель держал писателя до «database is locked». Судим по БАЗЕ, а не по надписи
+        # сборки: надпись проверяется отдельно — она обязана совпадать с тем, что в файле.
+        jcon = sqlite3.connect(f"file:{(mez / 'mezosync.db').as_posix()}?mode=ro", uri=True)
+        journal = str(jcon.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+        jcon.close()
+        said = "Режим журнала: wal" in out
+        ok &= case("⑳ свежий контур рождается в режиме WAL, и сборка называет режим вслух",
+                   journal == "wal" and said,
+                   f"PRAGMA journal_mode → {journal} (ждём wal); строка сборки о режиме: "
+                   f"{'есть' if said else 'НЕТ'}", differ=True)
 
         # ④ ПЕРВАЯ КОМАНДА ПЕРВОЙ РОЛИ РАБОТАЕТ. Регистр имени роли — живой дефект.
         rd = subprocess.run([sys.executable, str(mez / "scripts" / "read-messages.py"),
@@ -687,6 +705,34 @@ def main() -> int:
                       gi_nc is not None and gi_nc.returncode != 0 and "НЕ ОПРЕДЕЛЁН" in giout_nc,
                       f"код {gi_nc.returncode if gi_nc else '—'} (ждём не 0); «НЕ ОПРЕДЕЛЁН» "
                       f"в выводе: {'НЕ ОПРЕДЕЛЁН' in giout_nc}", differ=True)
+
+            # ── КОНТРОЛЬ ⑳ нарочной поломкой: копия init-group.py, которая спрашивает режим
+            # журнала, но не просит WAL, — ровно сборка до карточки #661. Ждём: база не в wal,
+            # и сборка говорит «НЕ переключён» — иначе ⑳ зеленел бы не от строки сборки.
+            wal_anchor = 'conn.execute("PRAGMA journal_mode=WAL")'
+            if reg_src.count(wal_anchor) != 1:
+                sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: запрос режима WAL не найден дословно в init-group.py — "
+                         "испытуемое изменилось, поломка ⑳ бьёт мимо")
+            wal_poisoned = pack_copy / "scripts" / "init-group-no-wal.py"
+            wal_poisoned.write_text(reg_src.replace(wal_anchor, 'conn.execute("PRAGMA journal_mode")'),
+                                    encoding="utf-8")
+            nw_root = tmp / "nowal"
+            mez_nw = nw_root / ".mezosync"
+            r_nw = subprocess.run([sys.executable, str(wal_poisoned), "--name", "bitenowal",
+                                   "--path", str(mez_nw), "--roles", "coord"],
+                                  capture_output=True, text=True, encoding="utf-8", timeout=300,
+                                  env=mezo_stand.stand_env(nw_root))
+            out_nw = (r_nw.stdout or "") + (r_nw.stderr or "")
+            journal_nw = "нет базы"
+            if (mez_nw / "mezosync.db").exists():
+                jcon_nw = sqlite3.connect(f"file:{(mez_nw / 'mezosync.db').as_posix()}?mode=ro", uri=True)
+                journal_nw = str(jcon_nw.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+                jcon_nw.close()
+            ok &= case("⑳ ПОЛОМКА (сборка не просит WAL) КРАСИТ случай ⑳ — база не в wal, "
+                      "и сборка говорит «НЕ переключён»",
+                      journal_nw not in ("wal", "нет базы") and "Режим журнала НЕ переключён" in out_nw,
+                      f"режим {journal_nw} (ждём не wal); «НЕ переключён» в выводе: "
+                      f"{'Режим журнала НЕ переключён' in out_nw}", differ=True)
 
             # ── КОНТРОЛЬ ⑭ нарочной поломкой: условие «🎉 только без ⛔» отключено обратно
             # (условие всегда ложно) — «🎉» обязана появиться ДАЖЕ поверх непустого
