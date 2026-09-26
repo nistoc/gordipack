@@ -683,9 +683,9 @@ def build_rows(circuit_rules: dict, pack_rows: list, base_map: dict, skip_map: d
     """Строки списка (ОДНА на ключ — см. governing_rows) + отдельно ключи «только у вас».
 
     retired_keys (карточка #608, возврат PROTO) — ключи, снятые САМИМ КОНТУРОМ
-    (load_circuit_retired_keys). Проверяются РАНЬШЕ и «new», и «removed»: контур,
-    отключивший правило сам, — не тот же случай, что «ключа никогда не было» и не тот же,
-    что «пакет его снял», при ЛЮБОМ соотношении текстов."""
+    (load_circuit_retired_keys). Проверяются РАНЬШЕ, чем «new»: контур, отключивший правило
+    сам, — не тот же случай, что «ключа никогда не было», при ЛЮБОМ соотношении текстов.
+    Но ПОЗЖЕ, чем снятие в пакете: ключ, снятый с обеих сторон, в список не идёт вовсе."""
     governing = governing_rows(pack_rows, contour_sets)
 
     out = []
@@ -695,10 +695,14 @@ def build_rows(circuit_rules: dict, pack_rows: list, base_map: dict, skip_map: d
         rule_set = row["rule_set"]
         base_src = None
         if v_sha is None:
-            if key in retired_keys:
-                state = "retired-here"
-            elif row["removed_at"]:
+            # Снятие в пакете проверяется РАНЬШЕ, чем снятие у контура: правило, снятое
+            # С ОБЕИХ сторон, — не «снято у вас» (--propose звал бы снять в пакете то, что
+            # пакет уже снял). Живой случай 26.09: у Atlas 6 правил сняты, у пакета 5 из них
+            # сняты ещё 18.08 — список показывал все шесть как «снято у вас».
+            if row["removed_at"]:
                 continue  # ни у контура, ни в пакете (сейчас) его нет — обсуждать нечего
+            elif key in retired_keys:
+                state = "retired-here"
             else:
                 state = "new"
         elif row["removed_at"]:

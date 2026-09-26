@@ -253,6 +253,26 @@ def patch_propose_retire_off(src: str):
     return src.replace(old, new), src.count(old)
 
 
+def patch_retired_before_removed(src: str):
+    """(Т) 26.09, находка PROTO на живом контуре: снятие у контура проверяется РАНЬШЕ
+    снятия в пакете — правило, снятое С ОБЕИХ сторон, снова попадает в список как «снято
+    у вас» (у Atlas так стояли 5 правил, снятых пакетом ещё 18.08). Должен провалиться
+    случай №51."""
+    old = (
+        '            if row["removed_at"]:\n'
+        '                continue  # ни у контура, ни в пакете (сейчас) его нет — обсуждать нечего\n'
+        '            elif key in retired_keys:\n'
+        '                state = "retired-here"\n'
+    )
+    new = (
+        '            if key in retired_keys:  # ПОЛОМКА (Т): снятие у контура раньше снятия в пакете\n'
+        '                state = "retired-here"\n'
+        '            elif row["removed_at"]:\n'
+        '                continue\n'
+    )
+    return src.replace(old, new), src.count(old)
+
+
 def patch_show_duplicate_pack_text(src: str):
     """ПОЛОМКА (К) карточка #608, повторная приёмка Н1, замечание COORD (3): возвращает
     старый дефект — в --show на «изменено с обеих сторон» текст пакета печатается ЕЩЁ
@@ -545,6 +565,43 @@ def build_retired_fixture(root: Path, text_sha):
                 rows=[{"rule_set": RULE_SET, "rule_key": key, "body": pack_body,
                        "text_sha": text_sha(pack_body)}])
     return circuit_db, pack_dir, key
+
+
+def build_retired_removed_fixture(root: Path, text_sha):
+    """Один ключ, снятый С ОБЕИХ сторон: у контура status='revoked', у пакета removed_at
+    непуст. Такой ключ в списке не нужен вовсе — ни «снято у вас», ни «снято в пакете».
+    Возвращает (circuit_db, pack_dir, key)."""
+    key = RETIRED_PREFIX + "both"
+    circuit_body = "текст контура, до отключения\n"
+    pack_body = "текст пакета — последняя версия перед снятием\n"
+    circuit_db = root / "circuit.db"
+    pack_dir = root / "pack"
+    make_circuit_db(
+        circuit_db,
+        rules=[{"rule_key": key, "body": circuit_body, "status": "revoked"}],
+        meta={"template_checkout": str(pack_dir), "pack_rule_sets": json.dumps(["universal"])},
+        roles=[("COORD", "alive", "координатор контура; в живом реестре")])
+    make_pack_db(pack_dir / "rules" / "pack-rules.db",
+                rows=[{"rule_set": RULE_SET, "rule_key": key, "body": pack_body,
+                       "text_sha": text_sha(pack_body), "pack_commit": "removedboth",
+                       "removed_at": "2026-08-18 15:50:09 UTC"}])
+    return circuit_db, pack_dir, key
+
+
+def rows_for_fixture(mod, circuit_db: Path, pack_dir: Path) -> tuple:
+    """Строки списка и сводка для одной фикстуры — тот же путь, что у самого инструмента."""
+    conn = sqlite3.connect(f"file:{circuit_db.as_posix()}?mode=ro", uri=True)
+    pconn = mod.open_pack_db(pack_dir)
+    circ = mod.load_circuit_rules(conn)
+    pack = mod.load_pack_rows(pconn)
+    cs, _ = mod.resolve_contour_rule_sets(conn, circ, pack)
+    rows, only = mod.build_rows(circ, pack, mod.load_meta_map(conn, "pack_rules_base"),
+                                mod.load_meta_map(conn, "pack_rules_skipped"),
+                                mod.make_history_has(pconn), cs,
+                                mod.load_circuit_retired_keys(conn))
+    counts = mod.summarize(rows, only)
+    conn.close(); pconn.close()
+    return rows, counts
 
 
 # ── ФИКСТУРА: «СНЯТО В ПАКЕТЕ» (карточка #614 ②, G3/PROTO) ─────────────────────────────
@@ -1876,6 +1933,39 @@ def main() -> int:
               state_p == "removed",
               f"состояние под поломкой после --skip --apply: «{state_p}» (под верным "
               f"кодом — «skipped»)")
+
+    # ═══ №51 26.09, НАХОДКА PROTO НА ЖИВОМ КОНТУРЕ: правило, снятое С ОБЕИХ сторон (у контура
+    # status='revoked', у пакета removed_at), в список не идёт. Раньше шло как «снято у вас»,
+    # и --propose звал бы снять в пакете то, что пакет снял ещё 18.08.
+    both_db, both_pack, both_key = build_retired_removed_fixture(root / "retired-removed",
+                                                                 mod.text_sha)
+    rowsBoth, countsBoth = rows_for_fixture(mod, both_db, both_pack)
+    stateBoth = {r["rule_key"]: r["state"] for r in rowsBoth}
+    ok &= case("№51 правило, снятое у контура И в пакете, в список не идёт: ни «снято у вас», "
+              "ни «снято в пакете»",
+              both_key not in stateBoth and countsBoth["retired-here"] == 0
+              and countsBoth["removed"] == 0,
+              f"состояние ключа: «{stateBoth.get(both_key, 'нет в списке')}» (ждём «нет в "
+              f"списке»); снято у вас {countsBoth['retired-here']}, снято в пакете "
+              f"{countsBoth['removed']} (ждём 0 и 0)")
+    # встречный: снятое ТОЛЬКО у контура (пакет держит живым) по-прежнему «снято у вас» —
+    # правка порядка не должна глушить случай ㊸
+    rowsOnlyHere, _ = rows_for_fixture(mod, *build_retired_fixture(root / "retired-51-counter",
+                                                                   mod.text_sha)[:2])
+    ok &= case("№51 встречный: снятое ТОЛЬКО у контура по-прежнему «снято у вас»",
+              [r["state"] for r in rowsOnlyHere] == ["retired-here"],
+              f"состояния: {[r['state'] for r in rowsOnlyHere]} (ждём ['retired-here'])")
+
+    mod_t = load_rfp(patch=patch_retired_before_removed, name="rfp_bite_retired_before_removed")
+    both_db_t, both_pack_t, both_key_t = build_retired_removed_fixture(
+        root / "retired-removed-break", mod_t.text_sha)
+    rowsBothT, _ = rows_for_fixture(mod_t, both_db_t, both_pack_t)
+    stateBothT = {r["rule_key"]: r["state"] for r in rowsBothT}
+    ok &= case("№51 ПОЛОМКА (Т) «снятие у контура раньше снятия в пакете» красит ровно №51: "
+              "ключ снова в списке как «снято у вас»",
+              stateBothT.get(both_key_t) == "retired-here",
+              f"состояние под поломкой: «{stateBothT.get(both_key_t, 'нет в списке')}» (под "
+              f"верным кодом — «нет в списке»)")
 
     # ── ㉟ контроль: живая база контура не изменилась ────────────────────────────────
     after_live = fake_key_count_live()
