@@ -28,6 +28,9 @@ r"""bite-bridge-own-letters.py — приёмка карточки #573: про�
 положенное в нашу папку, так не отличить). Встречные ⑧ ⑩ — чужой контур и смешанная папка
 старого обмена; обратный ход ⑪. ⑫–⑬ — ответ под другим именем темы засчитывается по
 ссылке на файл вопроса в первой строке (вопрос tapas 13 суток висел «311 ч без ответа»).
+⑭–⑰ — два места, которых приёмка не видела (COORD при приёмке, записка #5403): папка соседа
+«<сосед>-<мы>» (встречная ⑭ + поломка ⑮ «папка содержит имя») и места вызова сличения
+ответов в самой проверке (⑯ + поломка ⑰ «вызов без имени вопроса»).
 
 ═══ ГРАНИЦА ЭТОЙ ПРИЁМКИ, НАЗВАНА ПРЯМО
 Судится ПРИЗНАК различения на подопытных файлах и его влияние на живой прогон.
@@ -35,6 +38,7 @@ r"""bite-bridge-own-letters.py — приёмка карточки #573: про�
 как список ведёт себя при других сочетаниях. Что признак применён именно к списку —
 подтверждается живым прогоном: он печатает, сколько наших писем выведено из-под суда.
 """
+import ast
 import re
 import subprocess
 import sys
@@ -201,11 +205,49 @@ def main() -> int:
                 cited.name not in by_topic_only,
                 f"по темам: {by_topic_only} — ровно так проверка 13 суток держала «311 ч без ответа»")
 
+    # ⑭–⑰ — два места, которых приёмка не видела (находка COORD при приёмке, записка #5403).
+    # ⑭ папка СОСЕДА, в имени которой наше имя стоит НЕ в начале («tapas-atlas»): встречная ⑩
+    #    нашего имени не несла вовсе, и признак «папка содержит имя» прошёл бы её зелёным.
+    their_box = stand / "tapas-atlas"
+    their_box.mkdir()
+    their_headless = their_box / "answer.atlas.без-автора.md"
+    their_headless.write_text("# Tapas → Atlas: заголовок без автора\n", encoding="utf-8")
+    record_case("⑭ ВСТРЕЧНЫЙ: письмо без автора в папке соседа «<сосед>-<мы>» — НЕ наше",
+                sign(their_headless) is None,
+                f"признак: {sign(their_headless)} — наше имя в папке есть, но не в начале")
+    folder_anchor = 'file.parent.name.lower().startswith(own + "-")'
+    contains_src = SOURCE_TEXT.replace(folder_anchor, "own in file.parent.name.lower()")
+    contains_sign = own_letter_namespace("atlas", contains_src)["_our_letter_sign"]
+    record_case("⑮ ПОЛОМКА: признак папки «содержит имя» вместо «начинается с <мы>-» красит ровно ⑭",
+                SOURCE_TEXT.count(folder_anchor) == 1 and contains_sign(their_headless) == "folder"
+                and contains_sign(headless) == "folder" and contains_sign(mixed) is None,
+                f"под поломкой: ⑭ → {contains_sign(their_headless)} (ждём folder) · ⑨ → "
+                f"{contains_sign(headless)} · ⑩ → {contains_sign(mixed)} (соседи не задеты)")
+
+    # ⑯ оба места вызова сличения ответов передают имя вопроса: ⑫ зовёт функцию напрямую
+    #    и не видит, что сама проверка зовёт её без имени (на настоящих папках — «311 ч»).
+    def calls_with_ask_name(src: str) -> tuple[int, int]:
+        tree = ast.parse(src)
+        calls = [node for node in ast.walk(tree)
+                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                 and node.func.id == "_answers_to"]
+        return len(calls), sum(1 for c in calls if len(c.args) + len(c.keywords) >= 3)
+    total_calls, named_calls = calls_with_ask_name(SOURCE_TEXT)
+    record_case("⑯ проверка зовёт сличение ответов с именем вопроса во ВСЕХ местах вызова",
+                total_calls >= 2 and named_calls == total_calls,
+                f"мест вызова {total_calls}, с именем вопроса {named_calls}")
+    unnamed_src = re.sub(r"_answers_to\(([^()\n]*(?:\([^()\n]*\))?[^()\n]*?), [^,()\n]+\)\n",
+                         r"_answers_to(\1)\n", SOURCE_TEXT)
+    broken_total, broken_named = calls_with_ask_name(unnamed_src)
+    record_case("⑰ ПОЛОМКА: места вызова без имени вопроса красят ровно ⑯",
+                unnamed_src != SOURCE_TEXT and broken_total == total_calls and broken_named < broken_total,
+                f"под поломкой: мест вызова {broken_total}, с именем вопроса {broken_named}")
+
     failed = [case_name for case_name, ok, _ in results if not ok]
     print("")
     print("=" * 78)
-    print(f"РАЗЛИЧАЮЩИХ СЛУЧАЕВ {len(results)}, из них ВСТРЕЧНЫХ 4 (② ③ ⑧ ⑩) и ОБРАТНЫХ ХОДОВ 2 (⑪ ⑬);"
-          " ⑥ добавлен по границе @COORD, ⑦–⑬ — карточка #665")
+    print(f"РАЗЛИЧАЮЩИХ СЛУЧАЕВ {len(results)}, из них ВСТРЕЧНЫХ 5 (② ③ ⑧ ⑩ ⑭), ОБРАТНЫХ ХОДОВ 2 (⑪ ⑬)"
+          " и НАРОЧНЫХ ПОЛОМОК 2 (⑮ ⑰); ⑥ добавлен по границе @COORD, ⑦–⑰ — карточка #665")
     print("⚖️ Признак берётся ИЗ ЖИВОГО инструмента, а не переписан здесь: переписанная")
     print("   копия зелена к себе самой и о предмете не говорит ничего.")
     if failed:
