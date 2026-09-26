@@ -9,6 +9,26 @@ priority остаётся нетронутым. Иначе получилась 
     python bite-closure.py            # свойства
     python bite-closure.py --selftest # доказать, что укус умеет краснеть
 """
+import sys
+
+# ⚰️ ПОМЕТКА О СНЯТИИ (2026-09-26, карточка #659). Приёмка проверяла ЗАКРЫТИЕ ВОПРОСА в
+# прототипе write-message-vnext.py (таблица message_closure, вид message_urgency, девятый
+# аргумент write(..., closes)). 26.08 (коммит e284bf5, Э-Б) прототип этот замысел не понёс:
+# write() стал семиместным, message_closure из schema_vnext.sql ушла — приёмка падала
+# TypeError до первого свойства и с того дня не проверяла ничего (класс «приёмка отстала
+# от продукта», разбор COORD на карточке #288). В ПРОДУКТЕ закрытие живёт иначе:
+# write-message.py --reply-to N --resolves ставит messages.resolved у записки-цели, а
+# производную срочность гасит check-stale-urgency.py; приёмки продукта, касающиеся этого:
+# bite-messages-archive.py (resolved переживает перенос в архив), check-stale-urgency.py.
+# Файл оставлен как след (удаление — слово владельца); запуск — честный отказ мерить, код 2:
+# «не проверено» громче зелёного, которое ничего бы не проверяло. Ниже — прежний текст.
+print("⚰️ bite-closure.py СНЯТА 2026-09-26 (карточка #659): проверяла закрытие вопроса в "
+      "прототипе write-message-vnext.py, который с 26.08 (e284bf5) этого замысла не несёт — "
+      "write() семиместный, message_closure нет. В продукте закрытие — write-message.py "
+      "--reply-to N --resolves (messages.resolved); приёмки продукта: bite-messages-archive.py, "
+      "check-stale-urgency.py. Отказ мерить, код 2 — не «чисто».")
+sys.exit(2)
+
 import argparse
 import importlib.util
 import sqlite3

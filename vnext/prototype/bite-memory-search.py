@@ -220,6 +220,12 @@ NO_LEVEL2_ANCHOR = (
 NO_LEVEL2_REPLACEMENT = (
     "    matched_sections = []  # ПОЛОМКА no-level2: уровень 2 отключён нарочно, безусловно\n"
 )
+# Поломка к случаю ② (долг пакета #659): повтор поиска по началу слова отключён —
+# инструмент молчит вместо громкой строки «точных слов нет», записей нет, код не 0.
+NO_PREFIX_RETRY_ANCHOR = "    if not rows and stemming_helps:\n"
+NO_PREFIX_RETRY_REPLACEMENT = (
+    "    if False:  # ПОЛОМКА no-prefix-retry: повтор по началу слова отключён нарочно\n"
+)
 
 
 def build_broken_save_phoenix(sandbox_name: str) -> tuple[Path, dict]:
@@ -339,12 +345,47 @@ def case_1(find_tool: Path, db: Path) -> bool:
                        ok, "\n".join(lines))
 
 
-def case_2(find_tool: Path, db: Path) -> bool:
-    code, out = run_find(find_tool, db, "COORD", "права на отправку кода")
+def pick_prefix_only_token(conn: sqlite3.Connection, role: str, min_len: int = 7) -> tuple[str, str] | None:
+    """(токен, живое слово): токен НЕ встречается в записях роли целым словом, но является
+    НАЧАЛОМ живого слова записи — материал случая ②. Берётся ИЗ ДАННЫХ на каждом прогоне.
+
+    🩹 ДОЛГ ПАКЕТА #659 (26.09): прежний случай ② спрашивал впечатанную фразу «права на
+    отправку кода» и ждал, что ТОЧНОГО совпадения в памяти COORD не будет. Память живая:
+    к 26.09 все четыре слова сошлись в одной записи, точный поиск нашёл её, повтора по
+    началу слова не случилось — и случай покраснел от ДРЕЙФА ДАННЫХ, не от порчи
+    инструмента (тот же класс, что у абсолютных дат фикстуры в bite-issue-loop). Свойство
+    «при пустом точном совпадении инструмент САМ повторяет поиск по началу слова» от фразы
+    не зависит: токен берётся из живого словаря записей, а посылка «целым словом не
+    встречается» проверена по тому же словарю (subject и body — оба столбца поиска).
+    Усечение — на две буквы, как у _search_stem/find-phoenix.py, не короче 5 знаков.
+    """
+    vocab: set[str] = set()
+    for subject, body in conn.execute(
+            "SELECT COALESCE(subject, ''), body FROM phoenix_records WHERE role=?", (role,)):
+        vocab |= set(re.findall(r"[а-яё]+", f"{subject} {body}".lower()))
+    for word in sorted(w for w in vocab if len(w) >= min_len):
+        token = word[:len(word) - 2]
+        if len(token) >= 5 and token not in vocab:
+            return token, word
+    return None
+
+
+def case_2(find_tool: Path, db: Path, env: dict | None = None) -> bool:
+    name = "② начало слова без точного совпадения → повтор по началу слова, код 0"
+    conn = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
+    picked = pick_prefix_only_token(conn, "COORD")
+    conn.close()
+    if picked is None:
+        case_skip(name, "в записях COORD нет слова от 7 букв, чьё усечение не было бы само словом")
+        return True
+    token, word = picked
+    code, out = run_find(find_tool, db, "COORD", token, env=env)
     loud = "точных слов нет" in out
-    ok = code == 0 and loud
-    return case_result("② «права на отправку кода» → повтор по началу слова, код 0",
-                       ok, f"код {code} · громкая строка повтора {'есть' if loud else 'НЕТ'}")
+    ok = code == 0 and loud and bool(record_ids(out))
+    return case_result(name, ok,
+                       f"запрос «{token}» (начало живого слова «{word}», целым словом в записях "
+                       f"COORD не встречается — проверено по словарю) · код {code} · громкая "
+                       f"строка повтора {'есть' if loud else 'НЕТ'} · записей {len(record_ids(out))}")
 
 
 def load_counter3() -> list[dict]:
@@ -554,7 +595,8 @@ def main() -> int:
         description="Приёмка карточки #525: поиск по памяти (find-phoenix.py) вместо "
                     "чтения раздела целиком; хук пересборки записей в save-phoenix.py")
     ap.add_argument("--break", dest="break_kind",
-                    choices=["none", "case-fold", "no-level2", "no-hook"], default="none",
+                    choices=["none", "case-fold", "no-level2", "no-hook", "no-prefix-retry"],
+                    default="none",
                     help="нарочная поломка — какой случай проверяем на красное")
     ap.add_argument("--tool-dir", default=None,
                     help="каталог с find-phoenix.py/save-phoenix.py вместо живого "
@@ -585,9 +627,13 @@ def main() -> int:
 
     find_tool_for_v, env_for_v = find_tool_live, None
     find_tool_for_g, env_for_g = find_tool_live, None
+    find_tool_for_2, env_for_2 = find_tool_live, None
     save_tool_for_d, env_for_d = save_tool_live, None
 
-    if args.break_kind == "case-fold":
+    if args.break_kind == "no-prefix-retry":
+        find_tool_for_2, env_for_2 = build_broken_find_phoenix(
+            "bite-memory-search-break-npr-", NO_PREFIX_RETRY_ANCHOR, NO_PREFIX_RETRY_REPLACEMENT)
+    elif args.break_kind == "case-fold":
         find_tool_for_g, env_for_g = build_broken_find_phoenix(
             "bite-memory-search-break-cf-", CASE_FOLD_ANCHOR, CASE_FOLD_REPLACEMENT)
     elif args.break_kind == "no-level2":
@@ -597,7 +643,7 @@ def main() -> int:
         save_tool_for_d, env_for_d = build_broken_save_phoenix("bite-memory-search-break-nh-")
 
     case_1(find_tool_live, db)
-    case_2(find_tool_live, db)
+    case_2(find_tool_for_2, db, env=env_for_2)
     case_3(find_tool_live, db)
     case_4(db)
     case_a(find_tool_live, db)
