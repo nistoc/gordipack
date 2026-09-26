@@ -1057,25 +1057,55 @@ def main():
     except Exception:                                      # noqa: BLE001
         _own_name = None
 
-    def _is_our_letter(file) -> bool:
-        """Первая строка называет автором роль НАШЕГО контура ⇒ письмо написали мы."""
+    # ⚡ ТРИ ПРИЗНАКА СВОЕГО ПИСЬМА (карточка #665; находка контура tapas 26.09, их письмо
+    # ask.atlas.guard-all-own-letter-recognition.md). Первая редакция знала один признак —
+    # «контура <мы>» в первой строке, — а письма до 25.08 его не несут. 📏 Замер у нас
+    # 26.09 15:00 UTC: из 142 писем «исторического хвоста» 110 — наши собственные
+    # (35 вида «пишет РОЛЬ (atlas)», 75 без автора в первой строке, лежат в папках atlas-*).
+    #   ① «контура <мы>» в первой строке — как было;
+    #   ② «пишет <РОЛЬ> (<мы>)» — вид первой строки до 25.08;
+    #   ③ файл лежит в НАШЕЙ исходящей папке «<мы>-<сосед>»: по порядку мостов с 25.08
+    #      каждый контур пишет только в свою папку своего репозитория.
+    # ⛔ ПРЕДЕЛ ③, названный прямо: письмо соседа, положенное в нашу папку, по папке не
+    #    отличить. Поэтому узнанные ТОЛЬКО по папке считаются отдельно и печатаются числом.
+    #    Смешанные папки старого обмена (имя не начинается с «<мы>-», например
+    #    aia-stud-exchange) признаком ③ не судятся: там лежат письма обеих сторон.
+    def _our_letter_sign(file):
+        """Каким признаком письмо узнано нашим: 'line' · 'role' · 'folder' · None (не наше)."""
+        import re as _re
         if not _own_name:
-            return False       # имени не знаем — не гадаем, судим как прежде
+            return None        # имени не знаем — не гадаем, судим как прежде
         try:
             with file.open(encoding="utf-8", errors="replace") as fh:
                 first_line = fh.readline()
         except OSError:
-            return False
-        return f"контура {_own_name}".lower() in first_line.lower()
+            return None
+        own = _own_name.lower()
+        if f"контура {own}" in first_line.lower():
+            return "line"
+        if _re.search(r"пишет\s+\**[A-ZА-ЯЁ][A-ZА-ЯЁ0-9_-]*\**\s*\(" + _re.escape(own) + r"\)",
+                      first_line, _re.IGNORECASE):
+            return "role"
+        if file.parent.name.lower().startswith(own + "-"):
+            return "folder"
+        return None
+
+    def _is_our_letter(file) -> bool:
+        """Первая строка или наша исходящая папка называют автором НАШ контур ⇒ письмо написали мы."""
+        return _our_letter_sign(file) is not None
 
     unannounced = []
     our_letters_count = 0
+    our_by_folder_only = 0
     if BRIDGES and BRIDGES.exists():
         for f in sorted(BRIDGES.glob("*/*.md")):
             if f.name == "INDEX.md":       # указатель правится при каждой записке, о нём не сообщают
                 continue
-            if _is_our_letter(f):
+            sign = _our_letter_sign(f)
+            if sign:
                 our_letters_count += 1
+                if sign == "folder":
+                    our_by_folder_only += 1
                 continue       # своё письмо разбирать не просим: его писала наша же рука
             # РАННЯЯ из двух дат, и это третья приёмка той же правки. Git-дата — момент КОММИТА:
             # 21 КБ для @PROTO легли в 15:12, а закоммичены в 17:19 — по ней записка выглядела
@@ -1281,10 +1311,37 @@ def main():
     except sqlite3.OperationalError:
         our_group = ""
 
-    def _answers_to(topic: str, group: str) -> list:
-        """Наши ответы ЭТОМУ соседу, чья тема содержит эту или содержится в ней."""
-        return [o for o in sorted(_box_files(group)) if o.startswith("answer.")
-                and (_topic(o) in topic or topic in _topic(o))]
+    # 🪤 ОТВЕТ ПОД ДРУГИМ ИМЕНЕМ ТЕМЫ (карточка #665). Сличение тем по подстроке не видит
+    # ответа, названного по его СОДЕРЖАНИЮ: вопрос tapas «caller-identity-service-kind-and-
+    # receiver-sets-owner» (13.09) отвечен файлом «caller-identity-service-yes-owner-part-
+    # after-core-check», первая строка которого прямо называет вопрос, — а проверка 13 суток
+    # печатала «лежит без ответа 311 ч». Красное на сделанной работе учит не верить красному.
+    # ⇒ Ответ засчитывается и тогда, когда его ПЕРВАЯ строка называет файл вопроса.
+    # ⚖️ Это всё ещё ИМЕНА, а не смысл: полон ли ответ, машина не знает — как и прежде.
+    def _answer_cites(group: str, answer_name: str, ask_name: str) -> bool:
+        """Первая строка нашего ответа этому соседу называет файл его вопроса."""
+        for d in _neighbor_dirs(group):
+            path = d / answer_name
+            if not path.exists():
+                continue
+            try:
+                with path.open(encoding="utf-8", errors="replace") as fh:
+                    if ask_name in fh.readline():
+                        return True
+            except OSError:
+                continue
+        return False
+
+    def _answers_to(topic: str, group: str, ask_name: str = "") -> list:
+        """Наши ответы ЭТОМУ соседу: тема содержит эту или содержится в ней, либо первая
+        строка ответа называет файл вопроса (ask_name)."""
+        by_topic = [o for o in sorted(_box_files(group)) if o.startswith("answer.")
+                    and (_topic(o) in topic or topic in _topic(o))]
+        if not ask_name:
+            return by_topic
+        by_reference = [o for o in sorted(_box_files(group)) if o.startswith("answer.")
+                        and o not in by_topic and _answer_cites(group, o, ask_name)]
+        return by_topic + by_reference
 
     for group, dbp in links:
         container = Path(dbp).parent.parent          # <контур>/.mezosync/mezosync.db
@@ -1334,7 +1391,7 @@ def main():
                     for pref in [nm + sep for nm in names for sep in ("-", ".")]:
                         if topic.startswith(pref):
                             topic = topic[len(pref):]
-                    hit = _answers_to(topic, group)
+                    hit = _answers_to(topic, group, f.name)
                     if hit:
                         answered += 1
                         # ⚡ КРАТКИЙ РЕЖИМ (карточка #593): пара строк «✅ …»/«⚖️ Сверены ИМЕНА
@@ -1400,7 +1457,7 @@ def main():
                 # совпадения темы значит держать красным вопрос, на который ответили вдвоём.
                 # ⇒ Тема совпала, если одна содержит другую. Совпавшие файлы ПЕЧАТАЮТСЯ:
                 # механизм судит ИМЕНА, а полон ли ответ — видит только человек.
-                hit = _answers_to(_topic(ask.name), group)
+                hit = _answers_to(_topic(ask.name), group, ask.name)
                 if hit:
                     # ⚡ КРАТКИЙ РЕЖИМ (карточка #593) — то же правило, что в ветке старого
                     # вида выше: пара строк печатается сразу только при --full или переписанном
@@ -1494,7 +1551,10 @@ def main():
     # на две разные беды. Ноль здесь — не пустота, а свидетельство, что признак отработал.
     if BRIDGES and BRIDGES.exists():
         print(f"📤 мост: наших собственных писем {our_letters_count} — разбора с них НЕ спрашиваем"
-              + (f" (первая строка называет автором роль контура «{_own_name}»)" if _own_name
+              + (f" (первая строка называет автором роль контура «{_own_name}» или письмо лежит"
+                 f" в нашей исходящей папке «{_own_name}-…»; из них ТОЛЬКО по папке —"
+                 f" {our_by_folder_only}: письмо соседа, положенное в нашу папку, так не отличить)"
+                 if _own_name
                  else " ⚠️ имя контура не прочитано из базы — признак не работал, "
                       "исключено НИЧЕГО, и это не то же самое, что «исключать было нечего»"))
     if sect_lag:
