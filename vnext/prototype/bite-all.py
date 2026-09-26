@@ -19,6 +19,7 @@
 """
 import argparse
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -57,6 +58,12 @@ CANT_START = (
     "usage:", "the following arguments are required", "modulenotfounderror",
     "нет базы", "не найдена база", "can't open file",
 )
+# 🪤 ПРИМЕТА ЦЕЛЫМ СЛОВОМ (возврат карточки #659 по ①, находка COORD 26.09, записка #5398).
+# Подстрока «не найден» совпадала с «не найдено (ждали …)» — обычной строкой СЛУЧАЯ приёмки
+# поиска по памяти, — и настоящий провал с кодом 1 печатался как «не запустилась»: живой
+# итог по сути был «сломано 2», а читался «сломано 1». ⇒ За приметой не может идти буква.
+CANT_START_RE = re.compile(
+    "|".join(re.escape(m) + r"(?![a-zа-яё])" for m in CANT_START), re.IGNORECASE)
 
 
 def exercised(where: str, names) -> set:
@@ -94,7 +101,7 @@ def verdict(code: int, out: str):
     # покрасил её «СЛОМАНО» — то есть перевёл отказ мерить в приговор механизму.
     if code == 2:
         return "⚠️", "не запустилась (отказ мерить, код 2)"
-    if code != 0 and any(m in low for m in CANT_START):
+    if code != 0 and CANT_START_RE.search(low):
         return "⚠️", "не запустилась"
     return ("✅", "свойство держится") if code == 0 else ("🔴", "СЛОМАНО")
 

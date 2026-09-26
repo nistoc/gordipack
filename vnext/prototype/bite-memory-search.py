@@ -18,7 +18,9 @@
     только форму его вывода (строка итога, файл --out), не сами цифры;
   · слова запросов и записи, за которые цепляются случаи а)/б)/в), приёмка ВЫБИРАЕТ
     САМА по живым данным копии на каждом прогоне (а не хранит готовый список) —
-    иначе приёмка молчала бы, стоило конкретной записи уйти из памяти ролей;
+    иначе приёмка молчала бы, стоило конкретной записи уйти из памяти ролей; когда
+    живого материала нет (свежий контур, карточка #659), а)/б)/г) переходят на
+    подставную роль стенда BITEMEM (см. «СВЕЖИЙ КОНТУР БЕЗ ПАМЯТИ COORD» ниже);
   · случаи ①②③г) зовут find-phoenix.py БЕЗ --section (слово COORD 2026-09-07 к этой
     приёмке: поле section в наборе measurements/memory-search-coord-10.json угадано
     составителем набора и у части запросов неверно; case в) может передавать --section,
@@ -65,6 +67,36 @@
      memory-records.py --собрать после этого сходится знак в знак; повторное
      сохранение ТЕМ ЖЕ телом (ветка «СОДЕРЖИМОЕ НЕ ИЗМЕНИЛОСЬ») строку «🧩» НЕ
      печатает — хук зовётся только когда тело действительно записано заново.
+
+═══ СВЕЖИЙ КОНТУР БЕЗ ПАМЯТИ COORD (карточка #659, долг пакета: UPGRADE-v6, ≈строка 237) ═══
+Свежесобранный из пакета контур несёт ОДНУ роль COORD без памяти (phoenix_records для
+неё пуст) — протокол приёмки карточки #525 для случаев ①③④ держится на РЕАЛЬНЫХ словах
+и фактах ЖИВОЙ памяти COORD (три жёстких запроса случая ① и набор measurements/
+memory-search-coord-10.json случаев ③④), а не на данных, которые приёмка выбирает
+САМА (как у случаев а)/б)/в)/г)/д)). Мерить протоколом там, где предмета нет, нечем:
+такой контур случаи ①③④ честно помечают «⚪ не проверено: у контура нет памяти COORD
+(…)» (case_skip, не case_result) — это НЕ провал и не молчание, причина названа вслух.
+Случай ② уже был устроен так же (пропускает себя, если у COORD нет слова-кандидата) —
+её ничего чинить не пришлось.
+
+Случаи а)/б)/г)/д), напротив, проверяют МЕХАНИЗМ (снятая запись видна с пометкой ·
+слово только в архиве · регистр слова и роли · хук пересборки после сохранения),
+а не конкретные слова живой памяти, — им ЕСТЬ на чём устоять и без COORD. Каждый из
+них СНАЧАЛА пробует свой прежний материал (живые данные COORD/архива — живой контур
+проверяется КАК РАНЬШЕ, ничего для него не меняется), и только если материала не
+нашлось (свежий контур), переходит на подставную роль стенда BITEMEM — её заводит
+seed_bitemem() НА КОПИИ базы (mezo_stand) штатными инструментами (save-phoenix.py
+пишет тело и тем же ходом пересобирает phoenix_records; memory-archive.py --move
+уносит второй блок в архив), а не руками через SQL-INSERT в обход инструментов.
+Так один и тот же признак (не слово из чужой памяти) проверяется одинаково на живом
+контуре и на свежесобранном без неё. Случай в) уже был устроен так же (роль без
+записей ищется ЗАПРОСОМ, а не по имени) — его касаться не пришлось.
+
+КОД ВОЗВРАТА, а не только «зелено/красно» (три исхода, не два — правило свода
+acceptance-isolated-from-live): 0 — все проверенные случаи прошли, непроверенных
+нет; 2 — все проверенные прошли, но часть (⚪) честно не проверена — НЕ провал, но
+и не «всё чисто»; 1 — есть настоящий провал (🔴), и это ПЕРЕВЕШИВАЕТ любые «не
+проверено» — итог называет число непроверенных и причину, а не молчит о них.
 
 ═══ НАРОЧНЫЕ ПОЛОМКИ (--break {case-fold,no-level2,no-hook}), каждая — своя ЛИЧНАЯ
      копия ОДНОГО инструмента в рабочем каталоге; живой файл не трогается ни разу.
@@ -133,10 +165,38 @@ SAVE_PHOENIX_NAME = "save-phoenix.py"
 MEMORY_RECORDS = TOOLS_DIR / "memory-records.py"
 MEASURE_TOOL = TOOLS_DIR / "measure-memory-search.py"
 QUERY_SET = TOOLS_DIR / "measurements" / "memory-search-coord-10.json"
+# ⚠️ ИЗ vnext-tools, А НЕ ИЗ scripts_dir/LIVE_SCRIPTS — тем же приёмом, что и MEMORY_RECORDS
+# выше: memory-archive.py синхронизирован в .mezosync/scripts не у каждого контура (у
+# ЖИВОГО его там нет вовсе, только в vnext-tools), а нужен он здесь ТОЛЬКО для заведения
+# подставной роли BITEMEM (подготовка, не предмет проверки — предмет пробуют find-phoenix.py
+# и save-phoenix.py, их берут circuit-верно, из scripts_dir).
+MEMORY_ARCHIVE = TOOLS_DIR / "memory-archive.py"
 
 ACTOR = "PROTO"                     # чья рука ищет (не то же самое, что --role — чья память)
 RECORD_HEADER_RE = re.compile(r"^#(\d+)\s·", re.MULTILINE)
 ANSWER_LINE_RE = re.compile(r"ОТВЕТ: \d+ записей · \d+ знаков · [\d.]+ с")
+
+# ═══ ПОДСТАВНАЯ РОЛЬ СТЕНДА (карточка #659) — материал для случаев а)/б)/г)/д), когда
+# живых данных нет (см. заголовок файла). Роль условная, как BITE519 у save-phoenix.py.
+BITEMEM_ROLE = "BITEMEM"
+BITEMEM_SECTION = "state"
+BITEMEM_WORD_HOT = "синхрословобитемем"        # живёт в ГОРЯЧЕМ блоке — случаи а)/г)
+BITEMEM_WORD_ARCHIVE = "архивословобитемем"    # уносится в архив этой же приёмкой — случай б)
+BITEMEM_BODY = (
+    "## живой блок стенда BITEMEM\n"
+    "Стенд BITEMEM заведён приёмкой bite-memory-search.py (карточка #525/#659) как "
+    "подставная роль\n"
+    "для случаев, которые проверяют МЕХАНИЗМ поиска и сохранения памяти, а не слова "
+    "живой памяти\n"
+    f"COORD. Слово-метка {BITEMEM_WORD_HOT} встречается ровно в этом блоке и нигде "
+    "больше в этом стенде.\n"
+    "\n"
+    "## архивный блок стенда BITEMEM\n"
+    f"Слово-метка {BITEMEM_WORD_ARCHIVE} живёт только здесь — приёмка переносит этот "
+    "блок инструментом\n"
+    "memory-archive.py в архив и ищет слово ТОЛЬКО там: в живой памяти его быть не "
+    "должно.\n"
+)
 
 results: list[tuple[str, bool]] = []
 skipped: list[tuple[str, str]] = []
@@ -239,20 +299,85 @@ def build_broken_save_phoenix(sandbox_name: str) -> tuple[Path, dict]:
     sandbox = mezo_stand.new(sandbox_name)
     broken = mezo_stand.copy_tool(live_tool, sandbox)
     text = broken.read_text(encoding="utf-8")
-    anchor = "    rebuild_records(args.db, role, args.section, actor)\n"
-    if anchor not in text:
+    # 🩹 Якорь — СТРОКА ВЫЗОВА с любыми аргументами, а не дословный текст (карточка #659,
+    # возврат по ①, 26.09): дословный якорь «rebuild_records(args.db, role, args.section,
+    # actor)» умер, когда вызов оброс аргументами dry=… и preview=… (карточка #656), и
+    # поломка no-hook с тех пор молча не ставилась — нашёл помощник прогоном поломок.
+    anchor_re = re.compile(r"^    rebuild_records\(args\.db, role, args\.section, actor[^\n]*\)\n",
+                           re.MULTILINE)
+    found = anchor_re.findall(text)
+    if len(found) != 1:
         raise SystemExit(
-            f"ПРИЁМКА НЕ СОСТОЯЛАСЬ: якорь нарочной поломки не найден в {broken.name} "
-            "(живой инструмент, видимо, поправили под рукой) — обратный ход ставить "
-            "не на чем, зелёное было бы ложным. Перечитай save-phoenix.py и обнови якорь.")
-    replacement = "    # rebuild_records(args.db, role, args.section, actor)  # ПОЛОМКА no-hook: вызов снят\n"
-    patched = text.replace(anchor, replacement, 1)
+            f"ПРИЁМКА НЕ СОСТОЯЛАСЬ: якорь нарочной поломки найден {len(found)} раз в {broken.name} "
+            "(ждали ровно один; живой инструмент, видимо, поправили под рукой) — обратный ход "
+            "ставить не на чем, зелёное было бы ложным. Перечитай save-phoenix.py и обнови якорь.")
+    patched = anchor_re.sub(
+        lambda m: "    # " + m.group(0)[4:].rstrip("\n") + "  # ПОЛОМКА no-hook: вызов снят\n",
+        text, count=1)
     if patched == text:
         raise SystemExit("ПРИЁМКА НЕ СОСТОЯЛАСЬ: замена нарочной поломки no-hook не сработала")
     broken.write_text(patched, encoding="utf-8")
     env = os.environ.copy()
     env["MEZO_CONTAINER"] = str(CONTAINER)
     return broken, env
+
+
+# ═══ ПОДСТАВНАЯ РОЛЬ СТЕНДА BITEMEM (карточка #659) ═══════════════════════════════
+# Случаи а)/б)/г)/д) проверяют МЕХАНИЗМ, не слова живой памяти, — на контуре без
+# памяти COORD им нужен СВОЙ материал. Заводится ШТАТНЫМИ инструментами (не SQL-INSERT
+# в обход них), на КОПИИ базы, ОДИН раз за прогон, ДО того, как эти случаи его спросят.
+
+def coord_memory_reason(db: Path) -> str | None:
+    """None — у роли COORD в копии есть хоть одна запись поиска: протокол приёмки
+    карточки #525 для случаев ①③④ можно мерить НА ЖИВЫХ словах её памяти, как раньше.
+    Иначе — причина честного «не проверено» (см. заголовок файла): считать НЕЧЕМ,
+    а не «сломано» — свежесобранный контур несёт ОДНУ роль COORD без памяти по
+    построению пакета, а не по чьей-то ошибке."""
+    conn = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
+    n = conn.execute("SELECT COUNT(*) FROM phoenix_records WHERE role='COORD'").fetchone()[0]
+    conn.close()
+    if n > 0:
+        return None
+    return ("у контура нет памяти COORD (в копии phoenix_records пуст для роли COORD) — "
+            "протокол приёмки карточки #525 для случаев ①③④ держится на РЕАЛЬНЫХ словах "
+            "и фактах ЖИВОЙ памяти COORD (queries measurements/memory-search-coord-10.json "
+            "и три жёстких запроса случая ①), а не на данных, которые приёмка выбирает сама. "
+            "На свежесобранном контуре (одна роль COORD, памяти нет) мерить этим протоколом "
+            "нечем — честный отказ мерить, а не находка")
+
+
+def seed_bitemem(db: Path, save_tool: Path, archive_tool: Path) -> None:
+    """Завести подставную роль BITEMEM на КОПИИ базы штатными инструментами стенда:
+    save-phoenix.py пишет тело (и ТЕМ ЖЕ ходом пересобирает phoenix_records — карточка
+    #525, часть А, пункт 2), затем memory-archive.py --move уносит второй блок в архив
+    (и тоже сам пересобирает записи — карточка #627). ⛔ Всегда через ЖИВЫЕ/циркуль-
+    родные копии этих инструментов (save_tool/archive_tool — НЕ те, что нарочно
+    сломаны текущим --break): подставная роль — предмет ПОДГОТОВКИ, а не то, что
+    проверяет нарочная поломка выбранного случая.
+
+    Вызывается РОВНО ОДИН РАЗ за прогон, до всех случаев а)/б)/г)/д): они пробуют
+    свой прежний (живой) материал первыми и обращаются к BITEMEM только если его
+    не нашлось — на живом контуре эта роль заведена, но остаётся невостребованной.
+    """
+    stand = mezo_stand.new("bite-memory-search-bitemem-")
+    body_file = stand / "bitemem-body.md"
+    body_file.write_text(BITEMEM_BODY, encoding="utf-8")
+    code, out = run_tool(save_tool, ["--db", str(db), "--role", BITEMEM_ROLE,
+                                     "--section", BITEMEM_SECTION,
+                                     "--file", str(body_file), "--actor", BITEMEM_ROLE])
+    if code != 0:
+        raise SystemExit(
+            "ПРИЁМКА НЕ СОСТОЯЛАСЬ: заведение стенда BITEMEM (save-phoenix.py) "
+            f"отказало кодом {code}:\n{out}")
+    # блок 2 («## архивный блок стенда BITEMEM») — по номеру из --preview memory-archive.py;
+    # ⚖️ якорь этого номера — сам BITEMEM_BODY (ровно два "## "-заголовка, в этом порядке).
+    code, out = run_tool(archive_tool, ["--db", str(db), "--role", BITEMEM_ROLE,
+                                        "--section", BITEMEM_SECTION,
+                                        "--move", "2", "--actor", BITEMEM_ROLE])
+    if code != 0:
+        raise SystemExit(
+            "ПРИЁМКА НЕ СОСТОЯЛАСЬ: перенос архивного блока BITEMEM (memory-archive.py) "
+            f"отказал кодом {code}:\n{out}")
 
 
 # ═══ ПОДБОР РАБОЧЕГО МАТЕРИАЛА ИЗ ЖИВЫХ ДАННЫХ КОПИИ ═════════════════════════════
@@ -330,7 +455,11 @@ def pick_body_word(conn: sqlite3.Connection, role: str, min_len: int = 7) -> tup
 
 # ═══ СЛУЧАИ ═══════════════════════════════════════════════════════════════════════
 
-def case_1(find_tool: Path, db: Path) -> bool:
+def case_1(find_tool: Path, db: Path, coord_missing_reason: str | None) -> bool:
+    name = "① три запроса критерия на роли COORD → код 0, записи, строка ОТВЕТ"
+    if coord_missing_reason is not None:
+        case_skip(name, "не проверено: " + coord_missing_reason)
+        return True
     queries = ["права", "остановка смены", "будильник"]
     lines, ok = [], True
     for q in queries:
@@ -341,8 +470,7 @@ def case_1(find_tool: Path, db: Path) -> bool:
         ok = ok and q_ok
         lines.append(f"«{q}»: код {code} · записей {len(ids)} (id {', '.join(ids) or '—'}) "
                     f"· строка ОТВЕТ {'есть' if answer_ok else 'НЕТ'}")
-    return case_result("① три запроса критерия на роли COORD → код 0, записи, строка ОТВЕТ",
-                       ok, "\n".join(lines))
+    return case_result(name, ok, "\n".join(lines))
 
 
 def pick_prefix_only_token(conn: sqlite3.Connection, role: str, min_len: int = 7) -> tuple[str, str] | None:
@@ -393,7 +521,11 @@ def load_counter3() -> list[dict]:
     return [q for q in data if q.get("counter3")]
 
 
-def case_3(find_tool: Path, db: Path) -> bool:
+def case_3(find_tool: Path, db: Path, coord_missing_reason: str | None) -> bool:
+    name_base = "③ встречный случай карточки #525"
+    if coord_missing_reason is not None:
+        case_skip(name_base, "не проверено: " + coord_missing_reason)
+        return True
     items = load_counter3()
     threshold = 3
     conn = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
@@ -425,10 +557,17 @@ def case_3(find_tool: Path, db: Path) -> bool:
                        ok, "\n".join(lines))
 
 
-def case_4(db: Path) -> bool | None:
+def case_4(db: Path, coord_missing_reason: str | None) -> bool | None:
+    name = "④ измеритель печатает «первым N из 10» и даёт JSON через --out"
     if not MEASURE_TOOL.exists():
-        case_skip("④ измеритель печатает «первым N из 10» и даёт JSON через --out",
-                  "измеритель не сдан (файла measure-memory-search.py нет)")
+        case_skip(name, "измеритель не сдан (файла measure-memory-search.py нет)")
+        return None
+    if coord_missing_reason is not None:
+        # ⚖️ ПОРЯДОК ПРОВЕРОК ИМЕЕТ ЗНАЧЕНИЕ: «инструмент не сдан» — своя, отдельная от
+        # памяти COORD причина не мерить, и она проверяется ПЕРВОЙ (см. выше). Здесь —
+        # вторая причина: набор measurements/memory-search-coord-10.json целиком про
+        # роль COORD (см. заголовок файла), и на контуре без её памяти измерять нечем.
+        case_skip(name, "не проверено: " + coord_missing_reason)
         return None
     out_dir = mezo_stand.new("bite-memory-search-measure-")
     out_path = out_dir / "measure-out.json"
@@ -444,51 +583,64 @@ def case_4(db: Path) -> bool | None:
         except (OSError, json.JSONDecodeError):
             summary_ok = False
     ok = (code == 0) and bool(loud) and json_ok and summary_ok
-    return case_result("④ измеритель печатает «первым N из 10» и даёт JSON через --out",
-                       ok, f"код {code} · строка итога {loud.group(0) if loud else 'НЕТ'} "
+    return case_result(name, ok, f"код {code} · строка итога {loud.group(0) if loud else 'НЕТ'} "
                        f"· файл --out {'создан' if json_ok else 'НЕТ'} "
                        f"· форма JSON {'верна' if summary_ok else 'НЕВЕРНА'}")
 
 
 def case_a(find_tool: Path, db: Path) -> bool:
+    name = "а) снятая запись видна поиску с пометкой ⚰️ «снята»"
     conn = sqlite3.connect(str(db))
     picked = pick_unique_word(conn, "COORD")
+    role, fixture_used = "COORD", False
+    if not picked:
+        # ⚪ У COORD нет памяти (свежий контур, карточка #659) — тот же признак («слово
+        # ровно в одной записи») меряем на подставной роли стенда BITEMEM (см. seed_bitemem):
+        # источник данных другой, случай — тот же самый.
+        picked = pick_unique_word(conn, BITEMEM_ROLE)
+        role, fixture_used = BITEMEM_ROLE, True
     if not picked:
         conn.close()
-        return case_result("а) снятая запись видна поиску с пометкой ⚰️ «снята»", False,
-                           "не нашлось слова, единственного для одной записи COORD — "
-                           "опыт не поставлен")
+        return case_result(name, False,
+                           "не нашлось слова, единственного для одной записи, ни у COORD, "
+                           "ни у подставной роли стенда BITEMEM — опыт не поставлен")
     record_id, word = picked
     revoked_note = "проба приёмки"
     conn.execute("UPDATE phoenix_records SET alive='revoked', revoked_at=datetime('now'), "
                 "revoked_note=? WHERE id=?", (revoked_note, record_id))
     conn.commit()
     conn.close()
-    code, out = run_find(find_tool, db, "COORD", word)
+    code, out = run_find(find_tool, db, role, word)
     ids = record_ids(out)
     shown = str(record_id) in ids
     marked = ("⚰️" in out) and ("снята" in out) and (revoked_note in out)
     ok = code == 0 and shown and marked
-    return case_result("а) снятая запись видна поиску с пометкой ⚰️ «снята»", ok,
+    return case_result(name, ok,
+                       f"{'подставная роль стенда ' if fixture_used else 'роль '}{role}, "
                        f"слово «{word}», запись #{record_id} помечена revoked "
                        f"(«{revoked_note}») · код {code} · запись в ответе={shown} "
                        f"· пометка снятия видна={marked}")
 
 
 def case_b(find_tool: Path, db: Path) -> bool:
+    name = "б) слово только в архиве → код 4 и «в архиве»"
     conn = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
     picked = pick_archive_only_word(conn)
     conn.close()
+    fixture_used = False
     if not picked:
-        return case_result("б) слово только в архиве → код 4 и «в архиве»", False,
-                           "не нашлось слова, живущего только в архиве, — опыт не поставлен")
+        # ⚪ В живой памяти/архиве нет качественной пары (свежий контур, карточка #659) —
+        # берём слово, которое эта же приёмка унесла в архив BITEMEM в seed_bitemem():
+        # тот же признак («слово только в архиве»), источник — подставная роль стенда.
+        picked, fixture_used = (BITEMEM_ROLE, BITEMEM_WORD_ARCHIVE), True
     role, word = picked
     code, out = run_find(find_tool, db, role, word)
     has_line = "в архиве" in out
     ok = code == 4 and has_line
-    return case_result("б) слово только в архиве → код 4 и «в архиве»", ok,
-                       f"роль {role}, слово «{word}» · код {code} "
-                       f"· строка «в архиве» {'есть' if has_line else 'НЕТ'}")
+    return case_result(name, ok,
+                       f"{'подставная роль стенда ' if fixture_used else 'роль '}{role}, "
+                       f"слово «{word}»{' (унесено в архив memory-archive.py при заведении стенда)' if fixture_used else ''} "
+                       f"· код {code} · строка «в архиве» {'есть' if has_line else 'НЕТ'}")
 
 
 def case_v(find_tool: Path, db: Path, env: dict | None = None) -> bool:
@@ -523,31 +675,60 @@ def case_v2(find_tool: Path, db: Path) -> bool:
                        f"{'есть' if 'может быть' in out.lower() else 'НЕТ'}")
 
 
-def case_g(find_tool: Path, db: Path, env: dict | None = None) -> bool:
-    code_a, out_a = run_find(find_tool, db, "COORD", "Права", env=env)
-    code_b, out_b = run_find(find_tool, db, "COORD", "права", env=env)
+def case_g(find_tool: Path, db: Path, coord_missing_reason: str | None,
+          env: dict | None = None) -> bool:
+    name = "г) регистр слова и роли — одно множество id"
+    # ⚖️ ФАКТ «есть ли материал» БЕРЁТСЯ У БАЗЫ (coord_missing_reason — тот же признак,
+    # что у случаев ①③④), А НЕ У ОТВЕТА find-phoenix.py. Так и должно быть: этот случай
+    # ПРОВЕРЯЕТ find-phoenix.py, и если поиск сломан нарочной поломкой case-fold, его
+    # собственный (пустой или несовпавший) ответ — НАХОДКА, а не сигнал «данных нет».
+    # Решать по ответу испытуемого, чинить ли его же провал подстановкой, — значит
+    # спрятать именно ту поломку, ради которой случай существует (проверено прогоном:
+    # первая редакция читала расхождение ids_a/ids_b как «нет материала» и тихо
+    # переходила на BITEMEM, где поломка на своём слове не повторялась, — красный
+    # прогон при --break case-fold становился зелёным).
+    fixture_used = coord_missing_reason is not None
+    if not fixture_used:
+        word_hi, word_lo, role_hi, role_lo, role_word = "Права", "права", "COORD", "coord", "остановка смены"
+    else:
+        word_hi, word_lo = BITEMEM_WORD_HOT.upper(), BITEMEM_WORD_HOT.lower()
+        role_hi, role_lo, role_word = BITEMEM_ROLE, BITEMEM_ROLE.lower(), BITEMEM_WORD_HOT.lower()
+
+    code_a, out_a = run_find(find_tool, db, role_hi, word_hi, env=env)
+    code_b, out_b = run_find(find_tool, db, role_hi, word_lo, env=env)
     ids_a, ids_b = sorted(record_ids(out_a)), sorted(record_ids(out_b))
     word_case_equal = (code_a == 0 and code_b == 0) and ids_a == ids_b and bool(ids_a)
 
-    code_c, out_c = run_find(find_tool, db, "COORD", "остановка смены", env=env)
-    code_d, out_d = run_find(find_tool, db, "coord", "остановка смены", env=env)
+    code_c, out_c = run_find(find_tool, db, role_hi, role_word, env=env)
+    code_d, out_d = run_find(find_tool, db, role_lo, role_word, env=env)
     ids_c, ids_d = sorted(record_ids(out_c)), sorted(record_ids(out_d))
     role_case_equal = (code_c == 0 and code_d == 0) and ids_c == ids_d and bool(ids_c)
 
     ok = word_case_equal and role_case_equal
-    return case_result("г) регистр слова и роли — одно множество id", ok,
-                       f"«Права»→{ids_a} «права»→{ids_b}, равны={word_case_equal}\n"
-                       f"--role COORD→{ids_c} --role coord→{ids_d}, равны={role_case_equal}")
+    return case_result(name, ok,
+                       f"{'[подставная роль стенда BITEMEM] ' if fixture_used else ''}"
+                       f"«{word_hi}»→{ids_a} «{word_lo}»→{ids_b}, равны={word_case_equal}\n"
+                       f"--role {role_hi}→{ids_c} --role {role_lo}→{ids_d}, равны={role_case_equal}")
 
 
 def case_d(save_tool: Path, db: Path, env: dict | None = None) -> bool:
+    name = "д) хук save-phoenix.py: пересборка записей после сохранения, молчание при повторе"
     conn = sqlite3.connect(str(db))
     row = conn.execute(
         "SELECT body FROM phoenix WHERE role='PROTO' AND section='state'").fetchone()
+    role, section, fixture_used = "PROTO", "state", False
+    if not row:
+        # ⚪ У PROTO нет раздела state (свежий контур, карточка #659) — тот же признак
+        # (хук пересборки после сохранения) меряем на подставной роли стенда BITEMEM
+        # (см. seed_bitemem): её раздел state уже заведён и есть чем удлинить.
+        row = conn.execute("SELECT body FROM phoenix WHERE role=? AND section=?",
+                           (BITEMEM_ROLE, BITEMEM_SECTION)).fetchone()
+        role, section, fixture_used = BITEMEM_ROLE, BITEMEM_SECTION, True
     conn.close()
     if not row:
-        return case_result("д) хук: сохранение раздела пересобирает записи", False,
-                           "у PROTO нет раздела state в копии — опыт не поставлен")
+        return case_result(name, False,
+                           "нет раздела state ни у PROTO, ни у подставной роли стенда "
+                           "BITEMEM — опыт не поставлен")
     body = row[0] + ("\n\nСтрока смены: приёмка карточки #525, случай д, "
                      "перемерена рабочим каталогом приёмки.\n")
     stand = mezo_stand.new("bite-memory-search-save-")
@@ -555,23 +736,23 @@ def case_d(save_tool: Path, db: Path, env: dict | None = None) -> bool:
     file1.write_text(body, encoding="utf-8")
     file2.write_text(body, encoding="utf-8")
 
-    code1, out1 = run_tool(save_tool, ["--db", str(db), "--role", "PROTO", "--section", "state",
-                                       "--file", str(file1), "--actor", "PROTO"], env=env)
+    code1, out1 = run_tool(save_tool, ["--db", str(db), "--role", role, "--section", section,
+                                       "--file", str(file1), "--actor", role], env=env)
     first_hook = "🧩" in out1
 
-    code2, out2 = run_tool(MEMORY_RECORDS, ["--db", str(db), "--role", "PROTO",
-                                            "--section", "state", "--собрать"])
+    code2, out2 = run_tool(MEMORY_RECORDS, ["--db", str(db), "--role", role,
+                                            "--section", section, "--собрать"])
     converges = "СОВПАДАЕТ ЗНАК В ЗНАК" in out2
 
-    code3, out3 = run_tool(save_tool, ["--db", str(db), "--role", "PROTO", "--section", "state",
-                                       "--file", str(file2), "--actor", "PROTO"], env=env)
+    code3, out3 = run_tool(save_tool, ["--db", str(db), "--role", role, "--section", section,
+                                       "--file", str(file2), "--actor", role], env=env)
     unchanged_note = "СОДЕРЖИМОЕ НЕ ИЗМЕНИЛОСЬ" in out3
     second_hook = "🧩" in out3
 
     ok = (code1 == 0 and first_hook and code2 == 0 and converges
           and code3 == 0 and unchanged_note and not second_hook)
-    return case_result("д) хук save-phoenix.py: пересборка записей после сохранения, "
-                       "молчание при повторе", ok,
+    return case_result(name, ok,
+                       f"{'подставная роль стенда ' if fixture_used else 'роль '}{role}/{section} · "
                        f"первое сохранение (тело изменилось): код {code1}, "
                        f"«🧩» {'есть' if first_hook else 'НЕТ'}\n"
                        f"memory-records.py --собрать: код {code2}, сходится={converges}\n"
@@ -625,6 +806,12 @@ def main() -> int:
     db = stand / "copy.db"
     mezo_stand.snapshot_db(LIVE_DB, db)
 
+    # ⛔ ВСЕГДА через ЖИВЫЕ/циркуль-родные копии инструментов (никогда — сломанные копии
+    # --break): подставная роль BITEMEM — предмет ПОДГОТОВКИ для случаев а)/б)/г)/д),
+    # заводится ДО них, один раз за прогон (см. заголовок файла и seed_bitemem()).
+    seed_bitemem(db, save_tool_live, MEMORY_ARCHIVE)
+    coord_reason = coord_memory_reason(db)
+
     find_tool_for_v, env_for_v = find_tool_live, None
     find_tool_for_g, env_for_g = find_tool_live, None
     find_tool_for_2, env_for_2 = find_tool_live, None
@@ -642,15 +829,15 @@ def main() -> int:
     elif args.break_kind == "no-hook":
         save_tool_for_d, env_for_d = build_broken_save_phoenix("bite-memory-search-break-nh-")
 
-    case_1(find_tool_live, db)
+    case_1(find_tool_live, db, coord_reason)
     case_2(find_tool_for_2, db, env=env_for_2)
-    case_3(find_tool_live, db)
-    case_4(db)
+    case_3(find_tool_live, db, coord_reason)
+    case_4(db, coord_reason)
     case_a(find_tool_live, db)
     case_b(find_tool_live, db)
     case_v(find_tool_for_v, db, env=env_for_v)
     case_v2(find_tool_live, db)
-    case_g(find_tool_for_g, db, env=env_for_g)
+    case_g(find_tool_for_g, db, coord_reason, env=env_for_g)
     case_d(save_tool_for_d, db, env=env_for_d)
 
     after_records, after_max_msg = live_db_fingerprint()
@@ -678,6 +865,15 @@ def main() -> int:
     if failed:
         print(f"🔴 красных {len(failed)} из {len(results)}: {' · '.join(failed)}")
         code = 1
+    elif skipped:
+        # ⚖️ ТРИ ИСХОДА, НЕ ДВА (правило свода acceptance-isolated-from-live): непроверенное —
+        # не провал (иначе контур без памяти COORD красился бы находкой, которой нет), но
+        # и не «всё чисто» — молчание об этом было бы ложным нулём. Код 2 — тот же язык,
+        # каким уже говорит bite-all.py («код 2 — отказ мерить», см. его verdict()).
+        print(f"⚪ не проверено {len(skipped)} из {len(results) + len(skipped)} "
+             f"(проверенных {len(results)} — отказов среди них нет): "
+             + " · ".join(name for name, _ in skipped))
+        code = 2
     else:
         print(f"✅ принято {len(results)} из {len(results)}")
         code = 0

@@ -85,10 +85,22 @@ def case(title, verdict, detail, differ=False):
 
 def call_tool(tool: pathlib.Path, db: pathlib.Path, *args, extra_env=None):
     """Позвать печатника. `среда` дополняет переменные окружения — ею случай ⑭ показывает
-    печатнику ДРУГОЙ контейнер контура, чтобы проверить поиск каталогов обмена на диске."""
-    full_env = None
+    печатнику ДРУГОЙ контейнер контура, чтобы проверить поиск каталогов обмена на диске.
+
+    🩹 ДОГОН (класс ошибок (107)/(127), приёмка для пакета): MEZO_CONTAINER ВЫЗЫВАЮЩЕГО
+    (самой приёмки) ЗДЕСЬ ГЛУШИТСЯ намеренно, а не наследуется молча. Рецепт прогона
+    приёмки на свежей выгрузке пакета требует звать ЕЁ САМУ с MEZO_CONTAINER=<пакет> —
+    без глушения печатник-подпроцесс унаследовал бы эту переменную и решил, что ЕГО
+    контейнер — сам пакет (а не временная копия-песочница в --db), и искал бы живые
+    сессии/каталоги обмена там, где их нет. Найдено прогоном: случай ⑱ на свежей выгрузке
+    красился РОВНО этим — на живом контуре MEZO_CONTAINER у вызывающего просто не был
+    выставлен, и то же самое отсутствие подделывается здесь для ОБОИХ контуров разом.
+    Чей это принцип — mezo_stand.stand_env(): «направление закрепляет ЗАПУСКАЮЩИЙ, а не
+    mezo_paths»; здесь тот же довод, приложенный к точечному вызову без готового стенда.
+    """
+    full_env = dict(os.environ)
+    full_env.pop("MEZO_CONTAINER", None)
     if extra_env:
-        full_env = dict(os.environ)
         full_env.update(extra_env)
     r = subprocess.run([sys.executable, "-B", str(tool), "--db", str(db), *args],
                        capture_output=True, text=True, encoding="utf-8", errors="replace",
@@ -191,8 +203,17 @@ def main() -> int:
                     "VALUES ('COORD', 'atlas-17 [08a16e]', datetime('now'), 'COORD', 'self')")
         con.execute("INSERT INTO role_sessions (role, address, noted_at, noted_by, source) "
                     "VALUES ('STUD', 'atlas-old [000000]', datetime('now','-30 hours'), 'STUD', 'self')")
-        # свежая записка PROTO к COORD — чтобы номер в тексте брался из живой базы
-        note_id = con.execute("SELECT max(id) FROM messages WHERE writer_role='PROTO'").fetchone()[0]
+        # 🩹 ДОГОН (класс ошибок (107)/(127), приёмка для пакета — свежая выгрузка несёт
+        # ПУСТУЮ ленту и пустой backlog): раньше случай ① молчаливо полагался на то, что
+        # в ЖИВОЙ ленте УЖЕ есть записка PROTO к COORD (переменная note_id ниже не звалась
+        # нигде — мёртвый след того расчёта на живые данные). На пустой ленте «нечего
+        # сигналить» красило бы случай по пустой ленте, а не по свойству, которое он
+        # проверяет. Приёмка заводит СВОЮ записку САМА — тем же ходом, что и случаю ②.
+        con.execute("INSERT INTO messages (writer_role, body_md) VALUES "
+                    "('PROTO', 'фикстура случая ①: записка PROTO к COORD')")
+        proto_note_id = con.execute("SELECT last_insert_rowid()").fetchone()[0]
+        con.execute("INSERT INTO message_addressee (message_id, role, kind, linked_by) "
+                    "VALUES (?, 'COORD', 'to', 'field')", (proto_note_id,))
         # 🩹 ДОГОН: случаю ② нужна СВОЯ записка ОТ COORD К PROTO — приёмка строит фикстуру
         # сама (как и role_sessions выше), а не берёт «раньше/сейчас» из среды. Без этой
         # строки на пустой от COORD ленте случай ② получает код 2 «НЕЧЕГО СИГНАЛИТЬ» и
@@ -202,8 +223,16 @@ def main() -> int:
         coord_note_id = con.execute("SELECT last_insert_rowid()").fetchone()[0]
         con.execute("INSERT INTO message_addressee (message_id, role, kind, linked_by) "
                     "VALUES (?, 'PROTO', 'to', 'field')", (coord_note_id,))
-        # карточка с ЧУЖИМ держателем: взятие от CHROME
-        card = con.execute("SELECT max(id) FROM backlog").fetchone()[0]
+        # 🩹 ДОГОН (класс ошибок (107)/(127)): карточка с ЧУЖИМ держателем раньше бралась
+        # как max(id) ИЗ ЖИВОГО backlog — на свежей выгрузке пакета backlog ПУСТ, max(id)
+        # даёт NULL, и вставка ниже падала sqlite3.IntegrityError (backlog_events.backlog_id
+        # NOT NULL). Приёмка заводит СВОЮ подставную карточку на копии, явным именем —
+        # не полагаясь на то, есть ли в контуре хоть одна настоящая.
+        con.execute("INSERT INTO backlog (role, title, body_md, status, created_by) VALUES "
+                    "('PROTO', 'приёмка bite-signal-templates: подставная карточка', "
+                    "'', 'open', 'PROTO')")
+        card = con.execute("SELECT last_insert_rowid()").fetchone()[0]
+        # взятие от CHROME — держатель ЧУЖОЙ адресату COORD, которого приёмка сигналит
         con.execute("INSERT INTO backlog_events (backlog_id, at, actor_role, event_type, body_md) "
                     "VALUES (?, datetime('now'), 'CHROME', 'claim', ?)",
                     (card, "до 2026-09-09 10:00:00 UTC · чужая рука"))
@@ -289,7 +318,13 @@ def main() -> int:
         # Опыт судил бы тогда не то, что обещает.
         con3.execute("UPDATE tool_leases SET until_utc = datetime('now','-2 hours') "
                      "WHERE role = 'COORD' AND released_at IS NULL")
-        own_card = con3.execute("SELECT max(backlog_id) FROM backlog_events").fetchone()[0]
+        # 🩹 ДОГОН (класс ошибок (107)/(127)): раньше own_card брался запросом
+        # max(backlog_id) FROM backlog_events — на живом контуре это случайно совпадало
+        # с нашей же подставной карточкой (она и была максимумом), а на пустом backlog_events
+        # свежей выгрузки дал бы NULL. own_card — это ТА ЖЕ подставная карточка `card`,
+        # заведённая приёмкой выше: раскладка про «второй, СВОЙ держатель ТОЙ ЖЕ карточки»,
+        # а не про другую карточку.
+        own_card = card
         con3.execute("INSERT INTO backlog_events (backlog_id, at, actor_role, event_type, body_md) "
                      "VALUES (?, datetime('now'), 'COORD', 'claim', ?)",
                      (own_card, "до 2026-09-09 10:00:00 UTC · держит сам адресат"))
@@ -357,19 +392,33 @@ def main() -> int:
 
         # ═══ 🌉 УСЛОВИЕ РЕДАКЦИИ 2 ПРАВИЛА signal-not-carrier (карточка #570) ═══
         # «ТЕЛО ЕДЕТ ТАМ, ГДЕ ОБЩЕГО МЕСТА НЕТ; ПОЯВИТСЯ ОБЩЕЕ МЕСТО — ПОЕДЕТ ЗВОНОК.»
-        # Имя соседа и имя своего контура берутся ИЗ БАЗЫ, а не впечатаны: впечатанное
-        # «tapas» пережило бы закрытие моста и судило бы несуществующее.
+        # 🩹 ДОГОН (класс ошибок (107)/(127), приёмка для пакета): раньше случаи ⑩–⑬ судили
+        # НАСТОЯЩИЙ мост живого контура (связь atlas→aia/tapas в cross_links) — на свежей
+        # выгрузке пакета связей с соседями нет ВООБЩЕ, и приёмка отказывала ДО единого
+        # случая. Имя СВОЕГО контура по-прежнему берётся ИЗ БАЗЫ (впечатанное «atlas»
+        # пережило бы закрытие моста и судило бы несуществующее) — а вот СОСЕДА приёмка
+        # теперь заводит САМА, на своей КОПИИ, явным подставным именем, которое ни с
+        # настоящим соседом, ни с ролью контура не спутать.
         con4 = sqlite3.connect(str(db))
-        our_group = con4.execute(
+        our_group_row = con4.execute(
             "SELECT lower(value) FROM meta WHERE key = 'group_name'").fetchone()
-        neighbor_row = con4.execute(
-            "SELECT target_group FROM cross_links WHERE lower(source_group) = "
-            "(SELECT lower(value) FROM meta WHERE key = 'group_name') LIMIT 1").fetchone()
-        if not our_group or not neighbor_row:
+        if not our_group_row or not (our_group_row[0] or "").strip():
             con4.close()
-            sys.exit("⛔ ПРИЁМКА НЕ СОСТОЯЛАСЬ: в базе нет имени своего контура либо ни одной "
-                     "связи с соседом — случаям ⑩–⑬ судить нечего, и зелёный тут был бы ложью")
-        our_group, neighbor_name = our_group[0], neighbor_row[0].strip().lower()
+            print("⚠️ НЕ ПРОВЕРЕНО: в базе нет имени своего контура (meta.group_name) — "
+                  "случаям ⑩–⑬ и подставному мосту судить не с чем")
+            return 2
+        our_group = our_group_row[0].strip()
+        neighbor_name = "bitebridge"
+        already_role = con4.execute(
+            "SELECT 1 FROM roles WHERE upper(role) = ?", (neighbor_name.upper(),)).fetchone()
+        assert not already_role, (
+            f"имя подставного соседа «{neighbor_name}» занято настоящей ролью контура — "
+            f"приёмка судила бы не то")
+        con4.execute("INSERT OR IGNORE INTO cross_links (source_group, target_group, "
+                     "target_db_path, description) VALUES (?, ?, ?, ?)",
+                     (our_group, neighbor_name, str(sandbox / "подставная-соседняя-база.db"),
+                      "подставная связь приёмки bite-signal-templates — не настоящий мост"))
+        con4.commit()
 
         # ⑩ адресат ЗА пределами контура: условие НАЗВАНО словами правила
         code10, output10 = call_tool(tool, db, "--role", "PROTO", "--to", neighbor_name.upper())
