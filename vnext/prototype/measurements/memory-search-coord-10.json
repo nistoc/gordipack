@@ -1,0 +1,102 @@
+[
+  {
+    "n": 1,
+    "query": "права на отправку кода",
+    "role": "COORD",
+    "section": "identity",
+    "expect_word": "08.08 15:58:46",
+    "counter3": true,
+    "note": "строка про push 08.08 15:58:46",
+    "occurrences": 2
+  },
+  {
+    "n": 2,
+    "query": "остановка смены",
+    "role": "COORD",
+    "section": "launcher",
+    "expect_word": "ОСТАНОВКА СНЯТА",
+    "counter3": false,
+    "note": "порядок закрытия чата",
+    "occurrences": 2
+  },
+  {
+    "n": 3,
+    "query": "класс ошибки про время",
+    "role": "COORD",
+    "section": "history",
+    "expect_word": "ЧАС СЛОВА ВЛАДЕЛЬЦА",
+    "counter3": false,
+    "note": "час вопроса выдан за час ответа",
+    "occurrences": 1
+  },
+  {
+    "n": 4,
+    "query": "пауза четыре часа",
+    "role": "COORD",
+    "section": "plan",
+    "expect_word": "04.09 22:59",
+    "counter3": true,
+    "note": "блок слова владельца 22:59 UTC",
+    "occurrences": 2
+  },
+  {
+    "n": 5,
+    "query": "-A запрещён",
+    "role": "COORD",
+    "section": "identity",
+    "expect_word": "КОММИТЫ",
+    "counter3": true,
+    "note": "коммиты в atlas.archs поимённо",
+    "occurrences": 1
+  },
+  {
+    "n": 6,
+    "query": "порог 20 000",
+    "role": "COORD",
+    "section": "state",
+    "expect_word": "20 000",
+    "counter3": true,
+    "note": "порог памяти только в проверке",
+    "occurrences": 3
+  },
+  {
+    "n": 7,
+    "query": "встречный случай определение",
+    "role": "COORD",
+    "section": "state",
+    "expect_word": "встречный случай",
+    "counter3": false,
+    "note": "правило counter-case-own-definition",
+    "occurrences": 2
+  },
+  {
+    "n": 8,
+    "query": "мост tapas сжатие",
+    "role": "COORD",
+    "section": "plan",
+    "expect_word": "tapas",
+    "counter3": false,
+    "note": "письмо соседей 16:05 и ответ PROTO 21:00",
+    "occurrences": 1
+  },
+  {
+    "n": 9,
+    "query": "карточка #462",
+    "role": "COORD",
+    "section": "plan",
+    "expect_word": "#462",
+    "counter3": false,
+    "note": "очередь после паузы",
+    "occurrences": 1
+  },
+  {
+    "n": 10,
+    "query": "будильник",
+    "role": "COORD",
+    "section": "plan",
+    "expect_word": "36d74cb1",
+    "counter3": true,
+    "note": "расписание будильника 05.09 05:22:40 UTC",
+    "occurrences": 3
+  }
+]
