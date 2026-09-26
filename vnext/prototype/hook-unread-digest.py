@@ -30,6 +30,13 @@ r"""Хук UserPromptSubmit: одна строка о непрочитанном
 ⛔ ХУК НЕ ИМЕЕТ ПРАВА ЛОМАТЬ ХОД. Любой сбой внутри — краткая строка о сбое и код 0:
 молчание про сбой было бы классом «молчащий отказ читается как успех», а ненулевой
 код заблокировал бы ходы ВСЕХ ролей контура разом.
+
+💾 26.09 (карточка #664, слово владельца 10:45 UTC, чат PROTO): под сводкой — строка
+«память отстала», когда роль работала больше 3 ч после последнего сохранения своего
+раздела state. Считает общая функция .mezosync/scripts/phoenix_lag.py (одна на всех,
+кто об этом говорит). Нет отставших — строки нет: признак, горящий всегда, не значит
+ничего. Сбой функции — строка о сбое; ход не ломается. Имена в коде переведены
+на английский тем же ходом (слово владельца 07.09: при касании файла).
 """
 import json
 import pathlib
@@ -51,10 +58,10 @@ def main() -> int:
         con.execute("PRAGMA query_only=ON")
         # Поле адресата есть не в каждой базе (свежий контур из образца). Нет таблицы —
         # честно считаем регуляркой одной, как до Э-Б; молча ронять сводку нельзя.
-        есть_поле = bool(con.execute(
+        has_field = bool(con.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table'"
             " AND name='message_addressee'").fetchone())
-        части = []
+        parts = []
         # 🩸 ВАЖНОСТИ ВЗЯТЫ ЗАМЕРОМ ПО БАЗЕ, а не по памяти. Первая редакция считала
         # только high — а в базе живут normal 1632 · high 638 · critical 89, и одна
         # critical у роли лежала невидимой среди обычных. Нашёл @OPSSRE (записка #3788)
@@ -64,37 +71,47 @@ def main() -> int:
         for role, cursor in con.execute(
                 "SELECT reader_role, last_read_id FROM read_cursors ORDER BY reader_role"):
             # «адресовано» = поле (kind='to') ИЛИ @РОЛЬ в шапке — объединение, см. шапку.
-            поле_или_шапка = (
+            field_or_header = (
                 "(SUBSTR(m.body_md,1,200) LIKE ? OR EXISTS(SELECT 1 FROM message_addressee a"
                 " WHERE a.message_id = m.id AND a.role = ? AND a.kind = 'to'))"
-                if есть_поле else "SUBSTR(m.body_md,1,200) LIKE ?")
-            args = ([f"%@{role}%", role] if есть_поле else [f"%@{role}%"])
+                if has_field else "SUBSTR(m.body_md,1,200) LIKE ?")
+            args = ([f"%@{role}%", role] if has_field else [f"%@{role}%"])
             total, addr, high, crit = con.execute(
                 "SELECT COUNT(*),"
-                f" SUM(CASE WHEN {поле_или_шапка} THEN 1 ELSE 0 END),"
+                f" SUM(CASE WHEN {field_or_header} THEN 1 ELSE 0 END),"
                 " SUM(CASE WHEN priority='high' THEN 1 ELSE 0 END),"
                 " SUM(CASE WHEN priority='critical' THEN 1 ELSE 0 END)"
                 " FROM messages m WHERE m.id > ? AND m.writer_role <> ?",
                 (*args, cursor or 0, role)).fetchone()
             if total:
-                хвост = ""
+                tail = ""
                 if crit:
-                    хвост += f" 🔴{crit}"
+                    tail += f" 🔴{crit}"
                 if addr:
-                    хвост += f" ✉{addr}"
+                    tail += f" ✉{addr}"
                 if high:
-                    хвост += f" ⚠{high}"
-                части.append(f"{role} {total}{хвост}")
+                    tail += f" ⚠{high}"
+                parts.append(f"{role} {total}{tail}")
+        # 💾 карточка #664: отставание памяти ролей — общей функцией. Её сбой (нет модуля,
+        # нет таблицы) называется строкой и не роняет сводку непрочитанного.
+        try:
+            sys.path.insert(0, str(here.parent / ".mezosync" / "scripts"))
+            import phoenix_lag
+            lag = phoenix_lag.lag_line(con)
+        except Exception as exc:  # noqa: BLE001 — совет не имеет права ронять сводку
+            lag = f"   💾 отставание памяти ролей НЕ посчитано ({exc.__class__.__name__}: {exc})"
         con.close()
-        строка = " · ".join(части) if части else "долгов нет"
+        line = " · ".join(parts) if parts else "долгов нет"
         # ⚡ ЧТО СЧИТАЕТСЯ И КОГДА СНЯТО — В САМОЙ СТРОКЕ (замер @RCC #3892, 26.08).
         # Он сверил «RCC 1» со своим запросом минутой позже и получил 2: лента выросла
         # между печатью и его запросом, а строка не несла ни определения счёта, ни часа
         # снятия. Величину, которая не сходится с проверкой, перестают читать вовсе —
         # поэтому определение и час стоят В строке, а не в чьей-то памяти о ней.
-        снято = time.strftime("%H:%M:%S UTC", time.gmtime())
+        taken = time.strftime("%H:%M:%S UTC", time.gmtime())
         print(f"📬 MEZO непрочитано — ЧУЖИЕ записки за отметкой подтверждения роли, "
-              f"снято {снято} (🔴 critical · ✉ адресовано полем или в шапке · ⚠ high): {строка}")
+              f"снято {taken} (🔴 critical · ✉ адресовано полем или в шапке · ⚠ high): {line}")
+        if lag:
+            print(lag)
         # пульс наблюдателей пилота (файлы .watch-state-*.json кладёт watch-feed.py)
         # ⛔ файлы «-stand» — состояние ПРОВЕРОК на копии базы, не живой наблюдатель:
         # их пульс законно стар, и строка «похоже, мёртв» о них — ложная тревога
@@ -111,20 +128,19 @@ def main() -> int:
                 continue
             try:
                 data = json.loads(st.read_text(encoding="utf-8"))
-                роль = st.stem.replace(".watch-state-", "")
+                who = st.stem.replace(".watch-state-", "")
                 if data.get("buried"):
-                    print(f"   пилот наблюдателя ({роль}): снят {data.get('buried_at', '?')} — "
+                    print(f"   пилот наблюдателя ({who}): снят {data.get('buried_at', '?')} — "
                           f"{data.get('buried_why', 'причина не записана')}")
                     continue
-                возраст = int(time.time() - data.get("ts", 0))
-                if возраст > 600:
-                    давность = (f"{возраст // 60} мин" if возраст < 7200
-                                else f"{возраст // 3600} ч")
-                    print(f"   ⚠ механизм наблюдателя-пилота (заводила {роль}) не обновляется "
-                          f"{давность} (видел до #{data.get('last_seen', '?')}) — это пульс "
-                          f"МЕХАНИЗМА; живость роли {роль} смотри по её отметке прочитанного")
+                age = int(time.time() - data.get("ts", 0))
+                if age > 600:
+                    ago = (f"{age // 60} мин" if age < 7200 else f"{age // 3600} ч")
+                    print(f"   ⚠ механизм наблюдателя-пилота (заводила {who}) не обновляется "
+                          f"{ago} (видел до #{data.get('last_seen', '?')}) — это пульс "
+                          f"МЕХАНИЗМА; живость роли {who} смотри по её отметке прочитанного")
                 else:
-                    print(f"   наблюдатель-пилот ({роль}): пульс {возраст}с назад, "
+                    print(f"   наблюдатель-пилот ({who}): пульс {age}с назад, "
                           f"видел до #{data.get('last_seen', '?')}")
             except Exception as exc:  # noqa: BLE001 — пульс не имеет права ронять сводку
                 print(f"   наблюдатель {st.name}: файл пульса не читается ({exc.__class__.__name__})")
