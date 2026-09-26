@@ -37,7 +37,9 @@
 ⛔ ПАРАМЕТРЫ ЖИВУТ ТОЛЬКО ЗДЕСЬ. Менять шаг, начало и потолок — правкой этих трёх строк,
    и они меняются СРАЗУ У ВСЕХ. Ради этого всё и затевалось.
 """
+import re
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 START_SEC = 5 * 60          # с чего начинаем и куда возвращаемся при сбросе
@@ -108,7 +110,29 @@ def _foreign_bridge_head(conn, db_path) -> tuple:
       чтение упало). Свести третий ко второму значило бы объявить тишину оттого, что
       не сумели посмотреть, — правило `read-failure-blocks-write` ровно про это.
     """
-    places, mark, failures = [], 0.0, 0
+    places, failures = _foreign_bridge_places(conn, db_path)
+    mark = 0.0
+    for d in places:
+        try:
+            for f in d.glob("*.md"):
+                mark = max(mark, f.stat().st_mtime)
+        except OSError:
+            failures += 1
+    if failures and mark == 0.0:
+        return 0.0, "не смог"
+    if not places:
+        return 0.0, "смотреть некуда"
+    return mark, "прочитано"
+
+
+def _foreign_bridge_places(conn, db_path) -> tuple:
+    """Папки, где лежат ЧУЖИЕ письма моста → (список папок, число неудачных обходов).
+
+    Выделено 26.09 (карточка #663) из _foreign_bridge_head без изменения поведения:
+    те же папки нужны списку писем по именам, а второй обход со своим набором правил
+    разошёлся бы с первым молча.
+    """
+    places, failures = [], 0
     our_group = ""
     try:
         _r = conn.execute("SELECT value FROM meta WHERE key = 'group_name'").fetchone()
@@ -139,17 +163,98 @@ def _foreign_bridge_head(conn, db_path) -> tuple:
             places += [d for d in container.glob("*/.mezosync/bridges/*") if d.is_dir()]
         except OSError:
             failures += 1
-    for d in places:
+    return places, failures
+
+
+# ═══ 26.09 (карточка #663, слово владельца 10:05 UTC, чат PROTO): ПИСЬМА ПО ИМЕНАМ.
+# Прежняя строка «письма соседей в мосте: есть новое» не называла ни письма, ни адресата,
+# ни часа — и показывалась ОДИН раз: отметка моста сдвигается при каждом чтении ленты.
+# Четыре письма соседа к PROTO пролежали так до десяти часов; строку роль видела и приняла
+# за чужое. Теперь под строкой нового — по строке на письмо: час · сосед → адресат · имя.
+# ⚖️ Отметка по-прежнему «видел», а не «ответил»: письмо называется один раз. Постоянная
+#    строка «ждут твоего ответа» — отдельный предмет, эта правка его не решает.
+LETTER_LINES_MAX = 8
+_ROLE_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9-])[A-Z][A-Z0-9]{1,15}(?![A-Za-z0-9-])")
+_AT_ROLE_RE = re.compile(r"@([A-Z][A-Z0-9]{1,15})(?![A-Za-z0-9-])")
+# Маркер адресата в шапке письма и отрезок после него — до конца предложения.
+# 🪤 Автор письма («пишет COORD контура tapas») адресатом не считается: берём только
+#    отрезок ПОСЛЕ маркера. Пересланное тело («написано COORD контура .onto») — тоже.
+_ADDRESS_RE = re.compile(r"(?:(?<!\w)для(?!\w)|адресат\s*[—:-]|(?<!\w)кому\s*:)\s*(.+?)(?:\.\s|\.$|$)",
+                         re.IGNORECASE)
+_ALL_RE = re.compile(r"(?<!\w)(?:(?i:всем|всех)|ВСЕ)(?!\w)")
+
+
+def _known_roles(conn) -> set:
+    """Имена ролей контура: реестр ролей и авторы ленты. Без этого «UTC» и «AIA»
+    из шапки письма читались бы как адресаты."""
+    names = set()
+    for sql in ("SELECT role FROM roles", "SELECT DISTINCT writer_role FROM messages"):
         try:
-            for f in d.glob("*.md"):
-                mark = max(mark, f.stat().st_mtime)
+            names.update((r[0] or "").upper() for r in conn.execute(sql))
+        except sqlite3.OperationalError:
+            pass
+    names.discard("")
+    return names
+
+
+def _letter_addressees(path: Path, roles: set) -> list:
+    """Адресаты письма по его шапке (первые пять непустых строк) → список ролей,
+    ['всем'] или [] — «не назван». Разбор не бросает: нечитаемое письмо — «не назван»."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            head = [ln.strip() for ln in fh.read(4000).splitlines() if ln.strip()][:5]
+    except OSError:
+        return []
+    for ln in head:
+        m = _ADDRESS_RE.search(ln)
+        if not m:
+            continue
+        segment = m.group(1)
+        if _ALL_RE.search(segment):
+            return ["всем"]
+        found = [t for t in _ROLE_TOKEN_RE.findall(segment) if t in roles]
+        if found:
+            return list(dict.fromkeys(found))
+    # Маркера нет — обращение «@РОЛЬ» в шапке.
+    found = [t for ln in head for t in _AT_ROLE_RE.findall(ln) if t in roles]
+    return list(dict.fromkeys(found))
+
+
+def _bridge_letters(conn, db_path, role: str, since: float) -> list:
+    """Чужие письма моста новее отметки `since` → список словарей
+    {when, neighbour, to, to_me, file, dir}; сначала адресованные читающей роли."""
+    places, _ = _foreign_bridge_places(conn, db_path)
+    roles = _known_roles(conn)
+    try:
+        _r = conn.execute("SELECT value FROM meta WHERE key = 'group_name'").fetchone()
+        our_group = (_r[0] if _r else "") or ""
+    except sqlite3.OperationalError:
+        our_group = ""
+    letters = []
+    for d in places:
+        # Сосед — по имени папки: «tapas-atlas» → tapas, «aia-stud-exchange» → aia.
+        parts = d.name.split("-")
+        neighbour = parts[0]
+        # 🪤 Исходящая соседа ДРУГОМУ контуру («tapas-aia»): имена ролей в шапке там —
+        #    роли того контура, и «для COORD» пометило бы «тебе» нашего COORD ложно.
+        other_contour = (parts[1] if len(parts) == 2 and our_group
+                         and parts[1] != our_group else "")
+        try:
+            files = [(f, f.stat().st_mtime) for f in d.glob("*.md")]
         except OSError:
-            failures += 1
-    if failures and mark == 0.0:
-        return 0.0, "не смог"
-    if not places:
-        return 0.0, "смотреть некуда"
-    return mark, "прочитано"
+            continue
+        for f, mtime in files:
+            if mtime <= since:
+                continue
+            if other_contour:
+                to, to_me = [f"контур {other_contour}"], False
+            else:
+                to = _letter_addressees(f, roles)
+                to_me = role in to or to == ["всем"]
+            letters.append({"when": mtime, "neighbour": neighbour, "to": to,
+                            "to_me": to_me, "file": f.name, "dir": d.as_posix()})
+    letters.sort(key=lambda x: (not x["to_me"], x["when"]))
+    return letters
 
 
 def next_sleep(db_path, role: str, prev_sec: int = None) -> dict:
@@ -309,6 +414,8 @@ def news(db_path, role: str) -> dict:
         (seen, role)).fetchone()[0]
     bridge_new = (not first and bridge_outcome == "прочитано"
                   and bridge_head > (seen_bridge or 0))
+    # Письма по именам собираются ДО сдвига отметки: после него они уже «виденные».
+    letters = _bridge_letters(conn, db_path, role, seen_bridge or 0) if bridge_new else []
     bridge_to_save = bridge_head if bridge_outcome == "прочитано" else None
     conn.execute("INSERT INTO sync_backoff (role, sleep_sec, quiet_streak, last_seen_id, "
                  "last_bridge_mtime, updated_at) VALUES (?,?,0,?,?, datetime('now')) "
@@ -319,7 +426,7 @@ def news(db_path, role: str) -> dict:
     conn.commit()
     conn.close()
     return {"first": first, "new_count": new_count, "bridge": bridge_outcome,
-            "bridge_new": bool(bridge_new)}
+            "bridge_new": bool(bridge_new), "letters": letters}
 
 
 def news_line(db_path, role: str) -> str:
@@ -331,11 +438,30 @@ def news_line(db_path, role: str) -> str:
     if r["first"]:
         return "📬 с прошлого чтения: первое чтение — счёт нового начнётся со следующего"
     # ⚖️ Три исхода моста, и «не смог» не равен «нового нет» — как в next_sleep.
-    bridge_word = {"прочитано": "есть новое" if r["bridge_new"] else "нового нет",
-                   "смотреть некуда": "мостов нет",
-                   "не смог": "НЕ ПРОЧИТАН — проверь пути соседей в cross_links"}[r["bridge"]]
-    return (f"📬 с прошлого чтения: чужих записок {r['new_count']} · "
-            f"письма соседей в мосте: {bridge_word}")
+    letters = r.get("letters") or []
+    if r["bridge"] == "прочитано" and r["bridge_new"] and letters:
+        to_me = sum(1 for x in letters if x["to_me"])
+        bridge_word = f"новых {len(letters)}, тебе {to_me}"
+    else:
+        bridge_word = {"прочитано": "есть новое" if r["bridge_new"] else "нового нет",
+                       "смотреть некуда": "мостов нет",
+                       "не смог": "НЕ ПРОЧИТАН — проверь пути соседей в cross_links"}[r["bridge"]]
+    out = [f"📬 с прошлого чтения: чужих записок {r['new_count']} · "
+           f"письма соседей в мосте: {bridge_word}"]
+    # По строке на письмо: адресованные тебе — первыми, их предел строк не срезает.
+    shown = [x for x in letters if x["to_me"]]
+    shown += [x for x in letters if not x["to_me"]][:max(0, LETTER_LINES_MAX - len(shown))]
+    for x in shown:
+        when = datetime.fromtimestamp(x["when"], timezone.utc).strftime("%d.%m %H:%M UTC")
+        to = ", ".join(x["to"]) if x["to"] else "адресат не назван"
+        mark = " (тебе)" if x["to_me"] else ""
+        out.append(f"   ✉ {when} · {x['neighbour']} → {to}{mark} · {x['file']}")
+    if len(letters) > len(shown):
+        out.append(f"   … и ещё {len(letters) - len(shown)} — в папках ниже")
+    if letters:
+        dirs = list(dict.fromkeys(x["dir"] for x in letters))
+        out.append("   папки писем: " + " · ".join(dirs))
+    return "\n".join(out)
 
 
 def reader_line(db_path, role: str) -> str:

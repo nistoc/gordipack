@@ -32,12 +32,24 @@
   ⑭ правил в базе нет вовсе → счёт нового: ритма без правила не бывает
   ⑮ база недоступна → строка счёта ГОВОРИТ об отказе
 
+📌 26.09 (карточка #663): письма моста называются поимённо — час · сосед → адресат · имя файла.
+Прежняя строка «есть новое» не называла ни письма, ни адресата; письма к роли пролежали до
+десяти часов. Случаи ниже на прежнем коде ПРОВАЛИВАЮТСЯ — это и есть их встречная проверка.
+  ⑯ письмо соседа тебе → строка с «(тебе)», именем файла и счётом «новых 1, тебе 1»  РАЗЛИЧАЮЩИЙ
+  ⑰ письмо другой роли: адресат назван, «(тебе)» нет; автор и пересланное тело адресатом
+     не считаются                                                                    РАЗЛИЧАЮЩИЙ
+  ⑱ своя исходящая письмом соседа не считается                                       РАЗЛИЧАЮЩИЙ
+  ⑲ шапка без адресата → «адресат не назван», а не пропуск письма                     РАЗЛИЧАЮЩИЙ
+  ⑳ письмо соседа ДРУГОМУ контуру: имя нашей роли в шапке «тебе» НЕ даёт               РАЗЛИЧАЮЩИЙ
+  ㉑ писем больше предела строк: письмо тебе показано, остальное — «и ещё N»            РАЗЛИЧАЮЩИЙ
+
 ⛔ Живой базы не касается: своя песочница.
 """
 import os
 import re
 import sqlite3
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -77,6 +89,51 @@ def add(db, role):
     con.execute("INSERT INTO messages (writer_role, body_md) VALUES (?, 'тело')", (role,))
     con.commit()
     con.close()
+
+
+def bridge_stand():
+    """Наш контур atlas и сосед neigh с папками моста → (база, своя исходящая,
+    исходящая соседа к нам, исходящая соседа другому контуру)."""
+    tmp = Path(mezo_stand.new("bite-backoff-bridge-"))
+    ours = tmp / "atlas"
+    (ours / ".mezosync").mkdir(parents=True)
+    db = str(ours / ".mezosync" / "mezosync.db")
+    neigh = tmp / "neigh"
+    (neigh / ".mezosync").mkdir(parents=True)
+    sqlite3.connect(str(neigh / ".mezosync" / "mezosync.db")).close()
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "writer_role TEXT, body_md TEXT)")
+    con.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+    con.execute("INSERT INTO meta VALUES ('group_name', 'atlas')")
+    con.execute("CREATE TABLE cross_links (source_group TEXT, target_group TEXT, "
+                "target_db_path TEXT, description TEXT)")
+    con.execute("INSERT INTO cross_links VALUES ('atlas', 'neigh', ?, 'проба')",
+                (str(neigh / ".mezosync" / "mezosync.db"),))
+    con.execute("CREATE TABLE roles (role TEXT PRIMARY KEY)")
+    con.executemany("INSERT INTO roles VALUES (?)",
+                    [(r,) for r in ("COORD", "PROTO", "OPSSRE", "CORE")])
+    con.commit()
+    con.close()
+    own = ours / "atlas.archs" / ".mezosync" / "bridges" / "atlas-neigh"
+    theirs = neigh / "neigh.archs" / ".mezosync" / "bridges" / "neigh-atlas"
+    elsewhere = neigh / "neigh.archs" / ".mezosync" / "bridges" / "neigh-other"
+    for d in (own, theirs, elsewhere):
+        d.mkdir(parents=True)
+    return db, own, theirs, elsewhere
+
+
+_CLOCK = [time.time()]
+
+
+def letter(folder, name, header):
+    """Письмо в папку моста со СВОЕЙ, заведомо более поздней меткой времени: иначе два
+    письма в одну долю секунды читались бы как одно событие."""
+    _CLOCK[0] += 5
+    p = folder / name
+    p.write_text(header + "\n\n# Заголовок\n\nтело письма\n", encoding="utf-8")
+    os.utime(p, (_CLOCK[0], _CLOCK[0]))
+    return p
 
 
 def main() -> int:
@@ -196,6 +253,65 @@ def main() -> int:
     bad_news = sb.news_line(os.path.join(mezo_stand.new("bite-sync-backoff-"), "нет.db"), "PROTO")
     ok &= case("⑮ база недоступна — строка счёта ГОВОРИТ об отказе",
                "НЕ ПОСЧИТАНО" in bad_news, bad_news[:100])
+
+    # ═══ ⑯–㉑ письма моста поимённо (26.09, карточка #663)
+    db3, own, theirs, elsewhere = bridge_stand()
+    sb.news_line(db3, "PROTO")                       # первое чтение заводит отметку
+    letter(theirs, "ask.atlas.to-proto.md",
+           "2026-09-26 08:06 UTC · пишет **COORD контура neigh**, для PROTO. Все метки UTC.")
+    l16 = sb.news_line(db3, "PROTO")
+    ok &= case("⑯ письмо соседа тебе — названо: сосед, адресат с пометкой «тебе», имя файла",
+               "neigh → PROTO (тебе) · ask.atlas.to-proto.md" in l16
+               and "новых 1, тебе 1" in l16 and "✉" in l16,
+               l16.replace("\n", " ⏎ ")[:220], differ=True)
+
+    letter(theirs, "status.atlas.to-opssre.md",
+           "2026-09-26 09:00 UTC · пишет **COORD-A контура neigh**, адресат — **OPSSRE контура "
+           "atlas**. Тело ниже написано **CORE контура onto**, я его не правил.")
+    l17 = sb.news_line(db3, "PROTO")
+    ok &= case("⑰ письмо другой роли — адресат назван, «тебе» нет; автор и пересланное тело "
+               "адресатом не считаются",
+               "neigh → OPSSRE · status.atlas.to-opssre.md" in l17 and "(тебе)" not in l17
+               and "тебе 0" in l17,
+               l17.replace("\n", " ⏎ ")[:220], differ=True)
+
+    letter(own, "answer.neigh.from-us.md",
+           "2026-09-26 09:10 UTC · пишет **PROTO контура atlas**, для COORD контура neigh.")
+    l18 = sb.news_line(db3, "PROTO")
+    ok &= case("⑱ своя исходящая письмом соседа не считается",
+               "from-us" not in l18 and "нового нет" in l18,
+               l18.replace("\n", " ⏎ ")[:160], differ=True)
+
+    letter(theirs, "status.atlas.no-header.md", "# Просто заголовок, шапки нет")
+    l19 = sb.news_line(db3, "PROTO")
+    ok &= case("⑲ шапка без адресата — «адресат не назван», письмо не пропущено",
+               "neigh → адресат не назван · status.atlas.no-header.md" in l19,
+               l19.replace("\n", " ⏎ ")[:200], differ=True)
+
+    letter(elsewhere, "ask.other.for-their-proto.md",
+           "2026-09-26 09:20 UTC · пишет **COORD контура neigh**, для PROTO контура other.")
+    l20 = sb.news_line(db3, "PROTO")
+    ok &= case("⑳ письмо соседа ДРУГОМУ контуру — имя нашей роли в шапке «тебе» не даёт",
+               "neigh → контур other · ask.other.for-their-proto.md" in l20
+               and "(тебе)" not in l20 and "тебе 0" in l20,
+               l20.replace("\n", " ⏎ ")[:200], differ=True)
+
+    # Предел берётся у механизма; у прежнего кода его нет — тогда 8, чтобы случай
+    # провалился словами, а не падением всей приёмки.
+    limit = getattr(sb, "LETTER_LINES_MAX", 8)
+    for i in range(limit + 1):
+        letter(theirs, f"status.atlas.bulk-{i:02d}.md",
+               "2026-09-26 10:00 UTC · пишет **COORD контура neigh**, для OPSSRE.")
+    letter(theirs, "ask.atlas.last-but-mine.md",
+           "2026-09-26 10:30 UTC · пишет **COORD контура neigh**, для PROTO.")
+    l21 = sb.news_line(db3, "PROTO")
+    shown = l21.count("✉")
+    ok &= case("㉑ писем больше предела строк — письмо тебе показано, остальное «и ещё N»",
+               "last-but-mine.md" in l21 and shown == limit
+               and f"и ещё {limit + 2 - shown}" in l21
+               and f"новых {limit + 2}, тебе 1" in l21,
+               f"строк писем {shown} из {limit + 2}; " + l21.splitlines()[0][-40:],
+               differ=True)
 
     print()
     print(f"{'✅ РАЗГОН СНА ПРИНЯТ' if ok else '🔴 НЕ ПРИНЯТ'} — случаев {CASES}, "
