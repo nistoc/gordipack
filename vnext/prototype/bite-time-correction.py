@@ -18,9 +18,20 @@ import importlib.util
 import os
 import sqlite3
 import sys
+from pathlib import Path
 
-import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mezo_target  # noqa: E402 — какую копию испытываем, решается ОДНИМ местом (карточка #146)
+import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
 
+# ⚖️ ИСПЫТУЕМЫЙ ЛЕЖИТ РЯДОМ С ПРИЁМКОЙ — И ЭТО ВЕРНО (карточка #659, 26.09.2026). Помощник
+# группы D перевёл путь на mezo_target.scripts_root() («брать из --target, как соседи»), и на
+# живом контуре приёмка отказала: guard-phoenix-time.py — инструмент ВТОРОЙ пары (vnext-tools ↔
+# vnext/prototype), в каталоге контура (.mezosync/scripts) его нет ни у донора, ни в пакете.
+# Для такого испытуемого «рядом с приёмкой» и есть проверяемая копия: у донора — vnext-tools,
+# у соседа — vnext/prototype пакета. Класс (а) «испытуемый рядом, а не из --target» касается
+# только инструментов контура; переносить его на инструменты второй пары — ложная починка.
+# Настоящая причина провала была одна — стенд без вида messages_all (ниже, в build()).
 HERE = os.path.dirname(os.path.abspath(__file__))
 GUARD = os.path.join(HERE, "guard-phoenix-time.py")
 if not os.path.exists(GUARD):
@@ -51,6 +62,16 @@ def build(rows):
                 " timestamp TEXT, body_md TEXT, tags TEXT)")
     con.executemany("INSERT INTO messages (id, writer_role, timestamp, tags, body_md)"
                     " VALUES (?,?,?,?,?)", rows)
+    # 🩸 ВИД ЛЕНТЫ — тот же класс, что уже однажды оплачен в guard-phoenix-time.py (05.09,
+    # находка STUD, см. комментарий у стенд_база() того же файла). Живая схема получила
+    # migrations/20260905-messages-archive.py: guard_time_under_test.corrected_ids() с того
+    # часа читает СОЮЗ messages ∪ messages_history ∪ messages_archive через вид messages_all
+    # (карточка #538 шаг ③ — час, записанный неверно, остаётся неверным и в архиве), а этот
+    # стенд нёс только голую таблицу messages и падал «no such table: messages_all» на первом
+    # же случае. Здесь испытуемому нужно лишь имя вида — истории/архива в случаях этого файла
+    # нет — минимальный вид ТОЧНО такой же формы, каким guard-phoenix-time.py чинит СЕБЯ.
+    con.execute("CREATE VIEW messages_all AS SELECT id, writer_role, timestamp, "
+                "body_md, tags, 'live' AS source FROM messages")
     con.commit()
     return db, con
 
