@@ -39,7 +39,10 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import mezo_stand  # noqa: E402 — карточка #629: судим согласованную копию, не живую базу
+import mezo_stand   # noqa: E402 — карточка #629: судим согласованную копию, не живую базу
+import mezo_target  # noqa: E402 — какую копию испытываем (карточка #148)
+
+print(f"⚖️ испытуется: {mezo_target.label()}")
 
 ROLE = "STUD"
 # 🩸 ЧЕЙ СЛЕД. Все прогоны набора подписываются ОСОБЫМ актором: живую базу пишут девять
@@ -69,8 +72,15 @@ def body_from_db(db, role=ROLE, section=SECTION):
     row = con.execute("SELECT body FROM phoenix WHERE role=? AND section=?", (role, section)).fetchone()
     con.close()
     if not row:
-        sys.exit(f"⛔ ОПЫТ НЕ ПОСТАВЛЕН: в базе нет {role}/{section} — судить нечего.\n"
-                 f"   Это отказ ОПЫТА, а не находка: без исходного тела любой вердикт был бы выдуман.")
+        # ⚡ ДОЛГ ПАКЕТА #659: раньше — sys.exit(строка) = код 1, и bite-all.py читал это как
+        # СЛОМАНО (нет в CANT_START), хотя сама приёмка честно говорит «не поставлено», не
+        # «сломано». Тело НЕ ПОДСАЖИВАЕМ (даже пробное) — автор прямо отказался: «без исходного
+        # тела любой вердикт был бы выдуман» — фабрикация тела и есть тот самый выдуманный
+        # вердикт. Код 2 — установленный в наборе сигнал «отказ мерить» (образец: bite-mention.py
+        # и другие «ИСПЫТУЕМОГО НЕТ» рядом).
+        print(f"⛔ ОПЫТ НЕ ПОСТАВЛЕН: в базе нет {role}/{section} — судить нечего.\n"
+              f"   Это отказ ОПЫТА, а не находка: без исходного тела любой вердикт был бы выдуман.")
+        sys.exit(2)
     return row[0]
 
 
@@ -108,7 +118,7 @@ def signs_at_printers():
     """
     container_root = Path(__file__).resolve().parent.parent
     printers = [
-        container_root / ".mezosync" / "scripts" / "read-phoenix.py",
+        mezo_target.scripts_root() / "read-phoenix.py",
         container_root / "atlas.archs" / "step04_opssre" / "tools" / "disk_layer.py",
     ]
     found, missing_files = set(), []
@@ -227,8 +237,7 @@ def main():
     a = ap.parse_args()
 
     here = Path(__file__).resolve()
-    tool = Path(a.tool) if a.tool else \
-        here.parent.parent / ".mezosync" / "scripts" / "save-phoenix.py"
+    tool = Path(a.tool) if a.tool else mezo_target.script("save-phoenix.py")
     if not tool.exists():
         sys.exit(f"⛔ ОПЫТ НЕ ПОСТАВЛЕН: инструмента нет — {tool}")
 

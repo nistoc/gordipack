@@ -596,7 +596,7 @@ def declare_milestone(con: sqlite3.Connection) -> str:
 STEPS = [
     (STEP1, "реестр ролей (опора для пяти таблиц)", step1_roles),
     (STEP2, "messages: broadcast + addressed_by", step2_messages_columns),
-    (STEP3, "честный курсор отрезками", step3_cursor_segments),
+    (STEP3, "честная отметка прочитанного отрезками", step3_cursor_segments),
     (STEP4, "треды: ответ связан с вопросом полем", step4_message_thread),
     (STEP5, "критерий «готово» + связь записки с задачей", step5_task_criterion),
     (STEP6, "номер версии вычисляется, старый снят надгробием", step6_schema_version),
@@ -644,7 +644,7 @@ def main() -> int:
             mark_done(con, ver, title)
             print(f"    ✅ записан в журнал шагов")
     if not args.dry:
-        print(f"\n🔢 РУБЕЖ ВЕРСИИ: {declare_milestone(con)}")
+        print(f"\n🔢 ОТМЕТКА ВЕРСИИ: {declare_milestone(con)}")
     con.close()
     print("\n" + "─" * 78)
     print("Отчёт — ЧИСЛА до и после, а не слово «готово»: «готово» проверить нельзя, числа можно.")

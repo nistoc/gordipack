@@ -202,7 +202,7 @@ def selftest():
         bad = mut(orig)
         if bad == orig:
             print(f"⚠️ {name}: паттерн не найден в {target.name} — нарочная поломка НЕ ВСТАЛА, "
-                  f"считаю ВЫЖИВШИМ (не вставший мутант ничего не доказывает)")
+                  f"считаю ВЫЖИВШИМ (не вставшая нарочная поломка ничего не доказывает)")
             survived += 1
             continue
         target.write_text(bad, encoding="utf-8")

@@ -30,13 +30,15 @@ import tempfile
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 HERE = pathlib.Path(__file__).resolve().parent
-ROOT = HERE.parent
-LIVE = ROOT / ".mezosync" / "mezosync.db"
-STEP = ROOT / ".mezosync" / "scripts" / "migrations" / "20260904-phoenix-records-autoincrement.py"
-MEMORY_TOOL = HERE / "memory-records.py"
 
 sys.path.insert(0, str(HERE))
-import mezo_stand  # noqa: E402 — карточка #505/#624: согласованная копия живой базы
+import mezo_stand   # noqa: E402 — карточка #505/#624: согласованная копия живой базы
+import mezo_target  # noqa: E402 — какую копию испытываем (карточка #148)
+
+print(f"⚖️ испытуется: {mezo_target.label()}")
+LIVE = mezo_target.scripts_root().parent / "mezosync.db"
+STEP = mezo_target.migration("20260904-phoenix-records-autoincrement.py")
+MEMORY_TOOL = HERE / "memory-records.py"
 
 passed: list[str] = []
 failed: list[str] = []
@@ -184,7 +186,7 @@ def main() -> int:
     print("=" * 88)
     print("ПРИЁМКА шага 20260904-phoenix-records-autoincrement — карточка #532 (причина)")
     print(f"шаг: {STEP}")
-    print(f"живая база (только копируется): {LIVE}")
+    print(f"база для копирования (только читается): {LIVE}")
     if old_check:
         print("⚠️ ПОРЧА «old-check» ВЗВЕДЕНА — id_reuse_experiment судит по MAX(id) хвоста, "
               "не по своей паре записей; ждём красного в ①-бис (копия с пропуском)")
@@ -239,6 +241,20 @@ def main() -> int:
                gap_deleted == gap_new,
                f"удалён {gap_deleted}, новый {gap_new} — повтора нет, опыт не различает "
                f"(тот же класс беды, что нашёл COORD 14.09 17:25 UTC на живом хвосте)")
+
+        # ⚡ ДОЛГ ПАКЕТА #659: «база для копирования» (LIVE) на СВЕЖЕМ контуре — без единой
+        # записи (init-group.py заводит пустой phoenix_records), а случай ④ ниже проверяет
+        # MAX(id)/AUTOINCREMENT после шага — на пустой таблице MAX(id) есть NULL, и сравнение
+        # падает TypeError, не «не поставлено» и не «сломано». Опыт готовит СВОЁ условие сам —
+        # тем же приёмом, что и id_reuse_experiment/make_gap_before_max: пусто — подсаживаем
+        # ОДНУ пробную запись (role='ПРОБА', её и так исключает случай ⑦), НЕ пусто —
+        # ветка не срабатывает и поведение на населённой живой базе не меняется.
+        c = sqlite3.connect(step_db)
+        was_empty = c.execute("SELECT COUNT(*) FROM phoenix_records").fetchone()[0] == 0
+        if was_empty:
+            _insert_probe(c)
+            c.commit()
+        c.close()
 
         print()
         print("── ②–⑥ ШАГ на копии ──────────────────────────────────────────────────")

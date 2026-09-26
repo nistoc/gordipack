@@ -49,10 +49,12 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import mezo_stand  # noqa: E402 — env закреплённый за стендом (карточка #613)
+import mezo_stand   # noqa: E402 — env закреплённый за стендом (карточка #613)
+import mezo_target  # noqa: E402 — какую копию испытываем (карточка #148)
 
+print(f"⚖️ испытуется: {mezo_target.label()}")
 HERE = Path(__file__).resolve().parent
-LIVE_TOOL = HERE.parent / ".mezosync" / "scripts" / "read-broadcasts.py"
+LIVE_TOOL = mezo_target.script("read-broadcasts.py")
 
 CASES = DIFFER = PASSED = 0
 
@@ -88,7 +90,7 @@ def build_stand(tool_dir: Path) -> Path:
     shutil.copy2(LIVE_TOOL, tool_dir / "read-broadcasts.py")
     mezo_paths = HERE / "mezo_paths.py"
     shutil.copy2(mezo_paths, tool_dir / "mezo_paths.py")
-    local_time = HERE.parent / ".mezosync" / "scripts" / "local_time.py"
+    local_time = mezo_target.scripts_root() / "local_time.py"
     if local_time.exists():
         shutil.copy2(local_time, tool_dir / "local_time.py")
     return tool_dir / "read-broadcasts.py"

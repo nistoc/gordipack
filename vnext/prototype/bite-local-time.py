@@ -10,7 +10,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-SCRIPTS = Path(__file__).resolve().parent.parent / ".mezosync" / "scripts"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mezo_target  # noqa: E402 — какую копию испытываем (карточка #148)
+
+print(f"⚖️ испытуется: {mezo_target.label()}")
+SCRIPTS = mezo_target.scripts_root()
 sys.path.insert(0, str(SCRIPTS))
 from local_time import utc_to_local  # noqa: E402
 

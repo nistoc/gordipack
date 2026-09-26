@@ -44,6 +44,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
+import mezo_target  # noqa: E402 — испытуемый берётся ЧЕРЕЗ общий помощник (MEZO_SCRIPTS_ROOT),
+                    # а не жёстким подъёмом на два каталога (карточка #659, группа F)
 
 CASES = DIFFER = PASSED = 0
 
@@ -78,9 +80,11 @@ def main() -> int:
                          "LIKE, слепым к заглавной кириллице")
     a = ap.parse_args()
 
-    live_tool = Path(__file__).resolve().parent.parent / ".mezosync" / "scripts" / "gordi-issue.py"
-    if not live_tool.is_file():
-        sys.exit(f"⛔ НЕ ЗАПУСТИЛСЯ: gordi-issue.py нет: {live_tool}")
+    # было: live_tool = Path(__file__).resolve().parent.parent / ".mezosync" / "scripts" / "gordi-issue.py"
+    # — жёсткий подъём на два каталога верен ТОЛЬКО для живого контура (vnext/prototype
+    # лежит внутри контейнера), а в пакете рядом с vnext нет .mezosync вовсе: приёмка
+    # игнорировала --target/MEZO_SCRIPTS_ROOT и не находила инструмент никогда (карточка #659).
+    live_tool = mezo_target.script("gordi-issue.py")
 
     stand = Path(tempfile.mkdtemp(prefix="bite-gordi-issue-"))
     try:
@@ -92,6 +96,29 @@ def main() -> int:
         src.backup(dst)
         dst.close()
         src.close()
+
+        # ГРУППА F, карточка #659: контур, собранный ЧЕРЕЗ init-group.py пакета, не несёт
+        # roster.json — он живёт РЯДОМ с живой базой, не в пакете (см. комментарий шага
+        # migrations/20260810-role-lifecycle.py: «реестр ролей живёт рядом с базой, а не
+        # в коде шага... нет файла — состояния не выдумываем»). У свежего контура таблица
+        # roles потому пуста НЕ ПО ОШИБКЕ продукта — шаг сам честно отказывается выдумать
+        # историю без файла (доказано чтением файла шага и PRAGMA table_info на pc-F: 0 строк,
+        # тогда как та же таблица живого Atlas несёт 11 строк с roster.json рядом).
+        # ⚠️ С 26.09 (пакет 1e4d7c7) init-group.py сам пишет роли из --roles в реестр —
+        # но ТОЛЬКО их (обычно одну, координатора), а случаям ниже нужны пять имён.
+        # Приёмке нужна СВОЯ раскладка ролей для случаев ①–⑤ — досеваем РОВНО те роли, которых
+        # случаи касаются, UPSERT'ом (ON CONFLICT DO NOTHING): если контур случайно живой и
+        # строки уже настоящие — не трогаем; если пуст — даём базовую, той же формы, что и
+        # у живого roster.json (COORD — координатор, остальные — рядовые).
+        con = sqlite3.connect(str(db))
+        for role, reason in (("COORD", "координатор контура; в живом реестре"),
+                             ("PROTO", "в живом реестре"), ("TAXO", "в живом реестре"),
+                             ("CORE", "в живом реестре"), ("STUD", "в живом реестре")):
+            con.execute(
+                "INSERT INTO roles (role, lifecycle, lifecycle_reason) VALUES (?, 'alive', ?) "
+                "ON CONFLICT(role) DO NOTHING", (role, reason))
+        con.commit()
+        con.close()
 
         # копия скриптов рядом — gordi-issue.py лениво импортирует mezo_paths из своего
         # каталога через sys.path.insert(parent); кладём инструмент и mezo_paths РЯДОМ

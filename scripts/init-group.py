@@ -46,6 +46,13 @@ def _latest_schema() -> Path:
 SCHEMA_FILE = _latest_schema()
 UNIVERSAL_RULES = REPO_ROOT / "rules" / "universal.sql"
 DOMAIN_RULES_DIR = REPO_ROOT / "rules" / "domain-specific"
+# Роль-координатор нового контура: ей кладётся заготовка coordinator.md, и она же
+# называется координатором СТРУКТУРНО — словом «координатор» в roles.lifecycle_reason.
+# Так координатора ищет gordi-issue.py (писатель канала заявок соседям): по слову в причине
+# ровно одной живой роли, литерал имени ему запрещён (карточка #645). До 26.09 сборка
+# писала причину без этого слова, и свежий контур отвечал «координатор НЕ ОПРЕДЕЛЁН
+# ОДНОЗНАЧНО» на первую же заявку (карточка #659, группа F).
+COORDINATOR_ROLE = "COORD"
 
 
 def main():
@@ -187,16 +194,21 @@ def main():
     # Роль сборки — живая по построению: её завёл тот, кто собирал контур.
     ROLE_REGISTRY_SQL = ("INSERT OR IGNORE INTO roles (role, lifecycle, lifecycle_at, "
                          "lifecycle_by, lifecycle_reason, in_roster) VALUES (?, 'alive', "
-                         "datetime('now'), 'init-group.py', "
-                         "'заведена сборкой контура (--roles)', 1)")
+                         "datetime('now'), 'init-group.py', ?, 1)")
     for role in roles:
         conn.execute(
             "INSERT OR IGNORE INTO read_cursors (reader_role, last_read_id) VALUES (?, 0)",
             (role,)
         )
-        conn.execute(ROLE_REGISTRY_SQL, (role,))
+        # причина роли-координатора несёт слово «координатор» — см. COORDINATOR_ROLE выше
+        reason = ("координатор контура; заведена сборкой контура (--roles)"
+                  if role == COORDINATOR_ROLE else "заведена сборкой контура (--roles)")
+        conn.execute(ROLE_REGISTRY_SQL, (role, reason))
     print(f"  ✅ Отметки прочитанного: {', '.join(roles)}")
-    print(f"  ✅ Реестр ролей: {', '.join(roles)} — живые, законные адресаты записок")
+    print(f"  ✅ Реестр ролей: {', '.join(roles)} — живые, законные адресаты записок"
+          + (f"; координатор — {COORDINATOR_ROLE}" if COORDINATOR_ROLE in roles else
+             f"; ⚠️ роли {COORDINATOR_ROLE} среди --roles нет — координатора у контура нет, "
+             "канал заявок соседям (gordi-issue.py) без него нем"))
 
     # 6. ЖУРНАЛ ШАГОВ — контур обязан знать СВОЮ версию (#145, замер 10.08 01:07 UTC).
     # 🪤 Свежесобранный контур отвечал `schema_version → (None, 0, 0)`: сосуды на месте,
@@ -482,7 +494,7 @@ def main():
         history_cols = [c[1] for c in conn2.execute("PRAGMA table_info(phoenix_history)")]
         now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         for role in roles:
-            tpl = tpl_dir / ("coordinator.md" if role == "COORD" else "repo-dev.md")
+            tpl = tpl_dir / ("coordinator.md" if role == COORDINATOR_ROLE else "repo-dev.md")
             if not tpl.exists():
                 continue
             head = [
@@ -626,7 +638,7 @@ def main():
     # по указанному пути и не нашёл ничего. ⇒ заготовки кладутся В КОНТУР, а имя файла
     # в подсказке БЕРЁТСЯ ЗАМЕРОМ ПО ДИСКУ. Нет файла — так и сказано, без выдумки.
     first = args.roles[0].upper()
-    wanted = "coordinator.md" if first == "COORD" else "repo-dev.md"
+    wanted = "coordinator.md" if first == COORDINATOR_ROLE else "repo-dev.md"
     landed = mezosync_dir / "templates" / wanted
     if landed.exists():
         print(f"   Следующий шаг: запустить {first} текстом заготовки {landed}")

@@ -68,7 +68,6 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-GORDI_ISSUE_PY = HERE.parent / ".mezosync" / "scripts" / "gordi-issue.py"
 
 sys.path.insert(0, str(HERE))
 import mezo_paths  # noqa: E402
@@ -80,6 +79,10 @@ import mezo_target  # noqa: E402 — какую копию испытываем 
 # соседству в vnext-tools. mezo_target уважает MEZO_SCRIPTS_ROOT — приёмку можно
 # направить и на копию, не только на живой контур.
 RFP_PATH = mezo_target.script("rules-from-pack.py")
+# gordi-issue.py — СОСЕД rules-from-pack.py в том же .mezosync/scripts (карточка #645,
+# случай ⑰б): переехал ТУДА ЖЕ переездом #608 шаг 3, но здесь до сих пор искался по
+# старому соседству в vnext-tools — найдено при починке приёмки (долг пакета #659).
+GORDI_ISSUE_PY = mezo_target.script("gordi-issue.py")
 print(f"⚖️ испытуется: {mezo_target.label()}")
 
 # Корень СВОЕГО контура — выводится, а не пишется литералом: случай ㊻ ищет его в выводе

@@ -312,6 +312,25 @@ def main() -> int:
                    f"{wm.returncode} (ждём 0), отказ в выводе: {'ОТКАЗ' in wout}; пустой реестр "
                    "отказывал всем адресатам — нашёл сосед в первый день", differ=True)
 
+        # ④в КООРДИНАТОР НАХОДИТСЯ ИЗ ДАННЫХ. gordi-issue.py (писатель канала заявок соседям)
+        #    ищет координатора словом «координатор» в roles.lifecycle_reason ровно одной живой
+        #    роли — литерал имени ему запрещён (карточка #645). Сборка 1e4d7c7 писала причину
+        #    без этого слова ⇒ на свежем контуре create/close отвечали «координатор НЕ ОПРЕДЕЛЁН
+        #    ОДНОЗНАЧНО» (bite-issue-loop 7 из 12 на свежем контуре, карточка #659, группа F).
+        good_md = tmp / "good.md"
+        good_md.write_text("## ЗАМЕР\nотказ дословно: «нет пути»\n## КЛАСС\nмолчащий отказ\n"
+                           "## ПРЕДЛОЖЕНИЕ\nпечатать причину; цена — час\n", encoding="utf-8")
+        gi = subprocess.run([sys.executable, str(mez / "scripts" / "gordi-issue.py"), "create",
+                             "--role", "COORD", "--title", "проба приёмки", "--body-file",
+                             str(good_md), "--dry-run"],
+                            capture_output=True, text=True, encoding="utf-8", timeout=120, env=env)
+        giout = (gi.stdout or "") + (gi.stderr or "")
+        ok &= case("④в координатор контура находится из реестра (gordi-issue.py create --dry-run)",
+                   gi.returncode == 0 and "разделы полны" in giout and "НЕ ОПРЕДЕЛЁН" not in giout,
+                   f"код {gi.returncode} (ждём 0); «НЕ ОПРЕДЕЛЁН» в выводе: {'НЕ ОПРЕДЕЛЁН' in giout}"
+                   " — без слова «координатор» в причине роли канал заявок у нового контура нем",
+                   differ=True)
+
         # ⑤ СТОРОЖА СУДЯТ СВОЮ БАЗУ, А НЕ БАЗУ РАЗРАБОТЧИКА ШАБЛОНА.
         #    Различающий признак: в выводе не должно быть имён НАШИХ ролей.
         g = subprocess.run([sys.executable, str(mez / "scripts" / "guard-all.py")],
@@ -601,7 +620,7 @@ def main() -> int:
             # Ждём: реестр пуст и холостая записка роли себе отказана — иначе случай ④б
             # зеленел бы не от строки реестра, а сам по себе.
             reg_src = (pack_copy / "scripts" / "init-group.py").read_text(encoding="utf-8")
-            reg_anchor = "        conn.execute(ROLE_REGISTRY_SQL, (role,))\n"
+            reg_anchor = "        conn.execute(ROLE_REGISTRY_SQL, (role, reason))\n"
             if reg_src.count(reg_anchor) != 1:
                 sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: строка записи реестра ролей не найдена дословно в "
                          "init-group.py — испытуемое изменилось, поломка ④б бьёт мимо")
@@ -634,6 +653,40 @@ def main() -> int:
                       f"{wm_nr.returncode if wm_nr else '—'} (ждём не 0); «СБОРКА НЕ ПРИНЯТА» "
                       f"в выводе сборки: {'СБОРКА НЕ ПРИНЯТА' in out4b} — проба адресата при "
                       "сборке обязана поймать это сама", differ=True)
+
+            # ── КОНТРОЛЬ ④в нарочной поломкой: копия init-group.py, у которой причина роли
+            # COORD в реестре БЕЗ слова «координатор» — ровно код 1e4d7c7 до этой правки.
+            # Ждём: gordi-issue.py create --dry-run на таком контуре отказывает словами
+            # «НЕ ОПРЕДЕЛЁН ОДНОЗНАЧНО» — иначе случай ④в зеленел бы не от слова в причине.
+            coord_anchor = '"координатор контура; заведена сборкой контура (--roles)"'
+            if reg_src.count(coord_anchor) != 1:
+                sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: причина роли-координатора не найдена дословно в "
+                         "init-group.py — испытуемое изменилось, поломка ④в бьёт мимо")
+            coord_poisoned = pack_copy / "scripts" / "init-group-no-coordinator.py"
+            coord_poisoned.write_text(
+                reg_src.replace(coord_anchor, '"заведена сборкой контура (--roles)"'),
+                encoding="utf-8")
+            # ⚠️ СВОЙ контейнер и СВОЯ среда: gordi-issue.py ищет базу СНАЧАЛА по MEZO_CONTAINER
+            # (mezo_paths, ①), и со средой основного стенда он читал бы базу ПЕРВОГО контура
+            # (tmp/.mezosync, где слово есть) — поломка зеленела бы мимо (первый прогон 01:24 UTC:
+            # код 0 вместо отказа). Отравленный контур живёт под своим корнем nocoord/.mezosync.
+            nc_root = tmp / "nocoord"
+            mez_nc = nc_root / ".mezosync"
+            env_nc = mezo_stand.stand_env(nc_root)
+            subprocess.run([sys.executable, str(coord_poisoned), "--name", "bitenocoord",
+                            "--path", str(mez_nc), "--roles", "coord"],
+                           capture_output=True, text=True, encoding="utf-8", timeout=300, env=env_nc)
+            gi_nc = subprocess.run([sys.executable, str(mez_nc / "scripts" / "gordi-issue.py"),
+                                    "create", "--role", "COORD", "--title", "проба приёмки",
+                                    "--body-file", str(good_md), "--dry-run"],
+                                   capture_output=True, text=True, encoding="utf-8", timeout=120,
+                                   env=env_nc) if (mez_nc / "scripts" / "gordi-issue.py").exists() else None
+            giout_nc = ((gi_nc.stdout or "") + (gi_nc.stderr or "")) if gi_nc else ""
+            ok &= case("④в ПОЛОМКА (причина роли без слова «координатор») КРАСИТ случай ④в — "
+                      "gordi-issue.py отказывает «НЕ ОПРЕДЕЛЁН ОДНОЗНАЧНО»",
+                      gi_nc is not None and gi_nc.returncode != 0 and "НЕ ОПРЕДЕЛЁН" in giout_nc,
+                      f"код {gi_nc.returncode if gi_nc else '—'} (ждём не 0); «НЕ ОПРЕДЕЛЁН» "
+                      f"в выводе: {'НЕ ОПРЕДЕЛЁН' in giout_nc}", differ=True)
 
             # ── КОНТРОЛЬ ⑭ нарочной поломкой: условие «🎉 только без ⛔» отключено обратно
             # (условие всегда ложно) — «🎉» обязана появиться ДАЖЕ поверх непустого

@@ -66,13 +66,20 @@ from io import StringIO
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-TREE_ROOT = HERE.parent
 
 sys.path.insert(0, str(HERE))
 import mezo_paths  # noqa: E402
 import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
+import mezo_target  # noqa: E402 — испытуемых ищем через MEZO_SCRIPTS_ROOT, не подъёмом на N каталогов
 
-MEZO_SCRIPTS = TREE_ROOT / ".mezosync" / "scripts"
+# было: MEZO_SCRIPTS = TREE_ROOT / ".mezosync" / "scripts" (TREE_ROOT = HERE.parent) — верно
+# ТОЛЬКО когда приёмка лежит на один уровень под корнем контура (vnext-tools/ в живом
+# Atlas). В пакете этот же файл лежит в vnext/prototype/ — уровнем ГЛУБЖЕ, и подъём на один
+# каталог даёт vnext/.mezosync/scripts, которого нет НИГДЕ (ни в пакете, ни в контуре):
+# отсюда «испытуемых инструментов нет» и код 2 (карточка #659). scripts_root() читает
+# MEZO_SCRIPTS_ROOT (ставит bite-all.py по --target) и лишь при его отсутствии падает на
+# mezo_paths.live_scripts() — не зависит от того, на сколько уровней приёмка вложена.
+MEZO_SCRIPTS = mezo_target.scripts_root()
 UPDATE_TOOLS = MEZO_SCRIPTS / "update-tools.py"
 GUARD_ALL = MEZO_SCRIPTS / "guard-all.py"
 TARGET_NAME = "check-acceptance-env.py"      # звено, из-за которого заведена карточка #637/#638

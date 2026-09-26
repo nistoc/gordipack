@@ -23,13 +23,18 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
+import mezo_target  # noqa: E402 — испытуемое (gordi-issue.py) берём через MEZO_SCRIPTS_ROOT,
+                    # как остальные приёмки набора; live_scripts/live_db остаются для СОСЕДЕЙ
+                    # (backlog.py) и снимка базы, а не для самого испытуемого механизма.
 
 SCRIPTS = mezo_paths.live_scripts()
 LIVE_DB = mezo_paths.live_db()
+CONTAINER_ROOT = mezo_paths.container_root()
 sys.path.insert(0, str(SCRIPTS))
 import mezo_stand  # noqa: E402
 
@@ -54,7 +59,10 @@ def run(script, *args):
 
 stand = mezo_stand.new("issue-loop-")
 live_before = (LIVE_DB.stat().st_size, LIVE_DB.stat().st_mtime_ns)
-GI = SCRIPTS / "gordi-issue.py"
+# было: GI = SCRIPTS / "gordi-issue.py" — рядом со «своим» live_scripts(), не через
+# MEZO_SCRIPTS_ROOT (карточка #659): образец прочих приёмок набора берёт ИСПЫТУЕМОЕ
+# через mezo_target.script(), оставляя live_scripts()/live_db() соседям и снимку базы.
+GI = mezo_target.script("gordi-issue.py")
 
 good = stand / "good.md"
 good.write_text("## ЗАМЕР\nотказ дословно: «нет пути»\n## КЛАСС\nмолчащий отказ\n"
@@ -97,13 +105,28 @@ con.execute("INSERT INTO backlog (role, title, body_md, status, priority, tags, 
             "'[\"gordi-issue #77\"]','PROTO','критерий')")
 con.commit()
 con.close()
+# ГРУППА F, карточка #659: было — АБСОЛЮТНЫЕ календарные даты («2026-08-10», «2026-08-27»).
+# Возраст issue считается ОТ ТЕКУЩЕГО часа (julianday('now') в cmd_poll), поэтому абсолютная
+# дата молча стареет вместе с настоящим временем: «свежая заявка» от 27.08 была моложе 7 суток
+# только НЕДЕЛЮ-ДРУГУЮ после написания приёмки, а месяц спустя (замерено `date -u`: 2026-09-26)
+# сама стала «старше 7 суток» — случаи ⑤ (счёт «без карточки >7 суток: 1» стал 2) и ⑥-встречный-2
+# («в пределах 7 суток») ломались НЕ ОТ ПОРЧИ инструмента, а от даты в самой приёмке.
+# ⇒ времена ОТНОСИТЕЛЬНЫЕ (сейчас − N дней), не выдуманы — свойство «старше/младше 7 суток»
+# остаётся верным в любой день прогона.
+_now = datetime.now(timezone.utc)
+
+
+def _iso(days_ago: float) -> str:
+    return (_now - timedelta(days=days_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 fixture = stand / "issues.json"
 fixture.write_text(json.dumps([
-    {"number": 55, "title": "заявка без карточки", "createdAt": "2026-08-10T10:00:00Z",
+    {"number": 55, "title": "заявка без карточки", "createdAt": _iso(10),
      "comments": [], "labels": [{"name": "process"}]},
-    {"number": 77, "title": "заявка с карточкой", "createdAt": "2026-08-10T10:00:00Z",
+    {"number": 77, "title": "заявка с карточкой", "createdAt": _iso(10),
      "comments": [], "labels": [{"name": "process"}]},
-    {"number": 90, "title": "свежая заявка", "createdAt": "2026-08-27T10:00:00Z",
+    {"number": 90, "title": "свежая заявка", "createdAt": _iso(2),
      "comments": [], "labels": [{"name": "process"}]},
 ], ensure_ascii=False), encoding="utf-8")
 rc, out5 = run(GI, "poll", "--role", "COORD", "--db", str(db), "--fixture", str(fixture))
@@ -132,6 +155,12 @@ weak = stand / "weak"
 weak.mkdir()
 shutil.copy(GI, weak / "gordi-issue.py")
 shutil.copy(SCRIPTS / "mezo_paths.py", weak / "mezo_paths.py")
+# ГРУППА F, карточка #659: копия лежит ОТДЕЛЬНО (stand — системный temp, не внутри контура),
+# и mezo_paths копии искал бы контейнер подъёмом от weak/ — не нашёл бы НИКОГДА и упал бы
+# отказом «контейнер группы не найден» ДО того, как дошёл бы до _writer_gate/секций (доказано
+# прогоном: без этой строки ⑨ падал именно так). Второй замок — тот же приём, что и у
+# рабочего контура: local.paths РЯДОМ с копией, а не переменная среды (её здесь неоткуда взять).
+(weak / "local.paths").write_text(f"container={CONTAINER_ROOT}\n", encoding="utf-8")
 src = (weak / "gordi-issue.py").read_text(encoding="utf-8")
 ANCHOR = "if missing:"
 if ANCHOR not in src:
