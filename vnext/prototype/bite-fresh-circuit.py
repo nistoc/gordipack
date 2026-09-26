@@ -294,6 +294,24 @@ def main() -> int:
                    "сборка заводила отметку прочитанного «coord», читалка ждёт «COORD» — контур рождался"
                    " сломанным", differ=True)
 
+        # ④б РОЛЬ СБОРКИ — ЗАКОННЫЙ АДРЕСАТ. Заявка контура dominal (2026-09-26 00:34 UTC):
+        #    сборка заводила роль читателем (read_cursors), но не строкой реестра (roles), а
+        #    словарь адресатов write-message.py читает реестр ⇒ --to <РОЛЬ> отказывал ВСЕМ.
+        #    Мерится двумя способами: строкой реестра и холостой запиской самой роли себе.
+        con = sqlite3.connect(str(mez / "mezosync.db"))
+        reg = con.execute("SELECT lifecycle, lifecycle_by FROM roles WHERE role='COORD'").fetchone()
+        con.close()
+        wm = subprocess.run([sys.executable, str(mez / "scripts" / "write-message.py"),
+                             "--role", "COORD", "--to", "COORD", "--dry-run",
+                             "--body", "проба приёмки: роль сборки — адресат"],
+                            capture_output=True, text=True, encoding="utf-8", timeout=120, env=env)
+        wout = (wm.stdout or "") + (wm.stderr or "")
+        ok &= case("④б роль сборки стоит в реестре ролей живой и принимается адресатом записки",
+                   bool(reg) and reg[0] == "alive" and wm.returncode == 0 and "ОТКАЗ" not in wout,
+                   f"реестр: {reg} (ждём alive); write-message --to COORD --dry-run → код "
+                   f"{wm.returncode} (ждём 0), отказ в выводе: {'ОТКАЗ' in wout}; пустой реестр "
+                   "отказывал всем адресатам — нашёл сосед в первый день", differ=True)
+
         # ⑤ СТОРОЖА СУДЯТ СВОЮ БАЗУ, А НЕ БАЗУ РАЗРАБОТЧИКА ШАБЛОНА.
         #    Различающий признак: в выводе не должно быть имён НАШИХ ролей.
         g = subprocess.run([sys.executable, str(mez / "scripts" / "guard-all.py")],
@@ -576,6 +594,46 @@ def main() -> int:
                       len(base_map5) == 0,
                       f"записей опоры {len(base_map5)} (ждём 0 — воспроизведён баг Н1)",
                       differ=True)
+
+            # ── КОНТРОЛЬ ④б нарочной поломкой: копия init-group.py, которая заводит роль
+            # читателем, но НЕ пишет строку реестра — ровно прежний код до заявки dominal.
+            # Живёт рядом своим именем файла (init-group.py целиком ещё нужен ниже).
+            # Ждём: реестр пуст и холостая записка роли себе отказана — иначе случай ④б
+            # зеленел бы не от строки реестра, а сам по себе.
+            reg_src = (pack_copy / "scripts" / "init-group.py").read_text(encoding="utf-8")
+            reg_anchor = "        conn.execute(ROLE_REGISTRY_SQL, (role,))\n"
+            if reg_src.count(reg_anchor) != 1:
+                sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: строка записи реестра ролей не найдена дословно в "
+                         "init-group.py — испытуемое изменилось, поломка ④б бьёт мимо")
+            reg_poisoned = pack_copy / "scripts" / "init-group-no-roles.py"
+            reg_poisoned.write_text(
+                reg_src.replace(reg_anchor, "        pass  # нарочная поломка приёмки: реестр не заполняется\n"),
+                encoding="utf-8")
+            mez_nr = tmp / ".mezosync-noroles"
+            r4b = subprocess.run(
+                [sys.executable, str(reg_poisoned), "--name", "bitenoroles", "--path",
+                 str(mez_nr), "--roles", "coord"],
+                capture_output=True, text=True, encoding="utf-8", timeout=300, env=env)
+            out4b = (r4b.stdout or "") + (r4b.stderr or "")
+            reg_nr = None
+            if (mez_nr / "mezosync.db").exists():
+                con_nr = sqlite3.connect(str(mez_nr / "mezosync.db"))
+                reg_nr = con_nr.execute("SELECT count(*) FROM roles").fetchone()[0]
+                con_nr.close()
+            wm_nr = subprocess.run([sys.executable, str(mez_nr / "scripts" / "write-message.py"),
+                                    "--role", "COORD", "--to", "COORD", "--dry-run",
+                                    "--body", "проба приёмки: поломка реестра"],
+                                   capture_output=True, text=True, encoding="utf-8", timeout=120,
+                                   env=env) if (mez_nr / "scripts" / "write-message.py").exists() else None
+            wout_nr = ((wm_nr.stdout or "") + (wm_nr.stderr or "")) if wm_nr else ""
+            ok &= case("④б ПОЛОМКА (сборка без строки реестра ролей) КРАСИТ случай ④б — реестр "
+                      "пуст, записка роли себе отказана, сама сборка сказала «НЕ ПРИНЯТА»",
+                      reg_nr == 0 and wm_nr is not None and wm_nr.returncode != 0
+                      and "ОТКАЗ" in wout_nr and "СБОРКА НЕ ПРИНЯТА" in out4b,
+                      f"строк реестра {reg_nr} (ждём 0); write-message → код "
+                      f"{wm_nr.returncode if wm_nr else '—'} (ждём не 0); «СБОРКА НЕ ПРИНЯТА» "
+                      f"в выводе сборки: {'СБОРКА НЕ ПРИНЯТА' in out4b} — проба адресата при "
+                      "сборке обязана поймать это сама", differ=True)
 
             # ── КОНТРОЛЬ ⑭ нарочной поломкой: условие «🎉 только без ⛔» отключено обратно
             # (условие всегда ложно) — «🎉» обязана появиться ДАЖЕ поверх непустого

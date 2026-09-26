@@ -179,12 +179,24 @@ def main():
     # завести ВТОРУЮ роль-двойника поверх существующей.
     # ⚖️ Класс тот же, что у нас с токенами ролей: одно имя, два регистра, две правды.
     roles = [r.upper() for r in args.roles]
+    # 🪤 НАЙДЕНО СОСЕДОМ (контур dominal, заявка 2026-09-26 00:34 UTC): сборка заводила
+    # роли ТОЛЬКО как читателей (read_cursors), а строку в реестре ролей (roles) — нет.
+    # Словарь адресатов write-message.py строится из реестра ⇒ у новорождённого контура
+    # он был пуст, и записка с --to <РОЛЬ> отказывалась ВСЕМ ролям, включая единственную
+    # заведённую. Прототип init-group-vnext.py реестр заполнял — расхождение двух сборщиков.
+    # Роль сборки — живая по построению: её завёл тот, кто собирал контур.
+    ROLE_REGISTRY_SQL = ("INSERT OR IGNORE INTO roles (role, lifecycle, lifecycle_at, "
+                         "lifecycle_by, lifecycle_reason, in_roster) VALUES (?, 'alive', "
+                         "datetime('now'), 'init-group.py', "
+                         "'заведена сборкой контура (--roles)', 1)")
     for role in roles:
         conn.execute(
             "INSERT OR IGNORE INTO read_cursors (reader_role, last_read_id) VALUES (?, 0)",
             (role,)
         )
+        conn.execute(ROLE_REGISTRY_SQL, (role,))
     print(f"  ✅ Отметки прочитанного: {', '.join(roles)}")
+    print(f"  ✅ Реестр ролей: {', '.join(roles)} — живые, законные адресаты записок")
 
     # 6. ЖУРНАЛ ШАГОВ — контур обязан знать СВОЮ версию (#145, замер 10.08 01:07 UTC).
     # 🪤 Свежесобранный контур отвечал `schema_version → (None, 0, 0)`: сосуды на месте,
@@ -553,9 +565,14 @@ def main():
     # нет (два файла с одним именем и разной начинкой: 145 строк против 81).
     # ⇒ Сборка, которая не пробует собранное, печатает «готово» про непроверенное.
     import subprocess
+    # Четвёртая проба — записка, адресованная роли сборки, холостым прогоном: словарь
+    # адресатов читается из реестра ролей, и пустой реестр отказывает всем (заявка dominal
+    # 26.09.2026). Отказ адресата — код 5, он и красит пробу; база при этом не меняется.
     probes = [("read-messages.py", ["--role", roles[0]]),
               ("read-phoenix.py", ["--role", roles[0]]),
-              ("backlog.py", ["list", "--role", roles[0]])]
+              ("backlog.py", ["list", "--role", roles[0]]),
+              ("write-message.py", ["--role", roles[0], "--to", roles[0], "--dry-run",
+                                    "--body", "проба сборки: роль сборки — законный адресат"])]
     broken = []
     for name, argv in probes:
         p = tools_dir / name
