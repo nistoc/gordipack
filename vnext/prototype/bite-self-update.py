@@ -9,6 +9,13 @@
 рукой — то есть был не самостоятельной командой, а придатком чужой машины.
 
     python <КОНТУР>/vnext-tools/bite-self-update.py
+
+⚖️ КАРТОЧКА #667: ОБРАЗЕЦ-ВЫГРУЗКА. Приёмка собирает свой контур из образца (template_root).
+Если образец — выгрузка пакета без git (архив) или репозиторий без адреса origin, источником
+собранного контура ПО ПОСТРОЕНИЮ записывается каталог на этой машине: случай ③ («источник —
+общий репозиторий») мерить не на чем, и он помечается «⚪ не проверено» (код 2, если провалов
+нет). Остальные случаи мерятся как прежде — их краснота на таком образце есть находка, а не
+нехватка данных.
 """
 from __future__ import annotations
 
@@ -26,10 +33,28 @@ import mezo_paths  # noqa: E402
 import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
 CASES = DIFFER = 0
+SKIPPED: list[str] = []
 NL = chr(10)
-INIT = mezo_paths.template_root(__file__) / "scripts" / "init-group.py"
+TEMPLATE = mezo_paths.template_root(__file__)
+INIT = TEMPLATE / "scripts" / "init-group.py"
 UPDATER = (mezo_paths.container_root(__file__) / ".mezosync" / "scripts"
            / "update-tools.py")
+
+
+def shared_origin_reason() -> str | None:
+    """Предпосылка случая ③, спрошенная у образца ДО сборки (карточка #667): None — у
+    образца есть адрес общего репозитория (origin вида http… / git@…), и собранный из него
+    контур обязан записать именно его. Иначе — причина честного «не проверено»."""
+    r = subprocess.run(["git", "-C", str(TEMPLATE), "remote", "get-url", "origin"],
+                       capture_output=True, text=True)
+    url = (r.stdout or "").strip()
+    if r.returncode == 0 and url.startswith(("http", "git@")):
+        return None
+    return (f"образец, из которого приёмка собирает контур ({TEMPLATE}), не несёт адреса "
+            "общего репозитория — " + (f"origin у него «{url}»" if url else
+                                       "это выгрузка без git или репозиторий без origin")
+            + ": источник собранного контура по построению — каталог на этой машине, "
+              "мерить ③ не на чем")
 
 
 def case(title, ok, detail, differ=False):
@@ -41,8 +66,16 @@ def case(title, ok, detail, differ=False):
     return ok
 
 
+def case_skip(title, reason):
+    """Честный отказ мерить случай: ⚪, не ✅ и не 🔴 (карточка #667)."""
+    SKIPPED.append(title)
+    print("⚪ " + title)
+    print("   пропущен: не проверено: " + reason)
+
+
 def main() -> int:
     ok = True
+    origin_reason = shared_origin_reason()   # предпосылка ③ — до первого случая
     tmp = mezo_stand.new("bite-selfupd-")
     env = mezo_stand.stand_env(tmp)  # среда закреплена за стендом: MEZO_CONTAINER вызывающего сюда не доезжает (записка #5096)
     try:
@@ -69,10 +102,14 @@ def main() -> int:
                    f"источник {meta.get('template_source', 'НЕТ')} · версия "
                    f"{meta.get('template_commit', 'НЕТ')}. До 19.08 спросить контур об этом было "
                    f"НЕЧЕМ: ответ жил только в голове того, кто собирал", differ=True)
-        ok &= case("③ источник — ОБЩИЙ репозиторий, а не каталог на чьей-то машине",
-                   str(meta.get("template_source", "")).startswith(("http", "git@")),
-                   f"{meta.get('template_source')} — стой здесь путь на машине соседа, контур "
-                   f"зависел бы от чужого диска и не обновился бы вовсе", differ=True)
+        if origin_reason:
+            case_skip("③ источник — ОБЩИЙ репозиторий, а не каталог на чьей-то машине",
+                      origin_reason + f" (записано: {meta.get('template_source')})")
+        else:
+            ok &= case("③ источник — ОБЩИЙ репозиторий, а не каталог на чьей-то машине",
+                       str(meta.get("template_source", "")).startswith(("http", "git@")),
+                       f"{meta.get('template_source')} — стой здесь путь на машине соседа, контур "
+                       f"зависел бы от чужого диска и не обновился бы вовсе", differ=True)
 
         upd = tmp / ".mezosync" / "scripts" / "update-tools.py"
         if not upd.exists():
@@ -103,10 +140,17 @@ def main() -> int:
         p = subprocess.run([sys.executable, str(upd)], capture_output=True, text=True,
                            encoding="utf-8", timeout=300, env=env)
         plan = (p.stdout or "") + (p.stderr or "")
+        shown = "guard-utc.py" in plan
+        # карточка #667: при провале — что сказало само обновление (строка отказа «⛔», а
+        # нет её — первая строка вывода), иначе причину провала из вывода приёмки не видно
+        plan_lines = [ln.strip() for ln in plan.splitlines() if ln.strip()]
+        plan_says = next((ln for ln in plan_lines if ln.startswith("⛔")),
+                         plan_lines[0] if plan_lines else "(пусто)")
         ok &= case("④ план показывает отставший файл и НИЧЕГО не пишет",
-                   "guard-utc.py" in plan
-                   and "устаревшая копия" in victim.read_text(encoding="utf-8"),
-                   "обновление, которое пишет раньше показа, нельзя ни отменить, ни обсудить",
+                   shown and "устаревшая копия" in victim.read_text(encoding="utf-8"),
+                   "обновление, которое пишет раньше показа, нельзя ни отменить, ни обсудить"
+                   + ("" if shown else
+                      f" · код плана {p.returncode}, обновление сказало: «{plan_says[:240]}»"),
                    differ=True)
 
         p = subprocess.run([sys.executable, str(upd), "--apply"], capture_output=True,
@@ -193,9 +237,18 @@ def main() -> int:
         mezo_stand.release(tmp)  # уборка отложена до исхода прогона
 
     print()
-    print((f"✅ САМОСТОЯТЕЛЬНОСТЬ КОНТУРА — ПРИНЯТО — случаев {CASES}, различающих {DIFFER}"
-           if ok else f"🔴 НЕ ПРИНЯТО — случаев {CASES}, различающих {DIFFER}"))
-    return 0 if ok else 1
+    if not ok:
+        print(f"🔴 НЕ ПРИНЯТО — случаев {CASES}, различающих {DIFFER}"
+              + (f" · не проверено {len(SKIPPED)}: {' · '.join(SKIPPED)}" if SKIPPED else ""))
+        return 1
+    if SKIPPED:
+        # ⚖️ Три исхода, не два (карточка #667): непроверенное — не провал и не «всё чисто».
+        print(f"⚪ САМОСТОЯТЕЛЬНОСТЬ КОНТУРА — не проверено {len(SKIPPED)} из "
+              f"{CASES + len(SKIPPED)} (проверенных {CASES} — провалов нет): "
+              + " · ".join(SKIPPED))
+        return 2
+    print(f"✅ САМОСТОЯТЕЛЬНОСТЬ КОНТУРА — ПРИНЯТО — случаев {CASES}, различающих {DIFFER}")
+    return 0
 
 
 if __name__ == "__main__":

@@ -73,6 +73,13 @@ def make_stand(tmp: pathlib.Path, with_repo=True) -> tuple:
     their_box.mkdir(parents=True)
 
     con = sqlite3.connect(our_root / ".mezosync" / "mezosync.db")
+    # ⚖️ Имя СВОЕЙ группы — своё, а не унаследованное из снимка базы контура (карточка
+    # #667): на пустом новом контуре meta.group_name несёт имя СБОРКИ, а не «atlas», и
+    # признак «наш вопрос» / «наш ответ» в guard-all.py (our_group, _own_name) перестаёт
+    # узнавать вопросы с адресатом «atlas», которых строит эта приёмка. Приёмка — хозяин
+    # своей копии базы: имя группы в НЕЙ назначает сама, а не берёт из снимка.
+    con.execute("INSERT INTO meta (key, value) VALUES ('group_name', 'atlas') "
+                "ON CONFLICT(key) DO UPDATE SET value = 'atlas'")
     con.execute("DELETE FROM cross_links")
     con.execute("INSERT INTO cross_links (source_group, target_group, target_db_path,"
                 " description) VALUES ('atlas','neigh',?,'проба')",

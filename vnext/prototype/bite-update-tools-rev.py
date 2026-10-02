@@ -100,6 +100,47 @@ if not hasattr(mezo_stand, "stand_env"):
 PACKAGE = mezo_paths.template_root(__file__)
 INIT = PACKAGE / "scripts" / "init-group.py"
 
+# ═══ ПРЕДПОСЫЛКА — ИСТОРИЯ ПАКЕТА, спрошена ДО первого случая (карточка #667) ═══
+# Все случаи стоят на НАСТОЯЩЕЙ истории образца: старая редакция scripts/backlog.py (8-я от
+# HEAD), дата её появления и дата следующей смены. У контура, собранного из выгрузки пакета
+# (архив без .git), такой истории нет ВОВСЕ — это нехватка данных, а не поломка
+# update-tools.py. Прежде здесь падало «⛔ НЕ ЗАПУСТИЛАСЬ … (0)» кодом 1, и общий прогон
+# (bite-all.py) печатал это «СЛОМАНО». Теперь — честный отказ мерить: «⚪ не проверено»
+# и код 2. Подставную историю не строим: случаи берут --rev ЦЕЛОГО пакета и собирают
+# полные контуры его же init-group.py — подставной пакет с восемью редакциями был бы
+# отдельной большой постройкой, дороже честного отказа на контуре без истории.
+MIN_REVISIONS = 8
+
+
+def package_history_reason() -> str | None:
+    """None — у образца есть своя история git и в ней ≥ MIN_REVISIONS редакций
+    scripts/backlog.py. Иначе — причина честного «не проверено», словами."""
+    top = subprocess.run(["git", "-C", str(PACKAGE), "rev-parse", "--show-toplevel"],
+                         capture_output=True, text=True)
+    if top.returncode != 0:
+        return (f"образец пакета ({PACKAGE}) — каталог без истории git (выгрузка, не "
+                f"репозиторий): случаи стоят на редакциях scripts/backlog.py из истории "
+                f"пакета (нужно не меньше {MIN_REVISIONS}), а у выгрузки истории нет")
+    if pathlib.Path(top.stdout.strip()).resolve() != PACKAGE.resolve():
+        return (f"образец пакета ({PACKAGE}) лежит внутри другого репозитория "
+                f"({top.stdout.strip()}) — своей истории пакета у него нет")
+    log = subprocess.run(["git", "-C", str(PACKAGE), "log", "--format=%H", "--",
+                          "scripts/backlog.py"], capture_output=True, text=True)
+    revisions = len([h for h in (log.stdout or "").splitlines() if h.strip()])
+    if revisions < MIN_REVISIONS:
+        return (f"у scripts/backlog.py в истории образца пакета ({PACKAGE}) редакций "
+                f"{revisions}, нужно не меньше {MIN_REVISIONS}: старой версии, отличной "
+                f"от HEAD, приёмке взять неоткуда")
+    return None
+
+
+HISTORY_REASON = package_history_reason()
+if HISTORY_REASON:
+    print(f"⚪ не проверено: {HISTORY_REASON}")
+    print("   Это отказ мерить, а не находка: механизм не испытан, и «в порядке» о нём "
+          "сказать нельзя.")
+    sys.exit(2)
+
 
 def pack_state() -> tuple[str, str, str]:
     """Состояние рабочей копии пакета: HEAD · `git status --short` · отпечаток `git diff HEAD`."""

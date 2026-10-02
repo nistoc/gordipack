@@ -34,8 +34,8 @@ import mezo_stand  # копия живой базы — ТОЛЬКО через 
 import mezo_target
 
 LIVE_DB = mezo_paths.live_db()
-ROLE = "ЗОНДХОЛОСТОЙ"
-МЕТКА = "ЗОНД-ХОЛОСТОГО-ПРОГОНА"
+ROLE = "DRYRUNPROBE"
+LABEL = "ЗОНД-ХОЛОСТОГО-ПРОГОНА"
 
 CASES: list[tuple[str, bool, str]] = []
 
@@ -52,10 +52,14 @@ def run(tool: str, *args: str) -> tuple[int, str]:
 
 
 def count(db: Path, sql: str) -> int:
+    # ⚖️ con закрывается В ЛЮБОМ случае (в т.ч. при падении запроса) — иначе на Windows
+    # соединение держит файл базы открытым, и уборка временной папки падает следом
+    # PermissionError'ом, маскируя настоящую причину (карточка-беда #667, случай ④).
     con = sqlite3.connect(db)
-    n = con.execute(sql).fetchone()[0]
-    con.close()
-    return n
+    try:
+        return con.execute(sql).fetchone()[0]
+    finally:
+        con.close()
 
 
 def seed(db: Path) -> None:
@@ -64,30 +68,37 @@ def seed(db: Path) -> None:
                 " created_at) VALUES (?,'alive','проба','приёмка',0,datetime('now'))", (ROLE,))
     con.execute("INSERT OR REPLACE INTO read_cursors (reader_role, last_read_id, updated_at)"
                 " VALUES (?,(SELECT COALESCE(MAX(id),0) FROM messages),datetime('now'))", (ROLE,))
+    # Случай ④ меряет, что ХОЛОСТОЙ save-phoenix не трогает тело раздела PROTO/state —
+    # на пустом новом контуре этого раздела может не быть вовсе (подставная фикстура,
+    # предпочтение 1 из задания): делаем раздел измеримым, не трогая чужое содержимое,
+    # если оно уже есть на живом контуре.
+    con.execute("INSERT OR IGNORE INTO phoenix (role, section, body, saved_at)"
+                " VALUES ('PROTO','state',?,datetime('now'))",
+                ("⚪ подставное тело раздела для случая ④ (приёмка bite-dry-run.py)",))
     con.commit()
     con.close()
 
 
 def main() -> int:
     if not LIVE_DB.exists():
-        print(f"🔴 НЕ ЗАПУСТИЛАСЬ: нет базы {LIVE_DB}")
+        print(f"⚪ не проверено: нет базы {LIVE_DB}")
         return 2
     for tool in ("write-message.py", "save-phoenix.py", "backlog.py", "dryrun.py"):
         if not mezo_target.script(tool).exists():
-            print(f"🔴 НЕ ЗАПУСТИЛАСЬ: нет инструмента {tool}")
+            print(f"⚪ не проверено: нет инструмента {tool}")
             return 2
 
     with tempfile.TemporaryDirectory() as tmp:
         db = Path(tmp) / "probe.db"
         mezo_stand.snapshot_db(LIVE_DB, db)
         seed(db)
-        нот = f"SELECT COUNT(*) FROM messages WHERE body_md LIKE '%{МЕТКА}%'"
+        probe_count_sql = f"SELECT COUNT(*) FROM messages WHERE body_md LIKE '%{LABEL}%'"
 
         # ① ЗАПИСКА ВХОЛОСТУЮ — в ленте ноль. Главный случай: именно здесь я насорил.
         code, out = run("write-message.py", "--role", ROLE, "--db", str(db),
-                        "--body", f"{МЕТКА} записка", "--dry-run")
+                        "--body", f"{LABEL} записка", "--dry-run")
         case("① записка вхолостую в ленту НЕ попала",
-             count(db, нот) == 0, f"нот с меткой в базе: {count(db, нот)}")
+             count(db, probe_count_sql) == 0, f"нот с меткой в базе: {count(db, probe_count_sql)}")
 
         # ② ПОДПИСЬ ПЕЧАТАЕТСЯ ДВАЖДЫ — в начале и на выходе. Один раз мало: вывод длинный,
         #    шапка уезжает, читают хвост. Мой промах случился ровно на чтении хвоста.
@@ -97,29 +108,35 @@ def main() -> int:
 
         # ③ КОНТРОЛЬНАЯ ПАРА — БЕЗ ФЛАГА ЗАПИСЬ ПРОИСХОДИТ. Без этого случая приёмку прошёл бы
         #    инструмент, сломанный НАСОВСЕМ: «ничего не пишется» — тоже «ничего не пишется».
-        run("write-message.py", "--role", ROLE, "--db", str(db), "--body", f"{МЕТКА} боевая")
+        run("write-message.py", "--role", ROLE, "--db", str(db), "--body", f"{LABEL} боевая")
         case("③ без флага записка ПИШЕТСЯ (иначе это не холостой ход, а поломка)",
-             count(db, нот) == 1, f"нот с меткой: {count(db, нот)}")
+             count(db, probe_count_sql) == 1, f"нот с меткой: {count(db, probe_count_sql)}")
 
         # ④ ПАМЯТЬ ВХОЛОСТУЮ — секция не тронута.
-        было = count(db, f"SELECT COALESCE(LENGTH(body),0) FROM phoenix "
-                         f"WHERE role='PROTO' AND section='state'")
+        # ⚠️ ПОЧИНКА (карточка-беда #667): было scalar-SELECT без агрегата — если строка
+        #    role='PROTO'/section='state' в копии отсутствует (пустой новый контур), fetchone()
+        #    возвращал None, а не (0,), и count() падал TypeError'ом. MAX(...) превращает запрос
+        #    в агрегатный — он всегда возвращает одну строку, даже без совпадений. Фикстура в
+        #    seed() дополнительно гарантирует was_len > 0 на любом контуре.
+        was_len = count(db, "SELECT COALESCE(MAX(LENGTH(body)),0) FROM phoenix "
+                             "WHERE role='PROTO' AND section='state'")
         f = Path(tmp) / "s.md"
-        f.write_text(f"{МЕТКА} подмена секции", encoding="utf-8")
+        f.write_text(f"{LABEL} подмена секции", encoding="utf-8")
         run("save-phoenix.py", "--role", "PROTO", "--section", "state",
             "--file", str(f), "--db", str(db), "--dry-run")
-        стало = count(db, f"SELECT COALESCE(LENGTH(body),0) FROM phoenix "
-                          f"WHERE role='PROTO' AND section='state'")
-        case("④ память вхолостую не переписана", было == стало and было > 0,
-             f"длина секции {было} → {стало}")
+        now_len = count(db, "SELECT COALESCE(MAX(LENGTH(body)),0) FROM phoenix "
+                             "WHERE role='PROTO' AND section='state'")
+        case("④ память вхолостую не переписана", was_len == now_len and was_len > 0,
+             f"длина секции {was_len} → {now_len}")
 
         # ⑤ КАРТОЧКА ВХОЛОСТУЮ — события не прибавилось.
-        соб = "SELECT COUNT(*) FROM backlog_events"
-        до = count(db, соб)
+        events_count_sql = "SELECT COUNT(*) FROM backlog_events"
+        before_count = count(db, events_count_sql)
         run("backlog.py", "comment", "193", "--actor", "PROTO",
-            "--body", f"{МЕТКА} комментарий", "--db", str(db), "--dry-run")
+            "--body", f"{LABEL} комментарий", "--db", str(db), "--dry-run")
         case("⑤ комментарий вхолостую в историю карточки не попал",
-             count(db, соб) == до, f"событий {до} → {count(db, соб)}")
+             count(db, events_count_sql) == before_count,
+             f"событий {before_count} → {count(db, events_count_sql)}")
 
         # ⑥ У ЧИТАЮЩИХ ПОДКОМАНД ФЛАГА НЕТ — И ЭТО НАМЕРЕННО. Флаг там, где нечего сохранять,
         #    учил бы, что он иногда бесполезен; а дубль на двух уровнях разбора аргументов
@@ -130,7 +147,7 @@ def main() -> int:
 
     # ⑦ ЖИВАЯ БАЗА ЦЕЛА.
     con = sqlite3.connect(f"file:{LIVE_DB}?mode=ro", uri=True)
-    leaked = con.execute(f"SELECT COUNT(*) FROM messages WHERE body_md LIKE '%{МЕТКА}%'").fetchone()[0]
+    leaked = con.execute(f"SELECT COUNT(*) FROM messages WHERE body_md LIKE '%{LABEL}%'").fetchone()[0]
     con.close()
     case("⑦ живая база не тронута", leaked == 0, f"следов зонда в живой базе: {leaked}")
 

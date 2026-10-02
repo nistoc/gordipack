@@ -41,10 +41,10 @@ import importlib.util
 import pathlib
 import sqlite3
 import sys
-import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
+import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
 
 TOOL = (mezo_paths.container_root(__file__) / ".mezosync" / "scripts"
               / "guard-stub-expectations.py")
@@ -63,20 +63,10 @@ def case(title, verdict, detail, differ=False):
 
 def load_tool():
     sys.path.insert(0, str(TOOL.parent))
-    spec = importlib.util.spec_from_file_location("метки_под_испытанием", TOOL)
+    spec = importlib.util.spec_from_file_location("stub_marks_under_test", TOOL)
     tool = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(tool)
     return tool
-
-
-def task_with_status(statuses) -> str | None:
-    """Номер живой задачи с одним из статусов — ИЗ БАЗЫ, а не выдуманный."""
-    con = sqlite3.connect(f"file:{DB_PATH.as_posix()}?mode=ro", uri=True)
-    placeholders = ",".join("?" * len(statuses))
-    row = con.execute(f"SELECT id FROM backlog WHERE status IN ({placeholders}) LIMIT 1",
-                         statuses).fetchone()
-    con.close()
-    return str(row[0]) if row else None
 
 
 def writer_statuses() -> set[str]:
@@ -123,47 +113,60 @@ def main() -> int:
         sys.exit(f"⛔ НЕ ЗАПУСТИЛАСЬ: нет инструмента — {TOOL}")
     tool = load_tool()
 
-    open_task = task_with_status(["open", "in_progress"])
-    closed_task = task_with_status(["done", "dropped"])
-    if not open_task or not closed_task:
-        sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: в базе нет задач нужных состояний — "
-                 "опыт не на чем ставить, и это отказ мерить, а не «чисто»")
-
-    state, reason = tool._task_state(open_task)
-    ok &= case("① живая задача — долг законен",
-               state == "open",
-               f"#{open_task} → {state}: {reason}", differ=True)
-
-    state2, reason2 = tool._task_state(closed_task)
-    ok &= case("② ЗАКРЫТАЯ задача — «оправдание пережило свою причину»",
-               state2 == "closed",
-               f"#{closed_task} → {state2}: {reason2}", differ=True)
-
-    state3, reason3 = tool._task_state("99999999")
-    ok &= case("③ задачи НЕТ вовсе — отдельный исход, а не тот же, что у закрытой",
-               state3 == "ghost" and state3 != state2,
-               f"#99999999 → {state3}: {reason3}. Свести с ② значило бы объявить "
-               "несуществующее просроченным", differ=True)
-
-    # ④ НЕЗНАКОМЫЙ СТАТУС. Стенд: своя база с задачей в статусе, которого мы не знаем.
-    d = pathlib.Path(tempfile.mkdtemp(prefix="bite-debt-"))
-    stand_db = d / "mezosync.db"
+    # 🩹 ДОГОН (карточка #667, пустой новый контур): случаи ①② раньше искали НАСТОЯЩУЮ
+    # задачу подходящего статуса в списке задач контура — на свежей выгрузке пакета он
+    # ПУСТ, и приёмка отказывала ДО единого случая («в базе нет задач нужных состояний»,
+    # код 1 — не тот третий исход, которого ждёт общий прогон). Механизм при этом цел:
+    # ему всё равно, чья задача, важен её статус. ⇒ Приёмка снимает КОПИЮ базы контура
+    # (mezo_stand.snapshot_db — та же схема списка задач, что у живой) и заводит в ней
+    # СВОИ карточки: открытую, закрытую и с незнакомым статусом. _task_state читает
+    # mezo_paths.live_db() изнутри, поэтому на время ①②④⑥ он подменяется на копию.
+    # Случай ③ («задачи нет вовсе») судит НАСТОЯЩУЮ базу контура, как и до правки: он
+    # заодно доказывает, что инструмент находит базу сам, — потерянная база дала бы
+    # «unknown», а не «ghost». На пустом контуре номера 99999999 нет так же, как на живом.
+    stand = mezo_stand.new("bite-debt-")
+    stand_db = stand / "mezosync.db"
+    mezo_stand.snapshot_db(DB_PATH, stand_db)
     con = sqlite3.connect(stand_db)
-    con.execute("CREATE TABLE backlog (id INTEGER PRIMARY KEY, status TEXT)")
-    con.execute("INSERT INTO backlog (id, status) VALUES (4242, 'какой-то-новый')")
+    seeded = {}
+    for kind, status in (("open", "open"), ("closed", "done"), ("unknown", "какой-то-новый")):
+        cur = con.execute(
+            "INSERT INTO backlog (role, title, body_md, status, priority, created_by) "
+            "VALUES ('PROTO', ?, 'тело подставной карточки', ?, 'normal', 'PROTO')",
+            (f"подставная карточка приёмки bite-stub-debt-expiry: {kind}", status))
+        seeded[kind] = str(cur.lastrowid)
     con.commit()
     con.close()
-    previous_live_db = tool.mezo_paths.live_db if hasattr(tool, "mezo_paths") else None
+    open_task, closed_task, unknown_task = seeded["open"], seeded["closed"], seeded["unknown"]
+
     import mezo_paths as mp
     saved_live_db = mp.live_db
     mp.live_db = lambda *a, **k: str(stand_db)
     try:
-        state4, reason4 = tool._task_state("4242")
+        state, reason = tool._task_state(open_task)
+        state2, reason2 = tool._task_state(closed_task)
+        state4, reason4 = tool._task_state(unknown_task)
     finally:
         mp.live_db = saved_live_db
+
+    ok &= case("① живая задача — долг законен",
+               state == "open",
+               f"#{open_task} (своя карточка на копии) → {state}: {reason}", differ=True)
+
+    ok &= case("② ЗАКРЫТАЯ задача — «оправдание пережило свою причину»",
+               state2 == "closed",
+               f"#{closed_task} (своя карточка на копии) → {state2}: {reason2}", differ=True)
+
+    state3, reason3 = tool._task_state("99999999")
+    ok &= case("③ задачи НЕТ вовсе — отдельный исход, а не тот же, что у закрытой",
+               state3 == "ghost" and state3 != state2,
+               f"#99999999 (база контура) → {state3}: {reason3}. Свести с ② значило бы объявить "
+               "несуществующее просроченным", differ=True)
+
+    # ④ НЕЗНАКОМЫЙ СТАТУС — своя карточка на той же копии со статусом, которого мы не знаем.
     ok &= case("④ статус НЕЗНАКОМ — «не берусь судить», а не приговор",
                state4 == "unknown",
-               f"#4242 (статус «какой-то-новый») → {state4}: {reason4}. Отнести незнакомое "
+               f"#{unknown_task} (статус «какой-то-новый») → {state4}: {reason4}. Отнести незнакомое "
                "к закрытым — краснеть на каждом новом статусе; к живым — молча пропускать",
                differ=True)
 
@@ -209,18 +212,22 @@ def main() -> int:
                differ=True)
 
     # ⑥ ВЕРДИКТ МЕТКИ различает состояния, а не сводит всё к «долгу».
-    lines_open = ["// STUB-EXPECTED: #%s — снять вместе с формой" % open_task]
-    lines_closed = ["// STUB-EXPECTED: #%s — снять вместе с формой" % closed_task]
-    lines_ghost = ["// STUB-EXPECTED: #99999999 — снять вместе с формой"]
-    verdicts = (tool.verdict_for(lines_open, 0), tool.verdict_for(lines_closed, 0),
-                tool.verdict_for(lines_ghost, 0))
+    # Номера — ТЕ ЖЕ свои карточки копии, которыми судили ①②: verdict_for() читает статус
+    # через _task_state(), поэтому подмена базы на копию ставится на время этих трёх вызовов.
+    mp.live_db = lambda *a, **k: str(stand_db)
+    try:
+        lines_open = ["// STUB-EXPECTED: #%s — снять вместе с формой" % open_task]
+        lines_closed = ["// STUB-EXPECTED: #%s — снять вместе с формой" % closed_task]
+        lines_ghost = ["// STUB-EXPECTED: #99999999 — снять вместе с формой"]
+        verdicts = (tool.verdict_for(lines_open, 0), tool.verdict_for(lines_closed, 0),
+                    tool.verdict_for(lines_ghost, 0))
+    finally:
+        mp.live_db = saved_live_db
     ok &= case("⑥ вердикт метки различает три состояния, а не сводит к одному «долг»",
                verdicts == ("debt", "debt-dead", "debt-ghost"),
                f"вердикты: {verdicts} — до правки все три были «debt», и метка "
                "оправдывала заглушку бессрочно", differ=True)
 
-    import shutil
-    shutil.rmtree(d, ignore_errors=True)
     print()
     print(f"{'✅ СРОК ГОДНОСТИ ДОЛГА ПРИНЯТ' if ok else '🔴 НЕ ПРИНЯТО'} — случаев {CASES}, "
           f"различающих {DIFFER}")
@@ -228,4 +235,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))

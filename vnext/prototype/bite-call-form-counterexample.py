@@ -29,16 +29,28 @@ LIVE = mezo_paths.live_db()
 ORDER = r"python .mezosync\scripts\read-messages.py --role COORD"
 COUNTER = r"⛔ НЕ зови относительно: python .mezosync\scripts\read-messages.py — падает"
 
+# Подставная роль/раздел приёмки (карточка #667): раньше строка ложилась в память
+# ЖИВОЙ роли COORD, раздел 'state' — на свежесобранном контуре у COORD есть только
+# раздел 'identity', WHERE ничего не находил, UPDATE молча правил ноль строк, и
+# случаи ①–⑤ гоняли гард по НЕТРОНУТОЙ копии, а случай ⑥ падал трассой (SELECT по
+# тому же 'state' у COORD отвечал NULL). Своя роль/раздел не зависит от того, что
+# уже лежит в памяти ролей контура, и не подчищает за собой ЖИВУЮ память, которой
+# не касалась.
+TEST_ROLE = "BITECALLFORM"
+TEST_SECTION = "state"
+
 ok = True
 
 
 def run_with_snapshot(line, label):
-    """Кладёт строку в слепок КОПИИ базы и возвращает вывод гарда по этой копии."""
+    """Кладёт строку в тело КОПИИ базы (в свой подставной раздел памяти) и возвращает
+    вывод гарда по этой копии."""
     tmp = Path(tempfile.gettempdir()) / f"bite-callform-{label}.db"
     mezo_stand.snapshot_db(LIVE, tmp)
     c = sqlite3.connect(tmp)
-    c.execute("UPDATE phoenix SET body = body || ? WHERE role='COORD' AND section='state'",
-              ("\n" + line + "\n",))
+    c.execute("INSERT INTO phoenix (role, section, body) VALUES (?, ?, ?) "
+              "ON CONFLICT(role, section) DO UPDATE SET body = excluded.body",
+              (TEST_ROLE, TEST_SECTION, "\n" + line + "\n"))
     c.commit()
     c.close()
     r = subprocess.run([sys.executable, str(GUARD), "--db", str(tmp),
@@ -83,11 +95,14 @@ check("④", "относительная в памятях ролей" in out3,
 out4 = run_with_snapshot("обычная строка без вызовов", "clean")
 check("⑤", "относительная в памятях ролей" not in out4, "на чистой памяти проверка молчит")
 
-# ⑥ ЖИВАЯ БАЗА НЕ ЗАДЕТА: приёмка не смеет менять то, что проверяет.
+# ⑥ ЖИВАЯ БАЗА НЕ ЗАДЕТА: приёмка не смеет менять то, что проверяет. Проверяем, что
+# подставная роль приёмки не просочилась в живую базу — не привязываемся к тому,
+# какие разделы памяти у COORD есть НА ЭТОМ контуре (на свежем — только 'identity').
 c = sqlite3.connect(f"file:{LIVE}?mode=ro", uri=True)
-body = c.execute("SELECT body FROM phoenix WHERE role='COORD' AND section='state'").fetchone()[0]
-check("⑥", ORDER not in body and COUNTER not in body,
-      "ЖИВАЯ база не изменена приёмкой (образцы легли только в копии)")
+leaked = c.execute("SELECT 1 FROM phoenix WHERE role = ?", (TEST_ROLE,)).fetchone()
+c.close()
+check("⑥", leaked is None,
+      "ЖИВАЯ база не содержит подставной роли приёмки (образцы легли только в копиях)")
 
 print()
 print("✅ КАРТОЧКА #50: обе стороны проверены ПРОГОНОМ" if ok else "🔴 ПРИЁМКА КРАСНАЯ")

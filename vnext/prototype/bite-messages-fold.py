@@ -38,6 +38,19 @@ r"""ПРИЁМКА переноса записок в архив — карто�
 а зависимость, которую надо назвать. Не назвав её, автор объявляет порчу «не сошедшейся»
 и идёт чинить исправное.
 
+═══ ДОГОН (карточка #667, приёмка пакета на пустом новом контуре) ═══
+Свежесобранный из пакета контур несёт ПУСТУЮ ленту — кандидатов на перенос в ней нет
+по построению, и случаи ②/⑦ стоят НА СОСТОЯВШЕМСЯ переносе (см. выше, то же условие,
+каким уже объяснена порча). seed_fixture() заводит в копии ОДНУ свою старую обычную
+записку с адресатом — ровно то немногое, чего не хватает, чтобы перенос состоялся и было
+что мерить. На живом контуре, где кандидатов и так хватает, эта одна строка ничего не
+меняет по существу: она добавляется ДО снимка "before", значит входит в оба снимка
+одинаково, и ни одно из существующих равенств/неравенств не грубеет.
+Тул переноса (`messages-fold.py` в `.mezosync/scripts`) сам может отсутствовать в свежей
+выгрузке пакета — она собрана до его появления. Это — честный «не проверено» (смысл
+правила acceptance-isolated-from-live), не поломка: инструмента переноса нет, и мерить
+нечем совсем, ДО какой-либо фикстуры.
+
 ⛔ Живой базы не касается: работает на КОПИИ во временном каталоге.
 """
 from __future__ import annotations
@@ -53,41 +66,61 @@ import tempfile
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
 
-CASES = DIFFER = ЗЕЛЁНЫХ = 0
+CASES = DIFFER = GREENS = 0
+
+FIXTURE_MARKER = "[приёмка#538 bite-messages-fold: подставная старая записка]"
 
 
 def case(title, verdict, detail, differ=False):
-    global CASES, DIFFER, ЗЕЛЁНЫХ
+    global CASES, DIFFER, GREENS
     CASES += 1
     DIFFER += bool(differ)
-    ЗЕЛЁНЫХ += bool(verdict)
+    GREENS += bool(verdict)
     print(f"{'✅' if verdict else '🔴'} {title}")
     print(f"   {detail}")
     return verdict
 
 
-def зови(инструмент, db, *args):
-    r = subprocess.run([sys.executable, "-B", str(инструмент), "--db", str(db), *args],
+def call_tool(tool, db, *args):
+    r = subprocess.run([sys.executable, "-B", str(tool), "--db", str(db), *args],
                        capture_output=True, text=True, encoding="utf-8", errors="replace")
     return r.returncode, (r.stdout or "") + (r.stderr or "")
 
 
-def метки_точно(строка) -> list:
+def exact_tags(value) -> list:
     """Метки записки СПИСКОМ, а не подстрокой: «WAITING-OWNER-WORD» и «owner-word» — разные метки."""
     import json
     try:
-        return json.loads(строка or "[]")
+        return json.loads(value or "[]")
     except Exception:
         return []
 
 
-def снимок(db):
+def snapshot(db):
     con = sqlite3.connect(str(db))
-    живых = con.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
-    архив = con.execute("SELECT COUNT(*) FROM messages_archive").fetchone()[0]
-    тела = con.execute("SELECT COUNT(*), COALESCE(SUM(LENGTH(body_md)),0) FROM messages_all").fetchone()
+    live = con.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+    archive = con.execute("SELECT COUNT(*) FROM messages_archive").fetchone()[0]
+    totals = con.execute("SELECT COUNT(*), COALESCE(SUM(LENGTH(body_md)),0) FROM messages_all").fetchone()
     con.close()
-    return {"живых": живых, "архив": архив, "всего": тела[0], "знаков": тела[1]}
+    return {"live": live, "archive": archive, "total": totals[0], "chars": totals[1]}
+
+
+def seed_fixture(db) -> None:
+    """Подкладывает в копию СВОЮ старую обычную записку с адресатом — единственное, чего
+    пустой свежий контур (карточка #667) не несёт по построению, а без чего случаям ②/⑦
+    не на чём измерить перенос (см. заголовок файла, раздел «ДОГОН»). Обычная метка/
+    приоритет — чтобы запись сама по себе не задела случаи ③④⑤, которые считают СВОЙ
+    собственный материал запросом, а не по имени."""
+    con = sqlite3.connect(str(db))
+    con.execute(
+        "INSERT INTO messages (writer_role, timestamp, body_md, tags, priority, resolved) "
+        "VALUES ('PROTO', datetime('now','-30 days'), ?, '[]', 'normal', 0)",
+        (f"{FIXTURE_MARKER} — обычная старая записка, кандидат на перенос",))
+    fixture_id = con.execute("SELECT last_insert_rowid()").fetchone()[0]
+    con.execute("INSERT INTO message_addressee (message_id, role, kind, linked_by) "
+                "VALUES (?, 'COORD', 'to', 'field')", (fixture_id,))
+    con.commit()
+    con.close()
 
 
 def main() -> int:
@@ -95,13 +128,16 @@ def main() -> int:
     ap.add_argument("--porcha", choices=["мерка-с-источником"])
     a = ap.parse_args()
 
-    живой = mezo_paths.live_scripts(__file__) / "messages-fold.py"
-    if not живой.is_file():
-        sys.exit(f"⛔ НЕ ЗАПУСТИЛСЯ: инструмента переноса нет: {живой}")
+    live_tool = mezo_paths.live_scripts(__file__) / "messages-fold.py"
+    if not live_tool.is_file():
+        print(f"⚪ не проверено: инструмента переноса записок messages-fold.py нет в контуре "
+              f"(ожидался в {live_tool}) — свежая выгрузка пакета собрана до его появления "
+              f"в .mezosync/scripts, механизм мерить нечем")
+        return 2
 
-    стенд = pathlib.Path(tempfile.mkdtemp(prefix="bite-fold-"))
+    stand = pathlib.Path(tempfile.mkdtemp(prefix="bite-fold-"))
     try:
-        db = стенд / "copy.db"
+        db = stand / "copy.db"
         src = sqlite3.connect(str(mezo_paths.live_db(__file__)))
         dst = sqlite3.connect(str(db))
         src.backup(dst)
@@ -109,34 +145,38 @@ def main() -> int:
         src.close()
 
         # копия инструмента и его соседей рядом (он читает mezo_refs из своего каталога)
-        инструмент = стенд / "messages-fold.py"
-        shutil.copy2(живой, инструмент)
-        shutil.copy2(mezo_paths.live_scripts(__file__) / "mezo_refs.py", стенд / "mezo_refs.py")
-        for имя in ("read-broadcasts.py", "write-message.py"):
-            и = mezo_paths.live_scripts(__file__) / имя
-            if и.is_file():
-                shutil.copy2(и, стенд / имя)
+        tool = stand / "messages-fold.py"
+        shutil.copy2(live_tool, tool)
+        shutil.copy2(mezo_paths.live_scripts(__file__) / "mezo_refs.py", stand / "mezo_refs.py")
+        for name in ("read-broadcasts.py", "write-message.py"):
+            src_file = mezo_paths.live_scripts(__file__) / name
+            if src_file.is_file():
+                shutil.copy2(src_file, stand / name)
 
         if a.porcha == "мерка-с-источником":
-            т = инструмент.read_text(encoding="utf-8")
-            до = т
-            т = т.replace('"FROM messages_all ORDER BY id"',
-                          '"FROM messages_all ORDER BY source, id"')
-            т = т.replace('"SELECT id, writer_role, timestamp, body_md, tags, priority, resolved "',
-                          '"SELECT id, writer_role, timestamp, body_md, tags, priority, resolved, source "')
-            assert т != до, "порча не легла — строка мерки изменилась, поправь приёмку"
-            инструмент.write_text(т, encoding="utf-8")
+            text = tool.read_text(encoding="utf-8")
+            before_text = text
+            text = text.replace('"FROM messages_all ORDER BY id"',
+                                 '"FROM messages_all ORDER BY source, id"')
+            text = text.replace('"SELECT id, writer_role, timestamp, body_md, tags, priority, resolved "',
+                                 '"SELECT id, writer_role, timestamp, body_md, tags, priority, resolved, source "')
+            assert text != before_text, "порча не легла — строка мерки изменилась, поправь приёмку"
+            tool.write_text(text, encoding="utf-8")
             print("🧪 ПОРЧА «мерка-с-источником»: ждём красным РОВНО ② (обратимость), остальные целы\n")
 
-        было = снимок(db)
+        # 🩹 ДОГОН (карточка #667): своя фикстура ДО первого снимка — входит в оба снимка
+        # одинаково, случаям ①/⑧ (неизменность/сохранность) всё равно, кто её завёл.
+        seed_fixture(db)
+
+        before = snapshot(db)
 
         # ── ① холостой прогон ничего не меняет
-        код1, вывод1 = зови(инструмент, db)
-        после_холостого = снимок(db)
+        code1, output1 = call_tool(tool, db)
+        after_dry_run = snapshot(db)
         case("① холостой прогон НИЧЕГО не меняет",
-             код1 == 0 and после_холостого == было,
-             f"код {код1} · до {было['живых']}/{было['архив']} · "
-             f"после {после_холостого['живых']}/{после_холостого['архив']}", differ=True)
+             code1 == 0 and after_dry_run == before,
+             f"код {code1} · до {before['live']}/{before['archive']} · "
+             f"после {after_dry_run['live']}/{after_dry_run['archive']}", differ=True)
 
         # ── что инструмент собирался унести (для случаев ③④⑤)
         con = sqlite3.connect(str(db))
@@ -145,92 +185,92 @@ def main() -> int:
         # а это не речь владельца, а ожидание её. Приёмка покраснела на ВЕРНОМ инструменте.
         # ⚡ КЛАСС: приёмка и инструмент определяли предмет РАЗНЫМИ мерками, и грубее оказалась
         # мерка приёмки. Свойство, которое мы судим, — «среди точных меток есть owner-word».
-        владелец = len([1 for (t,) in con.execute(
+        owner_count = len([1 for (t,) in con.execute(
             "SELECT tags FROM messages WHERE timestamp < datetime('now','-7 days')")
-            if "owner-word" in метки_точно(t)])
-        срочные = con.execute(
+            if "owner-word" in exact_tags(t)])
+        urgent_count = con.execute(
             "SELECT COUNT(*) FROM messages WHERE timestamp < datetime('now','-7 days') "
             "AND (priority = 'critical' OR (priority = 'high' AND COALESCE(resolved,0) = 0))"
         ).fetchone()[0]
         con.close()
 
         # ── ② перенос и возврат
-        код2, вывод2 = зови(инструмент, db, "--apply")
-        после_переноса = снимок(db)
-        код3, вывод3 = зови(инструмент, db, "--unfold", "--apply")
-        после_возврата = снимок(db)
+        code2, output2 = call_tool(tool, db, "--apply")
+        after_fold = snapshot(db)
+        code3, output3 = call_tool(tool, db, "--unfold", "--apply")
+        after_unfold = snapshot(db)
         case("② перенос → возврат возвращает ленту в исходное состояние",
-             код2 == 0 and код3 == 0 and после_переноса["архив"] > 0
-             and после_возврата == было,
-             f"перенесено {после_переноса['архив']} · после возврата "
-             f"{после_возврата['живых']}/{после_возврата['архив']} "
-             f"(ждали {было['живых']}/{было['архив']})", differ=True)
+             code2 == 0 and code3 == 0 and after_fold["archive"] > 0
+             and after_unfold == before,
+             f"перенесено {after_fold['archive']} · после возврата "
+             f"{after_unfold['live']}/{after_unfold['archive']} "
+             f"(ждали {before['live']}/{before['archive']})", differ=True)
 
         # ── повторный перенос для проверок содержимого архива
-        зови(инструмент, db, "--apply")
+        call_tool(tool, db, "--apply")
         con = sqlite3.connect(str(db))
-        в_архиве_владельца = len([1 for (t,) in con.execute(
-            "SELECT tags FROM messages_archive") if "owner-word" in метки_точно(t)])
-        в_архиве_срочных = con.execute(
+        archived_owner_count = len([1 for (t,) in con.execute(
+            "SELECT tags FROM messages_archive") if "owner-word" in exact_tags(t)])
+        archived_urgent_count = con.execute(
             "SELECT COUNT(*) FROM messages_archive WHERE priority = 'critical' "
             "OR (priority = 'high' AND COALESCE(resolved,0) = 0)").fetchone()[0]
         # ⑤ на кого ссылается свежая записка
-        свежие_ссылки = set()
+        fresh_refs = set()
         import re as _re
-        for (тело,) in con.execute("SELECT body_md FROM messages_all "
+        for (body,) in con.execute("SELECT body_md FROM messages_all "
                                    "WHERE timestamp >= datetime('now','-7 days')"):
-            свежие_ссылки.update(int(n) for n in _re.findall(r"#(\d{2,6})", тело or ""))
-        унесённые = {r[0] for r in con.execute("SELECT id FROM messages_archive")}
-        задето_живых = свежие_ссылки & унесённые
+            fresh_refs.update(int(n) for n in _re.findall(r"#(\d{2,6})", body or ""))
+        archived_ids = {r[0] for r in con.execute("SELECT id FROM messages_archive")}
+        affected_live = fresh_refs & archived_ids
         # ⑦ адресаты
-        живой_join = con.execute("SELECT COUNT(*) FROM message_addressee a "
+        live_join_count = con.execute("SELECT COUNT(*) FROM message_addressee a "
                                  "JOIN messages m ON m.id = a.message_id").fetchone()[0]
-        вид_join = con.execute("SELECT COUNT(*) FROM message_addressee a "
+        view_join_count = con.execute("SELECT COUNT(*) FROM message_addressee a "
                                "JOIN messages_all m ON m.id = a.message_id").fetchone()[0]
-        итог = снимок(db)
+        final_snapshot = snapshot(db)
         con.close()
 
         case("③ речь владельца не уносится ни при каком возрасте",
-             в_архиве_владельца == 0,
-             f"старше срока с меткой владельца было {владелец}, в архиве {в_архиве_владельца}",
+             archived_owner_count == 0,
+             f"старше срока с меткой владельца было {owner_count}, в архиве {archived_owner_count}",
              differ=True)
         case("④ срочное незакрытое не уносится",
-             в_архиве_срочных == 0,
-             f"старше срока срочных незакрытых {срочные}, в архиве {в_архиве_срочных}", differ=True)
+             archived_urgent_count == 0,
+             f"старше срока срочных незакрытых {urgent_count}, в архиве {archived_urgent_count}", differ=True)
         case("⑤ записка, на которую ссылается свежая, остаётся (разговор жив)",
-             not задето_живых,
-             f"унесённых, на которые ссылается свежее: {len(задето_живых)}", differ=True)
+             not affected_live,
+             f"унесённых, на которые ссылается свежее: {len(affected_live)}", differ=True)
 
         # ── ⑥ читатель, не видящий архив ⇒ отказ
-        зови(инструмент, db, "--unfold", "--apply")
-        слепой = стенд / "read-broadcasts.py"
-        сохранён = слепой.read_text(encoding="utf-8") if слепой.is_file() else None
-        if сохранён is not None:
-            слепой.write_text(сохранён.replace("messages_all", "messages"), encoding="utf-8")
-        код6, вывод6 = зови(инструмент, db, "--apply")
-        if сохранён is not None:
-            слепой.write_text(сохранён, encoding="utf-8")
+        call_tool(tool, db, "--unfold", "--apply")
+        blind_copy = stand / "read-broadcasts.py"
+        saved_text = blind_copy.read_text(encoding="utf-8") if blind_copy.is_file() else None
+        if saved_text is not None:
+            blind_copy.write_text(saved_text.replace("messages_all", "messages"), encoding="utf-8")
+        code6, output6 = call_tool(tool, db, "--apply")
+        if saved_text is not None:
+            blind_copy.write_text(saved_text, encoding="utf-8")
         case("⑥ читатель, не видящий архив ⇒ ОТКАЗ переносить (условие ① правила)",
-             код6 == 2 and "условие ①" in вывод6,
-             f"код {код6} · отказ назван условием: {'да' if 'условие ①' in вывод6 else 'НЕТ'}",
+             code6 == 2 and "условие ①" in output6,
+             f"код {code6} · отказ назван условием: {'да' if 'условие ①' in output6 else 'НЕТ'}",
              differ=True)
 
         case("⑦ адресаты унесённых: живая таблица теряет, вид видит",
-             вид_join > живой_join,
-             f"через живую таблицу {живой_join} · через вид {вид_join} "
-             f"(разница {вид_join - живой_join} — они и потерялись бы у читателя «только моё»)",
+             view_join_count > live_join_count,
+             f"через живую таблицу {live_join_count} · через вид {view_join_count} "
+             f"(разница {view_join_count - live_join_count} — они и потерялись бы у читателя «только моё»)",
              differ=True)
 
         case("⑧ контроль: ни одна запись не пропала",
-             итог["всего"] == было["всего"] and итог["знаков"] == было["знаков"],
-             f"записей {итог['всего']} (было {было['всего']}) · "
-             f"знаков {итог['знаков']} (было {было['знаков']})")
+             final_snapshot["total"] == before["total"] and final_snapshot["chars"] == before["chars"],
+             f"записей {final_snapshot['total']} (было {before['total']}) · "
+             f"знаков {final_snapshot['chars']} (было {before['chars']})")
 
         print("")
-        print(f"ИТОГ: {ЗЕЛЁНЫХ} из {CASES} · различающих {DIFFER}")
-        return 0 if ЗЕЛЁНЫХ == CASES else 1
+        print(f"ИТОГ: {GREENS} из {CASES} · различающих {DIFFER}")
+        return 0 if GREENS == CASES else 1
     finally:
-        shutil.rmtree(стенд, ignore_errors=True)
+        shutil.rmtree(stand, ignore_errors=True)
 
 
 if __name__ == "__main__":

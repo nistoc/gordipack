@@ -59,6 +59,7 @@ TOOL = Path(__file__).resolve().parent / "guard-launcher-forms.py"
 LIVE_SCRIPTS = mezo_target.scripts_root()
 LIVE_DB = mezo_paths.live_db()
 CASES = DIFFER = 0
+SKIPPED: list[tuple[str, str]] = []
 
 
 def case(title, ok, detail, differ=False):
@@ -68,6 +69,35 @@ def case(title, ok, detail, differ=False):
     print(f"{'✅' if ok else '🔴'} {title}")
     print(f"   {detail}")
     return ok
+
+
+def case_skip(title, reason):
+    SKIPPED.append((title, reason))
+    print(f"⚪ {title}")
+    print(f"   пропущен: не проверено: {reason}")
+
+
+def seed_source(db, text, wipe=False):
+    """Подкладывает СВОЮ строку в PROTO/sources — УПОР (upsert), не UPDATE.
+
+    🩹 ДОГОН (карточка #667, приёмка пакета на пустом новом контуре): прежние места
+    этого файла звали `UPDATE phoenix SET body = body || ? WHERE role='PROTO' AND
+    section='sources'` — а на свежей выгрузке пакета строки PROTO/sources в phoenix
+    НЕТ ВООБЩЕ (там только COORD/identity), и UPDATE молча правит НОЛЬ строк. Подсадка
+    пропадала без следа, память оставалась пустой, и дальше ВСЁ опиралось на вызов
+    `--only <механизм>`, который без единой формы отвечает «СУД НЕ СОСТОЯЛСЯ» (код 1,
+    guard-launcher-forms.py карточка #368) — не по вине проверяемого механизма. INSERT …
+    ON CONFLICT создаёт строку, если её не было, и доращивает тело, если была — на
+    живом контуре (где PROTO/sources уже есть) ведёт себя как прежний UPDATE."""
+    con = sqlite3.connect(db)
+    if wipe:
+        con.execute("UPDATE phoenix SET body=''")
+    con.execute(
+        "INSERT INTO phoenix (role, section, body) VALUES ('PROTO', 'sources', ?) "
+        "ON CONFLICT(role, section) DO UPDATE SET body = phoenix.body || excluded.body",
+        (text,))
+    con.commit()
+    con.close()
 
 
 def sandbox():
@@ -236,7 +266,18 @@ def main() -> int:
         sys.exit(f"⛔ НЕ ЗАПУСТИЛАСЬ: инструмента нет — {TOOL}")
 
     # ── ① контроль ────────────────────────────────────────────────────────────
+    # 🩹 ДОГОН (карточка #667): случай судил ЧТО УГОДНО лежало в живой памяти о
+    # role-rights.py — на свежей выгрузке пакета памяти нет вовсе (кроме COORD/identity),
+    # «--only role-rights» не находит НИ ОДНОЙ формы, и guard-launcher-forms.py честно отвечает «СУД НЕ
+    # СОСТОЯЛСЯ» (код 1) — не по своей вине. Своя РАБОЧАЯ форма гарантирует предмет на
+    # любом контуре; на живом она лишь ДОБАВЛЯЕТСЯ к тому, что уже есть у CHROME/COORD.
+    # Здесь же подсаживаем x.py для случая ⑤ (та же копия `scripts`/`db`, он ниже).
     d, scripts, db = sandbox()
+    path1 = str(scripts).replace("\\", "/")
+    seed_source(db, chr(10) + "```" + chr(10)
+                + f"python {path1}/role-rights.py list --role PROTO" + chr(10) + "```" + chr(10))
+    (scripts / "x.py").write_text("import sys\nsys.exit(0)\n", encoding="utf-8")
+    seed_source(db, chr(10) + "```" + chr(10) + f"python {path1}/x.py" + chr(10) + "```" + chr(10))
     out, code = run(scripts, db, "--only", "role-rights")
     ok &= case("① контроль: неиспорченная копия — проверка зелёная",
                code == 0 and "🔴 ПАДАЮТ ИЛИ НЕТ ФАЙЛА 0" in out,
@@ -255,17 +296,12 @@ def main() -> int:
     # случай покраснел от чужого движения данных, не от прибора. Приёмка не судит живую
     # память: запускаемую форму подсаживаем сами, как делает встречный к девятому случаю.
     path2 = str(scripts2).replace("\\", "/")
-    con2 = sqlite3.connect(db2)
     # Сигнатуру (list, --role) несут СОКРАЩЁННЫМИ несколько живых памятей (CHROME, COORD,
     # …), прибор сливает одинаковые сигнатуры в группу и наследует «сокращено» — подсадка
     # тонула бы в чужих записях. Стенд делаем полностью управляемым: в КОПИИ гасим всю
     # память и оставляем ЕДИНСТВЕННУЮ подсаженную форму — судится ровно она.
-    con2.execute("UPDATE phoenix SET body=''")
-    con2.execute("UPDATE phoenix SET body = body || ? WHERE role='PROTO' AND section='sources'",
-                 (chr(10) + "```" + chr(10) + f"python {path2}/role-rights.py list --role PROTO"
-                  + chr(10) + "```" + chr(10),))
-    con2.commit()
-    con2.close()
+    seed_source(db2, chr(10) + "```" + chr(10) + f"python {path2}/role-rights.py list --role PROTO"
+                + chr(10) + "```" + chr(10), wipe=True)
     out, code = run(scripts2, db2, "--only", "role-rights")
     ok &= case("② сломан разбор параметра — проверка КРАСНЕЕТ",
                code != 0 and "ПАДАЕТ" in out,
@@ -273,7 +309,14 @@ def main() -> int:
                differ=True)
 
     # ── ③ скрипт исчез ────────────────────────────────────────────────────────
+    # 🩹 ДОГОН (карточка #667): та же беда, что у ①/②, на другом механизме — без своей
+    # формы «--only read-phoenix» ничего не находит, и случай судил бы пустоту пакета,
+    # а не реакцию на исчезнувший файл. Форма сеется ДО удаления файла: порядок не важен,
+    # guard-launcher-forms.py смотрит на диск в момент своего прогона, а не в момент записи памяти.
     d3, scripts3, db3 = sandbox()
+    path3 = str(scripts3).replace("\\", "/")
+    seed_source(db3, chr(10) + "```" + chr(10)
+                + f"python {path3}/read-phoenix.py --role PROTO" + chr(10) + "```" + chr(10))
     (scripts3 / "read-phoenix.py").unlink()
     out, code = run(scripts3, db3, "--only", "read-phoenix")
     ok &= case("③ скрипт ИСЧЕЗ — проверка краснеет и называет это «файла нет»",
@@ -289,6 +332,11 @@ def main() -> int:
                differ=True)
 
     # ── ⑤ упоминание ≠ команда ────────────────────────────────────────────────
+    # 🩹 ДОГОН (карточка #667): раньше случай стоял на ТОМ, что «x.py» — подстрока имени
+    # «phoeniX.PY» (read-/save-phoenix.py), и на живых командах этих механизмов в чужой
+    # памяти. На свежей выгрузке такой памяти нет. x.py теперь — СВОЙ, подсаженный в ①
+    # файл (exit 0) с СВОЕЙ рабочей формой: случай судит то же свойство (команда с этим
+    # именем отвечает, а не красится) без зависимости от чужой памяти.
     out, code = run(scripts, db, "--only", "x.py")
     ok &= case("⑤ пример в пояснении НЕ считается командой",
                code == 0 and "🔴 ПАДАЮТ ИЛИ НЕТ ФАЙЛА 0" in out,
@@ -313,15 +361,11 @@ def main() -> int:
         """→ True, если подсаженная строка попала в разбор КАК КОМАНДА (по своему ключу)."""
         d, scripts_, db_ = sandbox()
         path = str(scripts_).replace("\\", "/")
-        con = sqlite3.connect(db_)
-        con.execute("UPDATE phoenix SET body = body || ? WHERE role='PROTO' AND section='sources'",
-                    # ⚠️ Ключи .format() ПО-РУССКИ нарочно: шаблоны text ниже (case ⑤-бис..⑤-квинт)
-                    # несут {путь}/{проба} КАК ТЕКСТ ПРИМЕРА для роли — эти строки печатаемые,
-                    # не идентификаторы кода, и правило само их не переводит; ключи здесь
-                    # обязаны совпасть с плейсхолдерами дословно.
-                    (chr(10) + text.format(путь=path, проба=PROBE) + chr(10),))
-        con.commit()
-        con.close()
+        # ⚠️ Ключи .format() ПО-РУССКИ нарочно: шаблоны text ниже (case ⑤-бис..⑤-квинт)
+        # несут {путь}/{проба} КАК ТЕКСТ ПРИМЕРА для роли — эти строки печатаемые,
+        # не идентификаторы кода, и правило само их не переводит; ключи здесь
+        # обязаны совпасть с плейсхолдерами дословно.
+        seed_source(db_, chr(10) + text.format(путь=path, проба=PROBE) + chr(10))
         out, _ = run(scripts_, db_, "--only", "role-rights")
         return PROBE in out
 
@@ -360,12 +404,8 @@ def main() -> int:
     # а не командой). Случай, зависящий от чужого текста, зеленел бы «по отсутствию предмета»,
     # поэтому предмет кладём в копию памяти САМИ.
     d6, scripts6, db6 = sandbox()
-    con = sqlite3.connect(db6)
-    con.execute("UPDATE phoenix SET body = body || ? WHERE role='PROTO' AND section='sources'",
-                ("\n```\npython " + str(LIVE_SCRIPTS).replace("\\", "/")
-                 + "/read-messages.py --role PROTO --ack КЛЮЧ\n```\n",))
-    con.commit()
-    con.close()
+    seed_source(db6, "\n```\npython " + str(LIVE_SCRIPTS).replace("\\", "/")
+                + "/read-messages.py --role PROTO --ack КЛЮЧ\n```\n")
     out, code = run(scripts6, db6, "--only", "read-messages")
     ok &= case("⑥ форма с гашением ключа НЕ запущена, и сказано почему",
                "гасит ОДНОРАЗОВЫЙ ключ" in out,
@@ -376,6 +416,9 @@ def main() -> int:
     # а проверка отвечала «✅ отвечают 2». Судила она только по ТЕКСТУ ответа, а код
     # возврата не смотрела вовсе. Роль в таком случае видит пустоту и идёт дальше.
     d7a, scripts7a, db7a = sandbox()
+    path7a = str(scripts7a).replace("\\", "/")
+    seed_source(db7a, chr(10) + "```" + chr(10)
+                + f"python {path7a}/role-rights.py list --role PROTO" + chr(10) + "```" + chr(10))
     (scripts7a / "role-rights.py").write_text("raise SystemExit(9)", encoding="utf-8")
     out, code = run(scripts7a, db7a, "--only", "role-rights")
     ok &= case("⑦ механизм отказывает МОЛЧА — проверка краснеет",
@@ -387,6 +430,9 @@ def main() -> int:
     # Проверки контура законно отвечают кодом 1, когда нашли расхождения. Суди прибор
     # по одному коду — и он обвинил бы каждую такую находку как поломку формы.
     d8, scripts8, db8 = sandbox()
+    path8 = str(scripts8).replace("\\", "/")
+    seed_source(db8, chr(10) + "```" + chr(10)
+                + f"python {path8}/role-rights.py list --role PROTO" + chr(10) + "```" + chr(10))
     lines = ["print('нашёл 3 расхождения — это находка, а не поломка')",
               "raise SystemExit(1)"]
     (scripts8 / "role-rights.py").write_text(chr(10).join(lines), encoding="utf-8")
@@ -468,18 +514,34 @@ def main() -> int:
         print(f"   {mark:52} {name}")
     tail_collector_blind = (" (" + ", ".join(collector_blind) + ") — формы в памяти есть, сборщик их не дал"
                    if collector_blind else "")
-    ok &= case(f"⑨ сплошная поломка: слепых {len(blind)} из {seen} судимых механизмов",
-               not blind and not collector_blind and seen > 0,
-               f"судимых {seen} из {len(targets)} · "
-               f"слепых {len(blind)}{': ' + ', '.join(blind) if blind else ''} · "
-               f"сборщик ослеп {len(collector_blind)}{tail_collector_blind} · "
-               f"не судимы {len(unjudged)}"
-               f"{' (' + ', '.join(unjudged) + ') — красны и без поломки' if unjudged else ''} · "
-               f"форм нет {len(nothing)} · формы есть, но не запускаются {len(unrunnable)}"
-               f"{' (' + ', '.join(unrunnable) + ') — их держит ⑨-бис' if unrunnable else ''} · "
-               f"поломка не влияет {len(unaffected)}"
-               f"{' (' + ', '.join(unaffected) + ') — доказано прямым прогоном' if unaffected else ''}",
-               differ=True)
+    # 🩹 ДОГОН (карточка #667): свойство случая — «поломка видна НА РЕАЛЬНЫХ формах из
+    # ЖИВОЙ памяти ролей», не на подсаженных (те проверяют ⑨-тер..⑨-септ ниже, своей
+    # фикстурой). Когда НИ ОДИН из 26 механизмов не судим (все — «форм нет»/«не
+    # запускаются»/«не влияет», seen==0 и ни одного unjudged/blind) — это пустая память
+    # свежего контура (ровно та, что несёт пакет до первого пробуждения ролей),
+    # а не слепота guard-launcher-forms.py: предмета сплошной поломки — РЕАЛЬНЫХ
+    # записанных форм — в контуре попросту нет. Честный «не проверено», а не провал
+    # по пустоте.
+    if seen == 0 and not blind and not collector_blind and not unjudged:
+        case_skip(f"⑨ сплошная поломка: слепых N из N судимых механизмов",
+                  f"ни один из {len(targets)} механизмов, объявляющих --role, не имеет в "
+                  f"живой памяти ролей ни одной формы (форм нет {len(nothing)} · "
+                  f"не запускаются {len(unrunnable)} · поломка не влияет {len(unaffected)}) — "
+                  f"сплошной поломке негде проявиться не по вине проверки, а по пустоте "
+                  f"памяти свежей выгрузки пакета")
+    else:
+        ok &= case(f"⑨ сплошная поломка: слепых {len(blind)} из {seen} судимых механизмов",
+                   not blind and not collector_blind and seen > 0,
+                   f"судимых {seen} из {len(targets)} · "
+                   f"слепых {len(blind)}{': ' + ', '.join(blind) if blind else ''} · "
+                   f"сборщик ослеп {len(collector_blind)}{tail_collector_blind} · "
+                   f"не судимы {len(unjudged)}"
+                   f"{' (' + ', '.join(unjudged) + ') — красны и без поломки' if unjudged else ''} · "
+                   f"форм нет {len(nothing)} · формы есть, но не запускаются {len(unrunnable)}"
+                   f"{' (' + ', '.join(unrunnable) + ') — их держит ⑨-бис' if unrunnable else ''} · "
+                   f"поломка не влияет {len(unaffected)}"
+                   f"{' (' + ', '.join(unaffected) + ') — доказано прямым прогоном' if unaffected else ''}",
+                   differ=True)
 
     # ── ⑨-тер / ⑨-кватер: сам ПЕРЕМЕР карточки #358, обе половины ──────────────
     # Ведро «поломка не влияет» СНИМАЕТ обвинение с проверки — и ровно поэтому обязано
@@ -490,14 +552,8 @@ def main() -> int:
             # подсадной механизм: файла в живом каталоге нет, кладём своё тело (#415)
             (scripts_ / mechanism).write_text(body, encoding="utf-8")
         path = str(scripts_).replace("\\", "/")
-        con = sqlite3.connect(db_)
-        con.execute("UPDATE phoenix SET body=''")
-        con.execute("UPDATE phoenix SET body = body || ? "
-                    "WHERE role='PROTO' AND section='sources'",
-                    (chr(10) + "```" + chr(10) + f"python {path}/{mechanism} {tail}"
-                     + chr(10) + "```" + chr(10),))
-        con.commit()
-        con.close()
+        seed_source(db_, chr(10) + "```" + chr(10) + f"python {path}/{mechanism} {tail}"
+                    + chr(10) + "```" + chr(10), wipe=True)
         return scripts_, db_
 
     def stand_pair(mechanism, tail, body=None):
@@ -612,13 +668,9 @@ def main() -> int:
         def with_form(tail, kill):
             d_, scripts_, db_ = sandbox()
             path = str(scripts_).replace("\\", "/")
-            con = sqlite3.connect(db_)
-            con.execute("UPDATE phoenix SET body = body || ? WHERE role='PROTO' AND section='sources'",
-                        (chr(10) + "```" + chr(10)
-                         + f"python {path}/{subject} {tail}" + chr(10)
-                         + "```" + chr(10),))
-            con.commit()
-            con.close()
+            seed_source(db_, chr(10) + "```" + chr(10)
+                        + f"python {path}/{subject} {tail}" + chr(10)
+                        + "```" + chr(10))
             if kill:
                 # молчаливый отказ — та поломка, которую роль читает как сработавший запуск
                 (scripts_ / subject).write_text("raise SystemExit(9)", encoding="utf-8")
@@ -654,8 +706,13 @@ def main() -> int:
         print("⚪ ⑨-бис не на чем прогнать: разряд «формы есть, но не запускаются» пуст")
 
     print()
-    print(f"{'✅ ПРОВЕРКА ПРИНЯТА' if ok else '🔴 НЕ ПРИНЯТ'} — случаев {CASES}, различающих {DIFFER}")
-    return 0 if ok else 1
+    print(f"{'✅ ПРОВЕРКА ПРИНЯТА' if ok else '🔴 НЕ ПРИНЯТ'} — случаев {CASES}, различающих {DIFFER}"
+          + (f" · пропущено {len(SKIPPED)}" if SKIPPED else ""))
+    if SKIPPED and ok:
+        print(f"⚪ не проверено {len(SKIPPED)}: " + " · ".join(name for name, _ in SKIPPED))
+    if not ok:
+        return 1
+    return 2 if SKIPPED else 0
 
 
 if __name__ == "__main__":

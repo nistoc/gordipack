@@ -60,6 +60,16 @@ try:
     con.execute("DELETE FROM leases")
 except sqlite3.OperationalError:
     pass
+# 🩹 ДОГОН (класс ошибок (107)/(127), приёмка для пакета): track.py отбирает участников
+# пула ПЕРЕСЕЧЕНИЕМ с живыми ролями реестра (roles.lifecycle='alive') — механизм цел и
+# намеренный (П④: роль, не значащаяся живой, не становится налогом на всех), но на
+# свежей выгрузке пакета в реестре ТОЛЬКО COORD, и пересечение гасит CORE/STUD в пустое
+# множество: close тогда проходит БЕЗ единого вердикта (случай ④ зеленеет не тем, чем
+# должен), а повторное закрытие в случае ⑦ натыкается на «пул уже закрыт». Приёмка
+# заводит роли фикстуры САМА, тем же способом, что и подставные карточки ниже.
+for role in ("CORE", "STUD", "PROTO", "ING"):
+    con.execute("INSERT INTO roles (role, lifecycle) VALUES (?, 'alive') "
+                "ON CONFLICT(role) DO UPDATE SET lifecycle='alive'", (role,))
 con.commit()
 con.close()
 

@@ -38,8 +38,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
 import mezo_stand  # noqa: E402
 
-СКРИПТЫ = mezo_paths.live_scripts()
-BACKLOG = str(СКРИПТЫ / "backlog.py")
+SCRIPTS = mezo_paths.live_scripts()
+BACKLOG = str(SCRIPTS / "backlog.py")
 LIVE_DB = mezo_paths.live_db()
 
 CASES = DIFFER = 0
@@ -77,8 +77,17 @@ def main() -> int:
     con.execute("INSERT INTO tool_leases (role, tools, reason, until_utc) VALUES "
                 "('CORE', 'backlog.py', 'стендовое объявление #391', "
                 "datetime('now', '+30 minutes'))")
+    # 🩹 ДОГОН (класс ошибок (107)/(127), приёмка для пакета): раньше карточка бралась
+    # ПЕРВОЙ ПОПАВШЕЙСЯ ИЗ ЖИВОГО backlog — на свежей выгрузке пакета backlog ПУСТ,
+    # fetchone() даёт None, и подписка [0] падает TypeError. Приёмка заводит свою
+    # подставную карточку САМА (как в bite-signal-templates.py) и берёт её id, а не
+    # гадает, есть ли в контуре хоть одна настоящая.
+    cur = con.execute(
+        "INSERT INTO backlog (role, title, body_md, status, priority, created_by) VALUES "
+        "('PROTO', 'подставная карточка приёмки bite-lease-read-subcommands (#391)', "
+        "'тело подставной карточки', 'open', 'normal', 'PROTO')")
+    card = cur.lastrowid
     con.commit()
-    card = con.execute("SELECT id FROM backlog ORDER BY id LIMIT 1").fetchone()[0]
     con.close()
 
     # ① чужое объявление, show — работает, тело видно, предупреждение с номером и ролью.
@@ -114,7 +123,7 @@ def main() -> int:
                f"коды {rc1}/{rc2} — правящая роль отлаживает то, о чём объявила")
 
     # ⑥ ОБРАТНЫЙ ХОД в процессе: тот же файл, тот же замок — решает ПРИЗНАК.
-    _sp = importlib.util.spec_from_file_location("lease_live", СКРИПТЫ / "lease.py")
+    _sp = importlib.util.spec_from_file_location("lease_live", SCRIPTS / "lease.py")
     lease = importlib.util.module_from_spec(_sp)
     _sp.loader.exec_module(lease)
     os.environ["MEZO_LEASE_TEST"] = "1"

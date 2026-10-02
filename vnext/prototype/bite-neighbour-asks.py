@@ -62,6 +62,12 @@ def build(tmp: pathlib.Path, with_ask: bool, with_answer: bool, with_box: bool):
             (box / "ask.atlas.thing.md").write_text("вопрос", encoding="utf-8")
 
     con = sqlite3.connect(ours / ".mezosync" / "mezosync.db")
+    # ⚖️ Имя СВОЕЙ группы приёмка назначает в своей копии сама (карточка #667): на пустом
+    # новом контуре meta.group_name несёт имя СБОРКИ, а не «atlas», и проверка (our_group
+    # в guard-all.py) не узнаёт вопросы «ask.atlas.…», которые строит эта приёмка, своими —
+    # случаи ①②⑤⑨⑫⑬ краснели там не от поломки, а от чужого имени в снимке базы.
+    con.execute("INSERT INTO meta (key, value) VALUES ('group_name', 'atlas') "
+                "ON CONFLICT(key) DO UPDATE SET value = 'atlas'")
     con.execute("DELETE FROM cross_links")
     con.execute("INSERT INTO cross_links (source_group, target_group, target_db_path, description)"
                 " VALUES ('atlas','neigh',?,'проба')",

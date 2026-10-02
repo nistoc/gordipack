@@ -49,10 +49,10 @@ def main() -> int:
     tmp = mezo_stand.new("bite-shown-")
     try:
         # Стенд — НАСТОЯЩАЯ раскладка контура, а не файлы рядом (замер 20.08 07:33 UTC).
-        контур = tmp / ".mezosync"
-        scripts = контур / "scripts"
+        circuit_dir = tmp / ".mezosync"
+        scripts = circuit_dir / "scripts"
         shutil.copytree(live / "scripts", scripts)
-        db = контур / "mezosync.db"
+        db = circuit_dir / "mezosync.db"
         mezo_stand.snapshot_db(live / "mezosync.db", db)
         reader = scripts / "read-messages.py"
         env = {**os.environ, "MEZO_ROLE": "PROTO"}
@@ -67,45 +67,63 @@ def main() -> int:
         # Чистый лист: отметки живого контура сюда не тянем — иначе испытывался бы
         # не механизм, а сегодняшняя история чтения роли.
         con.execute("DELETE FROM cursor_segments WHERE from_id = to_id")
+        # 🩹 ДОГОН (пустой свежий контур пакета, карточка #667): роль PROTO и строка-курсор
+        # для неё нужны cursor_segments.role (FK на roles) и read_cursors — на свежей
+        # выгрузке нет ни того, ни другого (там только COORD).
+        con.execute("INSERT OR IGNORE INTO roles (role, lifecycle) VALUES ('PROTO', 'alive')")
+        if con.execute("SELECT 1 FROM read_cursors WHERE reader_role='PROTO'").fetchone() is None:
+            con.execute("INSERT INTO read_cursors (reader_role, last_read_id) VALUES ('PROTO', 0)")
+        # 🩹 ДОГОН: «личное обращение среди последних 80» искало его в ЖИВОЙ ленте — на
+        # пустом контуре записок нет вовсе, MIN() давал NULL, и «NULL - 1» падало трассой
+        # ДО первого случая. Сеем СВОЙ фон (чужие записки) и три личных обращения к PROTO
+        # внутри него — тот же признак («в долге оказались личные обращения»), но на
+        # данных, которые приёмка строит сама, а не ждёт от сегодняшней ленты.
+        personal_ids = []
+        for i in range(1, 41):
+            con.execute("INSERT INTO messages (writer_role, timestamp, body_md, tags, priority)"
+                        " VALUES ('ЧУЖОЙ', datetime('now'), ?, '[]', 'normal')",
+                        (f"посев приёмки #667 bite-shown-bodies: фон {i}",))
+            mid = con.execute("SELECT last_insert_rowid()").fetchone()[0]
+            if i in (10, 25, 38):
+                con.execute("INSERT INTO message_addressee (message_id, role, kind, linked_by)"
+                            " VALUES (?, 'PROTO', 'to', 'field')", (mid,))
+                personal_ids.append(mid)
         # Отматываем отметку прочитанного назад, чтобы в долге ОКАЗАЛИСЬ личные обращения.
-        head = con.execute("SELECT MAX(id) FROM messages").fetchone()[0]
-        first_personal = con.execute(
-            "SELECT MIN(message_id) FROM message_addressee WHERE role='PROTO' AND kind='to'"
-            " AND message_id > ?", (head - 80,)).fetchone()[0]
+        first_personal = personal_ids[0]
         con.execute("UPDATE read_cursors SET last_read_id = ? WHERE reader_role = 'PROTO'",
                     (first_personal - 1,))
         con.commit()
-        было = con.execute("SELECT COUNT(*) FROM cursor_segments WHERE kind='read' AND from_id=to_id"
+        before_count = con.execute("SELECT COUNT(*) FROM cursor_segments WHERE kind='read' AND from_id=to_id"
                            ).fetchone()[0]
-        курсор_до = con.execute("SELECT last_read_id FROM read_cursors WHERE reader_role='PROTO'"
+        cursor_before = con.execute("SELECT last_read_id FROM read_cursors WHERE reader_role='PROTO'"
                                 ).fetchone()[0]
         con.close()
 
         rc, out = call("--to-me")
         con = sqlite3.connect(db)
-        стало = con.execute("SELECT COUNT(*) FROM cursor_segments WHERE kind='read' AND from_id=to_id"
+        after_count = con.execute("SELECT COUNT(*) FROM cursor_segments WHERE kind='read' AND from_id=to_id"
                             ).fetchone()[0]
-        курсор_после = con.execute(
+        cursor_after = con.execute(
             "SELECT last_read_id FROM read_cursors WHERE reader_role='PROTO'").fetchone()[0]
         con.close()
         ok &= case("① показ тела ЗАПИСЫВАЕТСЯ, а не исчезает вместе с выводом на экран",
-                   стало > было and "ЗАПИСАНО" in out,
-                   f"отметок было {было}, стало {стало}. До починки не записывалось НИЧЕГО, "
+                   after_count > before_count and "ЗАПИСАНО" in out,
+                   f"отметок было {before_count}, стало {after_count}. До починки не записывалось НИЧЕГО, "
                    f"и вторая команда не могла узнать о первой", differ=True)
         ok &= case("② КОНТРОЛЬ: отбор по-прежнему НЕ двигает отметку прочитанного",
-                   курсор_после == курсор_до,
-                   f"отметка {курсор_до} → {курсор_после}. Это главный риск починки: сделай "
+                   cursor_after == cursor_before,
+                   f"отметка {cursor_before} → {cursor_after}. Это главный риск починки: сделай "
                    f"запись подтверждением чтения — и роль перескочит через всё, что "
                    f"в подмножество не попало, будучи уверенной, что дочитала", differ=True)
 
         rc, out2 = call("--to-me")
         con = sqlite3.connect(db)
-        снова = con.execute("SELECT COUNT(*) FROM cursor_segments WHERE kind='read' AND from_id=to_id"
+        again_count = con.execute("SELECT COUNT(*) FROM cursor_segments WHERE kind='read' AND from_id=to_id"
                             ).fetchone()[0]
         con.close()
         ok &= case("③ повторный показ не плодит отметок",
-                   снова == стало,
-                   f"{стало} → {снова}: иначе счёт «прочитано телами» рос бы от каждого "
+                   again_count == after_count,
+                   f"{after_count} → {again_count}: иначе счёт «прочитано телами» рос бы от каждого "
                    f"взгляда и перегнал бы число записок", differ=True)
 
         rc, out3 = call("--index", "--pass-by-index", "--basis",

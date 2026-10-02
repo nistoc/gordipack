@@ -55,6 +55,7 @@ LIVE_SCRIPTS = mezo_paths.live_scripts()
 CANON = mezo_paths.container_root() / "CLAUDE.md"
 
 OK = FAIL = 0
+SKIPPED: list[tuple[str, str]] = []
 _seq = [0]
 
 
@@ -64,6 +65,12 @@ def case(name, cond, detail=""):
     if detail:
         print(f"   {detail}")
     OK, FAIL = OK + (1 if cond else 0), FAIL + (0 if cond else 1)
+
+
+def case_skip(name, reason):
+    SKIPPED.append((name, reason))
+    print("⚪", name)
+    print(f"   пропущен: не проверено: {reason}")
 
 
 def load(path, name):
@@ -128,13 +135,26 @@ mezo_stand.snapshot_db(LIVE_DB, db)
 # ⓪ нетронутая копия судится ровно как живой свод (тем же словарём и списком имён)
 real_known = {p.name for p in LIVE_SCRIPTS.glob("*.py")}
 real_defs = mod.canon_defs(CANON)
+# 🩹 ДОГОН (карточка #667, приёмка пакета на пустом новом контуре): прежде отсутствие
+# канона (CLAUDE.md) обрывало ВЕСЬ прогон — SystemExit до единого случая. Свежая
+# выгрузка пакета не несёт CLAUDE.md в контейнере вовсе (не долг сборки — она просто
+# не копирует корневые файлы репозитория), и канон здесь нужен ТОЛЬКО случаю ⓪
+# (сверка копии свода с живым ТЕМИ ЖЕ сокращениями): все прочие случаи судят своим
+# подсаженным словарём DEFS={"s": ROOT}, от CLAUDE.md не зависящим. ⇒ без канона
+# честно пропускаем ОДИН случай ⓪, а не все; base_copy (нужна случаям ⑫/⑭ для счёта
+# «было») считаем своим словарём — тем же, каким дальше меряют сами случаи.
 if real_defs is None:
-    raise SystemExit("ПРИЁМКА НЕ СОСТОЯЛАСЬ: канон не найден — базовый словарь пуст")
-base_live = mod.scan_rules(LIVE_DB, real_known, LIVE_SCRIPTS, real_defs)
-base_copy = mod.scan_rules(db, real_known, LIVE_SCRIPTS, real_defs)
-case("⓪ копия свода судится ровно как живой (краснота ниже не пуста)",
-     base_live[:3] == base_copy[:3] and base_live[3] is None,
-     f"живой: 🔴🟡 {len(base_live[0])}, вне active {base_live[1]}, надгробий {base_live[2]}")
+    case_skip("⓪ копия свода судится ровно как живой (краснота ниже не пуста)",
+              f"канона нет на этом контуре ({CANON}) — свежая выгрузка пакета не несёт "
+              "CLAUDE.md, базового словаря сокращений нет, и сверка копии с живым "
+              "ТЕМ ЖЕ словарём не на чём ставить")
+    base_copy = mod.scan_rules(db, KNOWN, sb_scripts, DEFS)
+else:
+    base_live = mod.scan_rules(LIVE_DB, real_known, LIVE_SCRIPTS, real_defs)
+    base_copy = mod.scan_rules(db, real_known, LIVE_SCRIPTS, real_defs)
+    case("⓪ копия свода судится ровно как живой (краснота ниже не пуста)",
+         base_live[:3] == base_copy[:3] and base_live[3] is None,
+         f"живой: 🔴🟡 {len(base_live[0])}, вне active {base_live[1]}, надгробий {base_live[2]}")
 
 # ── подсадки ─────────────────────────────────────────────────────────────────────────
 add_rule(db, "zzprobe-01-rel", "зови: python .mezosync/scripts/zzprobe-tool.py --x")
@@ -368,5 +388,13 @@ case("㉒б встречный: та же строка как ЦИТАТА те�
 live_after = (LIVE_DB.stat().st_size, LIVE_DB.stat().st_mtime_ns)
 case("⑳ живая база прогоном не изменилась", live_before == live_after)
 
-print(f"\nИТОГ: {OK}/{OK + FAIL}")
-raise SystemExit(mezo_stand.finish(0 if FAIL == 0 else 1))
+print(f"\nИТОГ: {OK}/{OK + FAIL}" + (f" · пропущено {len(SKIPPED)}" if SKIPPED else ""))
+if SKIPPED:
+    print(f"⚪ не проверено {len(SKIPPED)}: " + " · ".join(name for name, _ in SKIPPED))
+if FAIL != 0:
+    _code = 1
+elif SKIPPED:
+    _code = 2
+else:
+    _code = 0
+raise SystemExit(mezo_stand.finish(_code))

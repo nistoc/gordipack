@@ -36,6 +36,17 @@ guard-scripts-drift.py считал «строк по существу» пос�
 
 ⛔ Живого контура не касается: контейнер, репозитории и обе копии — во временном каталоге
 (сверке контейнер называется переменной MEZO_CONTAINER — тем же входом, что у всех путей).
+
+═══ КАРТОЧКА #667: ПЕРВАЯ ПАРА СВЕРКИ — ТОЖЕ СВОЯ ═══
+Сверка сперва сличает СВОЮ пару «рабочий каталог ↔ зеркало-репозиторий» и лишь потом —
+предмет этой приёмки, пару «vnext-tools ↔ образец» (--vnext-runtime/--vnext-template). Прежде
+приёмка первой пары не называла, и сверка брала её из ЖИВОГО контура: свои инструменты и
+своё зеркало-репозиторий. У нового контура зеркала нет — сверка честно говорит «зеркало не
+заведено» и выходит ДО второй пары; случаи ①–④ ⑤б ⑥ краснели от того, что предмет вовсе не
+сличался. На живом контуре та же зависимость подмешивала в вывод чужие строки: «РАСХОДЯТСЯ»
+первой пары (живые инструменты против их зеркала) лежал в том же тексте, по которому судят
+① ② ⑤. Теперь первая пара — два пустых каталога стенда (mirror_pair: «рантайм и зеркало
+совпадают»), и сверка всегда доходит до предмета.
 """
 from __future__ import annotations
 
@@ -61,6 +72,16 @@ def case(title, ok, detail, differ=False):
     print(f"{'✅' if ok else '🔴'} {title}")
     print(f"   {detail}")
     return ok
+
+
+def mirror_pair(stand: pathlib.Path) -> list[str]:
+    """Аргументы ПЕРВОЙ пары сверки — два пустых каталога стенда (карточка #667, см. шапку).
+    Пустые и потому совпадающие: сверка печатает «совпадает» и идёт дальше, ко второй паре —
+    предмету приёмки, — не заглядывая ни в инструменты, ни в зеркало-репозиторий контура."""
+    runtime, repo = stand / "mirror-runtime", stand / "mirror-repo"
+    runtime.mkdir(exist_ok=True)
+    repo.mkdir(exist_ok=True)
+    return ["--runtime", str(runtime), "--repo", str(repo)]
 
 
 def main() -> int:
@@ -95,8 +116,9 @@ def main() -> int:
         (tpl / "crlf.py").write_bytes(crlf_case_text.encode("utf-8"))
 
         env = dict(os.environ, MEZO_CONTAINER=str(container))
+        first_pair = mirror_pair(tmp)
         r = subprocess.run(
-            [sys.executable, str(GUARD_TOOL), "--vnext-runtime", str(rt),
+            [sys.executable, str(GUARD_TOOL), *first_pair, "--vnext-runtime", str(rt),
              "--vnext-template", str(tpl)],
             capture_output=True, text=True, encoding="utf-8", timeout=300, env=env)
         out = (r.stdout or "") + (r.stderr or "")
@@ -141,7 +163,7 @@ def main() -> int:
 
         env5b = mezo_stand.stand_env(container)  # карточка #613: среда закреплённого стенда
         r5b = subprocess.run(
-            [sys.executable, str(GUARD_TOOL), "--vnext-runtime", str(rt),
+            [sys.executable, str(GUARD_TOOL), *first_pair, "--vnext-runtime", str(rt),
              "--vnext-template", str(tpl)],
             capture_output=True, text=True, encoding="utf-8", timeout=300, env=env5b)
         out5b = (r5b.stdout or "") + (r5b.stderr or "")
@@ -179,8 +201,9 @@ def main() -> int:
         (tpl6 / "drifted.py").write_text("\n".join(after_lines) + "\n", encoding="utf-8")
 
         env6 = dict(os.environ, MEZO_CONTAINER=str(container6))
+        first_pair6 = mirror_pair(tmp6)
         r6 = subprocess.run(
-            [sys.executable, str(GUARD_TOOL), "--vnext-runtime", str(rt6),
+            [sys.executable, str(GUARD_TOOL), *first_pair6, "--vnext-runtime", str(rt6),
              "--vnext-template", str(tpl6)],
             capture_output=True, text=True, encoding="utf-8", timeout=300, env=env6)
         out6 = (r6.stdout or "") + (r6.stderr or "")
@@ -211,7 +234,7 @@ def main() -> int:
                 1)
             broken_copy6.write_text(broken_text, encoding="utf-8")
             r6b = subprocess.run(
-                [sys.executable, str(broken_copy6), "--vnext-runtime", str(rt6),
+                [sys.executable, str(broken_copy6), *first_pair6, "--vnext-runtime", str(rt6),
                  "--vnext-template", str(tpl6)],
                 capture_output=True, text=True, encoding="utf-8", timeout=300, env=env6)
             out6b = (r6b.stdout or "") + (r6b.stderr or "")

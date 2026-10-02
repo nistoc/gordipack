@@ -193,8 +193,35 @@ def _boundaries_inside(chunks, body):
 # на открытии ограды (18 895): судил числа прошлой редакции, а не текст. Теперь ограды
 # считаются по ТЕКУЩЕМУ телу; раздел с непарной оградой не судится — как и все остальные.
 import sqlite3 as _sq  # noqa: E402
+import tempfile as _tempfile  # noqa: E402
+from pathlib import Path as _Path  # noqa: E402
 import mezo_paths as _mp  # noqa: E402
-_c = _sq.connect("file:" + _mp.live_db().as_posix() + "?mode=ro", uri=True)
+import mezo_stand as _mst  # noqa: E402 — копия живой базы: карточка #505/#659
+
+# 🩹 ДОГОН (карточка #667, пустой новый контур): случай ⑥ раньше читал ЖИВУЮ базу
+# напрямую и ЖЁСТКО требовал материал РЕАЛЬНОЙ роли RCC (§state) — на свежесобранном
+# контуре (одна роль COORD, памяти RCC нет вовсе) это честное отсутствие печаталось
+# как «🔴 РАЗДЕЛА НЕТ» и красило случай, хотя общий признак (ни одна граница куска не
+# внутри ограды) измерен на ТОМ, что в контуре есть, и там всё цело. Своя подставная
+# роль заводится НА КОПИИ только когда РЕАЛЬНОГО материала RCC нет — на живом контуре
+# копия несёт то же самое содержимое, что и раньше читалось напрямую.
+_stand_dir = _Path(_tempfile.mkdtemp(prefix="bite-memory-archive-rcc-"))
+_copy_db = _stand_dir / "mezosync.db"
+_mst.snapshot_db(_mp.live_db(), _copy_db)
+_seed_conn = _sq.connect(str(_copy_db))
+_has_rcc_state = _seed_conn.execute(
+    "SELECT 1 FROM phoenix WHERE role='RCC' AND section='state'").fetchone()
+_rcc_seeded = not _has_rcc_state
+if _rcc_seeded:
+    # та же подсадка ПО ДЛИНЕ, что уже доказана случаем ⑤ (код ~6000 зн. с пустыми
+    # строками внутри ограды) — подставной материал несёт ТО ЖЕ СВОЙСТВО, которое
+    # этот случай проверяет на материале @RCC, а не слова её настоящей памяти.
+    _seed_conn.execute(
+        "INSERT INTO phoenix (role, section, body, saved_at) VALUES "
+        "('RCC', 'state', ?, datetime('now'))", (_text5,))
+    _seed_conn.commit()
+_seed_conn.close()
+_c = _sq.connect("file:" + _copy_db.as_posix() + "?mode=ro", uri=True)
 _rows = _c.execute("SELECT role, section, body FROM phoenix ORDER BY role, section").fetchall()
 _c.close()
 _issues, _unpaired, _sections_total, _rcc = [], [], 0, None
@@ -220,6 +247,10 @@ print(f"  {'✅' if ok else '🔴'} ⑥ ЖИВАЯ ПАМЯТЬ, раздело�
 if _unpaired:
     print(f"     ⚠️ ограда НЕПАРНАЯ В ИСТОЧНИКЕ (автор открыл «```» и не закрыл) — не судится, названо"
           f" поимённо: {', '.join(_unpaired)}")
+if _rcc_seeded:
+    print("     ℹ️ в контуре у роли RCC раздела 'state' нет (пустой/свежий контур,"
+          " карточка #667) — приёмка завела подставной материал ТОГО ЖЕ свойства"
+          " (подсадка по длине случая ⑤) НА КОПИИ, не трогая живую базу")
 if _rcc:
     _rcc_fence = ("ограда непарная — внутри ограды не судится" if _rcc[5]
                   else f"внутри ограды: {_rcc[2] or 'нет'}")

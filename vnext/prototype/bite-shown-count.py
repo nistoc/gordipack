@@ -42,6 +42,7 @@ bite-shown-count.py — приёмка на правку ② : журнал вы
 Выход:   0 — все свойства держатся · 1 — поля ещё нет · 2 — поле есть, но свойство нарушено
 """
 
+import os
 import re
 import shutil
 import sqlite3
@@ -54,11 +55,12 @@ import mezo_target  # noqa: E402 — какую копию испытываем,
 import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
+
 LIVE = mezo_paths.live_db()
 SANDBOX = Path.home() / ".mezosync-sandbox" / "bite-shown.db"
 READER = mezo_target.script("read-messages.py")
 ROLE = "PROTO"
-START = 3069           # точка, с которой воспроизводится мой случай 06.08
+SEED_COUNT = 50         # сколько своих нот сеем поверх границы — заведомо больше любого --limit ниже
 
 # 🪤 ИМЯ ЗАШИТО НАМЕРЕННО — слово владельца 2026-08-07 13:26 UTC: «убери этот выбор колонки».
 #    Прежде здесь стоял список кандидатов и бралась первая подошедшая: пока имя выбирал
@@ -71,11 +73,27 @@ SHOWN_COL = "shown_max"
 
 
 def prepare() -> None:
-    """Копия живой базы. Живая НЕ ТРОГАЕТСЯ — у перископа и приёмок один закон."""
+    """Копия живой базы. Живая НЕ ТРОГАЕТСЯ — у перископа и приёмок один закон.
+
+    🩹 ДОГОН (пустой свежий контур пакета, карточка #667): впечатанная точка 3069 —
+    координата ЖИВОЙ ленты на день находки; на пустом контуре (0 записок) курсор
+    вставал бы ВЫШЕ любой записки, и --limit 40/12 показывали бы ноль строк — тот же
+    класс, что уже чинился в bite-r16-reissue.py. Граница теперь СВОЯ: берётся ТЕКУЩИЙ
+    максимум id, курсор встаёт РОВНО на него, и уже ПОСЛЕ сеются SEED_COUNT своих нот.
+    """
     SANDBOX.parent.mkdir(parents=True, exist_ok=True)
     mezo_stand.snapshot_db(LIVE, SANDBOX)
     con = sqlite3.connect(SANDBOX)
-    con.execute("UPDATE read_cursors SET last_read_id=? WHERE reader_role=?", (START, ROLE))
+    boundary = con.execute("SELECT MAX(id) FROM messages").fetchone()[0] or 0
+    for i in range(SEED_COUNT):
+        con.execute("INSERT INTO messages (writer_role, timestamp, body_md, tags, priority)"
+                    " VALUES ('PROTO', datetime('now'), ?, '[]', 'normal')",
+                    (f"посев приёмки #667 bite-shown-count: своя нота {i + 1}",))
+    updated = con.execute("UPDATE read_cursors SET last_read_id=? WHERE reader_role=?",
+                          (boundary, ROLE)).rowcount
+    if not updated:
+        con.execute("INSERT INTO read_cursors (reader_role, last_read_id) VALUES (?, ?)",
+                    (ROLE, boundary))
     con.execute("DELETE FROM read_batches WHERE role=?", (ROLE,))
     con.commit()
     con.close()

@@ -37,9 +37,15 @@ r"""bite-bridge-own-letters.py — приёмка карточки #573: про�
 ⛔ Приёмка НЕ строит целый стенд контура (база + каталоги обмена) и потому не судит,
 как список ведёт себя при других сочетаниях. Что признак применён именно к списку —
 подтверждается живым прогоном: он печатает, сколько наших писем выведено из-под суда.
+⚖️ ОДНО ИСКЛЮЧЕНИЕ (карточка #667, пустой новый контур): если в каталоге обмена, который
+судит проверка, нет НИ ОДНОГО письма, живому прогону нечего исключать, и «наших 0» там —
+правда, а не провал. Тогда ⑤ мерится на КОПИИ: инструменты контура + снимок его базы +
+два подставных письма (наше и соседа); ждём «наших 1» — ровно одно, не ноль и не оба.
 """
 import ast
 import re
+import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -58,6 +64,62 @@ results: list[tuple[str, bool, str]] = []
 def record_case(name: str, ok: bool, detail: str) -> None:
     results.append((name, ok, detail))
     print(f"{'✅' if ok else '🔴'} {name}: {detail}")
+
+
+def judged_bridge_letters(container: Path) -> int | None:
+    """Сколько писем ЛЮБОГО автора лежит в каталоге обмена, который судит проверка, —
+    предпосылка случая ⑤ (карточка #667). Каталог ищется функцией _by_marker ИЗ ИСХОДНИКА
+    проверки (не своей копией) и берётся ПЕРВЫЙ найденный — так же, как guard-all.py
+    (BRIDGES = _bridges[0]); INDEX.md письмом не считается и там. Различение «наше / не
+    наше» здесь НЕ участвует: предпосылка, построенная на самом признаке, прятала бы его
+    поломку («всегда не наше» дало бы ноль и увело ⑤ в другую ветку).
+    None — в исходнике нет _by_marker: искать каталог тем же способом нечем."""
+    tree = ast.parse(SOURCE_TEXT)
+    node = next((n for n in tree.body
+                 if isinstance(n, ast.FunctionDef) and n.name == "_by_marker"), None)
+    if node is None:
+        return None
+    namespace: dict = {}
+    exec(ast.get_source_segment(SOURCE_TEXT, node), namespace)  # noqa: S102 — свой же исходник
+    found = namespace["_by_marker"](container, "bridges")
+    if not found:
+        return 0
+    return sum(1 for f in found[0].glob("*/*.md") if f.name != "INDEX.md")
+
+
+def seeded_bridge_run(stand: Path) -> str:
+    """Прогон проверки на КОПИИ контура с подставными письмами (⑤ на пустом контуре).
+
+    Копия: инструменты контура + снимок его базы (mezo_stand.snapshot_db, живая база
+    только читается) + каталог обмена с двумя письмами — нашим (первая строка «контура
+    Atlas», лежит в нашей исходящей «atlas-neigh») и соседа (в его папке «neigh-atlas»).
+    Имя группы в копии назначает сама приёмка («atlas»): на новом контуре оно своё, и
+    письма, написанные под «atlas», иначе не были бы нашими. Связи с соседями в копии
+    стёрты — проверка на копии не ходит в настоящие соседние контуры."""
+    live = mezo_paths.container_root(__file__) / ".mezosync"
+    root = stand / "seeded"
+    shutil.copytree(live / "scripts", root / ".mezosync" / "scripts")
+    db = mezo_stand.snapshot_db(live / "mezosync.db", root / ".mezosync" / "mezosync.db")
+    con = sqlite3.connect(db)
+    con.execute("INSERT INTO meta (key, value) VALUES ('group_name', 'atlas') "
+                "ON CONFLICT(key) DO UPDATE SET value = 'atlas'")
+    con.execute("DELETE FROM cross_links")
+    con.commit()
+    con.close()
+    our_box = root / "bridges" / "atlas-neigh"
+    our_box.mkdir(parents=True)
+    (our_box / "answer.neigh.проба.md").write_text(
+        "2026-09-06 02:40 UTC · пишет **PROTO контура Atlas**. Все метки UTC.\nтело письма\n",
+        encoding="utf-8")
+    their_box = root / "bridges" / "neigh-atlas"
+    their_box.mkdir(parents=True)
+    (their_box / "ask.atlas.проба.md").write_text(
+        "2026-09-06 02:40 UTC · пишет **COORD контура Neigh**.\nтело письма\n",
+        encoding="utf-8")
+    r = subprocess.run([sys.executable, str(root / ".mezosync" / "scripts" / "guard-all.py")],
+                       capture_output=True, text=True, encoding="utf-8", timeout=900,
+                       env=mezo_stand.stand_env(root))  # копия — контур, где лежит её guard-all
+    return (r.stdout or "") + (r.stderr or "")
 
 
 def own_letter_predicate(group_name: str):
@@ -128,13 +190,32 @@ def main() -> int:
 
     # ⑤ ЖИВОЙ ПРОГОН печатает, сколько наших писем выведено из-под суда — молчание
     #    об исключённых читалось бы как «проверено», а они не проверены, а ИСКЛЮЧЕНЫ.
-    r = subprocess.run([sys.executable, str(GUARD_ALL)], capture_output=True, text=True,
-                       encoding="utf-8", timeout=900)
-    output = (r.stdout or "") + (r.stderr or "")
-    match = re.search(r"📤 мост: наших собственных писем (\d+)", output)
-    record_case("⑤ живой прогон НАЗЫВАЕТ число исключённых писем",
-           match is not None and int(match.group(1)) > 0,
-           f"сказано: {match.group(0)}" if match else "строки нет — исключение молчаливо")
+    # ⚖️ Карточка #667: в каталоге обмена пустого нового контура писем нет ВОВСЕ — живой
+    #    прогон честно говорит «наших 0», и требовать там «больше нуля» значило бы красить
+    #    правду. Тогда ⑤ мерится на копии с подставными письмами (seeded_bridge_run), и
+    #    требование там ТОЧНЕЕ живого: ровно 1 из 2 — признак, говорящий «наше» про всё,
+    #    дал бы 2, говорящий «не наше» про всё — 0.
+    letters_total = judged_bridge_letters(mezo_paths.container_root(__file__))
+    if letters_total is None:
+        record_case("⑤ живой прогон НАЗЫВАЕТ число исключённых писем", False,
+                    "в исходнике проверки нет _by_marker — каталог обмена тем же способом "
+                    "не найти, предпосылку случая спросить нечем")
+    elif letters_total == 0:
+        output = seeded_bridge_run(stand)
+        match = re.search(r"📤 мост: наших собственных писем (\d+)", output)
+        record_case("⑤ прогон НАЗЫВАЕТ число исключённых писем (копия контура с подставными "
+                    "письмами: в каталоге обмена контура писем нет ни одного)",
+                    match is not None and int(match.group(1)) == 1,
+                    (f"сказано: {match.group(0)}" if match else "строки нет — исключение молчаливо")
+                    + " · ждём ровно 1: наше письмо из двух (наше и соседа)")
+    else:
+        r = subprocess.run([sys.executable, str(GUARD_ALL)], capture_output=True, text=True,
+                           encoding="utf-8", timeout=900)
+        output = (r.stdout or "") + (r.stderr or "")
+        match = re.search(r"📤 мост: наших собственных писем (\d+)", output)
+        record_case("⑤ живой прогон НАЗЫВАЕТ число исключённых писем",
+               match is not None and int(match.group(1)) > 0,
+               f"сказано: {match.group(0)}" if match else "строки нет — исключение молчаливо")
 
     # ── ⑥ ГРАНИЦА, найденная @COORD (записка #4910) на трёх стендах: строка про исключённых
     #    обязана печататься и при НУЛЕ наших писем. Первая редакция печатала её только при

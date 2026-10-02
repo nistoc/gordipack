@@ -10,6 +10,15 @@ r"""ПРИЁМКА ВРЕЗКИ: guard-all зовёт признак «исто�
   ② исчезновение правила роняло ВЕСЬ прогон (найдено @PROTO нарочной поломкой, записка #3470):
      восемь проверок после не выполнялись, а код 1 читался как обычное «есть красное».
 🎯 Общее у них: приёмка компонента зелена, а связка врёт. Компонент и его врезка — разные предметы.
+
+🩹 ПРАВКА (карточка #667, пустой контур pcK). Случаи ① и ② молча полагались на то, что
+ЖИВАЯ база сама несёт правило «md-to-sqlite-phased-cutover» версии 5 и его след в
+audit_log — это верно для контура Atlas, но НЕ для только что собранного контура:
+там этой конкретной истории попросту нет. Отсюда и провал был не о признаке, а о
+пустых данных: снятое правило «исчезало» в НИКУДА, а не из прежде-бывшего состояния,
+и check-retired-mechanism.py законно отвечал «запись НЕПРИМЕНИМА» вместо «ПЕРЕЧЕНЬ
+УСТАРЕЛ». Теперь копии db1/db2 заводят эту запись СВОЕЙ РУКОЙ (seed_rule/seed_audit_trace)
+перед мутацией — проверка перестаёт зависеть от того, какой контур её запускает.
 """
 import pathlib
 import re
@@ -39,11 +48,45 @@ def run_on(db):
     return (r.stdout or "") + (r.stderr or ""), r.returncode
 
 
+RULE_KEY = "md-to-sqlite-phased-cutover"
+
+
+def seed_rule(db, version):
+    """Гарантировать в КОПИИ запись правила RULE_KEY с заданной версией — своя подставная
+    запись (карточка #667, Предпочтение 1), а не надежда на то, что её принёс контур сам.
+    На пустом контуре такой истории может не быть вовсе; UPSERT работает одинаково и
+    когда запись уже есть (живой контур), и когда её нет совсем (pcK)."""
+    c = sqlite3.connect(db)
+    c.execute(
+        "INSERT INTO rules (rule_key, body, version) VALUES (?, ?, ?) "
+        "ON CONFLICT(rule_key) DO UPDATE SET version=excluded.version",
+        (RULE_KEY, "подставное тело правила для приёмки врезки guard-all "
+                   "(bite-guard-all-retired-wiring.py)", version),
+    )
+    c.commit()
+    c.close()
+
+
+def seed_audit_trace(db, rule_key):
+    """Гарантировать в audit_log КОПИИ след по правилу — иначе check-retired-mechanism.py
+    не отличит «правило ИСЧЕЗЛО» от «правила здесь не было вовсе» и промолчит (та же беда
+    #667: пустые данные свежего контура, а не поломка признака)."""
+    c = sqlite3.connect(db)
+    c.execute(
+        "INSERT INTO audit_log (actor_role, action, target, diff_md) VALUES (?, ?, ?, ?)",
+        ("PROTO", "update_rule", rule_key, "подставной след для приёмки врезки guard-all"),
+    )
+    c.commit()
+    c.close()
+
+
 tmp = mezo_stand.new("wiring-")
 
 # ── ① ПРАВИЛО ИСЧЕЗЛО: набор обязан доработать до конца и назвать отказ отказом
 db1 = tmp / "no-rule.db"
 mezo_stand.snapshot_db(LIVE, db1)
+seed_rule(db1, 5)                    # своя запись: правило БЫЛО версии 5 — прежде чем исчезнуть
+seed_audit_trace(db1, RULE_KEY)      # и его исчезновение обязано иметь след, а не выглядеть «не было вовсе»
 c = sqlite3.connect(db1)
 c.execute("DELETE FROM rules WHERE rule_key='md-to-sqlite-phased-cutover'")
 c.commit()
@@ -65,6 +108,7 @@ check("① вердиктов много — набор не оборвался"
 #    если признак читает живую базу, он этой подмены не заметит и промолчит.
 db2 = tmp / "bumped.db"
 mezo_stand.snapshot_db(LIVE, db2)
+seed_rule(db2, 5)                    # базовая версия ДО правки — та же, что в RETIRED["версия_сверки"]
 c = sqlite3.connect(db2)
 c.execute("UPDATE rules SET version = version + 7 "
           "WHERE rule_key='md-to-sqlite-phased-cutover'")

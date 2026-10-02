@@ -94,15 +94,22 @@ def seed_rows(db):
     то есть проверял не миграцию, а погоду. Сеем в копию: живой не касаемся.
     Ноты берём с broadcast=0 — пометив уже помеченную, прироста не получишь
     и проверка соврёт в зелёную сторону.
+
+    🩹 ДОГОН (пустой свежий контур пакета, карточка #667): на нём записок вовсе нет —
+    «меньше трёх пригодных, сеять не на чем» было бы ОТКАЗОМ там, где признак (миграция
+    склеек в раздельные строки) можно поставить и на СВОИХ записках. Не хватает —
+    заводим сами НАПРЯМУЮ INSERT (а не через write-message.py: он уже пишет через новые
+    поля --to/--cc, а здесь нужны легаси-строки ДО миграции, которые --to/--cc не оставляют).
     """
     con = sqlite3.connect(db)
     condition = " WHERE COALESCE(broadcast,0)=0" if _has_broadcast(con) else ""
     notes = [r[0] for r in con.execute(
         f"SELECT id FROM messages{condition} ORDER BY id DESC LIMIT 3")]
-    if len(notes) < 3:
-        con.close()
-        raise SystemExit("⛔ ПРИЁМКА НЕ СОСТОЯЛАСЬ: в копии меньше трёх пригодных записок,"
-                         " сеять не на чем. Молчать об этом нельзя — вышло бы зелёное")
+    while len(notes) < 3:
+        con.execute("INSERT INTO messages (writer_role, timestamp, body_md, tags, priority)"
+                    " VALUES ('PROTO', datetime('now'), ?, '[]', 'normal')",
+                    ("посев приёмки #258: своя легаси-нота для миграции (копия пуста)",))
+        notes.append(con.execute("SELECT last_insert_rowid()").fetchone()[0])
     glued_note, all_, vse_note = notes
     for mid, role in ((glued_note, "CORE STUD"), (all_, "ALL"), (vse_note, "ВСЕ")):
         con.execute("INSERT OR REPLACE INTO message_addressee(message_id, role, kind,"
@@ -143,6 +150,18 @@ def main() -> int:
     try:
         db = d / "sand.db"
         mezo_stand.snapshot_db(LIVE_DB, db)
+        # 🩹 ДОГОН (пустой свежий контур пакета, карточка #667): словарь адресатов
+        # (write-message.py) отказывает имени, которого нет в таблице roles — а на
+        # свежей выгрузке там только COORD. Случаи ①②⑤ пишут CORE/STUD намеренно, как
+        # ЖИВЫЕ имена (это контроль ⑥⑧, а не предмет случая), и без них упали бы отказом
+        # словаря ДО того, как признак (разбор пробела/запятой) вообще начнёт работать.
+        # INSERT OR IGNORE — на живом контуре эти роли уже есть, трогать их незачем.
+        con_roles = sqlite3.connect(db)
+        for role in ("CORE", "STUD"):
+            con_roles.execute("INSERT OR IGNORE INTO roles (role, lifecycle) VALUES (?, 'alive')",
+                              (role,))
+        con_roles.commit()
+        con_roles.close()
         # 🩸 ПОЧИНЕНО 2026-08-27 09:02 UTC (замер @COORD, записка #3926 §③⑥). Прежняя
         # редакция ⑦а НАДЕЯЛАСЬ на состояние живой базы: ждала «склеек до > 0» и
         # «всем ПОСЛЕ = числу нот ALL ДО». Оба ожидания были верны ровно до того часа,
@@ -259,7 +278,12 @@ def main() -> int:
                    differ=True)
 
         # ⑤ живой читатель на мигрированной песочнице.
-        code5, output5 = run_tool(READER, "--db", str(db), "--role", "CORE", "--to-me")
+        # 🩹 ДОГОН (пустой свежий контур пакета, карточка #667): CORE там не значится
+        # читателем (read_cursors пуст кроме COORD) — ридер честно отказывает незнакомой
+        # роли без --register. На уже знакомой роли (живой контур) --register не делает
+        # ничего, кроме как пропускает ветку регистрации молча, — проверено прогоном.
+        code5, output5 = run_tool(READER, "--db", str(db), "--role", "CORE", "--to-me",
+                                  "--register")
         ok &= case("⑤ живой read-messages --to-me на песочнице: не падает, «всем»-ноту не выдаёт",
                    code5 == 0 and "проба Р4" not in output5,
                    f"код {code5}; новая колонка не ломает читателя, широковещательное"

@@ -51,6 +51,17 @@ bite-correction-target.py — приёмка карточки #520: гашени
      · строка, где ОДИН и тот же номер стои́т дважды в разных ролях.
    Сомневаешься — считай исправляемым: ложное гашение прячет живой дефект, лишнее
    суждение лишь красит его.
+
+═══ ДОГОН (карточка #667, приёмка пакета на пустом новом контуре) ═══
+Случаи ①②③ стоят на ИМЕННО ЭТОМ снимке живой ленты, снятом ДО правки 04-05.09 — ровно
+то, что докстрока называет «материал, который после правки уже не изготовить». Свежая
+выгрузка пакета несёт ПУСТУЮ ленту (messages пуста по построению, не по чьей-то вине),
+и ни один из 19 номеров в ней не найдётся — это тот же класс, что и отсутствующая
+история git: реконструировать их фикстурой значило бы судить ВЫДУМАННУЮ историю, а не
+проверить механизм на реальной. ⇒ при ПОЛНОМ отсутствии материала (все 19 номеров сразу)
+①②③ честно пропускаются; ④⑤⑥ — свои, самодостаточные (готовые строки/контроль) — мерятся
+как прежде на любом контуре. Частичная пропажа (материал живого контура подвинулся, но не
+весь) по-прежнему красит по имени — это не пустота пакета, а повод присмотреться.
 """
 import argparse
 import importlib.util
@@ -66,18 +77,18 @@ LIVE_DB = Path(str(mezo_paths.live_db()))
 
 # ── МАТЕРИАЛ. Номера — из живой ленты; строки берутся ОТТУДА ЖЕ по номеру поправки,
 #    а не переписаны сюда руками: переписанная строка судила бы мою копию, а не ленту.
-ЛОЖНЫЕ = {
+FALSE_CARRIERS = {
     2388: (4622, "разбор примера: «записка #2388 … — НАСТОЯЩИЙ дефект»"),
     2958: (3056, "пример внутри честной поправки о ДРУГОЙ записке: «(первый — #2958)»"),
     3626: (3858, "жертва — САМА поправка: «поправка была запиской #3626»"),
     4078: (4086, "указание, где лежит поправка: «(поправка — записка #4078)»"),
 }
-НАСТОЯЩИЕ = [2562, 3055, 3182, 3419, 3427, 3430, 3756, 3770, 3836, 3856, 3885,
-             4076, 4112, 4270, 4747]
+REAL_CORRECTIONS = [2562, 3055, 3182, 3419, 3427, 3430, 3756, 3770, 3836, 3856, 3885,
+                    4076, 4112, 4270, 4747]
 
 # ── ④ ВСТРЕЧНЫЕ С ДРУГИМ ОПРЕДЕЛЕНИЕМ ПРЕДМЕТА: строк такого вида в ленте НЕТ,
 #    и потому признак на них не настраивался. (строка, номер, ожидаемая роль, зачем)
-ВЫДУМАННЫЕ = [
+FABRICATED = [
     ("🩸 Поправка к записке #9001: час 10:00 UTC неверен, читайте 08:00 UTC",
      9001, "исправляемое", "обычная форма с иным номером — признак не привязан к материалу"),
     ("⚡ этот класс я уже разбирал: образцом была записка #9002 — местное под UTC",
@@ -91,21 +102,27 @@ LIVE_DB = Path(str(mezo_paths.live_db()))
 ]
 
 OK = FAIL = 0
+SKIPPED: list[tuple[str, str]] = []
 
 
-def случай(имя, ок, чем):
+def case(name, ok, detail):
     """Печатает ВЕРДИКТ РЯДОМ С ДАННЫМИ: число без данных однажды соврало мне в приёмке
     карточки #532 (подменено 14 из 14 при нуле подмен), и спасла именно печать тела."""
     global OK, FAIL
-    if ок:
+    if ok:
         OK += 1
-        print("✅ " + имя + "\n     " + чем)
+        print("✅ " + name + "\n     " + detail)
     else:
         FAIL += 1
-        print("🔴 " + имя + "\n     " + чем)
+        print("🔴 " + name + "\n     " + detail)
 
 
-def поводы_из_ленты(con):
+def case_skip(name, reason):
+    SKIPPED.append((name, reason))
+    print("⚪ " + name + "\n     пропущен: не проверено: " + reason)
+
+
+def reasons_from_feed(con):
     """{жертва: (поправка, строка)} — ПЕРВАЯ строка-повод, ровно как её видит гашение."""
     spec = importlib.util.spec_from_file_location(
         "gpt", str(Path(__file__).resolve().parent / "guard-phoenix-time.py"))
@@ -128,125 +145,158 @@ def поводы_из_ленты(con):
     return out, gpt
 
 
-def роль(line, n, порча):
+def classify_role(line, n, break_kind):
     """Различитель — с нарочными поломками, каждая гасит СВОЮ половину признака."""
-    if порча == "target":
+    if break_kind == "target":
         return "исправляемое", "поломка: различитель выключен"
-    if порча == "svyazka":
-        сохр = mention.СВЯЗКА_ОТОЖДЕСТВЛЕНИЯ
+    if break_kind == "svyazka":
+        saved = mention.СВЯЗКА_ОТОЖДЕСТВЛЕНИЯ
         mention.СВЯЗКА_ОТОЖДЕСТВЛЕНИЯ = r"(?!x)x"      # не совпадает ни с чем
         try:
             return mention.fix_target(line, n)
         finally:
-            mention.СВЯЗКА_ОТОЖДЕСТВЛЕНИЯ = сохр
-    if порча == "tire":
-        r, п = mention.fix_target(line, n)
-        if r == "ссылка" and "тире" in п:
+            mention.СВЯЗКА_ОТОЖДЕСТВЛЕНИЯ = saved
+    if break_kind == "tire":
+        r, reason = mention.fix_target(line, n)
+        if r == "ссылка" and "тире" in reason:
             return "исправляемое", "поломка: правило тире снято"
-        return r, п
+        return r, reason
     return mention.fix_target(line, n)
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--break", dest="порча", choices=["target", "svyazka", "tire"],
+    ap.add_argument("--break", dest="break_kind", choices=["target", "svyazka", "tire"],
                     help="нарочная поломка: приёмка ОБЯЗАНА покраснеть")
-    п = ap.parse_args().порча
-    if п:
-        print("⚠️ ПРОГОН С НАРОЧНОЙ ПОЛОМКОЙ «" + п + "» — красное ОЖИДАЕТСЯ\n")
+    break_kind = ap.parse_args().break_kind
+    if break_kind:
+        print("⚠️ ПРОГОН С НАРОЧНОЙ ПОЛОМКОЙ «" + break_kind + "» — красное ОЖИДАЕТСЯ\n")
 
-    живая_до = (LIVE_DB.stat().st_size, LIVE_DB.stat().st_mtime_ns)
+    live_before = (LIVE_DB.stat().st_size, LIVE_DB.stat().st_mtime_ns)
     con = sqlite3.connect("file:" + str(LIVE_DB) + "?mode=ro", uri=True)
-    поводы, gpt = поводы_из_ленты(con)
+    reasons, gpt = reasons_from_feed(con)
+
+    # 🩹 ДОГОН (карточка #667): ①②③ стоят на СНИМКЕ живой ленты «до правки» — на пустой
+    # ленте свежей выгрузки пакета НИ ОДИН из 19 номеров не найдётся вовсе, и это не
+    # поломка механизма, а отсутствие ИСТОРИИ (тот же класс, что «нет рубежа git»).
+    # Полная пропажа — честный «не проверено»; частичная (материал живого контура
+    # подвинулся) — по-прежнему красит по имени, как и раньше.
+    all_numbers = sorted(set(FALSE_CARRIERS) | set(REAL_CORRECTIONS))
+    missing_numbers = [n for n in all_numbers if n not in reasons]
+    material_gone = len(missing_numbers) == len(all_numbers)
+    if material_gone:
+        reason = (f"снимок живой ленты «до правки #520» (замер @TAXO 04-05.09) в этом "
+                  f"контуре отсутствует целиком — ни один из {len(all_numbers)} номеров "
+                  f"({', '.join('#' + str(n) for n in all_numbers)}) не найден в messages "
+                  f"(пустая лента свежей выгрузки пакета, не поломка гашения). Этот "
+                  f"материал нельзя изготовить заново — такова самая его суть (см. шапку "
+                  f"файла): фикстура судила бы выдуманную историю, а не настоящую")
 
     # ── ① четыре ложных носителя
     print("=" * 96)
-    беды = []
-    for ж, (ожид_поправка, почему) in sorted(ЛОЖНЫЕ.items()):
-        if ж not in поводы:
-            беды.append("#" + str(ж) + ": повода в ленте НЕТ (материал изменился)")
-            continue
-        поправка, line = поводы[ж]
-        р, п_поч = роль(line, ж, п)
-        метка = "✅" if р == "ссылка" else "🔴"
-        print("   " + метка + " #" + str(ж) + " <= #" + str(поправка) + " -> " + р
-              + " (" + п_поч + ")\n        " + line[:130])
-        if р != "ссылка":
-            беды.append("#" + str(ж) + " признан исправляемым — " + почему)
-    случай("① ЧЕТЫРЕ ЛОЖНЫХ носителя не гасят: разбор не есть исправление",
-           not беды, "ложных распознано " + str(len(ЛОЖНЫЕ) - len(беды)) + " из "
-           + str(len(ЛОЖНЫЕ)) + (" · беды: " + "; ".join(беды) if беды else ""))
+    if material_gone:
+        case_skip("① ЧЕТЫРЕ ЛОЖНЫХ носителя не гасят: разбор не есть исправление", reason)
+    else:
+        problems = []
+        for victim, (expected_correction, why) in sorted(FALSE_CARRIERS.items()):
+            if victim not in reasons:
+                problems.append("#" + str(victim) + ": повода в ленте НЕТ (материал изменился)")
+                continue
+            correction, line = reasons[victim]
+            r, why_said = classify_role(line, victim, break_kind)
+            mark = "✅" if r == "ссылка" else "🔴"
+            print("   " + mark + " #" + str(victim) + " <= #" + str(correction) + " -> " + r
+                  + " (" + why_said + ")\n        " + line[:130])
+            if r != "ссылка":
+                problems.append("#" + str(victim) + " признан исправляемым — " + why)
+        case("① ЧЕТЫРЕ ЛОЖНЫХ носителя не гасят: разбор не есть исправление",
+             not problems, "ложных распознано " + str(len(FALSE_CARRIERS) - len(problems)) + " из "
+             + str(len(FALSE_CARRIERS)) + (" · беды: " + "; ".join(problems) if problems else ""))
 
     # ── ② встречный: пятнадцать настоящих целы
     print("=" * 96)
-    потеряны = []
-    for ж in НАСТОЯЩИЕ:
-        if ж not in поводы:
-            потеряны.append("#" + str(ж) + " (повода нет)")
-            continue
-        р, _ = роль(поводы[ж][1], ж, п)
-        if р != "исправляемое":
-            потеряны.append("#" + str(ж))
-    случай("② ВСТРЕЧНЫЙ (взят ДО правки): пятнадцать настоящих поправок гасят как прежде",
-           not потеряны, "цело " + str(len(НАСТОЯЩИЕ) - len(потеряны)) + " из "
-           + str(len(НАСТОЯЩИЕ)) + (" · ПОТЕРЯНЫ: " + ", ".join(потеряны) if потеряны else ""))
+    if material_gone:
+        case_skip("② ВСТРЕЧНЫЙ (взят ДО правки): пятнадцать настоящих поправок гасят как прежде",
+                  reason)
+    else:
+        lost = []
+        for victim in REAL_CORRECTIONS:
+            if victim not in reasons:
+                lost.append("#" + str(victim) + " (повода нет)")
+                continue
+            r, _ = classify_role(reasons[victim][1], victim, break_kind)
+            if r != "исправляемое":
+                lost.append("#" + str(victim))
+        case("② ВСТРЕЧНЫЙ (взят ДО правки): пятнадцать настоящих поправок гасят как прежде",
+             not lost, "цело " + str(len(REAL_CORRECTIONS) - len(lost)) + " из "
+             + str(len(REAL_CORRECTIONS)) + (" · ПОТЕРЯНЫ: " + ", ".join(lost) if lost else ""))
 
     # ── ③ живой механизм целиком, а не только признак
-    if п:   # при поломке считаем так же, как считал бы механизм с этой поломкой
-        fixed = {ж: поводы[ж][0] for ж in list(ЛОЖНЫЕ) + НАСТОЯЩИЕ
-                 if ж in поводы and роль(поводы[ж][1], ж, п)[0] == "исправляемое"}
+    if material_gone:
+        case_skip("③ ЖИВОЙ механизм: ни один ложный не гасится, все настоящие гасятся", reason)
     else:
-        fixed = gpt.corrected_ids(con)
-    гасятся_ложные = sorted(ж for ж in ЛОЖНЫЕ if ж in fixed)
-    не_гасятся_наст = sorted(ж for ж in НАСТОЯЩИЕ if ж not in fixed)
-    случай("③ ЖИВОЙ механизм: ни один ложный не гасится, все настоящие гасятся",
-           not гасятся_ложные and not не_гасятся_наст,
-           "гасят ложных: " + (", ".join("#" + str(x) for x in гасятся_ложные) or "нет")
-           + " · не гасят настоящих: "
-           + (", ".join("#" + str(x) for x in не_гасятся_наст) or "нет"))
+        if break_kind:   # при поломке считаем так же, как считал бы механизм с этой поломкой
+            fixed = {victim: reasons[victim][0] for victim in list(FALSE_CARRIERS) + REAL_CORRECTIONS
+                     if victim in reasons and classify_role(reasons[victim][1], victim, break_kind)[0] == "исправляемое"}
+        else:
+            fixed = gpt.corrected_ids(con)
+        extinguished_false = sorted(victim for victim in FALSE_CARRIERS if victim in fixed)
+        not_extinguished_real = sorted(victim for victim in REAL_CORRECTIONS if victim not in fixed)
+        case("③ ЖИВОЙ механизм: ни один ложный не гасится, все настоящие гасятся",
+             not extinguished_false and not not_extinguished_real,
+             "гасят ложных: " + (", ".join("#" + str(x) for x in extinguished_false) or "нет")
+             + " · не гасят настоящих: "
+             + (", ".join("#" + str(x) for x in not_extinguished_real) or "нет"))
 
-    # ── ④ встречные с ДРУГИМ определением предмета
+    # ── ④ встречные с ДРУГИМ определением предмета (свои строки — любой контур)
     print("=" * 96)
-    промахи = []
-    for line, n, ждём, зачем in ВЫДУМАННЫЕ:
-        р, почему = роль(line, n, п)
-        метка = "✅" if р == ждём else "🔴"
-        print("   " + метка + " #" + str(n) + " ждём «" + ждём + "», вышло «" + р
-              + "» (" + почему + ")\n        " + line[:120] + "\n        => " + зачем)
-        if р != ждём:
-            промахи.append("#" + str(n))
-    случай("④ ВСТРЕЧНЫЕ С ДРУГИМ ОПРЕДЕЛЕНИЕМ ПРЕДМЕТА: формы, которых в ленте НЕТ",
-           not промахи, "верно " + str(len(ВЫДУМАННЫЕ) - len(промахи)) + " из "
-           + str(len(ВЫДУМАННЫЕ)) + (" · промахи: " + ", ".join(промахи) if промахи else ""))
+    misses = []
+    for line, n, expected, why in FABRICATED:
+        r, reason_said = classify_role(line, n, break_kind)
+        mark = "✅" if r == expected else "🔴"
+        print("   " + mark + " #" + str(n) + " ждём «" + expected + "», вышло «" + r
+              + "» (" + reason_said + ")\n        " + line[:120] + "\n        => " + why)
+        if r != expected:
+            misses.append("#" + str(n))
+    case("④ ВСТРЕЧНЫЕ С ДРУГИМ ОПРЕДЕЛЕНИЕМ ПРЕДМЕТА: формы, которых в ленте НЕТ",
+         not misses, "верно " + str(len(FABRICATED) - len(misses)) + " из "
+         + str(len(FABRICATED)) + (" · промахи: " + ", ".join(misses) if misses else ""))
 
-    # ── ⑤ перечисление наследует роль соседа — В ОБЕ СТОРОНЫ
-    хор = роль("метки в моих записках #7001 и #7002 неверны, UTC", 7002, п)[0] == "исправляемое"
+    # ── ⑤ перечисление наследует роль соседа — В ОБЕ СТОРОНЫ (свои строки — любой контур)
+    inherits_from_fixable = classify_role(
+        "метки в моих записках #7001 и #7002 неверны, UTC", 7002, break_kind)[0] == "исправляемое"
     # 🩸 в первой редакции строка кончалась «#7004 — местное под UTC», и вторая половина
     # была зелена ПО ПОСТОРОННЕЙ ПРИЧИНЕ: тире справа само давало «ссылка», наследование
     # не проверялось вовсе. Поймано прогнозом, не сошедшимся на --break svyazka (3 из 6
     # вместо 2). Тире убрано: теперь единственный путь к «ссылке» — наследование от #7003.
-    плох = роль("образцом была записка #7003 и #7004, там час 10:00 UTC местный",
-                7004, п)[0] == "ссылка"
-    случай("⑤ ПЕРЕЧИСЛЕНИЕ: второй номер наследует роль первого — и вверх, и вниз",
-           хор and плох,
-           "после исправляемого: " + ("наследует" if хор else "НЕ наследует")
-           + " · после ссылки: " + ("наследует" if плох else "НЕ наследует"))
+    inherits_from_reference = classify_role(
+        "образцом была записка #7003 и #7004, там час 10:00 UTC местный", 7004, break_kind)[0] == "ссылка"
+    case("⑤ ПЕРЕЧИСЛЕНИЕ: второй номер наследует роль первого — и вверх, и вниз",
+         inherits_from_fixable and inherits_from_reference,
+         "после исправляемого: " + ("наследует" if inherits_from_fixable else "НЕ наследует")
+         + " · после ссылки: " + ("наследует" if inherits_from_reference else "НЕ наследует"))
 
     con.close()
-    живая_после = (LIVE_DB.stat().st_size, LIVE_DB.stat().st_mtime_ns)
-    случай("⑥ контроль: живая база не открывалась на запись",
-           живая_до == живая_после,
-           "размер и час записи " + ("совпали" if живая_до == живая_после else "ИЗМЕНИЛИСЬ"))
+    live_after = (LIVE_DB.stat().st_size, LIVE_DB.stat().st_mtime_ns)
+    case("⑥ контроль: живая база не открывалась на запись",
+         live_before == live_after,
+         "размер и час записи " + ("совпали" if live_before == live_after else "ИЗМЕНИЛИСЬ"))
 
     print("=" * 96)
-    print("ИТОГ: " + str(OK) + " из " + str(OK + FAIL))
-    if п:
-        print("⚠️ прогон с нарочной поломкой «" + п + "» — красное здесь ОЖИДАЕТСЯ")
+    print("ИТОГ: " + str(OK) + " из " + str(OK + FAIL)
+          + (" · пропущено " + str(len(SKIPPED)) if SKIPPED else ""))
+    if SKIPPED:
+        print("⚪ не проверено " + str(len(SKIPPED)) + ": "
+              + " · ".join(name for name, _ in SKIPPED))
+    if break_kind:
+        print("⚠️ прогон с нарочной поломкой «" + break_kind + "» — красное здесь ОЖИДАЕТСЯ")
     print("⚖️ НЕ ПРОВЕРЕНО (долг назван, а не проглядён): формы «#N: неверно» и «см. #N — …» "
           "без носителя и предлога · жертва в СОСЕДНЕЙ строке · иные языки · один номер "
           "дважды в разных ролях в одной строке")
-    return 0 if FAIL == 0 else 1
+    if FAIL != 0:
+        return 1
+    return 2 if SKIPPED else 0
 
 
 if __name__ == "__main__":

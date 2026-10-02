@@ -109,7 +109,18 @@ BACKLOG = str(SCRIPTS / "backlog.py")
 READ_MESSAGES = str(SCRIPTS / "read-messages.py")
 WRITE_MESSAGE = str(SCRIPTS / "write-message.py")
 READ_PHOENIX = str(SCRIPTS / "read-phoenix.py")                    # случай ⑳
-REFS = str(CONTAINER / "vnext-tools" / "check-dangling-refs.py")   # зона @PROTO, вызов ПО ПУТИ
+SAVE_PHOENIX = str(SCRIPTS / "save-phoenix.py")                    # случай ⑳: завести подставную память
+# check-dangling-refs.py — зона @PROTO, вызов ПО ПУТИ. У двух контуров РАЗНАЯ раскладка:
+# в живом репозитории инструмент лежит рядом с этим файлом, в vnext-tools (ещё не уехал в
+# пакет GORDI); на контуре, СОБРАННОМ ИЗ ПАКЕТА, vnext-tools вообще нет — та же проверка
+# уезжает прямиком в .mezosync/scripts. CONTAINER/"vnext-tools" — путь, годный только для
+# живого репозитория; на свежесобранном контуре он ведёт в НИКУДА, python получает
+# несуществующий файл, молча выходит кодом 2 БЕЗ трассы — и случаи ④/⑫ читают это как
+# «полного текста нет» (находка этой правки, не домысел: воспроизведено прогоном на pcK).
+# Берём первый путь, который СУЩЕСТВУЕТ на этом контуре — тот же принцип, что у REFS_CANDIDATES.
+_REFS_CANDIDATES = (CONTAINER / "vnext-tools" / "check-dangling-refs.py",
+                    SCRIPTS / "check-dangling-refs.py")
+REFS = str(next((p for p in _REFS_CANDIDATES if p.exists()), _REFS_CANDIDATES[0]))
 
 sys.path.insert(0, str(SCRIPTS))
 import mezo_hints  # noqa: E402 — помощник карточки #586, для случаев ⑧⑨⑩ зовём напрямую
@@ -259,24 +270,37 @@ def main() -> int:
     # ═══ ⑤ ВСТРЕЧНЫЙ: read-messages.py вне механизма подсказок ═════════════════════
     # mezo_hints этот файл не зовёт вовсе — случай подтверждает, что работа над #586
     # не задела СОСЕДНИЙ механизм (разрезанный токен подтверждения ленты).
-    conn5 = sqlite3.connect(str(db))
-    max_id5 = conn5.execute("SELECT MAX(id) FROM messages").fetchone()[0] or 0
-    conn5.execute("UPDATE read_cursors SET last_read_id=? WHERE reader_role='PROTO'",
-                  (max(0, max_id5 - 15),))
-    if conn5.execute("SELECT changes()").fetchone()[0] == 0:
-        conn5.execute("INSERT INTO read_cursors (reader_role, last_read_id) VALUES ('PROTO', ?)",
-                      (max(0, max_id5 - 15),))
-    conn5.commit()
-    conn5.close()
-    rc5, out5 = run(READ_MESSAGES, db, "--role", "PROTO", "--limit", "5")
-    lines5 = [line for line in out5.splitlines() if line.strip()]
-    first5 = lines5[0] if lines5 else ""
-    last5 = lines5[-1] if lines5 else ""
-    ok5 = ("Токен разрезан: ПЕРВАЯ половина" in first5) and ("--ack <первая>-" in last5)
-    case("⑤ ВСТРЕЧНЫЙ: read-messages.py (mezo_hints не зовёт) — разрезанный токен цел",
-           rc5 == 0 and ok5,
-           "первая строка несёт первую половину, последняя — вторую" if ok5
-           else f"🔴 нарушен контракт токена; первая={first5[:70]!r} последняя={last5[:70]!r}")
+    # На свежесобранном контуре в ленте копии НЕТ НИ ОДНОЙ записки — читать нечего, ветка
+    # «нет непрочитанных» токена вообще не печатает (находка этой правки, не домысел:
+    # воспроизведено прогоном на pcK — там у копии 0 строк в messages). Заводим подставную
+    # записку ШТАТНЫМ write-message.py (тот же приём, что у ①②③ с backlog.py), чтобы
+    # read-messages.py было что показать на ЛЮБОМ контуре, свежем или живом.
+    rc5w, out5w = run(WRITE_MESSAGE, db, "--role", "COORD",
+                      "--body", "стендовая записка приёмки 586 случай пять: заведена, "
+                                "чтобы read-messages.py нашёл что читать")
+    if rc5w != 0:
+        case("⑤ ВСТРЕЧНЫЙ: read-messages.py (mezo_hints не зовёт) — разрезанный токен цел",
+               False, f"🔴 подставная записка НЕ заведена (код {rc5w}): {out5w[:200]!r}")
+    else:
+        conn5 = sqlite3.connect(str(db))
+        max_id5 = conn5.execute("SELECT MAX(id) FROM messages").fetchone()[0] or 0
+        cursor5 = max(0, max_id5 - 15)
+        conn5.execute("UPDATE read_cursors SET last_read_id=? WHERE reader_role='PROTO'",
+                      (cursor5,))
+        if conn5.execute("SELECT changes()").fetchone()[0] == 0:
+            conn5.execute("INSERT INTO read_cursors (reader_role, last_read_id) VALUES ('PROTO', ?)",
+                          (cursor5,))
+        conn5.commit()
+        conn5.close()
+        rc5, out5 = run(READ_MESSAGES, db, "--role", "PROTO", "--limit", "5")
+        lines5 = [line for line in out5.splitlines() if line.strip()]
+        first5 = lines5[0] if lines5 else ""
+        last5 = lines5[-1] if lines5 else ""
+        ok5 = ("Токен разрезан: ПЕРВАЯ половина" in first5) and ("--ack <первая>-" in last5)
+        case("⑤ ВСТРЕЧНЫЙ: read-messages.py (mezo_hints не зовёт) — разрезанный токен цел",
+               rc5 == 0 and ok5,
+               "первая строка несёт первую половину, последняя — вторую" if ok5
+               else f"🔴 нарушен контракт токена; первая={first5[:70]!r} последняя={last5[:70]!r}")
 
     # ═══ ⑥ write-message.py: позиция «OK #NNNN» от конца ═══════════════════════════
     forget_keys(db, "PROTO", ["refs-предупреждение-не-отказ", "refs-слова-пояснения"])
@@ -579,20 +603,36 @@ def main() -> int:
            f"третий (--role PROTO, без --actor, без MEZO_ROLE в среде) полный={full19c}")
 
     # ═══ ⑳ то же для read-phoenix.py — ключ «read-phoenix-canon» ══════════════════
-    forget_keys(db, "COORD", ["read-phoenix-canon"])
-    forget_keys(db, "PROTO", ["read-phoenix-canon"])
-    CANON_MARKER = "📌 КАНОН — ИСТОЧНИК ПРАВДЫ БД"
-    rc20a, out20a = run(READ_PHOENIX, db, "--role", "PROTO", "--actor", "COORD")
-    rc20b, out20b = run(READ_PHOENIX, db, "--role", "PROTO", "--actor", "COORD")
-    link20 = "ℹ️ подсказка «read-phoenix-canon» показана" in out20b
-    full20a = CANON_MARKER in out20a
-    rc20c, out20c = run(READ_PHOENIX, db, "--role", "PROTO")
-    full20c = CANON_MARKER in out20c
-    case("⑳ read-phoenix.py — читатель ≠ хозяин памяти: --actor COORD дважды (полный, "
-           "потом ссылка), --role PROTO без --actor видит канон целиком (засчитан себе)",
-           rc20a == 0 and rc20b == 0 and rc20c == 0 and full20a and link20 and full20c,
-           f"первый показ (--actor COORD) полный={full20a}, второй — ссылка={link20}, "
-           f"третий (--role PROTO без --actor) полный={full20c}")
+    # На свежесобранном контуре у роли PROTO ещё НЕТ сохранённой памяти вовсе — read-phoenix.py
+    # тогда отказывает ДО печати канона («ERR: сохранённой памяти роли PROTO в базе нет»,
+    # код 1) и случаю нечего мерить (находка этой правки, не домысел: воспроизведено прогоном
+    # на pcK — там зарегистрирована только роль COORD). Заводим подставную память ШТАТНЫМ
+    # save-phoenix.py — тот же приём, что у ⑱ с backlog.py add. --allow-shrink не вредит
+    # пустому контуру и защищает от честного отказа на живом, где у PROTO секция «state»
+    # уже большая, а подставное тело короче её.
+    rc20seed, out20seed = run(SAVE_PHOENIX, db, "--role", "PROTO", "--section", "state",
+                              "--allow-shrink",
+                              "--body", "стендовая память приёмки 586 случай двадцать: "
+                                        "заведена, чтобы read-phoenix.py нашёл что показать")
+    if rc20seed != 0:
+        case("⑳ read-phoenix.py — читатель ≠ хозяин памяти: --actor COORD дважды (полный, "
+               "потом ссылка), --role PROTO без --actor видит канон целиком (засчитан себе)",
+               False, f"🔴 подставная память НЕ заведена (код {rc20seed}): {out20seed[:200]!r}")
+    else:
+        forget_keys(db, "COORD", ["read-phoenix-canon"])
+        forget_keys(db, "PROTO", ["read-phoenix-canon"])
+        CANON_MARKER = "📌 КАНОН — ИСТОЧНИК ПРАВДЫ БД"
+        rc20a, out20a = run(READ_PHOENIX, db, "--role", "PROTO", "--actor", "COORD")
+        rc20b, out20b = run(READ_PHOENIX, db, "--role", "PROTO", "--actor", "COORD")
+        link20 = "ℹ️ подсказка «read-phoenix-canon» показана" in out20b
+        full20a = CANON_MARKER in out20a
+        rc20c, out20c = run(READ_PHOENIX, db, "--role", "PROTO")
+        full20c = CANON_MARKER in out20c
+        case("⑳ read-phoenix.py — читатель ≠ хозяин памяти: --actor COORD дважды (полный, "
+               "потом ссылка), --role PROTO без --actor видит канон целиком (засчитан себе)",
+               rc20a == 0 and rc20b == 0 and rc20c == 0 and full20a and link20 and full20c,
+               f"первый показ (--actor COORD) полный={full20a}, второй — ссылка={link20}, "
+               f"третий (--role PROTO без --actor) полный={full20c}")
 
     # ═══ ㉑ окружение MEZO_ROLE — засчитывается, когда --actor не передан ══════════
     forget_keys(db, "COORD", ["backlog-list-full"])

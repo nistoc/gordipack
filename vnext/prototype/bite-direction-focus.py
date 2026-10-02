@@ -47,11 +47,17 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
 import mezo_stand  # noqa: E402
 
-СКРИПТЫ = mezo_paths.live_scripts()
-BACKLOG = str(СКРИПТЫ / "backlog.py")
-BRIEF = str(СКРИПТЫ / "role-brief.py")
+SCRIPTS = mezo_paths.live_scripts()
+BACKLOG = str(SCRIPTS / "backlog.py")
+BRIEF = str(SCRIPTS / "role-brief.py")
+TRACK = str(SCRIPTS / "track.py")
 LIVE_DB = mezo_paths.live_db()
-НАПР = "TRACK-ROLES-REMEMBER"
+# Подставные имена наборов (карточка #667: пустой новый контур не несёт НИ ОДНОГО
+# набора — ни этого, ни TRACK-NEWUX, на которые приёмка раньше полагалась как на ЖИВЫЕ,
+# уже стоящие в контуре. Теперь приёмка заводит оба сама, настоящим инструментом
+# track.py, на своей копии — см. main()).
+DIRECTION = "BITE-FOCUS-PRIMARY"
+SECOND_TRACK = "BITE-FOCUS-SECOND"
 
 CASES = DIFFER = 0
 
@@ -81,13 +87,34 @@ def main() -> int:
     db = stand / "copy.db"
     mezo_stand.snapshot_db(LIVE_DB, db)
     con = sqlite3.connect(db)
-    # Направление в копии — ЕДИНСТВЕННОЕ: прочие активные ставятся на паузу.
-    con.execute("UPDATE tracks SET status='paused' WHERE status='active' AND track_id<>?",
-                (НАПР,))
+    # Прочие активные (если копия несла живые наборы) — на паузу: направление в копии
+    # задают ТОЛЬКО подставные наборы, заведённые ниже.
+    con.execute("UPDATE tracks SET status='paused' WHERE status='active'")
     # Живые объявления о правке приезжают в копию вместе с базой (оплачено в
     # bite-lease-read-subcommands): гасим, чтобы стенд судил ворота фокуса, а не их.
     con.execute("UPDATE tool_leases SET released_at=datetime('now') "
                 "WHERE released_at IS NULL")
+    con.commit()
+    con.close()
+
+    # ═══ КАРТОЧКА #667: подставные наборы приёмка заводит САМА ═══════════════════════
+    # Пустой новый контур не несёт ни TRACK-ROLES-REMEMBER, ни TRACK-NEWUX — раньше
+    # случаи ①③⑤⑦⑧⑨⑪ молча опирались на то, что эти наборы уже стоят в контуре
+    # активными (замер карточки #667: на пустом контуре 7 из 13 случаев красились НЕ
+    # трассой, а честным разбором — ворота фокуса целы, подставных данных для них
+    # просто не было). Заводим ДВА — настоящим инструментом (track.py open), именами,
+    # которых ни у одного живого набора нет: DIRECTION становится ЕДИНСТВЕННЫМ активным
+    # (ворота фокуса целятся на него), SECOND_TRACK рождается и тут же уходит на паузу —
+    # активным он станет только в случае ⑦ (граница «активных ДВА»), как раньше
+    # TRACK-NEWUX.
+    for track_id in (DIRECTION, SECOND_TRACK):
+        rc, out = run(TRACK, db, "open", "--id", track_id, "--actor", "PROTO",
+                      "--title", f"приёмка #667 bite-direction-focus: подставной набор {track_id}")
+        if rc != 0:
+            raise SystemExit(f"ПРИЁМКА НЕ СОСТОЯЛАСЬ: не завёлся подставной набор "
+                             f"{track_id} на копии:\n{out}")
+    con = sqlite3.connect(db)
+    con.execute("UPDATE tracks SET status='paused' WHERE track_id=?", (SECOND_TRACK,))
     con.commit()
     con.close()
 
@@ -108,7 +135,7 @@ def main() -> int:
 
     # ② встречный: заведение В набор → open.
     rc, out = run(BACKLOG, db, "add", "--role", "PROTO", "--actor", "PROTO",
-                  "--track", НАПР,
+                  "--track", DIRECTION,
                   "--title", "стендовая карточка направления",
                   "--body", "тело стендовой карточки направления",
                   "--done-when", "стендовый критерий: не судится")
@@ -155,7 +182,7 @@ def main() -> int:
 
     # ⑦ граница: активных ДВА → ворота молчат и говорят это вслух.
     con = sqlite3.connect(db)
-    con.execute("UPDATE tracks SET status='active' WHERE track_id='TRACK-NEWUX'")
+    con.execute("UPDATE tracks SET status='active' WHERE track_id=?", (SECOND_TRACK,))
     con.commit()
     con.close()
     rc, out = run(BACKLOG, db, "add", "--role", "PROTO", "--actor", "PROTO",
@@ -173,7 +200,7 @@ def main() -> int:
                and rc2 == 0 and "ВНЕ направления" not in out2,
                "судить «вне направления» при двух направлениях значит красить всё")
     con = sqlite3.connect(db)
-    con.execute("UPDATE tracks SET status='paused' WHERE track_id='TRACK-NEWUX'")
+    con.execute("UPDATE tracks SET status='paused' WHERE track_id=?", (SECOND_TRACK,))
     con.commit()
     con.close()
 
@@ -191,13 +218,13 @@ def main() -> int:
     # ⑨ сводка роли при одном активном несёт строку направления.
     rc, out = run(BRIEF, db, "--role", "PROTO")
     ok &= case("⑨ сводка роли называет НАПРАВЛЕНИЕ первой строкой секции набора",
-               rc == 0 and "НАПРАВЛЕНИЕ КОНТУРА" in out and НАПР in out,
+               rc == 0 and "НАПРАВЛЕНИЕ КОНТУРА" in out and DIRECTION in out,
                "роль узнаёт направление из живой сводки, а не из чьей-то памяти")
 
     # ── Карточка #405: три состояния мира в лазейке ─────────────────────────────
     # ⑩ наборов ДВА: причина не теряется и сообщение не врёт.
     con = sqlite3.connect(db)
-    con.execute("UPDATE tracks SET status='active' WHERE track_id='TRACK-NEWUX'")
+    con.execute("UPDATE tracks SET status='active' WHERE track_id=?", (SECOND_TRACK,))
     con.commit()
     con.close()
     rc, out = run(BACKLOG, db, "claim", bid3, "--actor", "PROTO",
@@ -220,7 +247,7 @@ def main() -> int:
                rc != 0 and "ПРИЧИНУ" in out,
                "отказ на пустую причину един для всех состояний мира")
     con = sqlite3.connect(db)
-    con.execute("UPDATE tracks SET status='paused' WHERE track_id='TRACK-NEWUX'")
+    con.execute("UPDATE tracks SET status='paused' WHERE track_id=?", (SECOND_TRACK,))
     con.commit()
     con.close()
 
@@ -238,31 +265,31 @@ def main() -> int:
 
     # ⑬ ОБРАТНЫЙ ХОД: копия инструмента без записи события в ветке «направления нет».
     src = pathlib.Path(BACKLOG).read_text(encoding="utf-8")
-    маркер = 'иначе летопись '
-    assert маркер in src, "ПРИЁМКА НЕ СОСТОЯЛАСЬ: якорь ветки #405 не найден в инструменте"
-    сломанный = stand / "backlog_broken.py"
-    тело = src.replace('_event(conn, a.id, a.actor, "off_pool", off.strip())\n'
-                       '            print("📝 направления сейчас НЕТ',
-                       'print("📝 направления сейчас НЕТ')
-    if тело == src:
+    anchor_marker = 'иначе летопись '
+    assert anchor_marker in src, "ПРИЁМКА НЕ СОСТОЯЛАСЬ: якорь ветки #405 не найден в инструменте"
+    broken_tool = stand / "backlog_broken.py"
+    patched_text = src.replace('_event(conn, a.id, a.actor, "off_pool", off.strip())\n'
+                               '            print("📝 направления сейчас НЕТ',
+                               'print("📝 направления сейчас НЕТ')
+    if patched_text == src:
         raise SystemExit("ПРИЁМКА НЕ СОСТОЯЛАСЬ: якорь замены ⑬ не совпал — "
                          "обратный ход не поставлен, зелёное было бы ложным")
-    сломанный.write_text(тело, encoding="utf-8")
+    broken_tool.write_text(patched_text, encoding="utf-8")
     con = sqlite3.connect(db)
-    con.execute("UPDATE tracks SET status='active' WHERE track_id='TRACK-NEWUX'")
+    con.execute("UPDATE tracks SET status='active' WHERE track_id=?", (SECOND_TRACK,))
     con.execute("DELETE FROM backlog_events WHERE backlog_id=? AND event_type='off_pool'",
                 (bid3,))
     con.commit()
     con.close()
     # Копия живёт в песочнице — соседей (mezo_paths, dryrun) ей даёт PYTHONPATH.
-    rc, out = run(str(сломанный), db, "claim", bid3, "--actor", "PROTO",
+    rc, out = run(str(broken_tool), db, "claim", bid3, "--actor", "PROTO",
                   "--note", "стендовое взятие на сломанной копии",
                   "--off-pool", "причина, которой суждено потеряться",
-                  extra_env={"PYTHONPATH": str(СКРИПТЫ)})
+                  extra_env={"PYTHONPATH": str(SCRIPTS)})
     con = sqlite3.connect(db)
     ev_br = con.execute("SELECT COUNT(*) FROM backlog_events WHERE backlog_id=? "
                         "AND event_type='off_pool'", (bid3,)).fetchone()[0]
-    con.execute("UPDATE tracks SET status='paused' WHERE track_id='TRACK-NEWUX'")
+    con.execute("UPDATE tracks SET status='paused' WHERE track_id=?", (SECOND_TRACK,))
     con.commit()
     con.close()
     ok &= case("⑬ ОБРАТНЫЙ ХОД: запись события снята в копии → случай ⑩ гаснет",

@@ -138,6 +138,64 @@ stand_a = mezo_stand.new("tasks-by-track-a-")
 db_a = stand_a / "mezosync.db"
 live_before = (LIVE_DB.stat().st_size, LIVE_DB.stat().st_mtime_ns)
 mezo_stand.snapshot_db(LIVE_DB, db_a)
+
+# 🩹 ДОГОН (карточка #667, пустой новый контур): случаи стенда A берут материал из копии
+# как есть — крупнейший набор, набор-сироту, заявленный пустой набор, задачу с телом,
+# задачи без набора. На свежей выгрузке пакета список задач и таблица наборов ПУСТЫ:
+# max() по пустому словарю падал ValueError ещё до первого случая. Механизм службы при
+# этом цел — ему не на чем показать себя. ⇒ Приёмка подставляет в КОПИЮ ровно то, чего
+# в ней НЕТ (своими наборами с меткой BITE-TBT и своими задачами), и только это: на живом
+# контуре, где весь материал есть, копия остаётся как была и случаи судят живые данные.
+# Подстановка — ДО снятия отметки «стенд до службы» (случай 13): она меняет копию сама.
+SEED_MAIN = "TRACK-BITE-TBT-MAIN"
+SEED_ORPHAN = "TRACK-BITE-TBT-ORPHAN"
+SEED_EMPTY = "TRACK-BITE-TBT-EMPTY"
+
+
+def seed_missing(db_path):
+    """Подставить в копию недостающий материал. Возвращает список подставленного словами."""
+    seed = sqlite3.connect(str(db_path))
+    by_track = dict(seed.execute(
+        "SELECT parent_track, COUNT(*) FROM backlog WHERE parent_track IS NOT NULL "
+        "AND TRIM(parent_track)!='' GROUP BY parent_track").fetchall())
+    declared = {r[0] for r in seed.execute("SELECT track_id FROM tracks")}
+    untracked = seed.execute("SELECT COUNT(*) FROM backlog WHERE parent_track IS NULL "
+                             "OR TRIM(parent_track)=''").fetchone()[0]
+    with_body = seed.execute("SELECT COUNT(*) FROM backlog WHERE body_md IS NOT NULL "
+                             "AND TRIM(body_md)!=''").fetchone()[0]
+    seeded = []
+
+    def add_task(track, status, title):
+        seed.execute(
+            "INSERT INTO backlog (role, title, body_md, status, priority, parent_track, created_by) "
+            "VALUES ('PROTO', ?, 'тело подставной задачи приёмки', ?, 'normal', ?, 'PROTO')",
+            (title, status, track))
+
+    if not by_track:
+        # набор с задачами: две открытые и одна закрытая — случай 6 судит пересечение со статусом
+        seed.execute("INSERT INTO tracks (track_id, title, status) VALUES (?, ?, 'active')",
+                     (SEED_MAIN, "подставной набор приёмки bite-tasks-by-track"))
+        for n, status in enumerate(("open", "open", "done"), 1):
+            add_task(SEED_MAIN, status, f"подставная задача набора №{n}")
+        seeded.append(f"набор {SEED_MAIN} с 3 задачами")
+    if not any(t not in declared for t in by_track):
+        add_task(SEED_ORPHAN, "open", "подставная задача набора-сироты")
+        seeded.append(f"набор-сирота {SEED_ORPHAN}")
+    if not any(t not in by_track for t in declared):
+        seed.execute("INSERT INTO tracks (track_id, title, status) VALUES (?, ?, 'active')",
+                     (SEED_EMPTY, "подставной пустой набор приёмки bite-tasks-by-track"))
+        seeded.append(f"пустой заявленный набор {SEED_EMPTY}")
+    if not untracked or not with_body:
+        add_task(None, "open", "подставная задача без набора")
+        seeded.append("задача без набора с телом")
+    seed.commit()
+    seed.close()
+    return seeded
+
+
+SEEDED = seed_missing(db_a)
+print("подставлено в копию (своего материала в ней не было): " + ", ".join(SEEDED) if SEEDED
+      else "подставлять не пришлось: весь материал случаев есть в копии")
 stand_before = (db_a.stat().st_size, db_a.stat().st_mtime_ns)
 
 con = sqlite3.connect(str(db_a))
@@ -289,4 +347,6 @@ if live_before != live_after:
           "это работа коллег, служба её не открывала")
 
 print(f"\nитог: {OK} из {OK + FAIL}")
-sys.exit(0 if FAIL == 0 else 1)
+# Исход объявляется mezo_stand: прежде здесь стоял голый sys.exit, и временные каталоги
+# с двумя копиями базы оставались после КАЖДОГО прогона, даже зелёного («исход не объявлен»).
+sys.exit(mezo_stand.finish(0 if FAIL == 0 else 1))

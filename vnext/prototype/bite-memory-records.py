@@ -57,6 +57,64 @@ DB = mezo_paths.live_db(__file__)
 ROLE = "PROTO"
 SEED = 524
 
+# 🩹 ДОГОН (карточка #667, пустой новый контур): на свежесобранном контуре у PROTO
+# ещё нет НИ ОДНОЙ разобранной записи (память пуста по построению пакета, а не по
+# чьей-то ошибке) — приёмке нечем судить, и она падала отказом ДО единого случая.
+# Подставная роль заводится своим ходом: тело раздела пишется штатно (save-phoenix.py),
+# разбор на записи — ЭТИМ ЖЕ инструментом (--разобрать). Приёмка продолжает проверять
+# МЕХАНИЗМ разбора/сборки, а не слова живой памяти PROTO — живой контур не тронут:
+# подставная роль заводится на КОПИИ базы.
+SEED_ROLE = "BITEMEMREC"
+
+# Заполнитель БЕЗ слова «право» — нужен числом знаков: случай ⑥ судит, что отбор
+# отвечает КОРОТКИМ списком, а не потоком тел (критерий «вывод < тела ÷ 3»), и это
+# различимо только когда тело ЗАМЕТНО больше служебного оформления списка (разделители,
+# шапка, подвал — у списка из одной-двух строк это ~700 знаков само по себе).
+_FILLER = (
+    "строка заполнителя приёмки bite-memory-records, без искомого слова — нужна "
+    "числом знаков, чтобы тело раздела было заметно больше служебного оформления "
+    "списка (разделители, шапка, подвал печатаются всегда, независимо от числа строк). "
+)
+SEED_FIXTURES = {
+    "state": (
+        "## 🎯 ПОДСТАВНОЙ РАЗДЕЛ ПРИЁМКИ bite-memory-records (карточка #667)\n"
+        "Этот текст заведён САМОЙ приёмкой на копии базы — на пустом свежесобранном\n"
+        "контуре у роли PROTO ещё нет ни одной разобранной записи, и мерить нечем.\n"
+        "Подставная роль разбирается ТЕМ ЖЕ инструментом (хук save-phoenix.py после\n"
+        "сохранения тела), что и живая память, — проверяется МЕХАНИЗМ, а не слова\n"
+        "чужой памяти. " + _FILLER * 2 + "\n\n"
+        "## право на отправку записки\n"
+        "⛔ слово владельца: право отправлять записки есть только у ролей из реестра.\n"
+        "мандат подтверждён 2026-09-04 13:41 UTC.\n\n"
+        "## 📏 замер числом\n"
+        "замер приёмки: подставных записей несколько, разделов два, слово «право» "
+        "встречается в ОДНОМ блоке — отбор обязан вернуть короткий список, не все тела. "
+        + _FILLER * 2 + "\n\n"
+        "## ⚡ класс урока первый\n"
+        "класс: подставные данные не должны зависеть от того, что уже лежит в памяти "
+        "ролей контура — иначе приёмка молчит там, где обязана измерить механизм. "
+        + _FILLER * 2 + "\n\n"
+        "## ⚡ класс урока второй\n"
+        "класс: тело заметно больше оформления списка — иначе проверка «список, а не "
+        "поток тел» красится не по предмету, а по масштабу подставных данных. "
+        + _FILLER * 2 + "\n"
+    ),
+    "plan": (
+        "## план приёмки: следующий шаг\n"
+        "следующий шаг — разобрать оба раздела подставной роли и свериться с суммой "
+        "знаков; очередь — по порядку, без спешки. " + _FILLER * 2 + "\n\n"
+        "## позиция на час посева\n"
+        "сейчас: раздел только что посеян, в работе — разбор на записи, сделано — "
+        "тело записано штатным save-phoenix.py. " + _FILLER * 2 + "\n\n"
+        "## инвариант сборки\n"
+        "инвариант: сборка записей обратно обязана сойтись с телом знак в знак, "
+        "иначе не переучиваться на ложном 🔁. " + _FILLER * 2 + "\n\n"
+        "## указатель на происхождение\n"
+        "смотри: это данные приёмки bite-memory-records.py, не живая память роли — "
+        "живое берите запросом к базе, не этим текстом. " + _FILLER * 2 + "\n"
+    ),
+}
+
 passed: list[str] = []
 failed: list[str] = []
 
@@ -66,12 +124,59 @@ def record_case(name: str, ok: bool, detail: str = "") -> None:
     print(f"  {'✅' if ok else '🔴'} {name}" + (f"\n       {detail}" if detail and not ok else ""))
 
 
-def call_tool(tool: pathlib.Path, *args: str, db: pathlib.Path = DB):
+def call_tool(tool: pathlib.Path, *args: str, db: pathlib.Path = None):
+    # ⚠️ db=None, А НЕ db=DB: значение параметра по умолчанию вычисляется ОДИН РАЗ,
+    # при определении функции, — а приёмка на пустом контуре переназначает глобальный
+    # DB уже ВНУТРИ main() (см. ensure_subject). Если бы умолчание держало старое
+    # значение DB, случаи, зовущие call_tool без явного db=, тихо продолжили бы
+    # спрашивать живую базу даже после переключения на подставную копию.
+    if db is None:
+        db = DB
     env = dict(os.environ, MEZO_ROLE=ROLE, PYTHONIOENCODING="utf-8")
     p = subprocess.run([sys.executable, str(tool), "--role", ROLE,
                         "--db", str(db), *args],
                        capture_output=True, text=True, encoding="utf-8", env=env)
     return p.returncode, (p.stdout or "") + (p.stderr or "")
+
+
+def ensure_subject(base_db: pathlib.Path) -> tuple[pathlib.Path, str, bool]:
+    """(база, роль, была_ли_заведена_подставная) — на которых приёмка измеряет.
+
+    У роли PROTO в этой базе уже есть разобранные записи (живой контур) → работаем
+    НА НЕЙ САМОЙ, ничего не меняя: прежнее поведение сохраняется знак в знак. Иначе
+    (пустой/свежесобранный контур) заводим подставную роль SEED_ROLE на КОПИИ базы —
+    своим ходом, штатными инструментами."""
+    probe = sqlite3.connect(f"file:{base_db}?mode=ro", uri=True)
+    has_records = probe.execute(
+        "SELECT 1 FROM phoenix_records WHERE role=? LIMIT 1", (ROLE,)).fetchone()
+    probe.close()
+    if has_records:
+        return base_db, ROLE, False
+
+    seed_dir = pathlib.Path(tempfile.mkdtemp(prefix="bite-memory-records-seed-"))
+    seeded_db = seed_dir / "mezosync.db"
+    mezo_stand.snapshot_db(base_db, seeded_db)
+    save_tool = mezo_paths.live_scripts(__file__) / "save-phoenix.py"
+    if not save_tool.is_file():
+        sys.exit(f"⛔ НЕ ЗАПУСТИЛАСЬ: инструмента save-phoenix.py нет: {save_tool}")
+    for section, body in SEED_FIXTURES.items():
+        body_file = seed_dir / f"{section}.md"
+        body_file.write_text(body, encoding="utf-8")
+        # ⚡ save-phoenix.py САМА пересобирает phoenix_records ТЕМ ЖЕ ходом (хук
+        # rebuild_records — карточка #525 часть А): первое сохранение раздела без
+        # предыдущих записей вызывает её же parse(), отдельный --разобрать не нужен
+        # и после хука только мешает («уже N записей» — находка первого же прогона
+        # на pcK).
+        save_env = dict(os.environ, PYTHONIOENCODING="utf-8")
+        r = subprocess.run([sys.executable, str(save_tool), "--db", str(seeded_db),
+                            "--role", SEED_ROLE, "--section", section,
+                            "--file", str(body_file), "--actor", SEED_ROLE],
+                           capture_output=True, text=True, encoding="utf-8", env=save_env)
+        if r.returncode != 0:
+            sys.exit("⛔ ПРИЁМКА НЕ СОСТОЯЛАСЬ: заведение подставного раздела "
+                     f"{section} (save-phoenix.py) отказало кодом {r.returncode}:\n"
+                     f"{r.stdout}{r.stderr}")
+    return seeded_db, SEED_ROLE, True
 
 
 def random_chunks(bodies: dict, records: dict, count: int = 10):
@@ -94,13 +199,22 @@ def random_chunks(bodies: dict, records: dict, count: int = 10):
 
 
 def main() -> int:
+    global DB, ROLE
+    if not TOOL.is_file():
+        sys.exit(f"⛔ инструмента нет рядом: {TOOL}")
+
+    DB, ROLE, seeded = ensure_subject(DB)
+
     print("=" * 88)
     print("ПРИЁМКА memory-records.py — карточка #524")
     print(f"инструмент: {TOOL}")
     print(f"база:       {DB}")
+    if seeded:
+        print(f"ℹ️ у роли PROTO в базе нет разобранных записей (пустой/свежий контур,"
+              f" карточка #667) — приёмка завела подставную роль {ROLE} НА КОПИИ:"
+              f" тело разделов записано save-phoenix.py, он же ТЕМ ЖЕ ходом (хук"
+              f" пересборки) разобрал его на записи")
     print("=" * 88)
-    if not TOOL.is_file():
-        sys.exit(f"⛔ инструмента нет рядом: {TOOL}")
 
     conn = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
     bodies = dict(conn.execute(

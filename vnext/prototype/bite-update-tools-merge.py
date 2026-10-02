@@ -58,6 +58,15 @@ local.paths и указывает на НАСТОЯЩИЙ клон пакета 
     ДО любого действия приёмки (до клонирования тоже) и сравниваются в самом конце: образец
     не должен измениться НИ ОДНИМ байтом за весь прогон, включая собственное клонирование.
 
+⚖️ ОБРАЗЕЦ БЕЗ ИСТОРИИ (карточка #667). Контур, собранный из ВЫГРУЗКИ пакета (архив без
+.git), держит образец обычным каталогом — клонировать нечего, и прежде приёмка падала
+«⛔ НЕ ЗАПУСТИЛАСЬ: … does not appear to be a git repository» кодом 1 (общий прогон печатал
+это «СЛОМАНО»). Но ни один случай не стои́т на истории САМОГО образца: всю историю, на
+которой мерятся ①–⑦, приёмка коммитит сама. Поэтому у выгрузки свой клон собирается иначе —
+`git init` во временном каталоге и файлы образца ОДНИМ коммитом, — а случаи те же. Контроль
+«образец не тронут» у выгрузки сравнивает отпечаток всех её файлов (HEAD и status у
+каталога без git пусты всегда — сравнение было бы пустым).
+
 ⚖️ КОНТУРЫ ЗДЕСЬ — ЛЁГКИЕ, НЕ ЧЕРЕЗ init-group.py: каждому случаю нужны только meta
 (table) + один файл в scripts/, а не работающая группа с ролями/лентой/бэклогом. Полный
 init-group.py-контур (как у bite-update-tools-rev.py) стоил бы кратно дороже по времени
@@ -91,9 +100,37 @@ if not hasattr(mezo_stand, "stand_env"):
              "приёмки старше неё; возьми оба файла из одной версии пакета")
 
 
+def template_is_repository(root) -> bool:
+    """Образец — КОРЕНЬ своего git-репозитория и в нём есть хоть один коммит (карточка #667).
+    Выгрузка без .git, каталог внутри чужого репозитория и репозиторий без коммитов — нет:
+    клонировать из них нечего."""
+    top = subprocess.run(["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+                         capture_output=True, text=True)
+    if top.returncode != 0 or Path(top.stdout.strip()).resolve() != Path(root).resolve():
+        return False
+    head = subprocess.run(["git", "-C", str(root), "rev-parse", "--verify", "-q", "HEAD"],
+                          capture_output=True)
+    return head.returncode == 0
+
+
+def files_digest(root) -> str:
+    """Отпечаток всех файлов каталога: пути и содержимое (карточка #667, образец-выгрузка)."""
+    h = hashlib.sha256()
+    for p in sorted(Path(root).rglob("*")):
+        if p.is_file():
+            h.update(p.relative_to(root).as_posix().encode("utf-8") + b"\0")
+            h.update(hashlib.sha256(p.read_bytes()).digest())
+    return h.hexdigest()[:12]
+
+
 def template_state(root) -> tuple[str, str]:
     """HEAD + `git status --porcelain` образца (template_root) — снимок для контроля
-    «образец не тронут» (ВТОРОЙ ВОЗВРАТ, карточка #609). Читает только, ничего не пишет."""
+    «образец не тронут» (ВТОРОЙ ВОЗВРАТ, карточка #609). Читает только, ничего не пишет.
+    У образца-выгрузки без git (карточка #667) HEAD и status пусты ВСЕГДА — сравнение их
+    было бы пустым; вместо них снимается отпечаток всех файлов каталога."""
+    if not template_is_repository(root):
+        return ("выгрузка без git", f"отпечаток файлов {files_digest(root)}")
+
     def g(*a) -> bytes:
         return subprocess.run(["git", "-C", str(root), *a], capture_output=True).stdout
     return (g("rev-parse", "HEAD").decode().strip(),
@@ -103,6 +140,7 @@ def template_state(root) -> tuple[str, str]:
 # ⛔ ВТОРОЙ ВОЗВРАТ (карточка #609): снимок берётся ДО ЛЮБОГО действия этой приёмки — раньше
 # собственного клонирования тоже. Сравнение — в самом конце файла (контроль «образец не тронут»).
 TEMPLATE_ROOT = mezo_paths.template_root(__file__)
+TEMPLATE_IS_REPOSITORY = template_is_repository(TEMPLATE_ROOT)
 TEMPLATE_BEFORE = template_state(TEMPLATE_ROOT)
 
 STAND = mezo_stand.new("bite-609-merge-")
@@ -113,11 +151,28 @@ STAND = mezo_stand.new("bite-609-merge-")
 # коммитила бы синтетические файлы для случаев ①–⑤ туда же. Клонирование — ЧТЕНИЕ образца
 # (`git clone` не пишет в источник), коммиты ниже идут уже в клон.
 PACKAGE = STAND / "pack"
-_clone = subprocess.run(["git", "clone", "--no-hardlinks", str(TEMPLATE_ROOT), str(PACKAGE)],
-                        capture_output=True, text=True)
-if _clone.returncode != 0:
-    sys.exit(f"⛔ НЕ ЗАПУСТИЛАСЬ: свой клон образца ({TEMPLATE_ROOT}) в стенд ({PACKAGE}) "
-             f"отказал: {_clone.stderr.strip()[:300]}")
+if TEMPLATE_IS_REPOSITORY:
+    _clone = subprocess.run(["git", "clone", "--no-hardlinks", str(TEMPLATE_ROOT), str(PACKAGE)],
+                            capture_output=True, text=True)
+    if _clone.returncode != 0:
+        sys.exit(f"⛔ НЕ ЗАПУСТИЛАСЬ: свой клон образца ({TEMPLATE_ROOT}) в стенд ({PACKAGE}) "
+                 f"отказал: {_clone.stderr.strip()[:300]}")
+else:
+    # ⚖️ Карточка #667: образец — выгрузка без истории (см. шапку). Свой «клон» — файлы
+    # образца одним коммитом в НОВОМ репозитории внутри своего временного каталога; образец
+    # при этом только читается (копирование), как и при `git clone`.
+    shutil.copytree(TEMPLATE_ROOT, PACKAGE, ignore=shutil.ignore_patterns(".git", "__pycache__"))
+    for _step in (["init", "-q"], ["add", "-A"],
+                  ["-c", "user.name=bite609", "-c", "user.email=bite609@local",
+                   "commit", "-q", "-m", "bite609: файлы образца-выгрузки одним коммитом"]):
+        _r = subprocess.run(["git", "-C", str(PACKAGE), *_step], capture_output=True, text=True)
+        if _r.returncode != 0:
+            sys.exit(f"⛔ НЕ ЗАПУСТИЛАСЬ: свой репозиторий из образца-выгрузки ({TEMPLATE_ROOT}) "
+                     f"в стенде ({PACKAGE}) не собрался на «git {' '.join(_step[:2])}»: "
+                     f"{_r.stderr.strip()[:300]}")
+    print(f"⚖️ образец — выгрузка без истории git ({TEMPLATE_ROOT}): свой репозиторий собран "
+          "из его файлов одним коммитом; историю, на которой стоят случаи, приёмка коммитит "
+          "сама, как и в клоне")
 
 RFP_TOOL_PATH = PACKAGE / "scripts" / "rules-from-pack.py"   # копируем, только если есть — не обязателен этим случаям
 
@@ -829,11 +884,17 @@ case("контроль: клон приёмки тот же, что был ПО�
 print("---- контроль (ВТОРОЙ ВОЗВРАТ, карточка #609): ОБРАЗЕЦ (template_root) не тронут ----")
 TEMPLATE_AFTER = template_state(TEMPLATE_ROOT)
 case("контроль: образец (template_root) не изменился НИ БАЙТОМ за весь прогон — ни своим "
-    "клонированием, ни коммитами приёмки, ни вызовами update-tools.py (HEAD и "
-    "status --porcelain сняты ДО первого действия и сравнены сейчас)",
+    "клонированием, ни коммитами приёмки, ни вызовами update-tools.py ("
+    + ("HEAD и status --porcelain сняты ДО первого действия и сравнены сейчас"
+       if TEMPLATE_IS_REPOSITORY else
+       "отпечаток всех файлов выгрузки снят ДО первого действия и сравнён сейчас")
+    + ")",
     TEMPLATE_AFTER == TEMPLATE_BEFORE,
-    f"было:  HEAD {TEMPLATE_BEFORE[0][:12]} · status «{TEMPLATE_BEFORE[1] or 'пусто'}»\n"
-    f"   стало: HEAD {TEMPLATE_AFTER[0][:12]} · status «{TEMPLATE_AFTER[1] or 'пусто'}»")
+    (f"было:  HEAD {TEMPLATE_BEFORE[0][:12]} · status «{TEMPLATE_BEFORE[1] or 'пусто'}»\n"
+     f"   стало: HEAD {TEMPLATE_AFTER[0][:12]} · status «{TEMPLATE_AFTER[1] or 'пусто'}»")
+    if TEMPLATE_IS_REPOSITORY else
+    (f"было:  {TEMPLATE_BEFORE[0]} · {TEMPLATE_BEFORE[1]}\n"
+     f"   стало: {TEMPLATE_AFTER[0]} · {TEMPLATE_AFTER[1]}"))
 
 live_after = live_meta()
 changed = sorted(k for k in set(LIVE_META_BEFORE) | set(live_after)

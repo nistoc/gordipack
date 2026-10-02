@@ -38,6 +38,7 @@ bite-r16-reissue.py — укус на дефект: ПЕРЕВЫДАННЫЙ Б�
     python <абсолютный путь>/bite-r16-reissue.py
 """
 
+import os
 import re
 import shutil
 import sqlite3
@@ -50,23 +51,45 @@ import mezo_target  # noqa: E402 — какую копию испытываем,
 import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
+
 LIVE = mezo_paths.live_db()
 SANDBOX = Path.home() / ".mezosync-sandbox" / "bite-r16.db"
 READER = mezo_target.script("read-messages.py")
 ROLE = "PROTO"
-START_CURSOR = 3069
+SEED_COUNT = 50     # сколько своих нот сеем поверх границы — заведомо больше любого --limit ниже
 
 
-def prepare() -> None:
-    """Копия живой базы + курсор на известную точку. Живая база НЕ ТРОГАЕТСЯ ВОВСЕ."""
+def prepare() -> int:
+    """Копия живой базы + курсор на известную точку. Живая база НЕ ТРОГАЕТСЯ ВОВСЕ.
+
+    Возвращает отметку прочитанного, на которую встал курсор.
+
+    🩹 ДОГОН (пустой свежий контур пакета, карточка #667): впечатанный номер 3069 —
+    координата ЖИВОЙ ленты на день находки; на пустом контуре (0 записок) курсор вставал
+    бы ВЫШЕ любой записки, и --limit 40/12 показывали бы ноль строк — опыт не про перевыдачу,
+    а про пустую ленту. Граница теперь СВОЯ: берётся ТЕКУЩИЙ максимум id (что бы ни лежало
+    в живой базе — много истории или ничего), курсор встаёт РОВНО на него, и уже ПОСЛЕ
+    этого сеются SEED_COUNT синтетических нот — их число известно заранее и не зависит от
+    того, сколько чужих записок было до границы. Живой базы это не касается: пишем в копию.
+    """
     SANDBOX.parent.mkdir(parents=True, exist_ok=True)
     mezo_stand.snapshot_db(LIVE, SANDBOX)
     con = sqlite3.connect(SANDBOX)
-    con.execute("UPDATE read_cursors SET last_read_id=? WHERE reader_role=?",
-                (START_CURSOR, ROLE))
+    boundary = con.execute("SELECT MAX(id) FROM messages").fetchone()[0] or 0
+    for i in range(SEED_COUNT):
+        con.execute("INSERT INTO messages (writer_role, timestamp, body_md, tags, priority)"
+                    " VALUES ('PROTO', datetime('now'), ?, '[]', 'normal')",
+                    (f"посев приёмки #667 bite-r16-reissue: своя нота {i + 1} для перевыдачи",))
+    updated = con.execute("UPDATE read_cursors SET last_read_id=? WHERE reader_role=?",
+                          (boundary, ROLE)).rowcount
+    if not updated:
+        # роли ROLE среди читателей нет вовсе (пустой контур несёт только COORD) — заводим
+        con.execute("INSERT INTO read_cursors (reader_role, last_read_id) VALUES (?, ?)",
+                    (ROLE, boundary))
     con.execute("DELETE FROM read_batches WHERE role=?", (ROLE,))
     con.commit()
     con.close()
+    return boundary
 
 
 def call_reader(*extra) -> str:
@@ -104,8 +127,8 @@ def shown_ids(text: str):
 def main() -> int:
     print("ПРИЁМКА: перевыданный батч подтверждает больше, чем показал")
     print(f"копия базы ..... {SANDBOX}")
-    print(f"отметка прочитанного старт ... #{START_CURSOR}\n")
-    prepare()
+    start_cursor = prepare()
+    print(f"отметка прочитанного старт ... #{start_cursor} (своя граница + {SEED_COUNT} своих нот)\n")
 
     # ── ① большой батч, НЕ подтверждаем (ровно то, что делает роль, когда вывод длинный)
     big = call_reader("--limit", "40")

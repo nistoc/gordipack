@@ -118,6 +118,7 @@ def live_ing_plan_state():
 LIVE_ING_PLAN_BEFORE = live_ing_plan_state()
 
 OK = FAIL = 0
+SKIPPED: list[str] = []
 
 
 def case(title, ok, detail=""):
@@ -127,6 +128,17 @@ def case(title, ok, detail=""):
         print(f"   {detail}")
     OK, FAIL = OK + (1 if ok else 0), FAIL + (0 if ok else 1)
     return ok
+
+
+def skip(title, reason):
+    # 🩹 ДОГОН (карточка #667, пустой новый контур): случай ⑤ стоит ПО СМЫСЛУ на
+    # живой памяти КОНКРЕТНОЙ роли ING (реальный перенос 2026-09-07) — это не
+    # механизм, который можно воспроизвести подставными данными без потери
+    # предмета (подделка повторила бы уже измеренные синтетикой случаи ①②, а не
+    # сам исторический регресс). Честный отказ мерить, а не провал.
+    SKIPPED.append(title)
+    print(f"⚪ {title}")
+    print(f"   не проверено: {reason}")
 
 
 def stand_env(container: pathlib.Path) -> dict:
@@ -492,10 +504,33 @@ case("④ правка мимо инструмента, ПОТОМ штатны�
 dir5 = stand / "case5"
 db5 = fresh_case_db(dir5)
 env5 = stand_env(dir5)
-rc, out5 = run(READ, "--db", str(db5), "--role", "ING", "--section", "plan",
-              "--actor", "PROTO", env=env5)
-case("⑤ живой случай ING/plan (копия): нет «СТАРШЕ текста», есть «унесены в архив штатным переносом»",
-     "СТАРШЕ текста" not in out5 and "унесены в архив штатным переносом" in out5)
+_probe5 = sqlite3.connect(f"file:{db5.as_posix()}?mode=ro", uri=True)
+# Случай ⑤ мерим, только пока ПОСЛЕДНЕЕ действие над ING/plan — штатный перенос. Если после
+# переноса роль законно сохранила раздел (живой контур: обычное сохранение 2026-09-26 01:29:45
+# поверх переноса 2026-09-24), читалка верно не говорит «унесены в архив», и случай мерил бы
+# протухшие данные, а не механизм (поправка PROTO 2026-10-01, карточка #667).
+_top5 = _probe5.execute(
+    "SELECT reason FROM phoenix_history WHERE role='ING' AND section='plan' "
+    "ORDER BY id DESC LIMIT 1").fetchone()
+_probe5.close()
+ING_PLAN_AVAILABLE = _top5 is not None and (_top5[0] or "").startswith("archive-move")
+ING_PLAN_REASON = (
+    "у роли ING в этой базе нет раздела 'plan' (пустой/свежий контур, карточка #667)"
+    if _top5 is None else
+    f"последнее действие над ING/plan — «{(_top5[0] or '')[:40]}», а не штатный перенос: "
+    "живой случай перекрыт законным сохранением роли")
+if ING_PLAN_AVAILABLE:
+    rc, out5 = run(READ, "--db", str(db5), "--role", "ING", "--section", "plan",
+                  "--actor", "PROTO", env=env5)
+    case("⑤ живой случай ING/plan (копия): нет «СТАРШЕ текста», есть «унесены в архив штатным переносом»",
+         "СТАРШЕ текста" not in out5 and "унесены в архив штатным переносом" in out5)
+else:
+    out5 = ""
+    skip("⑤ живой случай ING/plan",
+         f"{ING_PLAN_REASON} — "
+         "случай стоит на КОНКРЕТНОЙ живой памяти ING (реальный штатный перенос), "
+         "подделывать её нельзя: подставная синтетика повторила бы уже измеренные случаи ①②, "
+         "а не сам исторический регресс")
 
 # ── ⑥ НАРОЧНАЯ ПОЛОМКА: archive_move_look() отключена в копии инструмента ───
 broken_dir = stand / "broken"
@@ -513,8 +548,8 @@ rc, b_out1 = run(broken_tool, "--db", str(db1), "--role", ROLE, "--section", SEC
                 "--actor", "PROTO", env=env1)
 rc, b_out2 = run(broken_tool, "--db", str(db2), "--role", ROLE, "--section", SECTION,
                 "--actor", "PROTO", env=env2)
-rc, b_out5 = run(broken_tool, "--db", str(db5), "--role", "ING", "--section", "plan",
-                "--actor", "PROTO", env=env5)
+b_out5 = run(broken_tool, "--db", str(db5), "--role", "ING", "--section", "plan",
+            "--actor", "PROTO", env=env5)[1] if ING_PLAN_AVAILABLE else ""
 rc, b_out3 = run(broken_tool, "--db", str(db3), "--role", ROLE, "--section", SECTION,
                 "--actor", "PROTO", env=env3)
 rc, b_out4 = run(broken_tool, "--db", str(db4), "--role", ROLE, "--section", SECTION,
@@ -529,7 +564,10 @@ rc, b_out3g = run(broken_tool, "--db", str(db3g), "--role", ROLE, "--section", S
 
 case("⑥ поломка (полная) КРАСИТ случай ① (раньше его спасала функция)", "СТАРШЕ текста" in b_out1)
 case("⑥ поломка (полная) КРАСИТ случай ② (раньше его спасала функция)", "СТАРШЕ текста" in b_out2)
-case("⑥ поломка (полная) КРАСИТ случай ⑤ (живой ING/plan, раньше спасала функция)", "СТАРШЕ текста" in b_out5)
+if ING_PLAN_AVAILABLE:
+    case("⑥ поломка (полная) КРАСИТ случай ⑤ (живой ING/plan, раньше спасала функция)", "СТАРШЕ текста" in b_out5)
+else:
+    skip("⑥ поломка (полная) на случае ⑤", "случай ⑤ не поставлен (см. выше) — нечему краснеть под поломкой")
 case("⑥ поломка (полная) КРАСИТ случай ③г (законный, но раньше его тоже спасала функция)",
      "СТАРШЕ текста" in b_out3g)
 case("⑥ поломка (полная) НЕ ТРОГАЕТ случай ③ (он и без функции был 🔴)", "СТАРШЕ текста" in b_out3)
@@ -567,8 +605,8 @@ rc, l_out3b = run(broken_len_tool, "--db", str(db3b), "--role", ROLE, "--section
                  "--actor", "PROTO", env=env3b)
 rc, l_out4 = run(broken_len_tool, "--db", str(db4), "--role", ROLE, "--section", SECTION,
                 "--actor", "PROTO", env=env4)
-rc, l_out5 = run(broken_len_tool, "--db", str(db5), "--role", "ING", "--section", "plan",
-                "--actor", "PROTO", env=env5)
+l_out5 = run(broken_len_tool, "--db", str(db5), "--role", "ING", "--section", "plan",
+            "--actor", "PROTO", env=env5)[1] if ING_PLAN_AVAILABLE else ""
 rc, l_out3v = run(broken_len_tool, "--db", str(db3v), "--role", ROLE, "--section", SECTION,
                  "--actor", "PROTO", env=env3v)
 rc, l_out3g = run(broken_len_tool, "--db", str(db3g), "--role", ROLE, "--section", SECTION,
@@ -584,8 +622,11 @@ case("⑥б поломка НЕ ТРОГАЕТ случай ② (там длин
      "перечитано и признано верным" in l_out2 and "СТАРШЕ текста" not in l_out2)
 case("⑥б поломка НЕ ТРОГАЕТ случай ④ (там уже ДЛИНА не совпала — ловится первой же проверкой)",
      "СТАРШЕ текста" in l_out4)
-case("⑥б поломка НЕ ТРОГАЕТ случай ⑤ (живой ING/plan — длина без содержимого совпадала честно)",
-     "СТАРШЕ текста" not in l_out5 and "унесены в архив штатным переносом" in l_out5)
+if ING_PLAN_AVAILABLE:
+    case("⑥б поломка НЕ ТРОГАЕТ случай ⑤ (живой ING/plan — длина без содержимого совпадала честно)",
+         "СТАРШЕ текста" not in l_out5 and "унесены в архив штатным переносом" in l_out5)
+else:
+    skip("⑥б поломка (частичная, длина) на случае ⑤", "случай ⑤ не поставлен (см. выше)")
 case("⑥б поломка НЕ ТРОГАЕТ случай ③в (его ловит сверка ВРЕМЕНИ унесённых блоков, "
      "не проверка содержимого — она тут ни при чём)",
      "СТАРШЕ текста" in l_out3v and "унесены в архив штатным переносом" not in l_out3v)
@@ -625,8 +666,8 @@ rc, o_out3g = run(broken_origin_tool, "--db", str(db3g), "--role", ROLE, "--sect
                  "--actor", "PROTO", env=env3g)
 rc, o_out4 = run(broken_origin_tool, "--db", str(db4), "--role", ROLE, "--section", SECTION,
                 "--actor", "PROTO", env=env4)
-rc, o_out5 = run(broken_origin_tool, "--db", str(db5), "--role", "ING", "--section", "plan",
-                "--actor", "PROTO", env=env5)
+o_out5 = run(broken_origin_tool, "--db", str(db5), "--role", "ING", "--section", "plan",
+            "--actor", "PROTO", env=env5)[1] if ING_PLAN_AVAILABLE else ""
 
 case("⑥в поломка (частичная, только сверка окном унесённых блоков) КРАСИТ РОВНО "
      "случай ③в (обход внутри архивируемого блока больше некому ловить)",
@@ -643,8 +684,11 @@ case("⑥в поломка НЕ ТРОГАЕТ случай ③г (у него �
      "СТАРШЕ текста" not in o_out3g and "унесены в архив штатным переносом" in o_out3g)
 case("⑥в поломка НЕ ТРОГАЕТ случай ④ (там уже ДЛИНА не совпала — ловится первой же проверкой)",
      "СТАРШЕ текста" in o_out4)
-case("⑥в поломка НЕ ТРОГАЕТ случай ⑤ (живой ING/plan — окно унесённых блоков совпадало честно)",
-     "СТАРШЕ текста" not in o_out5 and "унесены в архив штатным переносом" in o_out5)
+if ING_PLAN_AVAILABLE:
+    case("⑥в поломка НЕ ТРОГАЕТ случай ⑤ (живой ING/plan — окно унесённых блоков совпадало честно)",
+         "СТАРШЕ текста" not in o_out5 and "унесены в архив штатным переносом" in o_out5)
+else:
+    skip("⑥в поломка (частичная, окно) на случае ⑤", "случай ⑤ не поставлен (см. выше)")
 
 # ── КОНТРОЛЬ: живая база НЕ ТРОНУТА ЭТИМ ПРОГОНОМ ────────────────────────────
 top_after, live_after = live_ing_plan_state()
@@ -652,5 +696,17 @@ case("контроль: живая база НЕ ТРОНУТА (верхняя 
      (top_after, live_after) == LIVE_ING_PLAN_BEFORE,
      f"было {LIVE_ING_PLAN_BEFORE}; стало {(top_after, live_after)}")
 
-print(f"\n{'✅' if FAIL == 0 else '🔴'} ИТОГ: {OK} из {OK + FAIL}")
-sys.exit(mezo_stand.finish(0 if FAIL == 0 else 1))
+if FAIL:
+    print(f"\n🔴 ИТОГ: {OK} из {OK + FAIL}" + (f" · не поставлено {len(SKIPPED)}" if SKIPPED else ""))
+    EXIT_CODE = 1
+elif SKIPPED:
+    # ⚡ КАРТОЧКА #667 (пустой новый контур): все поставленные случаи прошли, но
+    # часть (случай ⑤ и его поломки) честно не поставлена — не провал и не «всё
+    # чисто». Три исхода, не два (правило свода acceptance-isolated-from-live).
+    print(f"\n⚪ не проверено {len(SKIPPED)} из {OK + len(SKIPPED)} "
+          f"(поставленных {OK} — провалов среди них нет): {', '.join(SKIPPED)}")
+    EXIT_CODE = 2
+else:
+    print(f"\n✅ ИТОГ: {OK} из {OK}")
+    EXIT_CODE = 0
+sys.exit(mezo_stand.finish(EXIT_CODE))

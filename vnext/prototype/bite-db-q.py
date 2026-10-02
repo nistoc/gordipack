@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -48,11 +49,27 @@ def digest(p: Path) -> str:
     return hashlib.sha256(p.read_bytes()).hexdigest()
 
 
+def seed(db: Path) -> None:
+    """Подставные записки для случая ⑥: он меряет, что ОБРЕЗАНИЕ хвоста называется
+    вслух, а не пустые данные. На пустом новом контуре таблица messages может быть
+    пуста — своя фикстура делает случай измеримым независимо от того, что уже есть
+    на живом контуре (предпочтение 1 из задания)."""
+    con = sqlite3.connect(db)
+    for i in range(5):
+        con.execute(
+            "INSERT INTO messages (writer_role, body_md) VALUES (?, ?)",
+            ("ПРИЁМКА-db-q", f"подставная запись {i} для случая ⑥ обрезания хвоста"),
+        )
+    con.commit()
+    con.close()
+
+
 def main() -> int:
     CASES.clear()
     with tempfile.TemporaryDirectory() as tmp:
         db = Path(tmp) / "copy.db"
         mezo_stand.snapshot_db(LIVE_DB, db)
+        seed(db)
         before = digest(db)
 
         rc, out, err = run(db, "SELECT role FROM roles LIMIT 2")

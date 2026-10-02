@@ -95,18 +95,32 @@ def main():
 
         # ④ §LAUNCHER — зона PROTO ⇒ КРАСНОЕ, прочие секции — зона роли ⇒ жёлтое.
         # Разный цвет и есть смысл признака: вечно-красный сторож обесценивается.
+        # 🩹 ДОГОН (карточка #667, приёмка пакета на пустом новом контуре): прежде случай
+        # ПРАВИЛ существующую память роли CORE (UPDATE ... WHERE role='CORE'). На свежей
+        # выгрузке пакета в phoenix есть ровно ОДНА строка — COORD/identity — секций
+        # launcher/state у CORE (и ни у кого) ещё нет, UPDATE молча меняет НОЛЬ строк,
+        # признак честно находит ноль мёртвых целей, и случай краснеет НЕ по своей причине
+        # (та же находка нашлась ПУСТОТОЙ, а не трассой — класс «подставной случай проще
+        # живого»). Приёмка заводит СВОЮ фикстуру — роль, которой ни на одном контуре
+        # не бывает, явными секциями launcher/state, — и больше не зависит от того, что
+        # именно сохранила CORE.
         db = fresh_db()          # ⚠️ этот случай ПОРТИТ базу — дальше идут свои копии
+        FIXTURE_ROLE = "BITECMDTARGET"
         con = sqlite3.connect(db)
-        con.execute("UPDATE phoenix SET body = body || ?  WHERE role='CORE' AND section='launcher'",
-                    (f"\n    {ghost} -Full\n",))
-        con.execute("UPDATE phoenix SET body = body || ?  WHERE role='CORE' AND section='state'",
-                    (f"\n    {ghost} -Full\n",))
+        con.execute(
+            "INSERT INTO phoenix (role, section, body) VALUES (?, 'launcher', ?) "
+            "ON CONFLICT(role, section) DO UPDATE SET body = excluded.body",
+            (FIXTURE_ROLE, f"приёмка bite-command-targets: подставная память\n    {ghost} -Full\n"))
+        con.execute(
+            "INSERT INTO phoenix (role, section, body) VALUES (?, 'state', ?) "
+            "ON CONFLICT(role, section) DO UPDATE SET body = excluded.body",
+            (FIXTURE_ROLE, f"приёмка bite-command-targets: подставная память\n    {ghost} -Full\n"))
         con.commit()
         con.close()
         code, out = run_guard(db, prompts_clean)
         case("④ launcher красный, прочая секция жёлтая — зоны различены",
-             code == 1 and "🔴 ЦЕЛИ НЕТ [CORE/launcher]" in out
-             and "🟡 цели нет [CORE/state]" in out, f"код {code}")
+             code == 1 and f"🔴 ЦЕЛИ НЕТ [{FIXTURE_ROLE}/launcher]" in out
+             and f"🟡 цели нет [{FIXTURE_ROLE}/state]" in out, f"код {code}")
 
         # ⑤ СТРОКА-ПРЕДОСТЕРЕЖЕНИЕ НЕ ОБВИНЯЕТСЯ. Роль, записавшая урок «⛔ не зови так:
         # <мёртвый путь>», не должна получать красное ЗА ПРАВИЛЬНО ЗАПИСАННЫЙ УРОК —

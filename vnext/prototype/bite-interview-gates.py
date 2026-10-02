@@ -90,6 +90,12 @@ def call_tool(tool: pathlib.Path, *args: str, extra_env=None) -> tuple[int, str]
 
 def weaken(live_path: pathlib.Path, out_dir: pathlib.Path, anchor: str, replacement: str) -> pathlib.Path:
     text = live_path.read_bytes().decode("utf-8")
+    # Копия инструмента из выгрузки пакета приходит с окончаниями CRLF (у клона пакета core.autocrlf=true),
+    # а якорь из двух строк записан с LF — на свежем контуре он не находился ни разу (карточка #667).
+    # Окончания якоря и замены берутся те же, что у самого файла: поломка ложится ровно туда же.
+    if "\r\n" in text:
+        anchor = anchor.replace("\r\n", "\n").replace("\n", "\r\n")
+        replacement = replacement.replace("\r\n", "\n").replace("\n", "\r\n")
     if text.count(anchor) != 1:
         raise SystemExit(f"ПРИЁМКА НЕ СОСТОЯЛАСЬ: якорь «{anchor}» найден "
                          f"{text.count(anchor)} раз в {live_path.name} (нужен ровно 1)")

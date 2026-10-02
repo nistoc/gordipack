@@ -63,9 +63,9 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402 — пути машины выводятся, не впечатаны
 
-ПРОВЕРКА = (mezo_paths.container_root(__file__) / ".mezosync" / "scripts"
+CHECK = (mezo_paths.container_root(__file__) / ".mezosync" / "scripts"
             / "guard-write-without-read.py")
-ОБЩИЙ = mezo_paths.container_root(__file__) / ".mezosync" / "scripts" / "guard-all.py"
+COMMON = mezo_paths.container_root(__file__) / ".mezosync" / "scripts" / "guard-all.py"
 
 CASES = DIFFER = 0
 
@@ -79,7 +79,7 @@ def case(title, verdict, detail, differ=False):
     return verdict
 
 
-def стенд(роли) -> pathlib.Path:
+def stand(roles) -> pathlib.Path:
     """Своя база на каждый случай.
 
     ⚠️ Каждый случай строит СВОЁ состояние — иначе порядок прогона меняет результат,
@@ -95,74 +95,74 @@ def стенд(роли) -> pathlib.Path:
                                    updated_at TEXT);
         CREATE VIEW messages_all AS SELECT * FROM messages;
     """)
-    сейчас = datetime.now(timezone.utc)
-    нота = 0
-    for имя, минут, долг in роли:
-        когда = сейчас - timedelta(minutes=минут)
-        нота += 1
+    now_ = datetime.now(timezone.utc)
+    note_id = 0
+    for name_, minutes_, debt in roles:
+        when_ = now_ - timedelta(minutes=minutes_)
+        note_id += 1
         con.execute("INSERT INTO messages (id, writer_role, timestamp, body) VALUES (?,?,?,?)",
-                    (нота, имя, когда.strftime("%Y-%m-%d %H:%M:%S"), "нота"))
+                    (note_id, name_, when_.strftime("%Y-%m-%d %H:%M:%S"), "нота"))
     # чужие ноты, которые роли не прочли: пишет их отдельный «сосед»
-    хвост = нота
-    for имя, минут, долг in роли:
-        for _ in range(долг):
-            хвост += 1
+    tail_ = note_id
+    for name_, minutes_, debt in roles:
+        for _ in range(debt):
+            tail_ += 1
             con.execute("INSERT INTO messages (id, writer_role, timestamp, body) VALUES (?,?,?,?)",
-                        (хвост, "ЧУЖОЙ", сейчас.strftime("%Y-%m-%d %H:%M:%S"), "чужая нота"))
-    for i, (имя, минут, долг) in enumerate(роли, 1):
+                        (tail_, "ЧУЖОЙ", now_.strftime("%Y-%m-%d %H:%M:%S"), "чужая нота"))
+    for i, (name_, minutes_, debt) in enumerate(roles, 1):
         # отметка прочитанного ставится так, чтобы непрочитанных чужих было ровно `долг`
-        предел = хвост - долг
+        threshold = tail_ - debt
         con.execute("INSERT INTO read_cursors (reader_role, last_read_id, updated_at)"
                     " VALUES (?,?,?)",
-                    (имя, предел, (сейчас - timedelta(minutes=минут)).strftime("%Y-%m-%d %H:%M:%S")))
+                    (name_, threshold, (now_ - timedelta(minutes=minutes_)).strftime("%Y-%m-%d %H:%M:%S")))
     con.commit()
     con.close()
     return d
 
 
-def прогон(d: pathlib.Path, *extra) -> tuple[str, int]:
-    r = subprocess.run([sys.executable, str(ПРОВЕРКА), "--db", str(d / "mezosync.db"), *extra],
+def run_guard(d: pathlib.Path, *extra) -> tuple[str, int]:
+    r = subprocess.run([sys.executable, str(CHECK), "--db", str(d / "mezosync.db"), *extra],
                        capture_output=True, text=True, encoding="utf-8", errors="replace",
                        timeout=300, env=dict(os.environ, PYTHONIOENCODING="utf-8"))
     return (r.stdout or "") + (r.stderr or ""), r.returncode
 
 
-def подставная(строки, код=0) -> pathlib.Path:
+def fake_subguard(lines, code_=0) -> pathlib.Path:
     """Подпроверка, печатающая заданные строки и возвращающая заданный код.
 
     ⚖️ Своя, а не живая: живая зависит от состояния контура, и опыт стал бы гаданием.
     Испытывается при этом НАСТОЯЩИЙ sub_guard из живого общего прогона.
     """
     d = pathlib.Path(tempfile.mkdtemp(prefix="bite-subguard-"))
-    ф = d / "подпроверка.py"
-    тело = chr(10).join(f"print({s!r})" for s in строки)
-    ф.write_text("# -*- coding: utf-8 -*-" + chr(10) + тело + chr(10)
-                 + f"raise SystemExit({код})" + chr(10), encoding="utf-8")
-    return ф
+    f_ = d / "подпроверка.py"
+    body_ = chr(10).join(f"print({s!r})" for s in lines)
+    f_.write_text("# -*- coding: utf-8 -*-" + chr(10) + body_ + chr(10)
+                 + f"raise SystemExit({code_})" + chr(10), encoding="utf-8")
+    return f_
 
 
-def через_общий(подпроверка: pathlib.Path, общий: pathlib.Path = None) -> str:
+def via_common(subcheck: pathlib.Path, common: pathlib.Path = None) -> str:
     """Зовём sub_guard живого общего прогона и ловим ВСЁ, что он напечатал."""
     import importlib.util
-    цель = общий or ОБЩИЙ
-    sys.path.insert(0, str(цель.parent))
-    сп = importlib.util.spec_from_file_location(f"общий_{цель.parent.name}", цель)
-    м = importlib.util.module_from_spec(сп)
-    сп.loader.exec_module(м)
-    буфер = io.StringIO()
-    with contextlib.redirect_stdout(буфер):
-        м.sub_guard("испытуемый", None, set(), script_path=str(подпроверка))
-    return буфер.getvalue()
+    target_ = common or COMMON
+    sys.path.insert(0, str(target_.parent))
+    spec_ = importlib.util.spec_from_file_location(f"общий_{target_.parent.name}", target_)
+    mod_ = importlib.util.module_from_spec(spec_)
+    spec_.loader.exec_module(mod_)
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        mod_.sub_guard("испытуемый", None, set(), script_path=str(subcheck))
+    return buffer.getvalue()
 
 
 def main() -> int:
     ok = True
-    if not ПРОВЕРКА.exists():
-        sys.exit(f"⛔ НЕ ЗАПУСТИЛАСЬ: нет проверки — {ПРОВЕРКА}")
+    if not CHECK.exists():
+        sys.exit(f"⛔ НЕ ЗАПУСТИЛАСЬ: нет проверки — {CHECK}")
 
     # ① СПЯЩАЯ РОЛЬ С ДОЛГОМ. Здесь и умирала прежняя редакция: роль исчезала бесследно.
-    d = стенд([("БОДРАЯ", 5, 0), ("СПЯЩАЯ", 600, 40)])
-    out, rc = прогон(d)
+    d = stand([("БОДРАЯ", 5, 0), ("СПЯЩАЯ", 600, 40)])
+    out, rc = run_guard(d)
     ok &= case("① долг СПЯЩЕЙ роли назван вслух, хотя она не судится",
                "СПЯЩАЯ 40" in out and "НЕ ПРОВЕРЯЛСЯ" in out,
                f"код {rc}; строка: {next((s.strip() for s in out.splitlines() if 'вне окна' in s), '(нет)')[:120]}",
@@ -183,16 +183,16 @@ def main() -> int:
 
     # ④ АКТИВНАЯ РОЛЬ С ДОЛГОМ — красное, и долг вне окна назван ТУТ ЖЕ.
     #    🪤 Иначе роль, увидев красное, разберёт своё и не узнает про остальных.
-    d4 = стенд([("ДОЛЖНИК", 5, 30), ("СПЯЩАЯ", 600, 12)])
-    out4, rc4 = прогон(d4)
+    d4 = stand([("ДОЛЖНИК", 5, 30), ("СПЯЩАЯ", 600, 12)])
+    out4, rc4 = run_guard(d4)
     ok &= case("④ активная роль с долгом — КРАСНОЕ, и долг вне окна назван тут же",
                rc4 == 1 and "ДОЛЖНИК" in out4 and "СПЯЩАЯ 12" in out4,
                f"код {rc4}; обе стороны в одном выводе: судимая и непроверенная",
                differ=True)
 
     # ⑤ АКТИВНЫХ НЕТ ВОВСЕ — самый коварный пустой набор: судить некого.
-    d5 = стенд([("СПЯЩАЯ", 600, 20), ("ДРУГАЯ", 900, 7)])
-    out5, rc5 = прогон(d5)
+    d5 = stand([("СПЯЩАЯ", 600, 20), ("ДРУГАЯ", 900, 7)])
+    out5, rc5 = run_guard(d5)
     ok &= case("⑤ активных нет вовсе — сказано «проверять было НЕКОГО»",
                "НЕТ" in out5 and "НЕКОГО" in out5 and "читают все" not in out5,
                f"код {rc5}; строка: {next((s.strip() for s in out5.splitlines() if 'активных' in s), '(нет)')[:110]}",
@@ -200,64 +200,78 @@ def main() -> int:
 
     # ⑥ МАШИННЫЙ ОТВЕТ. Встраивающий не должен узнавать о непроверенных ролях позже,
     #    чем зовущий глазами: иначе починка чинит только человеческий вывод.
-    out6, rc6 = прогон(d, "--json")
+    out6, rc6 = run_guard(d, "--json")
     try:
-        ответ = json.loads(out6.strip().splitlines()[-1])
+        answer = json.loads(out6.strip().splitlines()[-1])
     except (ValueError, IndexError):
-        ответ = {}
+        answer = {}
     ok &= case("⑥ машинный ответ несёт непроверенные роли, а не только нарушителей",
-               isinstance(ответ, dict) and ответ.get("out_of_window_debt") == 40
-               and any(x.get("role") == "СПЯЩАЯ" for x in ответ.get("out_of_window", [])),
-               f"поля ответа: {sorted(ответ) if isinstance(ответ, dict) else 'разобрать не вышло'}",
+               isinstance(answer, dict) and answer.get("out_of_window_debt") == 40
+               and any(x.get("role") == "СПЯЩАЯ" for x in answer.get("out_of_window", [])),
+               f"поля ответа: {sorted(answer) if isinstance(answer, dict) else 'разобрать не вышло'}",
                differ=True)
 
     # ⑦ ПРЕДЕЛ, НАЗВАННЫЙ ВСЛУХ. Проверка видит ОТМЕТКУ прочитанного, а не понимание.
     #    Случай стои́т в приёмке, чтобы предел был записан, а не забыт: молчание о пределе
     #    читается как охват.
-    текст = ПРОВЕРКА.read_text(encoding="utf-8", errors="replace")
+    text_ = CHECK.read_text(encoding="utf-8", errors="replace")
     ok &= case("⑦ ⛔ ЗНАЕМ, ЧТО НЕ ЛОВИМ: подтверждение прочтения ≠ понимание",
-               "а не понимание" in текст,
+               "а не понимание" in text_,
                "предел записан в самом инструменте, где его прочтёт применяющий")
 
     # ⑧ ЖЁЛТАЯ СТРОКА ДОЕЗЖАЕТ ДО ОБЩЕГО ПРОГОНА. Ровно то, о чём была заявка: роль
     #    зовёт guard-all.py, а не двадцать семь проверок по одной.
-    жёлтая = "⚠️ вне окна (90 мин) 8 ролей, их долг НЕ ПРОВЕРЯЛСЯ: 1257 непрочитанных"
-    п8 = подставная(["✅ активных ролей 1 из 9 — читают все", жёлтая])
-    вывод8 = через_общий(п8)
+    yellow_line = "⚠️ вне окна (90 мин) 8 ролей, их долг НЕ ПРОВЕРЯЛСЯ: 1257 непрочитанных"
+    p8 = fake_subguard(["✅ активных ролей 1 из 9 — читают все", yellow_line])
+    output8 = via_common(p8)
     ok &= case("⑧ жёлтая строка доезжает до ОБЩЕГО прогона, а не только до прямого вызова",
-               "НЕ ПРОВЕРЯЛСЯ" in вывод8,
-               f"общий прогон напечатал: {' ¦ '.join(s.strip() for s in вывод8.splitlines())[:150]}",
+               "НЕ ПРОВЕРЯЛСЯ" in output8,
+               f"общий прогон напечатал: {' ¦ '.join(s.strip() for s in output8.splitlines())[:150]}",
                differ=True)
 
     # ⑨ ВСТРЕЧНЫЙ: обычные строки НЕ выливаются. Иначе починка утопит красное в зелёном.
-    п9 = подставная(["✅ первая", "✅ вторая", "разбор: python что-то.py", "ИТОГ: ✅ сошлось"])
-    вывод9 = через_общий(п9)
+    p9 = fake_subguard(["✅ первая", "✅ вторая", "разбор: python что-то.py", "ИТОГ: ✅ сошлось"])
+    output9 = via_common(p9)
     ok &= case("⑨ ВСТРЕЧНЫЙ: обычные строки зелёного прогона НЕ выливаются в общий вывод",
-               "первая" not in вывод9 and "разбор:" not in вывод9,
-               f"напечатано строк {len(вывод9.strip().splitlines())} — только галочка итога; "
+               "первая" not in output9 and "разбор:" not in output9,
+               f"напечатано строк {len(output9.strip().splitlines())} — только галочка итога; "
                "вылить всё значило бы утопить красное в зелёном", differ=True)
 
     # ⑩ ОБРАТНЫЙ ХОД. Ломаем общий прогон обратно и требуем, чтобы строка ПОТЕРЯЛАСЬ.
     #    🎯 Без него ⑧ означает «сегодня видно», а не «починка работает».
     d10 = pathlib.Path(tempfile.mkdtemp(prefix="bite-subguard-old-"))
-    цел = ОБЩИЙ.read_text(encoding="utf-8")
-    поломка = цел.replace('if l.lstrip().startswith(("⚠️", "ℹ️")):', "if False:", 1)
-    if поломка == цел:
+    original_text = COMMON.read_text(encoding="utf-8")
+    broken_text = original_text.replace('if l.lstrip().startswith(("⚠️", "ℹ️")):', "if False:", 1)
+    if broken_text == original_text:
         ok &= case("⑩ ОБРАТНЫЙ ХОД: с ПРЕЖНИМ общим прогоном случай ⑧ теряется",
                    False,
                    "⛔ НЕ ЗАПУСТИЛСЯ: место переброса в общем прогоне не найдено — он "
                    "менялся, правь приёмку. Молча пропустить нельзя: это зелёный без опыта")
     else:
-        (d10 / "guard-all.py").write_text(поломка, encoding="utf-8")
-        shutil.copy(ОБЩИЙ.with_name("mezo_paths.py"), d10 / "mezo_paths.py")
-        вывод10 = через_общий(п8, общий=d10 / "guard-all.py")
+        (d10 / "guard-all.py").write_text(broken_text, encoding="utf-8")
+        shutil.copy(COMMON.with_name("mezo_paths.py"), d10 / "mezo_paths.py")
+        # 🩹 ДОГОН (пустой свежий контур пакета, карточка #667): копия guard-all.py лежит
+        # ВНЕ контейнера (d10 — голый временный каталог), и её mezo_paths.container_root()
+        # не находит .mezosync/mezosync.db подъёмом по дереву — это тот же класс, что уже
+        # закрыт в случае ⑥ bite-addressee-dictionary.py: «контейнер отдаём средой». Через
+        # importlib загрузка идёт В ЭТОМ ЖЕ процессе (не подпроцессом), поэтому задаём
+        # MEZO_CONTAINER переменной окружения на время вызова и возвращаем как было.
+        _prev_container = os.environ.get("MEZO_CONTAINER")
+        os.environ["MEZO_CONTAINER"] = str(mezo_paths.container_root(__file__))
+        try:
+            output10 = via_common(p8, common=d10 / "guard-all.py")
+        finally:
+            if _prev_container is None:
+                os.environ.pop("MEZO_CONTAINER", None)
+            else:
+                os.environ["MEZO_CONTAINER"] = _prev_container
         ok &= case("⑩ ОБРАТНЫЙ ХОД: с ПРЕЖНИМ общим прогоном случай ⑧ теряется",
-                   "НЕ ПРОВЕРЯЛСЯ" not in вывод10,
-                   f"прежняя редакция напечатала: {' ¦ '.join(s.strip() for s in вывод10.splitlines())[:110]} "
+                   "НЕ ПРОВЕРЯЛСЯ" not in output10,
+                   f"прежняя редакция напечатала: {' ¦ '.join(s.strip() for s in output10.splitlines())[:110]} "
                    "— долг восьми ролей пропадал именно здесь", differ=True)
         shutil.rmtree(d10, ignore_errors=True)
-    for мусор in (п8.parent, п9.parent):
-        shutil.rmtree(мусор, ignore_errors=True)
+    for junk in (p8.parent, p9.parent):
+        shutil.rmtree(junk, ignore_errors=True)
 
     print()
     print(f"{'✅ ВИДИМОСТЬ ДОЛГА ПРИНЯТА' if ok else '🔴 НЕ ПРИНЯТО'} — случаев {CASES}, "

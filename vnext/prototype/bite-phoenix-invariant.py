@@ -20,6 +20,13 @@ SQL) не закрывается ничем: его можно только за
 различает». Ломается ровно то, что и есть предмет: СИЛА сравнения.
 
 ⛔ Живой базы не касается: каждый случай строит СВОЮ копию.
+
+🩹 ДОГОН (карточка #667, пустой новый контур): случаи ②③④⑥ раньше мерили на разделе
+ЖИВОЙ роли PROTO (role='PROTO', section='state') — на свежесобранном контуре такой
+роли в памяти нет вовсе, SELECT отвечал NULL, и приёмка падала трассой TypeError
+прямо на случае ③. Подставная роль/раздел (BITEINVARIANT/state) заводится штатным
+инструментом (save-phoenix.py) НА КОПИИ, тем же ходом, что и тело, и история версий —
+приёмка продолжает проверять МЕХАНИЗМ (а не слова чужой памяти) и на пустом контуре.
 """
 from __future__ import annotations
 
@@ -34,10 +41,17 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
 import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
-ПРОВЕРКА = pathlib.Path(__file__).with_name("check-phoenix-invariant.py")
-ИНСТРУМЕНТ = (mezo_paths.container_root(__file__) / ".mezosync" / "scripts"
-              / "save-phoenix.py")
-БАЗА = mezo_paths.container_root(__file__) / ".mezosync" / "mezosync.db"
+CHECK_TOOL = pathlib.Path(__file__).with_name("check-phoenix-invariant.py")
+SAVE_TOOL = (mezo_paths.container_root(__file__) / ".mezosync" / "scripts"
+             / "save-phoenix.py")
+LIVE_DB = mezo_paths.container_root(__file__) / ".mezosync" / "mezosync.db"
+
+# Подставная роль/раздел приёмки — не зависит от того, какие роли и разделы памяти
+# уже есть в контуре (живом или пустом свежесобранном).
+TEST_ROLE = "BITEINVARIANT"
+TEST_SECTION = "state"
+PHANTOM_ROLE = "BITEPHANTOM"
+
 CASES = DIFFER = 0
 
 
@@ -50,115 +64,137 @@ def case(title, verdict, detail, differ=False):
     return verdict
 
 
-def копия(d: pathlib.Path) -> pathlib.Path:
+def snapshot(d: pathlib.Path) -> pathlib.Path:
     db = d / "mezosync.db"
-    mezo_stand.snapshot_db(БАЗА, db)
+    mezo_stand.snapshot_db(LIVE_DB, db)
     return db
 
 
-def прогон(db: pathlib.Path, разбор: pathlib.Path = None):
-    r = subprocess.run([sys.executable, str(разбор or ПРОВЕРКА), "--db", str(db)],
+def run_check(db: pathlib.Path, checker: pathlib.Path = None):
+    r = subprocess.run([sys.executable, str(checker or CHECK_TOOL), "--db", str(db)],
                        capture_output=True, text=True, encoding="utf-8",
                        errors="replace", timeout=300)
     return r.returncode, (r.stdout or "") + (r.stderr or "")
 
 
+def seed_subject(db: pathlib.Path, body: str) -> None:
+    """Завести подставную роль/раздел приёмки штатным инструментом (save-phoenix.py):
+    он пишет И тело, И версию истории ТЕМ ЖЕ ходом — ровно то согласованное состояние,
+    на котором инвариант обязан молчать (случай ①, control)."""
+    body_file = db.parent / "subject-body.md"
+    body_file.write_text(body, encoding="utf-8")
+    r = subprocess.run([sys.executable, str(SAVE_TOOL), "--db", str(db),
+                        "--role", TEST_ROLE, "--section", TEST_SECTION,
+                        "--file", str(body_file), "--actor", TEST_ROLE],
+                       capture_output=True, text=True, encoding="utf-8",
+                       errors="replace", timeout=300)
+    if r.returncode != 0:
+        sys.exit("⛔ ПРИЁМКА НЕ СОСТОЯЛАСЬ: заведение подставного раздела приёмки "
+                 f"(save-phoenix.py) отказало кодом {r.returncode}:\n"
+                 f"{r.stdout}{r.stderr}")
+
+
 def main() -> int:
     ok = True
-    for нужен in (ПРОВЕРКА, ИНСТРУМЕНТ, БАЗА):
-        if not нужен.exists():
-            sys.exit(f"⛔ НЕ ЗАПУСТИЛАСЬ: нет файла — {нужен}")
+    for needed in (CHECK_TOOL, SAVE_TOOL, LIVE_DB):
+        if not needed.exists():
+            sys.exit(f"⛔ НЕ ЗАПУСТИЛАСЬ: нет файла — {needed}")
     d = pathlib.Path(tempfile.mkdtemp(prefix="bite-invariant-"))
     try:
-        # ① КОНТРОЛЬ: нетронутая копия живой базы — молчит.
-        db = копия(d)
-        код, _ = прогон(db)
+        # ① КОНТРОЛЬ: копия живой базы + своя подставная роль, заведённая штатно, — молчит.
+        db = snapshot(d)
+        seed_subject(db, "подставной раздел приёмки bite-phoenix-invariant: версия 1")
+        code, _ = run_check(db)
         ok &= case("① КОНТРОЛЬ: копия живой базы — молчит",
-                   код == 0,
-                   f"код {код}; красное здесь значило бы, что мы включаем вечно-красное —"
+                   code == 0,
+                   f"код {code}; красное здесь значило бы, что мы включаем вечно-красное —"
                    " оно учит не верить красному", differ=True)
 
         # ② ПРАВКА МИМО ИНСТРУМЕНТА — красное, поимённо.
         con = sqlite3.connect(db)
         con.execute("UPDATE phoenix SET body = body || ' ПРАВКА МИМО' "
-                    "WHERE role='PROTO' AND section='state'")
+                    "WHERE role=? AND section=?", (TEST_ROLE, TEST_SECTION))
         con.commit()
         con.close()
-        код2, вывод2 = прогон(db)
+        code2, output2 = run_check(db)
+        subject = f"{TEST_ROLE}/{TEST_SECTION}"
         ok &= case("② правка тела МИМО инструмента — красное, раздел назван поимённо",
-                   код2 == 1 and "PROTO/state" in вывод2 and "МИМО ИНСТРУМЕНТА" in вывод2,
-                   f"код {код2}; ровно тот путь, который нельзя закрыть — только заметить",
+                   code2 == 1 and subject in output2 and "МИМО ИНСТРУМЕНТА" in output2,
+                   f"код {code2}; ровно тот путь, который нельзя закрыть — только заметить",
                    differ=True)
 
-        # ③ ЗАКОННАЯ ЗАПИСЬ ШТАТНЫМ ИНСТРУМЕНТОМ — молчит. Свежая копия, своё состояние.
+        # ③ ЗАКОННАЯ ЗАПИСЬ ШТАТНЫМ ИНСТРУМЕНТОМ — молчит. Своя свежая копия со своим посевом.
         d3 = pathlib.Path(tempfile.mkdtemp(prefix="bite-invariant-3-"))
-        db3 = копия(d3)
-        ф = d3 / "тело.md"
+        db3 = snapshot(d3)
+        seed_subject(db3, "подставной раздел приёмки bite-phoenix-invariant: версия 1")
         con = sqlite3.connect(f"file:{db3.as_posix()}?mode=ro", uri=True)
-        тело = con.execute("SELECT body FROM phoenix WHERE role='PROTO'"
-                           " AND section='state'").fetchone()[0]
+        body_text = con.execute("SELECT body FROM phoenix WHERE role=? AND section=?",
+                                (TEST_ROLE, TEST_SECTION)).fetchone()[0]
         con.close()
-        ф.write_text(тело + chr(10) + "дописано штатно" + chr(10), encoding="utf-8")
-        r = subprocess.run([sys.executable, str(ИНСТРУМЕНТ), "--db", str(db3),
-                            "--role", "PROTO", "--section", "state", "--file", str(ф),
-                            "--actor", "PROTO"],
+        body_file = d3 / "body.md"
+        body_file.write_text(body_text + chr(10) + "дописано штатно" + chr(10),
+                             encoding="utf-8")
+        r = subprocess.run([sys.executable, str(SAVE_TOOL), "--db", str(db3),
+                            "--role", TEST_ROLE, "--section", TEST_SECTION,
+                            "--file", str(body_file), "--actor", TEST_ROLE],
                            capture_output=True, text=True, encoding="utf-8",
                            errors="replace", timeout=300)
-        код3, _ = прогон(db3)
+        code3, _ = run_check(db3)
         ok &= case("③ законная запись ШТАТНЫМ инструментом — после неё молчит",
-                   r.returncode == 0 and код3 == 0,
-                   f"запись код {r.returncode} · проверка код {код3}; встречный к ② —"
+                   r.returncode == 0 and code3 == 0,
+                   f"запись код {r.returncode} · проверка код {code3}; встречный к ② —"
                    " иначе проверка красна на всё подряд и её перестают читать",
                    differ=True)
         shutil.rmtree(d3, ignore_errors=True)
 
         # ④ РАЗДЕЛ БЕЗ ИСТОРИИ — отдельное слово, не то же, что у правки.
         d4 = pathlib.Path(tempfile.mkdtemp(prefix="bite-invariant-4-"))
-        db4 = копия(d4)
+        db4 = snapshot(d4)
         con = sqlite3.connect(db4)
         con.execute("INSERT INTO phoenix (role, section, body, saved_at)"
-                    " VALUES ('ФАНТОМ','state','раздел мимо всего',datetime('now'))")
+                    " VALUES (?, 'state', 'раздел мимо всего', datetime('now'))",
+                    (PHANTOM_ROLE,))
         con.commit()
         con.close()
-        код4, вывод4 = прогон(db4)
+        code4, output4 = run_check(db4)
         ok &= case("④ раздел, вставленный мимо инструмента И посева, — «версий нет вовсе»",
-                   код4 == 1 and "БЕЗ ИСТОРИИ" in вывод4 and "ФАНТОМ" in вывод4,
-                   f"код {код4}; свести с ② значило бы искать «какую версию правили»"
+                   code4 == 1 and "БЕЗ ИСТОРИИ" in output4 and PHANTOM_ROLE in output4,
+                   f"код {code4}; свести с ② значило бы искать «какую версию правили»"
                    " у раздела, у которого версий не было никогда", differ=True)
         shutil.rmtree(d4, ignore_errors=True)
 
         # ⑤ БАЗА БЕЗ ТАБЛИЦЫ ИСТОРИИ — отказ мерить, не «чисто».
         d5 = pathlib.Path(tempfile.mkdtemp(prefix="bite-invariant-5-"))
-        db5 = копия(d5)
+        db5 = snapshot(d5)
         con = sqlite3.connect(db5)
         con.execute("DROP TABLE phoenix_history")
         con.commit()
         con.close()
-        код5, вывод5 = прогон(db5)
+        code5, output5 = run_check(db5)
         ok &= case("⑤ база БЕЗ таблицы истории — код 2 «мерить нечем», не «чисто»",
-                   код5 == 2 and "нечем" in вывод5,
-                   f"код {код5}; сказать тут «инвариант держится» — выдать бессилие"
+                   code5 == 2 and "нечем" in output5,
+                   f"код {code5}; сказать тут «инвариант держится» — выдать бессилие"
                    " за исправность", differ=True)
         shutil.rmtree(d5, ignore_errors=True)
 
         # ⑥ ОБРАТНЫЙ ХОД: ослабляем сравнение до «есть хоть какая-то версия» —
         #    случай ② обязан позеленеть у сломанной копии.
-        цел = ПРОВЕРКА.read_text(encoding="utf-8")
-        поломка = цел.replace("elif row[0] != (body or \"\"):",
-                              "elif False:", 1)
-        if поломка == цел:
+        original_text = CHECK_TOOL.read_text(encoding="utf-8")
+        patched_text = original_text.replace("elif row[0] != (body or \"\"):",
+                                              "elif False:", 1)
+        if patched_text == original_text:
             ok &= case("⑥ ОБРАТНЫЙ ХОД: сравнение ослаблено — случай ② зеленеет", False,
                        "⛔ НЕ ЗАПУСТИЛСЯ: места сравнения в проверке нет — она менялась,"
                        " правь приёмку. Молча пропустить нельзя: зелёный без опыта")
         else:
             d6 = pathlib.Path(tempfile.mkdtemp(prefix="bite-invariant-6-"))
-            слаб = d6 / "прежняя.py"
-            слаб.write_text(поломка, encoding="utf-8")
-            shutil.copy(ПРОВЕРКА.with_name("mezo_paths.py"), d6 / "mezo_paths.py")
-            код6, _ = прогон(db, разбор=слаб)   # db — та же копия с правкой мимо (②)
+            weak_copy = d6 / "weak-check.py"
+            weak_copy.write_text(patched_text, encoding="utf-8")
+            shutil.copy(CHECK_TOOL.with_name("mezo_paths.py"), d6 / "mezo_paths.py")
+            code6, _ = run_check(db, checker=weak_copy)   # db — та же копия с правкой мимо (②)
             ok &= case("⑥ ОБРАТНЫЙ ХОД: сравнение ослаблено — случай ② ЗЕЛЕНЕЕТ у сломанной",
-                       код6 == 0 and код2 == 1,
-                       f"слабая {код6} против настоящей {код2} — разница и есть"
+                       code6 == 0 and code2 == 1,
+                       f"слабая {code6} против настоящей {code2} — разница и есть"
                        " доказательство, что ловит именно СИЛА сравнения", differ=True)
             shutil.rmtree(d6, ignore_errors=True)
     finally:

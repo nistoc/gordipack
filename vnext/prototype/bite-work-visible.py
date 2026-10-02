@@ -82,8 +82,16 @@ def main() -> int:
         # синтетическое чужое объявление в изолированной копии даёт код 3 «В РАБОТЕ у роли
         # …» вместо отказа по случаю ②/успеха по ③④ — после снятия здесь claim снова чист.
         con.execute("UPDATE tool_leases SET released_at = datetime('now') WHERE released_at IS NULL")
+        # 🩹 ДОГОН (карточка #667, пустой новый контур): раньше объявление ставилось на ПЕРВУЮ
+        # ПОПАВШУЮСЯ открытую карточку копии — на свежей выгрузке пакета список задач ПУСТ,
+        # fetchone() давал None, и приёмка падала TypeError до первого случая. Механизму
+        # объявления всё равно, чья карточка; приёмка заводит СВОЮ на копии и берёт её номер.
+        cur = con.execute(
+            "INSERT INTO backlog (role, title, body_md, status, priority, created_by) VALUES "
+            "('PROTO', 'подставная карточка приёмки bite-work-visible', "
+            "'тело подставной карточки', 'open', 'normal', 'PROTO')")
+        bid = cur.lastrowid
         con.commit()
-        bid = con.execute("SELECT id FROM backlog WHERE status='open' LIMIT 1").fetchone()[0]
         con.close()
 
         before = block()

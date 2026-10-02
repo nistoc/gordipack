@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import shutil
 import sqlite3
@@ -31,6 +32,26 @@ GUARD = mezo_target.script("guard-all.py")
 LIVE_DB = mezo_paths.live_db()
 
 CASES: list[tuple[str, bool, str]] = []
+
+
+def ensure_baseline(db: Path) -> None:
+    """Своя подставная база сравнения (meta.memory_volume_baseline) — когда её в этой
+    КОПИИ нет вовсе (карточка #667, пустой свежесобранный контур: точку отсчёта по
+    построению пакета там никто не ставил, это честное отсутствие, а не поломка).
+
+    Случаи ①② здесь судят, что строка объёма ЕСТЬ и считает рост по БАЗЕ (не по
+    впечатанному списку) — для этого нужно хоть какое-то согласие о точке отсчёта,
+    а не её конкретные числа: случай ③ отдельно и честно проверяет САМО отсутствие
+    на другой копии и этой правки не касается."""
+    con = sqlite3.connect(db)
+    has = con.execute(
+        "SELECT 1 FROM meta WHERE key='memory_volume_baseline'").fetchone()
+    if not has:
+        baseline = json.dumps({"date": "2026-09-19", "roles": {}})
+        con.execute("INSERT INTO meta (key, value) VALUES "
+                   "('memory_volume_baseline', ?)", (baseline,))
+        con.commit()
+    con.close()
 
 
 def case(name: str, ok: bool, detail: str = "") -> None:
@@ -57,6 +78,7 @@ def main() -> int:
         # ① Нормальная копия: строка с объёмом и ростом из базы.
         db = Path(tmp) / "a.db"
         mezo_stand.snapshot_db(LIVE_DB, db)
+        ensure_baseline(db)
         ln = volume_line(run_guard(db))
         m = re.search(r"объём (\d+) симв по (\d+) ролям", ln)
         case("① строка печатает объём и рост из базы", bool(m) and "рост" in ln, ln[:110])
