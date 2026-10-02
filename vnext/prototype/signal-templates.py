@@ -961,9 +961,10 @@ def main() -> int:
         print(f"   Адрес умирает вместе с чатом, а строка о нём — нет. Отправив по старому,")
         print(f"   ты получишь «успешно отправлено» и никакой доставки: признака недоставки")
         print(f"   у отправки НЕТ (замер карточки #548).")
-        print(f"   👉 попроси {to_role} обновить адрес в ленте — или запиши сам, если видишь")
-        print(f"      её строку «This session is …» в ListAgents: signal-templates.py "
-              f"--role {to_role} --set-address \"…\"")
+        # ⚖️ Здесь стоял совет «или запиши сам, если видишь её строку «This session is …»» —
+        # снят 02.10 (находка OPSSRE, записка #5436): он звал писать ЧУЖОЙ адрес (против записки
+        # #5416 COORD) и был неисполним — строку «This session is …» видит только сама сессия.
+        print(f"   👉 попроси {to_role} обновить адрес в ленте: свой адрес роль записывает сама")
         if absent_warning:
             print(f"   ⚠️ {absent_warning}")
         elif session.state == SESSION_UNCHECKED and target.get("session_id"):
