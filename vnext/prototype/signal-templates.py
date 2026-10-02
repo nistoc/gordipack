@@ -35,7 +35,8 @@
     {from} ......... кто шлёт — из --role, НЕ впечатано (заготовка с зашитым именем соврёт
                      у любой другой роли, и соврёт правдоподобно)
     {role} ......... кому — из --to
-    {session} ...... адрес доставки — role_sessions.address, с часом записи
+    {session} ...... адрес доставки — role_sessions.address, с часом записи; при ЖИВОМ
+                     session_id — живой заголовок чата из хранилища сессий приложения
     {last_note} .... номер записки — из --note либо последняя записка отправителя к адресату
     {card} ......... номер карточки — из --card
     {deadline} ..... 🔴 срок взятия карточки НЕ УГАДЫВАЕТСЯ. Взятие — это событие карточки,
@@ -44,6 +45,12 @@
     {lease} ........ номер объявления о правке — tool_leases, последнее незакрытое у адресата
     {lease_until} .. срок этого объявления — tool_leases.until_utc
     {sent_at} ...... час печати — ЗАПРОСОМ к системе (UTC), не из базы и не из подсказки среды
+
+🔑 ГОДНОСТЬ АДРЕСА — ПО ЖИВОСТИ session_id, А НЕ ПО ВОЗРАСТУ (записки #5415 и #5417): живая
+сессия в хранилище приложения делает адрес годным при любом возрасте; архивная — отказ;
+нет хранилища или сессии в нём — прежнее правило 24 ч. Подробно — у check_session ниже.
+«Жива» здесь значит РОВНО «не в архиве»: открыт ли чат сейчас, хранилище не знает, поэтому
+рядом всегда печатается час его последней активности.
 
 ⚖️ ЧЕГО ИНСТРУМЕНТ НЕ ДЕЛАЕТ: не решает, стоит ли слать; не шлёт повторно; не заменяет
 эскалацию владельцу (правило ack-deadline: при молчании дольше срока идут к владельцу,
@@ -59,6 +66,7 @@ import pathlib
 import re
 import sqlite3
 import sys
+from dataclasses import dataclass
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
@@ -71,6 +79,9 @@ import mezo_sessions  # noqa: E402 — сверка адреса/session_id с �
 # и выглядит свежей — поэтому старый адрес печатник называет старым ВСЛУХ и печатать
 # отказывается. Сутки — не догадка: чаты контура живут от нескольких часов до нескольких суток,
 # и адрес суточной давности чаще жив, чем нет; двухсуточный — чаще мёртв.
+# ⚖️ С записки #5417 это правило — ЗАПАСНОЕ: оно судит только тогда, когда живость нечем
+# проверить по session_id (его нет, нет хранилища сессий или сессии в нём нет). Живой
+# session_id делает адрес годным при любом возрасте — см. check_session ниже.
 VALID_HOURS = 24
 
 # 🔴 АДРЕС БЕЗ РАЗЛИЧИТЕЛЯ В СКОБКАХ УКАЗЫВАЕТ НА НЕСКОЛЬКО РАЗГОВОРОВ СРАЗУ.
@@ -81,31 +92,31 @@ DISTINGUISHER = __import__("re").compile(r"\[[0-9a-f]{6,}\]\s*$")
 
 TEMPLATES = {
     "записка": {
-        "срочность": "низкая",
-        "текст": ("{from} → {role}: в ленте записка #{last_note} к тебе. Тело — только в ленте, "
-                  "читай лентой, не этим сообщением. Отвечать — в ленту."),
-        "когда": "положил записку и она не терпит до ближайшей сверки соседа",
-        "повтор": "не повторять: записка никуда не денется, сосед дочитает лентой",
+        "urgency": "низкая",
+        "text": ("{from} → {role}: в ленте записка #{last_note} к тебе. Тело — только в ленте, "
+                 "читай лентой, не этим сообщением. Отвечать — в ленту."),
+        "when": "положил записку и она не терпит до ближайшей сверки соседа",
+        "repeat": "не повторять: записка никуда не денется, сосед дочитает лентой",
     },
     "приёмка": {
-        "срочность": "средняя",
-        "текст": ("{from} → {role}: карточка #{card} сдана на приёмку, приёмщик — ты или любая "
-                  "рука, кроме моей. Вызовы и критерий — в карточке. Сдано {sent_at} UTC. "
-                  "Отвечать — в ленту или комментарием на карточке."),
-        "когда": "работа сдана и стои́т, пока её никто не принял",
-        "повтор": "не раньше чем через час",
+        "urgency": "средняя",
+        "text": ("{from} → {role}: карточка #{card} сдана на приёмку, приёмщик — ты или любая "
+                 "рука, кроме моей. Вызовы и критерий — в карточке. Сдано {sent_at} UTC. "
+                 "Отвечать — в ленту или комментарием на карточке."),
+        "when": "работа сдана и стои́т, пока её никто не принял",
+        "repeat": "не раньше чем через час",
     },
     "держишь": {
-        "срочность": "высокая",
+        "urgency": "высокая",
         # 🔴 СОБИРАЕТСЯ ИЗ ТОГО, ЧТО ЕСТЬ ЗА АДРЕСАТОМ, а не из всех полей подряд.
         # Оплачено на первом же прогоне 05.09: заготовка со всеми полями напечатала роли
         # «ТЫ держишь карточку #561» — карточку держала ДРУГАЯ роль, а рядом стояло
         # «объявление о правке #— (до — UTC)». Самый срочный сигнал уверенно утверждал
         # неправду, и предупреждение рядом её не отменяло: адресат читает ТЕКСТ, а не
         # вывод печатника. ⇒ упоминается только то, что за адресатом ДЕЙСТВИТЕЛЬНО числится.
-        "текст": "{from} → {role}: ТЫ держишь {что}; {from} ждёт. Продли вслух или сними. Отвечать — в ленту.",
-        "когда": "чужое взятие или объявление о правке держит твою работу",
-        "повтор": ("НЕ ПОВТОРЯТЬ. При молчании дольше срока — к владельцу по правилу "
+        "text": "{from} → {role}: ТЫ держишь {what}; {from} ждёт. Продли вслух или сними. Отвечать — в ленту.",
+        "when": "чужое взятие или объявление о правке держит твою работу",
+        "repeat": ("НЕ ПОВТОРЯТЬ. При молчании дольше срока — к владельцу по правилу "
                    "ack-deadline, а не второй сигнал"),
     },
 }
@@ -121,7 +132,7 @@ def query_time() -> str:
 
 def open_db(path: str | None):
     """Соединение и ПУТЬ к базе. Путь возвращается не для красоты: от него ищется контейнер
-    контура, а в нём — каталоги обмена с соседями (см. каталоги_обмена ниже)."""
+    контура, а в нём — каталоги обмена с соседями (см. exchange_dirs ниже)."""
     db = path or str(mezo_paths.live_db(__file__))
     if not os.path.isfile(db):
         sys.exit(f"⛔ НЕ ЗАПУСТИЛСЯ: базы нет: {db}")
@@ -152,6 +163,151 @@ def age_hours(timestamp: str) -> float | None:
     except (ValueError, TypeError):
         return None
     return (dt.datetime.now(dt.timezone.utc) - t).total_seconds() / 3600
+
+
+# ═══ 🔑 ЖИВОСТЬ АДРЕСА ПО session_id (предложение OPSSRE ②, записка #5415; решение PROTO, #5417) ═══
+# Беда, которую это снимает: с 02.10 правило signal-not-carrier v6 делает сигнал к каждой
+# записке с адресатом обязательным, а печатник по правилу «24 ч с часа записи» раз в сутки
+# отказывал всем. При этом код в скобках адреса («atlas coord 08.30 [3c476f]») меняется при
+# КАЖДОМ перезапуске приложения, а session_id («local_…») переживает и возобновление чата,
+# и перезапуск. Сверка действует только для печати сигнала и для --list; запись адреса
+# (--set-address) сверяется по-своему и этой правкой не тронута.
+# Четыре исхода сверки — четыре РАЗНЫХ слова, не один флаг «годен/нет»: печать сигнала и --list
+# судят по одной этой функции, чтобы перечень и печать не разошлись в оценке одной строки.
+#   live ...... сессия есть в хранилище и не в архиве — адрес годен при любом возрасте записи
+#   archived .. сессия есть, но в архиве — отказ: архив важнее возраста
+#   absent .... хранилище прочитано, такой сессии в нём нет — прежнее правило 24 ч и
+#               предупреждение (хранилище может быть другой установки приложения, заявка пакета #34)
+#   unchecked . session_id не записан, хранилища нет или оно не разобрано — прежнее правило
+#               24 ч без изменений
+# ⚖️ «Жива по хранилищу» = «не в архиве», и только. Хранилище не знает, открыт ли чат сейчас,
+# занята ли роль и дочитает ли она сообщение (замер 02.10 ≈22:15 UTC: два чата «живы» по хранилищу, а
+# последняя их активность — восемь суток назад, и среди адресатов ListAgents их нет). Поэтому
+# рядом с «жива» всегда печатается час последней активности. Получение подтверждает только
+# сама роль.
+SESSION_LIVE = "live"
+SESSION_ARCHIVED = "archived"
+SESSION_ABSENT = "absent"
+SESSION_UNCHECKED = "unchecked"
+
+
+@dataclass(frozen=True)
+class SessionCheck:
+    """Итог сверки записанного session_id с хранилищем сессий приложения."""
+    state: str                  # один из SESSION_* выше
+    record: object | None       # mezo_sessions.SessionRecord — для live и archived
+    twins: tuple                # ДРУГИЕ живые сессии с тем же заголовком (только для live)
+    store_note: str | None      # путь прочитанного хранилища либо причина, почему сверить нечем
+    deleted_note: str | None = None   # метка удаления этого чата в хранилище (только для absent)
+
+
+def read_store_guarded():
+    """Хранилище сессий приложения — либо found=False с причиной словами, но НЕ исключение.
+
+    🩹 Хранилище чужое, оно принадлежит приложению. Один неожиданный файл в нём (например,
+    JSON-список вместо объекта) ронял чтение трассировкой, и печатник, прежде вовсе не
+    читавший хранилище при печати сигнала, падал там, где раньше отвечал внятно. Негодное
+    хранилище теперь значит «сверить нечем», и судит прежнее правило 24 ч."""
+    try:
+        return mezo_sessions.read_store()
+    except Exception as store_error:  # noqa: BLE001 — любое падение чтения = «сверить нечем»
+        path = mezo_sessions.default_store_path()
+        return mezo_sessions.SessionStore(
+            found=False, path=path, sessions=(),
+            error=(f"хранилище сессий приложения не разобрано ({path}): "
+                   f"{type(store_error).__name__}: {store_error}"))
+
+
+def title_key(title) -> str:
+    """Заголовок для сравнения: без учёта регистра и крайних пробелов."""
+    return title.strip().casefold() if isinstance(title, str) else ""
+
+
+def deletion_marker(store_path, session_id):
+    """Метка удаления этого чата в хранилище — или None.
+
+    Рядом с файлами сессий приложение держит метки `deleted_<uuid>` (внутри — час удаления
+    в миллисекундах эпохи). ⚠️ Соответствие метки и сессии выведено ПО ИМЕНИ
+    (deleted_<uuid> ↔ local_<uuid>): прямой сверки нет, на машине 02.10 ≈22:30 UTC ни у одной метки
+    не нашлось файла сессии. Поэтому метка меняет только СЛОВА предупреждения («похоже,
+    удалён» вместо «другая установка»), но не годность адреса."""
+    if not isinstance(session_id, str) or not session_id.startswith("local_"):
+        return None
+    name = "deleted_" + session_id[len("local_"):]
+    try:
+        for marker in pathlib.Path(store_path).rglob("deleted_*"):
+            if marker.name != name or not marker.is_file():
+                continue
+            try:
+                ms = int(marker.read_text(encoding="utf-8").strip())
+                when = dt.datetime.fromtimestamp(ms / 1000, dt.timezone.utc)
+                return f"{marker.name}, удалён {when:%Y-%m-%d %H:%M} UTC"
+            except (OSError, ValueError, OverflowError):
+                return f"{marker.name}, час удаления не разобран"
+    except OSError:
+        return None
+    return None
+
+
+def activity_note(record) -> str:
+    """Час последней активности чата словами — из поля lastActivityAt хранилища."""
+    ms = getattr(record, "last_activity", None)
+    if isinstance(ms, bool) or not isinstance(ms, (int, float)) or ms <= 0:
+        return "час последней активности неизвестен"
+    try:
+        when = dt.datetime.fromtimestamp(ms / 1000, dt.timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return "час последней активности неизвестен"
+    hours = (dt.datetime.now(dt.timezone.utc) - when).total_seconds() / 3600
+    return f"последняя активность {when:%Y-%m-%d %H:%M} UTC ({hours:.1f} ч назад)"
+
+
+def check_session(session_id, store=None) -> SessionCheck:
+    """Сверить session_id адресата с хранилищем сессий приложения (mezo_sessions).
+
+    `store` — уже прочитанное хранилище (--list читает его один раз на весь перечень);
+    без него хранилище читается здесь, и только если session_id вообще записан.
+
+    ⚖️ Двойники по заголовку ищутся среди ВСЕХ живых сессий хранилища, а не только своего
+    рабочего каталога: отправка по голому имени выбирает среди всех сессий, и чужой чат
+    с тем же заголовком так же примет сообщение, как свой. Сравнение — без учёта регистра
+    и крайних пробелов: лишняя тревога о неоднозначности дешевле молчаливого промаха.
+    ⛔ Граница: видно только ЭТО хранилище. Сессии других установок приложения, облачные
+    и сессии удалённого управления сюда не попадают, а отправка по имени их видит."""
+    if not session_id:
+        return SessionCheck(SESSION_UNCHECKED, None, (), "session_id не записан")
+    if store is None:
+        store = read_store_guarded()
+    if not store.found:
+        return SessionCheck(SESSION_UNCHECKED, None, (), store.error)
+    try:
+        found = mezo_sessions.find_by_session_id(store, session_id)
+        if found is None:
+            return SessionCheck(SESSION_ABSENT, None, (), str(store.path),
+                                deletion_marker(store.path, session_id))
+        if found.archived:
+            return SessionCheck(SESSION_ARCHIVED, found, (), str(store.path))
+        found_key = title_key(found.title)
+        twins = tuple(r for r in store.sessions
+                      if found_key and not r.archived and r.session_id != found.session_id
+                      and title_key(r.title) == found_key)
+    except Exception as check_error:  # noqa: BLE001 — чужие данные: сбой сверки = «сверить нечем»
+        return SessionCheck(SESSION_UNCHECKED, None, (),
+                            f"сверка с хранилищем не удалась ({store.path}): "
+                            f"{type(check_error).__name__}: {check_error}")
+    return SessionCheck(SESSION_LIVE, found, twins, str(store.path))
+
+
+def absent_words(session_id, session: SessionCheck) -> str:
+    """Предупреждение для исхода absent: метка удаления — одни слова, её нет — другие."""
+    if session.deleted_note:
+        return (f"в хранилище сессий этой машины файла сессии {session_id} нет, но есть метка "
+                f"её удаления ({session.deleted_note}) — похоже, чат удалён на этой машине "
+                f"(соответствие метки и сессии выведено по имени, прямой сверки нет); годность "
+                f"адреса судится по возрасту записи, как раньше")
+    return (f"в хранилище сессий этой машины сессии {session_id} нет — "
+            f"возможно, хранилище другой установки приложения (заявка пакета #34); "
+            f"годность адреса судится по возрасту записи, как раньше")
 
 
 def last_note_of(conn, from_role: str, to_role: str):
@@ -226,11 +382,11 @@ def claim_info(conn, card: int):
         expired = bool(r2 and r2[0])
     # ⚖️ Истёкшее взятие в сигнал ВХОДИТ — оно и есть повод звать («продли вслух или сними»),
     # в отличие от истёкшего объявления о правке, которое гаснет само и не держит ничего.
-    return {"держатель": holder, "срок": deadline_text, "когда": when, "истёк": expired}
+    return {"holder": holder, "deadline": deadline_text, "claimed_at": when, "expired": expired}
 
 
 # ═══ 🌉 ГРАНИЦА КОНТУРА: КОМУ КОРОТКИЙ СИГНАЛ, А КОМУ ПИСЬМО ЦЕЛИКОМ ═══════════════════
-# Врезано 2026-09-06 по редакции 2 правила signal-not-carrier (слово владельца 05:38 UTC),
+# Добавлено 2026-09-06 по редакции 2 правила signal-not-carrier (слово владельца 05:38 UTC),
 # карточка #570. До этой правки печатник знал только про короткий сигнал и об условии
 # молчал — то есть на мосту с соседним контуром предписывал неисполнимое.
 #
@@ -318,12 +474,12 @@ def neighbor_groups(conn, our, db_path):
         rows = []
     for (name,) in rows:
         if name and name.strip():
-            entry2 = neighbors.setdefault(name.strip().lower(), {"откуда": [], "каталог": None})
-            entry2["откуда"].append("связь с этим соседом записана в базе координации")
+            entry2 = neighbors.setdefault(name.strip().lower(), {"reasons": [], "directory": None})
+            entry2["reasons"].append("связь с этим соседом записана в базе координации")
     for name, path in exchange_dirs(our, db_path).items():
-        entry2 = neighbors.setdefault(name, {"откуда": [], "каталог": None})
-        entry2["каталог"] = path
-        entry2["откуда"].append(f"на диске есть каталог обмена: {path}")
+        entry2 = neighbors.setdefault(name, {"reasons": [], "directory": None})
+        entry2["directory"] = path
+        entry2["reasons"].append(f"на диске есть каталог обмена: {path}")
     return neighbors
 
 
@@ -334,7 +490,7 @@ def letter_to_neighbor(from_role, our, name, info, body, card, at_time) -> int:
     роль своей рукой. Довод тот же, что у короткого сигнала: у отправки нет признака
     недоставки, и подпись под письмом соседу должна стоять живая.
     """
-    exchange_dir = info.get("каталог")
+    exchange_dir = info.get("directory")
     print("=" * 78)
     print(f"ПИСЬМО СОСЕДНЕМУ КОНТУРУ «{name}» · {at_time} UTC")
     print("=" * 78)
@@ -350,7 +506,7 @@ def letter_to_neighbor(from_role, our, name, info, body, card, at_time) -> int:
     print("")
     print("КАК РАЗЛИЧЕНО — признак выведен из живых данных, впечатанного перечня имён нет:")
     print(f"   · имя «{name.upper()}» не значится ролью нашего контура (перечень ролей — в базе)")
-    for reason in info.get("откуда", []):
+    for reason in info.get("reasons", []):
         print(f"   · {reason}")
     print("   Ошибись признак — цена РАЗНАЯ, и обе стороны ошибки молчаливы: чужой, названный")
     print("   своим, получит номер записки, которую не откроет; свой, названный чужим,")
@@ -424,7 +580,7 @@ def main() -> int:
                     help="ЧЕМ добыт адрес: self — роль назвала свой сама (надёжно) · "
                          "listing — взят из перечня сессий чужой рукой (роль не подтверждала) · "
                          "owner — сказан владельцем")
-    ap.add_argument("--list", action="store_true", help="показать реестр адресов с их возрастом")
+    ap.add_argument("--list", action="store_true", help="показать реестр адресов с их возрастом и живостью по session_id (сверка с хранилищем сессий приложения)")
     ap.add_argument("--db")
     a = ap.parse_args()
 
@@ -457,24 +613,63 @@ def main() -> int:
             print('   signal-templates.py --role <СВОЯ> --set-address "<имя [различитель]>" '
                   '--session-id "<sessionId>"')
             return 0
-        print(f"РЕЕСТР АДРЕСОВ — {len(rows)} · короткий адрес годен {VALID_HOURS} ч с часа записи")
+        # Хранилище сессий читается ОДИН раз на весь перечень и только если хоть у одной
+        # строки записан session_id: без него сверять нечего, и вывод остаётся прежним.
+        store = read_store_guarded() if any(r[5] for r in rows) else None
+        print(f"РЕЕСТР АДРЕСОВ — {len(rows)} · короткий адрес годен {VALID_HOURS} ч с часа записи; "
+              f"адрес с живым session_id годен при любом возрасте, пока чат не в архиве")
+        if store is not None:
+            if store.found:
+                print(f"   session_id сверены с хранилищем сессий приложения: {store.path}")
+            else:
+                print(f"   ⚠️ session_id сверить нечем: {store.error} — у этих строк судит "
+                      f"только возраст записи")
         for role, addr, when, actor, src, sid, tid in rows:
             age = age_hours(when)
-            # 🔴 ЗДЕСЬ БЫЛ «✅» — И ОН ЧИТАЛСЯ КАК «ЖИВ». Инструмент не видит перечень живых
-            # сессий этой машины: он умеет сказать только «моложе {ГОДЕН_ЧАСОВ} ч» либо
-            # «старше». ✅ в словаре контура значит «сделано/верно», и рядом с адресом роль
-            # читает его как «сессия жива, шли смело» — а живость тут НЕ ПРОВЕРЕНА никем.
-            label = ("⚪ живость не проверялась" if age is not None and age < VALID_HOURS
-                     else "⌛ СТАР" if age is not None else "⚪ возраст неизвестен")
+            session = check_session(sid, store)
+            # 🔴 «✅» ЗДЕСЬ ПЕЧАТАЕТСЯ ТОЛЬКО ПО СВЕРКЕ С ХРАНИЛИЩЕМ, НИКОГДА ПО ВОЗРАСТУ.
+            # Раньше его не было вовсе: он стоял у свежих адресов и читался как «жив», хотя
+            # возраст записи живости не доказывает. ✅ в словаре контура значит «сделано/верно»,
+            # и рядом с адресом роль читает его как «сессия жива, шли смело» — поэтому он
+            # вернулся ровно туда, где живость ПРОВЕРЕНА: сессия с этим session_id есть в
+            # хранилище сессий приложения и не в архиве. Свежая строка без такой сверки
+            # по-прежнему «⚪ живость не проверялась».
+            # ⚖️ «Жива» = «не в архиве», и это сказано в самой метке вместе с часом последней
+            # активности: чат, молчащий восемь суток, иначе читался бы как открытый сейчас.
+            if session.state == SESSION_LIVE:
+                label = (f"✅ сессия жива по session_id (заголовок "
+                         f"«{session.record.title or 'без заголовка'}») — не в архиве; "
+                         f"{activity_note(session.record)}")
+                if session.twins:
+                    label += (f" ⚠️ голое имя неоднозначно: других живых сессий с тем же "
+                              f"заголовком — {len(session.twins)}")
+            elif session.state == SESSION_ARCHIVED:
+                label = "⛔ чат в архиве"
+            elif session.state == SESSION_ABSENT:
+                # своя метка: сверка БЫЛА и сессии не нашла, «не проверялась» тут неправда
+                label = ("⚪ в хранилище не найдена" if age is not None and age < VALID_HOURS
+                         else "⌛ СТАР" if age is not None else "⚪ возраст неизвестен")
+            else:
+                label = ("⚪ живость не проверялась" if age is not None and age < VALID_HOURS
+                         else "⌛ СТАР" if age is not None else "⚪ возраст неизвестен")
+            absent_note = (" · в хранилище этой машины такой сессии нет"
+                           + (f", но есть метка удаления ({session.deleted_note})"
+                              if session.deleted_note else "")
+                           if session.state == SESSION_ABSENT else "")
             print(f"   {label:<26} {role:<8} {addr:<28} "
                   f"{('sid: ' + sid) if sid else '(session_id не записан)':<28} "
                   f"{('tid: ' + tid) if tid else '(transcript_id не записан)':<28} "
                   f"записан {when} UTC ({'?' if age is None else f'{age:.1f} ч назад'}) "
-                  f"рукой {actor}, путь {src}")
+                  f"рукой {actor}, путь {src}{absent_note}")
         print("⚖️ Адрес умирает вместе с чатом роли. Старый печатник не подставляет — говорит вслух.")
-        print(f"⚪ ГРАНИЦА, НАЗВАННАЯ ВСЛУХ: «моложе {VALID_HOURS} ч» ≠ «жива», и «нет в перечне "
-              f"живых сессий на этой машине» ≠ «мертва» — инструмент такого перечня не видит "
-              f"вовсе. Живость подтверждает только сама роль (или её сосед, получив ответ).")
+        print(f"⚪ ГРАНИЦА, НАЗВАННАЯ ВСЛУХ: «моложе {VALID_HOURS} ч» ≠ «жива»; «нет в хранилище "
+              f"сессий этой машины» ≠ «мертва» — хранилище может быть другой установки приложения "
+              f"(заявка пакета #34), а без хранилища живость по session_id не проверяется вовсе; "
+              f"«жива по хранилищу» ≠ «прочтёт сейчас» — «жива» значит только «не в архиве»: "
+              f"хранилище не знает, открыт ли чат сейчас, занята ли роль и дочитает ли она "
+              f"сообщение, поэтому рядом напечатан час последней активности. По голому имени "
+              f"дойдёт только до чата, открытого сейчас (виден в ListAgents). Получение "
+              f"подтверждает только сама роль (или её сосед, получив ответ).")
         print("⚠️ Столбец «рукой» и путь «self» — это то, ЧТО СКАЗАЛ вызывающий, а не")
         print("   доказательство. Инструмент не видит, чья рука его позвала.")
         return 0
@@ -741,7 +936,27 @@ def main() -> int:
               f'--set-address "<её адрес>"')
         return 2
     age = age_hours(target["noted_at"])
-    if age is not None and age >= VALID_HOURS:
+    # ── 🔑 ЖИВОСТЬ ПО session_id РЕШАЕТ РАНЬШЕ ВОЗРАСТА (записка #5417) ──
+    session = check_session(target.get("session_id"))
+    absent_warning = None
+    if session.state == SESSION_ABSENT:
+        absent_warning = absent_words(target["session_id"], session)
+    if session.state == SESSION_ARCHIVED:
+        # ⚖️ АРХИВ ВАЖНЕЕ ВОЗРАСТА: свежая запись об архивном чате ведёт туда же, куда
+        # и старая, — в чат, который роль не откроет. Признака недоставки у отправки нет,
+        # поэтому отказ здесь дешевле «успешно отправлено» в никуда.
+        archived = session.record
+        print(f"⛔ АДРЕС РОЛИ {to_role} НЕГОДЕН: чат роли закрыт (в архиве).")
+        print(f"   session_id {archived.session_id} («{archived.title or 'без заголовка'}») "
+              f"в хранилище сессий приложения помечен архивным ({session.store_note}).")
+        print(f"   Возраст записи тут не довод: запись {target['noted_at']} UTC"
+              + (f", {age:.1f} ч назад" if age is not None else "")
+              + " — архивный чат роль не откроет, а признака недоставки у отправки нет.")
+        print(f"   👉 попроси {to_role} в ленте записать новый адрес из живого чата: "
+              f"signal-templates.py --role {to_role} --set-address \"<имя [различитель]>\" "
+              f"--session-id \"<sessionId>\"")
+        return 2
+    if session.state != SESSION_LIVE and age is not None and age >= VALID_HOURS:
         print(f"⌛ АДРЕС РОЛИ {to_role} СТАР: записан {target['noted_at']} UTC, {age:.1f} ч назад.")
         print(f"   Адрес умирает вместе с чатом, а строка о нём — нет. Отправив по старому,")
         print(f"   ты получишь «успешно отправлено» и никакой доставки: признака недоставки")
@@ -749,13 +964,21 @@ def main() -> int:
         print(f"   👉 попроси {to_role} обновить адрес в ленте — или запиши сам, если видишь")
         print(f"      её строку «This session is …» в ListAgents: signal-templates.py "
               f"--role {to_role} --set-address \"…\"")
+        if absent_warning:
+            print(f"   ⚠️ {absent_warning}")
+        elif session.state == SESSION_UNCHECKED and target.get("session_id"):
+            # session_id записан, но сверить его нечем — сказано вслух, почему новое правило
+            # не помогло: иначе отказ читался бы как «session_id ничего не значит»
+            print(f"   ⚠️ session_id {target['session_id']} записан, но сверить его нечем: "
+                  f"{session.store_note} — поэтому судит возраст записи, как раньше")
         return 2
 
     template = TEMPLATES[a.kind]
     fields = {
         "from": from_role,
         "role": to_role,
-        "session": target["address"],
+        "session": (session.record.title or target["address"]) if session.state == SESSION_LIVE
+                   else target["address"],
         "sent_at": query_time(),
         "last_note": a.note,
         "card": a.card if a.card else "—",
@@ -764,6 +987,8 @@ def main() -> int:
         "lease_until": "—",
     }
     warnings = []
+    if absent_warning:
+        warnings.append(absent_warning)
     if not a.note:
         fields["last_note"], warning = last_note_of(conn, from_role, to_role)
         if warning:
@@ -782,13 +1007,13 @@ def main() -> int:
             fields["lease"], fields["lease_until"] = lease["id"], lease["until"]
             parts.append(f"объявление о правке #{lease['id']} (до {lease['until']} UTC)")
         claim = claim_info(conn, a.card)
-        if claim and claim["держатель"] and claim["держатель"].upper() == to_role:
-            fields["deadline"] = claim["срок"]
-            tail_note = " — СРОК УЖЕ ПРОШЁЛ" if claim.get("истёк") else ""
-            parts.append(f"карточку #{a.card} ({claim['срок']}{tail_note})")
-        elif claim and claim["держатель"]:
+        if claim and claim["holder"] and claim["holder"].upper() == to_role:
+            fields["deadline"] = claim["deadline"]
+            tail_note = " — СРОК УЖЕ ПРОШЁЛ" if claim.get("expired") else ""
+            parts.append(f"карточку #{a.card} ({claim['deadline']}{tail_note})")
+        elif claim and claim["holder"]:
             warnings.append(
-                f"карточку #{a.card} по последнему взятию держит {claim['держатель']}, а не {to_role} — "
+                f"карточку #{a.card} по последнему взятию держит {claim['holder']}, а не {to_role} — "
                 f"в текст сигнала она НЕ ВОШЛА: адресат прочтёт текст, а не это предупреждение")
         else:
             warnings.append(f"взятия карточки #{a.card} в базе нет — в текст она не вошла")
@@ -800,11 +1025,11 @@ def main() -> int:
             for warn in warnings:
                 print(f"   ⚠️ {warn}")
             return 2
-        fields["что"] = " и ".join(parts)
+        fields["what"] = " и ".join(parts)
 
-    text = template["текст"].format(**fields)
+    text = template["text"].format(**fields)
     print("=" * 78)
-    print(f"СИГНАЛ «{a.kind}» · срочность {template['срочность']} · {fields['sent_at']} UTC")
+    print(f"СИГНАЛ «{a.kind}» · срочность {template['urgency']} · {fields['sent_at']} UTC")
     print("=" * 78)
     for warn in warnings:
         print(f"⚠️ {warn}")
@@ -813,6 +1038,67 @@ def main() -> int:
     # ⚡ ПОРЯДОК ФОРМ: СНАЧАЛА ПО ИДЕНТИФИКАТОРУ, ПОТОМ ПО ИМЕНИ. session_id переживает
     # возобновление чата, короткий адрес — нет; печатник ведёт к более стойкому пути первым,
     # но не отбирает второй — записи session_id может ещё не быть.
+    if session.state == SESSION_LIVE:
+        # 🔑 СЕССИЯ ЖИВА ПО ХРАНИЛИЩУ: имя для отправки — ЖИВОЙ заголовок чата, а не строка
+        # реестра. Код в скобках записанного адреса меняется при каждом перезапуске
+        # приложения, и вызов, собранный из него, уехал бы по устаревшему коду.
+        live = session.record
+        print(f'   mcp__ccd_session_mgmt__send_message(session_id="{live.session_id}", '
+              f'message="{text}")')
+        print(f"      ⚖️ по идентификатору сессии — переживает и возобновление чата, и перезапуск "
+              f"приложения; чат не в архиве по хранилищу сессий приложения (session_id найден), "
+              f"{activity_note(live)}")
+        print()
+        by_name = False
+        if not (live.title or "").strip():
+            print("   по имени не шли: у живой сессии нет заголовка — только по session_id выше")
+        elif session.twins:
+            # ⚠️ ГОЛОЕ ИМЯ НЕОДНОЗНАЧНО — вызов по нему НЕ печатается: тот же класс, что
+            # и у адреса без различителя (имя «atlas-17» носили ДВА разговора), — сообщение
+            # «успешно отправится» не в тот чат, и признака этого не будет ни у кого.
+            print(f"   ⚠️ ПО ИМЕНИ НЕ ШЛИ: голое имя «{live.title}» НЕОДНОЗНАЧНО — других живых "
+                  f"сессий с тем же заголовком в хранилище {session.store_note}: "
+                  f"{len(session.twins)}")
+            for twin in session.twins:
+                print(f"      session_id {twin.session_id} · «{twin.title}» · "
+                      f"каталог {twin.cwd or 'не записан'}")
+            print("      сообщение по имени может уйти не в тот чат. Шли по session_id выше.")
+        else:
+            by_name = True
+            print(f'   ЛИБО по имени (живой заголовок чата): '
+                  f'SendMessage(to="{live.title}", message="{text}")')
+            # ⚖️ отправка по имени ищет адресата среди ListAgents, а там только чаты, открытые
+            # сейчас (замер 02.10 ≈22:15 UTC: «живых» по хранилищу CORE и CHROME в ListAgents не было)
+            print("      ⚖️ по имени дойдёт, только если чат открыт сейчас (виден в ListAgents): "
+                  "хранилище знает, что чат не в архиве, но не знает, запущен ли он")
+            print(f"      голое имя годно, пока оно единственное среди живых сессий хранилища "
+                  f"{session.store_note}; сессии других установок приложения, облачные и "
+                  f"сессии удалённого управления здесь не видны")
+        print()
+        if by_name:
+            print(f"   в реестре записан адрес «{target['address']}» — код в скобках мог смениться "
+                  f"при перезапуске приложения, поэтому вызов по имени собран из живого заголовка")
+        else:
+            print(f"   в реестре записан адрес «{target['address']}» — код в скобках мог смениться "
+                  f"при перезапуске приложения; по имени не шли — см. выше")
+        # 🔎 ИМЯ В РЕЕСТРЕ РАСХОДИТСЯ С ЖИВЫМ ЗАГОЛОВКОМ: код в скобках меняется сам, а имя —
+        # нет. Расхождение имени значит «чат переименован» или «session_id записан от другого
+        # чата» — запись адреса (--set-address) такое расхождение считает отказом.
+        registry_name = (target["address"] or "").split(" [", 1)[0]
+        renamed = bool(title_key(live.title)) and title_key(registry_name) != title_key(live.title)
+        if renamed:
+            print(f"   ⚠️ имя чата в реестре («{registry_name.strip()}») не совпадает с живым "
+                  f"заголовком («{live.title}») — чат переименован или session_id записан от "
+                  f"другого чата; попроси {to_role} перезаписать адрес")
+        print(f"   адрес записан {target['noted_at']} UTC"
+              + (f" ({age:.1f} ч назад)" if age is not None else "")
+              + f", путь «{target['source']}» — возраст записи здесь не довод: чат не в архиве "
+                f"по session_id")
+        print(f"⚖️ СИГНАЛ — НЕ НОСИТЕЛЬ: тело лежит в ленте, ответ ждём В ЛЕНТЕ, не сообщением.")
+        print(f"   когда слать: {template['when']}")
+        print(f"   повтор: {template['repeat']}")
+        print(f"   «жива по хранилищу» ≠ «прочтёт сейчас»: хранилище не знает, открыт ли чат и занята ли роль")
+        return 0
     if target.get("session_id"):
         print(f'   mcp__ccd_session_mgmt__send_message(session_id="{target["session_id"]}", '
               f'message="{text}")')
@@ -828,8 +1114,8 @@ def main() -> int:
     print(f"   адрес записан {target['noted_at']} UTC"
           + (f" ({age:.1f} ч назад)" if age is not None else "") + f", путь «{target['source']}»")
     print(f"⚖️ СИГНАЛ — НЕ НОСИТЕЛЬ: тело лежит в ленте, ответ ждём В ЛЕНТЕ, не сообщением.")
-    print(f"   когда слать: {template['когда']}")
-    print(f"   повтор: {template['повтор']}")
+    print(f"   когда слать: {template['when']}")
+    print(f"   повтор: {template['repeat']}")
     return 0
 
 
