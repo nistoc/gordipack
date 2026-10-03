@@ -53,7 +53,7 @@ def build(msgs, cursor=None, phoenix=(), rules=(), cards=()):
     # Вид messages_all — как в живой базе: свой след модуль читает через него (карточка #466,
     # находка PROTO 03.10 — перенос в архив). Без вида случай ④ проваливался бы на верной
     # редакции модуля, а не на ошибке; ③ проходит и без строки вовсе (так было до правки).
-    # Заготовка вида — PROTO (её приёмка 03.10, комментарий карточки #466).
+    # Заготовка вида — PROTO (её приёмка 03.10, комментарий карточки #466 11:20 UTC).
     for t in ("messages_history", "messages_archive"):
         con.execute(f"""CREATE TABLE {t} (id INTEGER PRIMARY KEY, writer_role TEXT,
                        timestamp TEXT, body_md TEXT, tags TEXT, priority TEXT)""")
