@@ -1049,6 +1049,9 @@ def main() -> int:
             if expected_fail == actual_fail:
                 print(f"🧪 ожидание поломки «{break_name}» ПОДТВЕРДИЛОСЬ: провалены ровно "
                       f"{' '.join(n for n in RUN_IDS if n in actual_fail)}")
+                # Поломка поймана как записано — стенд с копией живой базы хранить незачем;
+                # код выхода прежний (карточка #657, пункт (3), записка #5437)
+                mezo_stand.expected_break()
             else:
                 print(f"⚠️ ожидание поломки «{break_name}» НЕ ПОДТВЕРДИЛОСЬ: ждали "
                       f"{' '.join(n for n in RUN_IDS if n in expected_fail) or 'ничего'}, "

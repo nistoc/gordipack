@@ -30,30 +30,64 @@ mezo_stand.py — временные рабочие каталоги прове�
 
 СОХРАНИТЬ ВСЁ, ДАЖЕ ПРИ УСПЕХЕ — переменная окружения MEZO_KEEP_STANDS=1. Нужна, когда
 разбираешь зелёный прогон и хочешь посмотреть, на чём он был зелёным.
+
+ХРАНИТСЯ ТОЛЬКО ПОСЛЕДНИЙ ПРОВАЛ ПРИЁМКИ (карточка #657, пункт (3); слово владельца «Б1»
+02.10.2026 23:47 UTC, чат OPSSRE; план и два дополнения — комментарии карточки, согласованы
+с PROTO записками #5422 и #5437). Замер 24.09: стендов старше суток 4 132, 117 ГБ — каждый
+провальный прогон оставлял свои, срока у них не было. Теперь:
+  · сохраняя стенд, помощник кладёт В НЕГО метку .mezo_stand_kept: полный путь скрипта ·
+    вид исхода · час UTC · номер процесса. Пишется только на выходе — прогону, который судит
+    содержимое своего стенда, она не мешает;
+  · сохраняя стенды по провалу, отказу или неизвестному исходу, помощник убирает стенды
+    ПРЕЖНЕГО провала ТОГО ЖЕ скрипта — только с его меткой. Ключ — полный путь скрипта, а не
+    имя файла: тот же bite-x.py из пакета у соседнего контура на этой машине — чужой;
+  · каталог БЕЗ метки не трогается никогда: так выглядит прогон, идущий прямо сейчас, и всё,
+    накопленное до этой правки (его убирает janitor-stands.py рукой владельца);
+  · стенды, оставленные по MEZO_KEEP_STANDS, не убираются и сами никого не убирают;
+  · успех прежний провал НЕ убирает (успешный прогон не доказывает, что сохранённый провал
+    больше не нужен), а называет: «прежний провал этого скрипта сохранён: N»;
+  · код 2 (приёмка отказалась мерить) хранится и учитывается как провал, но называется
+    своими словами — «прогон отказался мерить»;
+  · прогон нарочной поломки, чьё ожидание ПОДТВЕРДИЛОСЬ, — не провал для уборки: приёмка
+    зовёт expected_break(), и стенд убирается как при успехе. Код выхода приёмки не меняется.
+⚖️ Границы: кандидатов на уборку ищу среди каталогов с теми же началами имён, что у стендов
+этого прогона (полный обход %TEMP% — около 2 с на 21 тыс. каталогов, замер 02.10). Начало
+имени, которым этот прогон не пользовался, не смотрится — его стенды остаются до
+janitor-stands.py. Инструмент, запущенный С КОПИИ на стенде, каждый раз имеет новый путь —
+его прогоны между собой не связываются. Обе стороны безопасные: лишний каталог.
 """
 import ast
 import atexit
+import datetime as dt
 import gc
 import os
 import shutil
 import sqlite3
 import stat
+import sys
 import tempfile
 import time
 from pathlib import Path
 
 __all__ = ["new", "release", "finish", "keep_reason", "copy_tool", "neighbours_of", "stand_env",
-           "snapshot_db", "crlf_twin"]
+           "snapshot_db", "crlf_twin", "expected_break"]
 
 _stands: list[Path] = []
+_prefixes: set[str] = set()           # начала имён, которыми этот прогон заводил стенды
 _verdict: bool | None = None          # None — исход не объявлен, считаем провалом
+_exit_code: int | None = None         # код, объявленный finish(): различает отказ (2) и провал
+_expected_break = False               # приёмка объявила: ожидание нарочной поломки подтвердилось
 _ALWAYS_KEEP = os.environ.get("MEZO_KEEP_STANDS", "").strip().lower() in ("1", "yes", "true", "да")
+KEPT_MARKER = ".mezo_stand_kept"      # имя метки внутри сохранённого стенда (с точкой — служебное)
+_KIND_KEEP_ENV = "keep_env"           # вид исхода в метке: сохранено по MEZO_KEEP_STANDS
+_MKDTEMP_SUFFIX = 8                   # tempfile.mkdtemp дописывает к началу имени 8 случайных знаков
 
 
 def new(prefix: str) -> Path:
     """Создать временный рабочий каталог. Дальше он убирается сам — по исходу прогона."""
     p = Path(tempfile.mkdtemp(prefix=prefix))
     _stands.append(p)
+    _prefixes.add(prefix)
     return p
 
 
@@ -68,6 +102,11 @@ def release(path) -> None:
     p = Path(path)
     if p not in _stands:
         _stands.append(p)
+    # Начало имени здесь не передано — выводим его так, как его строит tempfile.mkdtemp
+    # (начало + 8 случайных знаков). Вывод неверен — кандидатов просто не найдётся:
+    # уборка дополнительно требует метку того же скрипта, лишнего она не тронет.
+    if len(p.name) > _MKDTEMP_SUFFIX:
+        _prefixes.add(p.name[:-_MKDTEMP_SUFFIX])
 
 
 def stand_env(container, **extra) -> dict:
@@ -247,21 +286,127 @@ def finish(code: int) -> int:
     """Объявить исход прогона. Возвращает тот же код — чтобы писалось одной строкой.
 
     Ноль — успех, каталоги убираются. Любое другое число — провал, каталоги остаются.
+    Код 2 — приёмка отказалась мерить: каталоги остаются так же, но называется это своими словами.
     """
-    global _verdict
+    global _verdict, _exit_code
     _verdict = (code == 0)
+    _exit_code = code
     return code
+
+
+def expected_break() -> None:
+    """Приёмка объявляет: это прогон нарочной поломки, и её ожидание ПОДТВЕРДИЛОСЬ.
+
+    ЗАЧЕМ (дополнение-2 к плану карточки #657, согласовано с PROTO запиской #5437). Прогон
+    с --break кончается кодом 1, хотя приёмка сделала свою работу: поломка поймана ровно так,
+    как записано заранее. Замер 02.10 22:43–22:47 UTC: два круга по 27 поломок одной приёмки
+    оставили 54 стенда, ≈4 ГБ, 54 копии живой базы. Хранить обстановку подтверждённой
+    поломки незачем — разбирать в ней нечего.
+    Код выхода приёмки этим НЕ меняется: его читают общий прогон и сверка поломок. Меняется
+    только решение о стенде. Ожидание НЕ подтвердилось — не зови: стенд сохранится как провал.
+    Объявление без finish() не действует: упавший прогон сохраняется всегда.
+    """
+    global _expected_break
+    _expected_break = True
+
+
+def _outcome_kind() -> str:
+    """Вид исхода для метки: keep_env · undeclared · refused · failed."""
+    if _ALWAYS_KEEP:
+        return _KIND_KEEP_ENV
+    if _verdict is None:
+        return "undeclared"
+    return "refused" if _exit_code == 2 else "failed"
 
 
 def keep_reason() -> str | None:
     """Почему каталоги будут сохранены; None — если будут убраны. Для проверок этого помощника."""
     if _ALWAYS_KEEP:
         return "указано переменной окружения MEZO_KEEP_STANDS"
-    if _verdict is False:
-        return "прогон провалился"
     if _verdict is None:
         return "исход прогона не объявлен (падение или прерывание) — сохранено на всякий случай"
+    if _verdict is False and not _expected_break:
+        return "прогон отказался мерить" if _exit_code == 2 else "прогон провалился"
     return None
+
+
+def _script_key() -> str | None:
+    """Полный путь запущенного скрипта — ключ «тот же скрипт». None — скрипта-файла нет.
+
+    Берётся при ЗАГРУЗКЕ помощника: к выходу скрипт мог сменить рабочий каталог, и
+    относительный sys.argv[0] указал бы не туда.
+    """
+    main = sys.argv[0] if sys.argv else ""
+    if not main or main in ("-c", "-m"):
+        return None
+    p = Path(main)
+    if not p.is_file():
+        return None
+    return os.path.normcase(str(p.resolve()))
+
+
+_SCRIPT_KEY = _script_key()
+
+
+def _read_marker(path: Path) -> dict | None:
+    """Метка сохранённого стенда как словарь; None — метку прочитать нельзя (такой стенд не трогаем)."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    fields = {}
+    for line in text.splitlines():
+        name, sep, value = line.partition("=")
+        if sep:
+            fields[name.strip()] = value.strip()
+    return fields if fields.get("script") else None
+
+
+def _previous_kept(key: str, include_keep_env: bool) -> list[Path]:
+    """Сохранённые стенды ПРЕЖНИХ прогонов этого скрипта: с меткой и тем же полным путём.
+
+    Ищутся рядом со стендами этого прогона и только среди имён с теми же началами
+    (полный обход %TEMP% слишком дорог для каждого прогона — см. шапку).
+    """
+    prefixes = [p for p in _prefixes if p]
+    if not prefixes:
+        return []
+    current = {os.path.normcase(os.path.abspath(p)) for p in _stands}
+    found = []
+    for parent in {p.parent for p in _stands}:
+        try:
+            with os.scandir(parent) as entries:
+                for entry in entries:
+                    if not any(entry.name.startswith(pr) for pr in prefixes):
+                        continue
+                    if not entry.is_dir(follow_symlinks=False):
+                        continue
+                    if os.path.normcase(os.path.abspath(entry.path)) in current:
+                        continue
+                    marker = _read_marker(Path(entry.path) / KEPT_MARKER)
+                    if marker is None or marker["script"] != key:
+                        continue
+                    if marker.get("kind") == _KIND_KEEP_ENV and not include_keep_env:
+                        continue
+                    found.append(Path(entry.path))
+        except OSError:
+            continue
+    return sorted(found)
+
+
+def _write_markers(key: str, kind: str, why: str) -> list[Path]:
+    """Положить метку в каждый сохраняемый стенд. Вернуть стенды, куда положить не удалось."""
+    stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    body = f"script={key}\nkind={kind}\nreason={why}\nat={stamp}\npid={os.getpid()}\n"
+    failed = []
+    for p in _stands:
+        if not p.is_dir():
+            continue
+        try:
+            (p / KEPT_MARKER).write_text(body, encoding="utf-8")
+        except OSError:
+            failed.append(p)
+    return failed
 
 
 def _force_writable(func, path, _exc):
@@ -271,6 +416,49 @@ def _force_writable(func, path, _exc):
         func(path)
     except OSError:
         raise
+
+
+def _remove_all(paths) -> tuple[int, list[Path]]:
+    """Убрать каталоги с повторами. Вернуть (сколько убрано, какие остались)."""
+    # ⚠️ Windows не даёт удалить каталог, пока внутри открыт файл. Проверки почти все
+    # работают с базой и соединение обычно НЕ закрывают явно — на момент уборки оно ещё
+    # живо. Сборка мусора закрывает такие соединения (у них есть финализатор), поэтому
+    # сначала зовём её, а потом делаем несколько заходов с крошечной паузой: файл
+    # освобождается не мгновенно. Замер 2026-08-24: без этого спотыкались 16 проверок
+    # из 51 — и уборка честно печатала предупреждение, которого раньше не было.
+    gc.collect()
+    removed = 0
+    remaining = []
+    for p in paths:
+        for attempt in range(4):
+            try:
+                shutil.rmtree(p, onerror=_force_writable)
+                removed += 1
+                break
+            except OSError:
+                if attempt == 3:
+                    remaining.append(p)
+                else:
+                    time.sleep(0.15)
+    return removed, remaining
+
+
+def _after_keep(why: str) -> None:
+    """Сохраняя стенды: убрать прежний провал этого скрипта и пометить нынешний."""
+    kind = _outcome_kind()
+    if _SCRIPT_KEY is None:
+        print("   метка не поставлена: скрипт не файл (python -c, импорт) — прежние стенды не убираются")
+        return
+    if kind == _KIND_KEEP_ENV:
+        print("   по MEZO_KEEP_STANDS стенды прежнего провала этой приёмки не убираются")
+    else:
+        removed, left = _remove_all(_previous_kept(_SCRIPT_KEY, include_keep_env=False))
+        print(f"🧹 стендов прежнего провала этой приёмки убрано: {removed if removed else 'НОЛЬ'}"
+              + (f" · не удалось убрать (занято): {len(left)}" if left else ""))
+        for p in left:
+            print(f"   {p}")
+    for p in _write_markers(_SCRIPT_KEY, kind, why):
+        print(f"   ⚠️ метку положить не удалось — этот стенд следующим прогоном не уберётся: {p}")
 
 
 @atexit.register
@@ -283,30 +471,18 @@ def _at_exit() -> None:
         for p in _stands:
             print(f"   {p}")
         print("   Осмотрите и удалите; старые уберёт janitor-stands.py.")
+        _after_keep(why)
         return
-    # ⚠️ Windows не даёт удалить каталог, пока внутри открыт файл. Проверки почти все
-    # работают с базой и соединение обычно НЕ закрывают явно — на момент уборки оно ещё
-    # живо. Сборка мусора закрывает такие соединения (у них есть финализатор), поэтому
-    # сначала зовём её, а потом делаем несколько заходов с крошечной паузой: файл
-    # освобождается не мгновенно. Замер 2026-08-24: без этого спотыкались 16 проверок
-    # из 51 — и уборка честно печатала предупреждение, которого раньше не было.
-    gc.collect()
-    removed = failed = 0
-    remaining = []
-    for p in _stands:
-        for attempt in range(4):
-            try:
-                shutil.rmtree(p, onerror=_force_writable)
-                removed += 1
-                break
-            except OSError:
-                if attempt == 3:
-                    failed += 1
-                    remaining.append(p)
-                else:
-                    time.sleep(0.15)
+    removed, remaining = _remove_all(_stands)
     print(f"🧹 убрано временных каталогов: {removed}"
-          + (f" · занято другим процессом, останутся до уборки janitor-stands.py: {failed}"
-             if failed else ""))
+          + (f" · занято другим процессом, останутся до уборки janitor-stands.py: {len(remaining)}"
+             if remaining else "")
+          + (" (ожидание нарочной поломки подтвердилось — для уборки это не провал)"
+             if _verdict is False and _expected_break else ""))
     for p in remaining:
         print(f"   {p}")
+    if _SCRIPT_KEY is not None:
+        previous = _previous_kept(_SCRIPT_KEY, include_keep_env=False)
+        if previous:
+            print(f"📂 прежний провал этого скрипта сохранён: {len(previous)} каталогов "
+                  f"(успех его не убирает; старые уберёт janitor-stands.py)")
