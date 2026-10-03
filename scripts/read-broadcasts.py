@@ -113,8 +113,11 @@ def main():
 
 
 def _inbox(conn, role, show_all):
+    # ⚡ Через ВИД, как _ack: неподтверждённое объявление, унесённое переносом в архив, иначе
+    # пропадало из входящих МОЛЧА — так ушли записки #4 и #49 после шага 02.10.2026 (карточка #538,
+    # проверка переноса 03.10 12:55 UTC). Условие ① переноса теперь судит каждый запрос этого файла.
     rows = conn.execute(
-        "SELECT id, writer_role, timestamp, body_md, tags, priority FROM messages "
+        "SELECT id, writer_role, timestamp, body_md, tags, priority FROM messages_all "
         "ORDER BY timestamp ASC, id ASC"
     ).fetchall()
     acked = {r[0] for r in conn.execute(
@@ -169,8 +172,9 @@ def _ack(conn, role, ids):
 def _status(conn):
     # известные роли группы — из отметок прочитанного, таблица read_cursors (нормализуем к UPPER)
     roles_all = {r[0].upper() for r in conn.execute("SELECT reader_role FROM read_cursors")}
+    # Через ВИД: снятый (resolved) и унесённый в архив призыв иначе пропадал из «ждём» молча.
     ctas = [(mid, w, ts) for mid, w, ts, tags in conn.execute(
-        "SELECT id, writer_role, timestamp, tags FROM messages "
+        "SELECT id, writer_role, timestamp, tags FROM messages_all "
         "ORDER BY timestamp ASC, id ASC") if is_cta(tags)]
 
     if not ctas:

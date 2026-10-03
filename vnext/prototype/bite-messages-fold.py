@@ -20,16 +20,42 @@ r"""ПРИЁМКА переноса записок в архив — карто�
   ④ срочное незакрытое не уносится                                        РАЗЛИЧАЮЩИЙ
   ⑤ записка, на которую ссылается свежая, остаётся (разговор жив)          РАЗЛИЧАЮЩИЙ
   ⑥ читатель, не видящий архив ⇒ ОТКАЗ переносить (условие ① правила)      РАЗЛИЧАЮЩИЙ
+  ⑥б читатель видит архив ЧАСТЬЮ запросов ⇒ тоже отказ; слово в комментарии — не в счёт РАЗЛИЧАЮЩИЙ
   ⑦ адресаты унесённых: живая таблица теряет, вид видит                    РАЗЛИЧАЮЩИЙ
   ⑧ контроль: ни одна запись не пропала — сумма живых и архива постоянна
+  ⑨ непрочитанное хоть одной ролью не уносится; прочитанное ниже — уносится РАЗЛИЧАЮЩИЙ
+  ⑩ самопроверка по каждой роли ловит непрочитанное, даже если отбор сломан РАЗЛИЧАЮЩИЙ
+  ⑪ контроль: холостой прогон печатает «непрочитанных в отборе: 0» и кто держит отметку
 
-ПОРЧА (--porcha мерка-с-источником): отпечатку возвращают источник и порядок по нему.
-ОЖИДАНИЕ, НАЗВАННОЕ ДО ПРОГОНА (и УТОЧНЁННОЕ после первого прогона — честно, вслух):
-краснеют ДВА случая, ② и ⑦.
+━━ ⑨–⑪: ПОЧЕМУ (карточка #538, слово владельца 2026-10-03 11:45 UTC, чат PROTO — «перенос не
+трогает непрочитанное») ━━
+Повторная приёмка карточки #466 нашла: следующий шаг уносил непрочитанное спящих ролей (RCC 533,
+CORE и CHROME по 48), а чтение ленты архив не видит. Отметки прочитанного в копии сначала
+ставятся ВСЕМ ролям на последнюю записку: случаи ①–⑧ мерят СВОИ условия, и спящая роль живой
+базы не должна решать, будет ли им что переносить (на свежем контуре из пакета отметки нулевые —
+без этого не перенеслось бы ничего). Непрочитанное мерят ⑨ и ⑩ на своей паре подставных записок
+A < B и своём проверочном читателе, дочитавшем ровно до A.
+
+ПОРЧИ (--porcha). ОЖИДАНИЯ, НАЗВАННЫЕ ДО ПРОГОНА:
+```
+мерка-с-источником .. отпечатку возвращают источник и порядок по нему ⇒ проваливаются ② ⑦ ⑨
+                      (все три стоят НА СОСТОЯВШЕМСЯ переносе — см. ниже)
+без-отметки ......... отбор не смотрит на отметки ⇒ проваливается РОВНО ⑨: самопроверка
+                      отказывает кодом 2, и прочитанное A тоже не уносится
+без-самопроверки .... самопроверка выключена ⇒ проваливается РОВНО ⑩: при сломанном отборе
+                      непрочитанное уносится молча
+условие-по-слову .... условие ① снова судит наличие слова в файле ⇒ проваливается РОВНО ⑥б
+```
+━━ ⑥б: ПОЧЕМУ (проверка переноса 03.10 12:55 UTC) ━━ Случай ⑥ портил ВСЕ упоминания вида в копии
+read-broadcasts.py — случай своего автора. Живой был другим: подтверждение шло через вид, а входящие
+и «ждём» — мимо, и условие ① засчитывало файл по одному слову; после шага 02.10 записки #4 и #49
+ушли из входящих восьми ролей. ⑥б портит ОДИН запрос и отдельно кладёт «FROM messages» в комментарий.
+Почему у «мерки-с-источником» краснеют ② и ⑦ (уточнено после первого прогона — честно, вслух):
 ```
 ② обратимость ....... перенос откатывается сам, проверять обратимость не на чем
 ⑦ адресаты .......... стои́т НА СОСТОЯВШЕМСЯ переносе: если унесено ноль, живая таблица
                       и вид дают одно число, и разница исчезает
+⑨ непрочитанное ..... та же зависимость: A обязано уехать, а перенос откатывается
 ```
 🩸 Первая редакция ожидания говорила «краснеет РОВНО ②», и прогон её опроверг. Записано
 как есть, а не подогнано: ожидание было неточным, потому что автор держал в голове предмет
@@ -69,6 +95,12 @@ import mezo_paths  # noqa: E402
 CASES = DIFFER = GREENS = 0
 
 FIXTURE_MARKER = "[приёмка#538 bite-messages-fold: подставная старая записка]"
+UNREAD_MARKER = "[приёмка#538 bite-messages-fold: пара для непрочитанного]"
+TEST_READER = "BITE-FOLD-READER"
+UNREAD_WORD = "не прочитано"
+FILTER_LINE = "        if floor is not None and mid > floor:"
+SELF_CHECK_LINE = "    unread = unread_in_selection(chosen, marks)"
+STRICT_LINE = "        elif strict and (lines := direct_queries(text)):"
 
 
 def case(title, verdict, detail, differ=False):
@@ -123,9 +155,53 @@ def seed_fixture(db) -> None:
     con.close()
 
 
+def seed_unread_pair(db) -> tuple[int, int]:
+    """Две старые обычные записки A < B для ⑨/⑩: проверочный читатель дочитает ровно до A,
+    значит A прочитана всеми, а B — нет. Свои, а не живые: на свежем контуре живых нет."""
+    con = sqlite3.connect(str(db))
+    ids = []
+    for label in ("A — прочитана всеми", "B — НЕ прочитана проверочным читателем"):
+        con.execute(
+            "INSERT INTO messages (writer_role, timestamp, body_md, tags, priority, resolved) "
+            "VALUES ('PROTO', datetime('now','-30 days'), ?, '[]', 'normal', 0)",
+            (f"{UNREAD_MARKER} {label}",))
+        ids.append(con.execute("SELECT last_insert_rowid()").fetchone()[0])
+    con.commit()
+    con.close()
+    return ids[0], ids[1]
+
+
+def mark_everything_read(db) -> None:
+    """Всем ролям копии — отметку на последнюю записку (см. заголовок, раздел ⑨–⑪)."""
+    con = sqlite3.connect(str(db))
+    con.execute("UPDATE read_cursors SET last_read_id = (SELECT MAX(id) FROM messages_all)")
+    con.commit()
+    con.close()
+
+
+def set_test_reader(db, last_read_id) -> None:
+    """Проверочный читатель: поставить отметку (номер) или убрать строку (None)."""
+    con = sqlite3.connect(str(db))
+    if last_read_id is None:
+        con.execute("DELETE FROM read_cursors WHERE reader_role = ?", (TEST_READER,))
+    else:
+        con.execute("INSERT OR REPLACE INTO read_cursors (reader_role, last_read_id) VALUES (?, ?)",
+                    (TEST_READER, last_read_id))
+    con.commit()
+    con.close()
+
+
+def archive_ids_of(db) -> set:
+    con = sqlite3.connect(str(db))
+    ids = {r[0] for r in con.execute("SELECT id FROM messages_archive")}
+    con.close()
+    return ids
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--porcha", choices=["мерка-с-источником"])
+    ap.add_argument("--porcha", choices=["мерка-с-источником", "без-отметки", "без-самопроверки",
+                                         "условие-по-слову"])
     a = ap.parse_args()
 
     live_tool = mezo_paths.live_scripts(__file__) / "messages-fold.py"
@@ -186,11 +262,24 @@ def main() -> int:
                                  '"SELECT id, writer_role, timestamp, body_md, tags, priority, resolved, source "')
             assert text != before_text, "порча не легла — строка мерки изменилась, поправь приёмку"
             tool.write_text(text, encoding="utf-8")
-            print("🧪 ПОРЧА «мерка-с-источником»: ждём красным РОВНО ② (обратимость), остальные целы\n")
+            print("🧪 ПОРЧА «мерка-с-источником»: ждём провала ② ⑦ ⑨ (стоят на состоявшемся переносе), "
+                  "остальные целы\n")
+        elif a.porcha in ("без-отметки", "без-самопроверки", "условие-по-слову"):
+            line, broken, expect = {
+                "без-отметки": (FILTER_LINE, "        if False:", "⑨"),
+                "без-самопроверки": (SELF_CHECK_LINE, "    unread = {}", "⑩"),
+                "условие-по-слову": (STRICT_LINE, "        elif False:", "⑥б"),
+            }[a.porcha]
+            text = tool.read_text(encoding="utf-8")
+            assert line in text, f"порча не легла — строки «{line.strip()}» нет, поправь приёмку"
+            tool.write_text(text.replace(line, broken), encoding="utf-8")
+            print(f"🧪 ПОРЧА «{a.porcha}»: ждём провала РОВНО {expect}, остальные целы\n")
 
         # 🩹 ДОГОН (карточка #667): своя фикстура ДО первого снимка — входит в оба снимка
         # одинаково, случаям ①/⑧ (неизменность/сохранность) всё равно, кто её завёл.
         seed_fixture(db)
+        a_id, b_id = seed_unread_pair(db)
+        mark_everything_read(db)
 
         before = snapshot(db)
 
@@ -279,6 +368,30 @@ def main() -> int:
              f"код {code6} · отказ назван условием: {'да' if 'условие ①' in output6 else 'НЕТ'}",
              differ=True)
 
+        # ── ⑥б ОДИН запрос мимо вида ⇒ отказ; «FROM messages» в комментарии ⇒ не отказ
+        partial_ok = control_ok = False
+        detail6b = "копии read-broadcasts.py в стенде нет — проверить нечем"
+        if saved_text is not None and "FROM messages_all" in saved_text:
+            blind_copy.write_text(saved_text.replace("FROM messages_all", "FROM messages", 1),
+                                  encoding="utf-8")
+            archive6b = len(archive_ids_of(db))
+            code6b, output6b = call_tool(tool, db, "--apply")
+            moved6b = len(archive_ids_of(db)) - archive6b
+            if moved6b:   # проверка не сработала и перенос прошёл — вернуть, иначе ⑨ мерит не то
+                call_tool(tool, db, "--unfold", "--apply")
+            blind_copy.write_text(saved_text + "\n# FROM messages — только в комментарии, не запрос\n",
+                                  encoding="utf-8")
+            code6c, output6c = call_tool(tool, db)
+            blind_copy.write_text(saved_text, encoding="utf-8")
+            partial_ok = (code6b == 2 and "мимо вида" in output6b and moved6b == 0)
+            control_ok = (code6c == 0 and "✅ условие ①" in output6c)
+            detail6b = (f"один запрос мимо вида: код {code6b}, отказ «мимо вида» "
+                        f"{'назван' if 'мимо вида' in output6b else 'НЕ назван'}, унесено {moved6b} · "
+                        f"слово в комментарии: код {code6c}, условие ① "
+                        f"{'пройдено' if '✅ условие ①' in output6c else 'НЕ пройдено'}")
+        case("⑥б читатель видит архив ЧАСТЬЮ запросов ⇒ отказ; слово в комментарии — не в счёт",
+             partial_ok and control_ok, detail6b, differ=True)
+
         case("⑦ адресаты унесённых: живая таблица теряет, вид видит",
              view_join_count > live_join_count,
              f"через живую таблицу {live_join_count} · через вид {view_join_count} "
@@ -289,6 +402,51 @@ def main() -> int:
              final_snapshot["total"] == before["total"] and final_snapshot["chars"] == before["chars"],
              f"записей {final_snapshot['total']} (было {before['total']}) · "
              f"знаков {final_snapshot['chars']} (было {before['chars']})")
+
+        # ── ⑨ непрочитанное не уносится. После ⑥ архив пуст (возврат выше).
+        set_test_reader(db, a_id)
+        code9, output9 = call_tool(tool, db, "--apply")
+        moved9 = archive_ids_of(db)
+        above9 = sorted(i for i in moved9 if i > a_id)
+        call_tool(tool, db, "--unfold", "--apply")
+        case("⑨ непрочитанное хоть одной ролью не уносится; прочитанное ниже — уносится",
+             code9 == 0 and a_id in moved9 and b_id not in moved9 and not above9
+             and UNREAD_WORD in output9 and TEST_READER in output9,
+             f"код {code9} · проверочный читатель дочитал до #{a_id}: A #{a_id} "
+             f"{'унесена' if a_id in moved9 else 'НЕ унесена'} · B #{b_id} "
+             f"{'УНЕСЕНА' if b_id in moved9 else 'на месте'} · унесено выше отметки: {len(above9)} · "
+             f"«{UNREAD_WORD}» и держащий отметку названы: "
+             f"{'да' if UNREAD_WORD in output9 and TEST_READER in output9 else 'НЕТ'}", differ=True)
+
+        # ── ⑩ самопроверка: копия инструмента со сломанным отбором обязана отказать сама
+        nofilter = stand / "messages-fold-nofilter.py"
+        tool_text = tool.read_text(encoding="utf-8")
+        filter_present = FILTER_LINE in tool_text
+        nofilter.write_text(tool_text.replace(FILTER_LINE, "        if False:"), encoding="utf-8")
+        archive_before10 = len(archive_ids_of(db))
+        code10, output10 = call_tool(nofilter, db, "--apply")
+        moved10 = archive_ids_of(db)
+        if moved10:
+            call_tool(tool, db, "--unfold", "--apply")
+        set_test_reader(db, None)
+        case("⑩ самопроверка по каждой роли ловит непрочитанное, даже если отбор сломан",
+             code10 == 2 and "в отборе есть НЕПРОЧИТАННОЕ" in output10 and TEST_READER in output10
+             and len(moved10) == archive_before10,
+             f"код {code10} · отказ назван: "
+             f"{'да' if 'в отборе есть НЕПРОЧИТАННОЕ' in output10 else 'НЕТ'} · унесено "
+             f"{len(moved10) - archive_before10} (ждали 0)"
+             f"{'' if filter_present or a.porcha == 'без-отметки' else ' · строка отбора не найдена ДОСЛОВНО: если её переписали равносильно — поправь FILTER_LINE в приёмке, инструмент может быть исправен'}"
+             f"{' · отбор в инструменте уже без отметки (порча)' if a.porcha == 'без-отметки' else ''}",
+             differ=True)
+
+        # ── ⑪ контроль: строка самопроверки в холостом прогоне ① (две честные формы)
+        with_marks = "непрочитанных в отборе: 0" in output1 and "держит отметка прочитанного" in output1
+        no_marks = ("отметок прочитанного нет ни у одной роли" in output1
+                    and "непрочитанных в отборе: не проверено" in output1)
+        case("⑪ контроль: холостой прогон печатает самопроверку и кто держит отметку",
+             with_marks or no_marks,
+             f"строка самопроверки: {'есть' if 'непрочитанных в отборе' in output1 else 'НЕТ'} · "
+             f"{'держащий отметку назван' if with_marks else 'отметок нет — сказано «не проверено»' if no_marks else 'держащий отметку НЕ назван'}")
 
         print("")
         print(f"ИТОГ: {GREENS} из {CASES} · различающих {DIFFER}")
