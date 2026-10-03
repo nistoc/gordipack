@@ -98,9 +98,14 @@ def machine_block(db_path, role: str) -> list:
 
     last = None     # нужна и блоку «свои записки после записи памяти», даже если запрос упал
     # ── СВОЙ СЛЕД: последняя записка старше памяти ──────────────────────────
+    # Источник — messages_all, как у части «после записи памяти» ниже (карточка #466, находка
+    # PROTO 03.10): перенос в архив (messages-fold.py) уносит самую новую свою записку, а старую
+    # («жив разговор», срочное) оставляет в ленте — и строка из одной messages назвала бы старую,
+    # потеряв «ОНА НОВЕЕ…», пока строкой ниже стоит правда. Положение в ленте (📬) выше остаётся
+    # по messages: там предмет и есть лента.
     try:
         last = conn.execute(
-            "SELECT id, timestamp FROM messages WHERE writer_role=? ORDER BY id DESC LIMIT 1",
+            "SELECT id, timestamp FROM messages_all WHERE writer_role=? ORDER BY id DESC LIMIT 1",
             (role,)).fetchone()
         newest_sec = conn.execute("SELECT MAX(saved_at) FROM phoenix WHERE role=?",
                                   (role,)).fetchone()[0]

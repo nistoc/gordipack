@@ -50,6 +50,18 @@ def build(msgs, cursor=None, phoenix=(), rules=(), cards=()):
         con.execute("INSERT INTO backlog VALUES (?, 'PROTO', ?, ?, ?)", (cid, title, st, crit))
     con.execute("""CREATE TABLE messages (id INTEGER PRIMARY KEY, writer_role TEXT,
                    timestamp TEXT, body_md TEXT, tags TEXT, priority TEXT)""")
+    # Вид messages_all — как в живой базе: свой след модуль читает через него (карточка #466,
+    # находка PROTO 03.10 — перенос в архив). Без вида случаи ③ ④ проваливались бы на верной
+    # редакции модуля, а не на ошибке. Заготовка вида — PROTO (её черновая папка, acc466).
+    for t in ("messages_history", "messages_archive"):
+        con.execute(f"""CREATE TABLE {t} (id INTEGER PRIMARY KEY, writer_role TEXT,
+                       timestamp TEXT, body_md TEXT, tags TEXT, priority TEXT)""")
+    con.execute("""CREATE VIEW messages_all AS
+        SELECT id, writer_role, timestamp, body_md, tags, priority, 'live' AS source FROM messages
+        UNION ALL
+        SELECT id, writer_role, timestamp, body_md, tags, priority, 'history' AS source FROM messages_history
+        UNION ALL
+        SELECT id, writer_role, timestamp, body_md, tags, priority, 'archive' AS source FROM messages_archive""")
     con.execute("CREATE TABLE read_cursors (reader_role TEXT PRIMARY KEY, last_read_id INTEGER)")
     con.execute("CREATE TABLE phoenix (role TEXT, section TEXT, body TEXT, saved_at TEXT)")
     # 🩸 status — как в живой базе: блок «правила» машинного слоя читает его по карточке #517.
