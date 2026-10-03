@@ -17,6 +17,9 @@
      поломки не держит — находка PROTO 03.10; своя #299 РОВНО в час отметки: без неё не проверялось
      условие по часу в команде — вторая приёмка PROTO 03.10; state подтверждён в час отметки, а plan
      записан позже: без этого не проверялось, ОТКУДА команда берёт час, — третья приёмка PROTO 03.10)
+  ③б то же, но state БЕЗ отметки «правок нет», identity старше, plan свежее — команда от    РАЗЛИЧАЮЩИЙ
+     saved_at state (с отметкой у state подмены «confirmed_at без COALESCE», «MAX(confirmed_at)» и
+     «MIN(COALESCE)» дают тот же час, что верный модуль, — четвёртая приёмка PROTO 03.10)
   ④ отметка «правок нет» после записок — записки до неё не показаны                        РАЗЛИЧАЮЩИЙ
   ⑤ записка, унесённая в архив по возрасту, — показана                                     РАЗЛИЧАЮЩИЙ
   ⑥ чужие записки не показаны                                                              (контроль)
@@ -28,6 +31,11 @@
 без данных; живая открыта только на чтение. Своя схема разошлась бы с живой молча, а вид
 messages_all и есть предмет случая ⑤.
 ⛔ Живую базу не пишет. Команду без --db песочницы (случай ③) НЕ исполняет: она ушла бы в живую.
+
+⚖️ НЕ ЛОВИТ (известно; печатается и в выводе): команда без --limit (предел db-q.py по умолчанию 200,
+своих записок здесь 14) · ORDER BY timestamp в команде (у своих записок номер и час растут вместе) ·
+строка «ПОСЛЕДНЯЯ СВОЯ ЗАПИСКА» меряет «ОНА НОВЕЕ…» самым новым разделом, а блок ниже — отметкой
+state (вне этой приёмки; находка PROTO 03.10, комментарий карточки #466 16:37 UTC).
 """
 import importlib.util
 import re
@@ -175,43 +183,54 @@ def main() -> int:
     # мало: saved_at без confirmed_at он не ловит.
     # ⚖️ Не ловятся (известно): команда без --limit (предел db-q.py по умолчанию 200) и ORDER BY timestamp
     # (у своих записок здесь номер и час растут вместе).
-    own13 =[(300 + k, f"2026-09-14 {8 + k // 6:02d}:{(k % 6) * 10:02d}:30", f"# записка {k}")
-             for k in range(1, 14)]
-    in_archive = own13[1]                                   # #302 — унесена переносом
-    at_mark = (299, MARK, "# своя, ровно в час отметки — не после неё")
-    stand, db = build(ddl, own=[at_mark] + [n for n in own13 if n is not in_archive], archived=[in_archive],
-                      foreign=[(300, "COORD", "2026-09-14 08:05:00", "# чужая, раньше своих по номеру"),
-                               (350, "CORE", "2026-09-14 10:05:00", "# чужая, позже своих по номеру")],
-                      sections=(("state", "2026-09-14 07:00:00", MARK), ("plan", "2026-09-14 09:00:00", None)))
-    text = "\n".join(m.machine_block(db, ROLE))
-    got = listed(text)
-    cmd_line = next((ln.strip() for ln in text.splitlines() if "db-q.py" in ln), "")
-    args = shlex.split(cmd_line) if cmd_line else []
-    has_db = "--db" in args and Path(args[args.index("--db") + 1]).resolve() == db.resolve()
-    ran, detail = False, "команды нет"
-    if cmd_line and not has_db:
-        detail = f"команда БЕЗ --db песочницы — не исполняю (ушла бы в живую базу): {cmd_line[:120]}"
-    elif cmd_line:
-        r = subprocess.run([sys.executable, *args[1:]], capture_output=True, text=True, encoding="utf-8",
-                           env=mezo_stand.stand_env(stand, PYTHONIOENCODING="utf-8"), timeout=60)
-        ids = [int(ln.split("\t")[0]) for ln in r.stdout.splitlines() if ln.split("\t")[0].isdigit()]
-        want = [n for n, _, _ in own13]
-        cut = "ЕСТЬ ЕЩЁ" in (r.stderr or "")
-        ran = r.returncode == 0 and ids == want and not cut
-        extra = sorted(set(ids) - set(want))
-        missing = sorted(set(want) - set(ids))
-        in_order = ids == sorted(ids)
-        detail = (f"код {r.returncode} · команда дала {len(ids)} записок, ждали 13 по порядку · "
-                  f"лишние {extra or 'нет'} · недостающие {missing or 'нет'} · "
-                  f"обрезано пределом: {'ДА' if cut else 'нет'} · порядок: {'верен' if in_order else 'НАРУШЕН'}")
-    in_block = re.search(r"твоих записок (\d+)", text)
-    rest = re.search(r"и ещё (\d+)", text)
-    ok &= case("③ тринадцать — ровно десять строк и «и ещё 3»; команда исполнена как напечатана и дала 13",
-               "твоих записок 13" in text and got == list(range(304, 314)) and "и ещё 3" in text
-               and has_db and ran,
-               f"в блоке: твоих записок {in_block.group(1) if in_block else 'НЕТ строки'} · "
-               f"«и ещё {rest.group(1) if rest else '—'}» · "
-               f"показаны {len(got)}: {got[:1]}…{got[-1:]} · {detail}", differ=True)
+    def check_thirteen(title, sections):
+        own13 = [(300 + k, f"2026-09-14 {8 + k // 6:02d}:{(k % 6) * 10:02d}:30", f"# записка {k}")
+                 for k in range(1, 14)]
+        in_archive = own13[1]                                   # #302 — унесена переносом
+        at_mark = (299, MARK, "# своя, ровно в час отметки — не после неё")
+        stand, db = build(ddl, own=[at_mark] + [n for n in own13 if n is not in_archive], archived=[in_archive],
+                          foreign=[(300, "COORD", "2026-09-14 08:05:00", "# чужая, раньше своих по номеру"),
+                                   (350, "CORE", "2026-09-14 10:05:00", "# чужая, позже своих по номеру")],
+                          sections=sections)
+        text = "\n".join(m.machine_block(db, ROLE))
+        got = listed(text)
+        cmd_line = next((ln.strip() for ln in text.splitlines() if "db-q.py" in ln), "")
+        args = shlex.split(cmd_line) if cmd_line else []
+        has_db = "--db" in args and Path(args[args.index("--db") + 1]).resolve() == db.resolve()
+        ran, detail = False, "команды нет"
+        if cmd_line and not has_db:
+            detail = f"команда БЕЗ --db песочницы — не исполняю (ушла бы в живую базу): {cmd_line[:120]}"
+        elif cmd_line:
+            r = subprocess.run([sys.executable, *args[1:]], capture_output=True, text=True, encoding="utf-8",
+                               env=mezo_stand.stand_env(stand, PYTHONIOENCODING="utf-8"), timeout=60)
+            ids = [int(ln.split("\t")[0]) for ln in r.stdout.splitlines() if ln.split("\t")[0].isdigit()]
+            want = [n for n, _, _ in own13]
+            cut = "ЕСТЬ ЕЩЁ" in (r.stderr or "")
+            ran = r.returncode == 0 and ids == want and not cut
+            extra = sorted(set(ids) - set(want))
+            missing = sorted(set(want) - set(ids))
+            in_order = ids == sorted(ids)
+            detail = (f"код {r.returncode} · команда дала {len(ids)} записок, ждали 13 по порядку · "
+                      f"лишние {extra or 'нет'} · недостающие {missing or 'нет'} · "
+                      f"обрезано пределом: {'ДА' if cut else 'нет'} · порядок: {'верен' if in_order else 'НАРУШЕН'}")
+        in_block = re.search(r"твоих записок (\d+)", text)
+        rest = re.search(r"и ещё (\d+)", text)
+        return case(title,
+                    "твоих записок 13" in text and got == list(range(304, 314)) and "и ещё 3" in text
+                    and has_db and ran,
+                    f"в блоке: твоих записок {in_block.group(1) if in_block else 'НЕТ строки'} · "
+                    f"«и ещё {rest.group(1) if rest else '—'}» · "
+                    f"показаны {len(got)}: {got[:1]}…{got[-1:]} · {detail}", differ=True)
+
+    ok &= check_thirteen("③ тринадцать — ровно десять строк и «и ещё 3»; команда исполнена как напечатана и дала 13",
+                         (("state", "2026-09-14 07:00:00", MARK), ("plan", "2026-09-14 09:00:00", None)))
+    # 🩸 Четвёртая приёмка PROTO 03.10 (комментарий карточки #466 21:05 UTC): с отметкой у state подмены
+    # «confirmed_at без COALESCE», «MAX(confirmed_at)» и «MIN(COALESCE)» дают тот же час, что верный модуль, —
+    # данные ③ закрыли одну дыру и открыли две, которые прежняя приёмка ловила. ③б — роль без отметки «правок
+    # нет»: confirmed_at пуст, identity старше, plan свежее; команда обязана взять saved_at state.
+    ok &= check_thirteen("③б то же, но state без отметки «правок нет», identity старше, plan свежее — команда от saved_at state",
+                         (("identity", "2026-09-14 07:00:00", None), ("state", MARK, None),
+                          ("plan", "2026-09-14 09:00:00", None)))
 
     # ④ отметка «правок нет» после двух записок — показана только третья
     _, db = build(ddl, own=[(401, "2026-09-14 08:10:00", "# до взгляда 1"),
@@ -271,6 +290,8 @@ def main() -> int:
                differ=True)
 
     print()
+    print("   ⚖️ не ловит (известно): команда без --limit · ORDER BY timestamp в команде · «ПОСЛЕДНЯЯ СВОЯ ЗАПИСКА»")
+    print("      меряет «ОНА НОВЕЕ…» самым новым разделом, а блок — отметкой state (вне этой приёмки)")
     print(f"   схема песочницы — из {live.as_posix()} (только определения, без данных)")
     print(f"{'✅ СВОИ ЗАПИСКИ ПОСЛЕ ПАМЯТИ ВОЗВРАЩАЮТСЯ' if ok else '🔴 СВОИ ЗАПИСКИ ПОСЛЕ ПАМЯТИ НЕ ВОЗВРАЩАЮТСЯ'}"
           f" — случаев {CASES}, различающих {DIFFER}, испытан {mezo_target.label()}")
