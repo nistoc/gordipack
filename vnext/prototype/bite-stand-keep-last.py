@@ -4,7 +4,8 @@ bite-stand-keep-last.py — приёмка: mezo_stand.py хранит при п
 прогона того же вызова приёмки (карточка #657, пункт (3); слово владельца «Б1» 02.10.2026 23:47 UTC,
 чат OPSSRE; план и два дополнения — комментарии карточки, согласованы с PROTO записками #5422 и #5437;
 доделка по возврату PROTO 03.10 01:38 UTC, записка #5452 — случаи ③б ⑤б ⑩б ⑬–㉖; по второму возврату
-02:39 UTC, записка #5459 — ⑤в ⑮б ⑲б ㉗–㉙ и вложенные вызовы).
+02:39 UTC, записка #5459 — ⑤в ⑮б ⑲б ㉗–㉙ и вложенные вызовы; по семи мелочам третьей приёмки 03:56 UTC —
+⑮в ㉚–㉟, а ① теперь ждёт счёт убранных В строке «СОХРАНЕНЫ»).
 
 Проверяет ЗАПУСКОМ: поднимает подставные скрипты, которые заводят стенды помощником и кончаются
 как велено, и смотрит, что осталось на диске. Стенды подставных скриптов ложатся в песочницу
@@ -42,6 +43,7 @@ SAID_KEPT = "стенды прежних неудачных прогонов э�
 SAID_BUSY = "занято, не тронуто:"
 SAID_ANY_PRUNE = "этого вызова убрано"
 SAID_OWN = "убрано временных каталогов:"
+SAID_NESTED = "лежат внутри стенда вызывающего прогона"
 
 _EARLY_MARKER = ("    _prefixes.add(prefix)\n"
                  "    _offer_home(p)\n"
@@ -76,6 +78,18 @@ BREAKS = {
                             "    if _CALL_KEY is None:"),
                            ("    group = _KIND_GROUPS[kind]",
                             "    group = _KIND_GROUPS.get(kind, \"failed\")")],
+    "joined-not-resolved": [('    if arg.startswith("-") and "=" in arg:',
+                             "    if False:")],
+    "no-vanish-check": [("    if _home is not None and not os.path.isdir(_home):",
+                         "    if False:")],
+    "nested-says-inspect": [("        if _home is not None:",
+                             "        if False:")],
+    "resolve-at-import": [("_CALL_KEY = _call_key()\n",
+                           "_CALL_KEY = _call_key()\n_resolve_home()\n")],
+    "race-as-busy": [("        except FileNotFoundError:\n            continue\n        except OSError:",
+                      "        except OSError:")],
+    "keep-env-counted": [("        previous = _previous_kept(_CALL_KEY, set(_KIND_GROUPS), before=None)",
+                          "        previous = _previous_kept(_CALL_KEY, set(_KIND_GROUPS) | {_KIND_KEEP_ENV}, before=None)")],
     "no-prune": [("    removed, busy, partial = _remove_previous(_previous_kept(_CALL_KEY, kinds, before=_RUN_STARTED))",
                   "    removed, busy, partial = 0, [], []")],
     "kinds-mixed": [("    kinds = {k for k, g in _KIND_GROUPS.items() if g == group}",
@@ -95,10 +109,10 @@ BREAKS = {
                            "        pass")],
     "zero-line": [("    if removed or busy or partial:",
                    "    if True:")],
-    "prune-after-saved": [("        _prune_for_keep()\n",
-                           ""),
-                          ("        _mark_kept(why)",
-                           "        _prune_for_keep()\n        _mark_kept(why)")],
+    # счёт убранных — отдельной строкой до «СОХРАНЕНЫ», как во второй редакции
+    "prune-own-line": [('        print(f"\\n📂 Временные рабочие каталоги СОХРАНЕНЫ ({why}) — всего {len(_stands)}{pruned}:")',
+                        '        print("🧹" + pruned.lstrip(" ·")) if pruned else None\n'
+                        '        print(f"\\n📂 Временные рабочие каталоги СОХРАНЕНЫ ({why}) — всего {len(_stands)}:")')],
     "refuse-as-fail": [('        return "прогон отказался мерить" if _exit_code == 2 else "прогон провалился"',
                         '        return "прогон провалился"')],
     "break-ignored": [("    _expected_break = True",
@@ -116,34 +130,41 @@ BREAKS = {
 BREAK_FAILS = {
     "name-key": ["③"],
     "dir-key": ["③б"],
-    "args-ignored": ["⑪", "⑬", "⑮"],
-    "args-not-resolved": ["⑮"],
+    "args-ignored": ["⑪", "⑬", "⑮", "⑮в"],
+    "args-not-resolved": ["⑮", "⑮в"],
     "root-ignored": ["⑭"],
     "cwd-in-key": ["⑮б"],
     "no-marker-check": ["④", "⑲"],
-    "keep-env-pruned": ["⑤"],
+    "keep-env-pruned": ["⑤", "㉟"],
     "keepenv-run-prunes": ["⑤б"],
-    "no-prune": ["①", "②", "⑦", "⑨", "⑬", "⑭", "⑮б", "㉑", "㉒", "㉔"],
+    "joined-not-resolved": ["⑮в"],
+    "no-vanish-check": ["㉚", "㉜"],
+    "nested-says-inspect": ["㉛"],
+    "resolve-at-import": ["㉝"],
+    "race-as-busy": ["㉞"],
+    "keep-env-counted": ["㉟"],
+    "no-prune": ["①", "②", "⑦", "⑨", "⑬", "⑭", "⑮б", "⑮в", "㉑", "㉒", "㉔"],
     "kinds-mixed": ["⑥", "⑯", "⑰", "⑱"],
     "start-ignored": ["⑳"],
     "marker-at-new": ["⑲"],
     "marker-at-new-undeclared": ["⑲", "⑲б"],
     "no-stand-check": ["㉒"],
     "links-followed": ["㉓"],
-    "no-rename-probe": ["㉑"],
+    "no-rename-probe": ["㉑", "㉞"],
     "release-no-prefix": ["㉔"],
     "zero-line": ["③", "④", "㉓"],
-    "prune-after-saved": ["①"],
+    "prune-own-line": ["①"],
     "refuse-as-fail": ["⑨"],
     "break-ignored": ["⑩", "⑩б"],
     "break-any-code": ["㉕"],
     "success-silent": ["⑥"],
-    "no-home": ["㉗", "㉙"],
-    "home-ignores-temp": ["㉘"],
+    # ㉚ дописан ПОСЛЕ прогона 03.10 14:21 UTC: прогноз не учёл, что ㉚ требует первый стенд внутри дома
+    "no-home": ["㉗", "㉙", "㉚"],
+    "home-ignores-temp": ["㉘", "㉝"],
 }
 CASE_IDS = ["①", "②", "③", "③б", "④", "⑤", "⑤б", "⑤в", "⑥", "⑦", "⑧", "⑨", "⑩", "⑩б", "⑪", "⑫",
-            "⑬", "⑭", "⑮", "⑮б", "⑯", "⑰", "⑱", "⑲", "⑲б", "⑳", "㉑", "㉒", "㉓", "㉔", "㉕", "㉖",
-            "㉗", "㉘", "㉙"]
+            "⑬", "⑭", "⑮", "⑮б", "⑮в", "⑯", "⑰", "⑱", "⑲", "⑲б", "⑳", "㉑", "㉒", "㉓", "㉔", "㉕", "㉖",
+            "㉗", "㉘", "㉙", "㉚", "㉛", "㉜", "㉝", "㉞", "㉟"]
 
 OUTCOMES = {
     "ok": ["sys.exit(mezo_stand.finish(0))"],
@@ -187,6 +208,44 @@ p = subprocess.run([sys.executable, str(Path(__file__).with_name('inner.py')), s
 print(p.stdout + p.stderr, flush=True)
 sys.exit(mezo_stand.finish(0 if sys.argv[1] == 'ok' else 1))
 """ % PREFIX_OUT
+
+# ㉚ дом исчезает посреди прогона: первый стенд лёг внутрь дома, дом убран, второй new()
+VANISH_CODE = """# -*- coding: utf-8 -*-
+import os
+import shutil
+import sys
+import mezo_stand
+r = mezo_stand.new(%r)
+print('STAND=' + str(r), flush=True)
+shutil.rmtree(os.environ['MEZO_STAND_HOME'])
+r = mezo_stand.new(%r)
+(r / 'data.txt').write_text('x', encoding='utf-8')
+print('STAND=' + str(r), flush=True)
+sys.exit(mezo_stand.finish(1))
+""" % (PREFIX, PREFIX)
+# ㉝ временную папку сменили ПОСЛЕ import mezo_stand и до первого стенда
+RETMP_CODE = """# -*- coding: utf-8 -*-
+import os
+import sys
+import mezo_stand
+other = os.environ['PROBE_OTHER_TMP']
+for name in ('TMP', 'TEMP', 'TMPDIR'):
+    os.environ[name] = other
+r = mezo_stand.new(%r)
+print('STAND=' + str(r), flush=True)
+sys.exit(mezo_stand.finish(1))
+""" % PREFIX
+# ㉞ гонка уборщиков: каталог прежнего прогона исчез до пробного переименования
+RACE_CODE = """# -*- coding: utf-8 -*-
+import os
+import sys
+from pathlib import Path
+import mezo_stand
+gone = Path(os.environ['TMP']) / (%r + 'gone0000')
+removed, busy, partial = mezo_stand._remove_previous([gone])
+print(f'RACE removed={removed} busy={len(busy)} partial={len(partial)}', flush=True)
+sys.exit(mezo_stand.finish(0))
+""" % PREFIX
 
 RESULTS: list[tuple[str, bool]] = []
 
@@ -356,15 +415,18 @@ def apply_break(helper: Path, name: str, dest: Path) -> Path:
 
 def run_cases(root: Path, helper: Path) -> None:
     # ① ВСТРЕЧНЫЙ ИЗ КРИТЕРИЯ КАРТОЧКИ: два провала подряд → остаются стенды только второго;
-    #    строка уборки — ДО списка сохранённых (иначе вытесняет итог из хвоста bite-all)
+    #    счёт убранных — В строке «СОХРАНЕНЫ», отдельной строки нет: она вытесняла итог приёмки из
+    #    хвоста bite-all (мелочь третьей приёмки PROTO)
     lab = Lab(root, "c1", helper)
     (s1,), _, _ = lab.run("fail")
     (s2,), out2, _ = lab.run("fail")
-    order_ok = SAID_FAIL in out2 and "СОХРАНЕНЫ" in out2 and out2.index(SAID_FAIL) < out2.index("СОХРАНЕНЫ")
-    case("①", "два провала одного вызова подряд — остаются стенды только второго, строка уборки до списка сохранённых",
-         not s1.exists() and s2.exists() and marker_kind(s2) == "failed" and said(out2, SAID_FAIL, 1) and order_ok,
+    head = next((ln for ln in out2.splitlines() if "СОХРАНЕНЫ" in ln), "")
+    prune_lines = [ln for ln in out2.splitlines() if SAID_ANY_PRUNE in ln]
+    in_head = said(head, SAID_FAIL, 1) and len(prune_lines) == 1
+    case("①", "два провала одного вызова подряд — остаются стенды только второго, счёт убранных в строке «СОХРАНЕНЫ»",
+         not s1.exists() and s2.exists() and marker_kind(s2) == "failed" and in_head,
          f"первый на месте: {s1.exists()} · второй на месте: {s2.exists()} · метка второго: {marker_kind(s2)} · "
-         f"строка «убрано: 1»: {said(out2, SAID_FAIL, 1)} · раньше списка сохранённых: {order_ok}")
+         f"«убрано: 1» в строке «СОХРАНЕНЫ»: {said(head, SAID_FAIL, 1)} · строк со счётом уборки: {len(prune_lines)}")
 
     # ② два начала имён в одном прогоне — второй провал убирает оба стенда первого
     lab = Lab(root, "c2", helper)
@@ -548,6 +610,22 @@ def run_cases(root: Path, helper: Path) -> None:
          not s1.exists() and s2.exists() and said(out2, SAID_FAIL, 1),
          f"первый убран: {not s1.exists()} · второй на месте: {s2.exists()}")
 
+    # ⑮в слитная форма «--helper=arg.txt»: из разных каталогов — разные файлы, разные вызовы;
+    #     снова из первого — тот же файл, тот же вызов (мелочь третьей приёмки PROTO)
+    lab = Lab(root, "c15c", helper)
+    cwd1, cwd2 = lab.base / "cwd-1", lab.base / "cwd-2"
+    for d, text in ((cwd1, "a"), (cwd2, "b")):
+        d.mkdir()
+        (d / "arg.txt").write_text(text, encoding="utf-8")
+    (s1,), _, _ = lab.run("fail", args=("--helper=arg.txt",), cwd=cwd1)
+    (s2,), _, _ = lab.run("fail", args=("--helper=arg.txt",), cwd=cwd2)
+    both = s1.exists() and s2.exists()
+    (s3,), _, _ = lab.run("fail", args=("--helper=arg.txt",), cwd=cwd1)
+    case("⑮в", "слитная форма «--helper=arg.txt»: разные файлы — оба провала целы; тот же файл — прежний убран",
+         both and not s1.exists() and s2.exists() and s3.exists(),
+         f"после второго каталога оба на месте: {both} · первый убран третьим (тот же файл): {not s1.exists()} · "
+         f"второй на месте: {s2.exists()}")
+
     # ⑯ П2: провал, затем отказ мерить — провал цел (отказ доказывает меньше провала)
     lab = Lab(root, "c16", helper)
     (s1,), _, _ = lab.run("fail")
@@ -703,6 +781,77 @@ def run_cases(root: Path, helper: Path) -> None:
     case("㉙", "внешний провалился — вложенный стенд сохранён внутри его стенда",
          rc == 1 and kept,
          f"код внешнего {rc} · внешний и вложенный на месте, вложенный внутри: {kept}")
+
+    # ── мелочи третьей приёмки PROTO (комментарий карточки 03.10 03:56 UTC) ──
+    # ㉚ дом исчез посреди прогона (вызывающий оборвался, его стенд убран): второй new() не падает,
+    #    стенд ложится на верхний уровень временной папки
+    lab = Lab(root, "c30", helper)
+    home = lab.base / "home"
+    home.mkdir()
+    probe = lab.put("host-a", "probe.py", VANISH_CODE)
+    out, rc = lab.execute(probe, env_extra={"MEZO_STAND_HOME": str(home), "MEZO_STAND_HOME_TEMP": str(lab.tmp)})
+    st = stands_of(out)
+    first_in_home = len(st) > 0 and real(st[0].parent) == real(home)
+    second_top = len(st) > 1 and st[1].exists() and real(st[1].parent) == real(lab.tmp)
+    case("㉚", "дом исчез посреди прогона — второй стенд на верхнем уровне временной папки, без падения",
+         rc == 1 and first_in_home and second_top and "Traceback" not in out,
+         f"код {rc} · первый был в доме: {first_in_home} · второй на верхнем уровне: {second_top} · "
+         f"падение: {'ДА' if 'Traceback' in out else 'нет'}")
+
+    # ㉛ вложенный провал под прошедшим внешним: вложенный говорит, что его стенд внутри стенда
+    #    вызывающего и уйдёт с ним, — «Осмотрите» не обещает
+    lab = Lab(root, "c31", helper)
+    lab.put("host-n", "inner.py", INNER_CODE)
+    outer = lab.put("host-n", "outer.py", OUTER_CODE)
+    out, rc = lab.execute(outer, ("ok",))
+    case("㉛", "вложенный провал под прошедшим внешним — назван «внутри стенда вызывающего», «Осмотрите» нет",
+         rc == 0 and SAID_NESTED in out and "Осмотрите" not in out,
+         f"код внешнего {rc} · «внутри стенда вызывающего»: {SAID_NESTED in out} · "
+         f"«Осмотрите»: {'есть' if 'Осмотрите' in out else 'нет'}")
+
+    # ㉜ дом назван, но его нет с самого начала — стенд на верхнем уровне, без падения
+    lab = Lab(root, "c32", helper)
+    st, out, rc = lab.run("fail", env_extra={"MEZO_STAND_HOME": str(lab.base / "no-such-home"),
+                                             "MEZO_STAND_HOME_TEMP": str(lab.tmp)})
+    top = len(st) == 1 and st[0].exists() and real(st[0].parent) == real(lab.tmp)
+    case("㉜", "дома нет с самого начала — стенд на верхнем уровне временной папки, без падения",
+         rc == 1 and top and "Traceback" not in out,
+         f"код {rc} · стенд на верхнем уровне: {top} · падение: {'ДА' if 'Traceback' in out else 'нет'}")
+
+    # ㉝ временную папку сменили после import mezo_stand — дом решается при первом стенде, а не при
+    #    загрузке: стенд в новой папке, не внутри дома
+    lab = Lab(root, "c33", helper)
+    home = lab.base / "home"
+    other = lab.base / "other-tmp"
+    home.mkdir()
+    other.mkdir()
+    probe = lab.put("host-a", "probe.py", RETMP_CODE)
+    out, rc = lab.execute(probe, env_extra={"MEZO_STAND_HOME": str(home), "MEZO_STAND_HOME_TEMP": str(lab.tmp),
+                                            "PROBE_OTHER_TMP": str(other)})
+    st = stands_of(out)
+    in_other = len(st) == 1 and real(st[0].parent) == real(other)
+    case("㉝", "временную папку сменили после import — стенд в новой папке, а не внутри дома",
+         rc == 1 and in_other,
+         f"код {rc} · стенд в новой временной папке: {in_other} · "
+         f"внутри дома: {len(st) == 1 and real(st[0].parent) == real(home)}")
+
+    # ㉞ гонка уборщиков: каталог прежнего прогона исчез до переименования — это не «занято»
+    lab = Lab(root, "c34", helper)
+    probe = lab.put("host-a", "probe.py", RACE_CODE)
+    out, rc = lab.execute(probe)
+    race_ok = "RACE removed=0 busy=0 partial=0" in out
+    case("㉞", "каталог исчез до переименования (гонка уборщиков) — не назван ни «занято», ни «не до конца»",
+         rc == 0 and race_ok,
+         f"код {rc} · {next((ln for ln in out.splitlines() if ln.startswith('RACE')), 'строки RACE нет')}")
+
+    # ㉟ сохранённое по MEZO_KEEP_STANDS, затем успех — строки «сохранены» нет: это не неудачный прогон
+    lab = Lab(root, "c35", helper)
+    (s1,), _, _ = lab.run("fail", env_extra={"MEZO_KEEP_STANDS": "1"})
+    own, out2, rc = lab.run("ok")
+    case("㉟", "сохранённое по MEZO_KEEP_STANDS, затем успех — строки «сохранены» нет, свой стенд убран",
+         s1.exists() and rc == 0 and SAID_KEPT not in out2 and len(own) == 1 and not own[0].exists(),
+         f"код {rc} · сохранённое на месте: {s1.exists()} · строка «сохранены»: "
+         f"{'есть' if SAID_KEPT in out2 else 'нет'} · свой убран: {len(own) == 1 and not own[0].exists()}")
 
 
 def main() -> int:
