@@ -541,17 +541,18 @@ def main() -> int:
         stub = stand / STUB_REL
         stub.parent.mkdir(parents=True, exist_ok=True)
         stub.write_text(f"print({STUB_LINE!r})\n", encoding="utf-8")
-        env = mezo_stand.stand_env(stand, PYTHONIOENCODING="utf-8")
-        # Показ подсказки засчитывается роли из MEZO_ROLE вызывающего, если она задана (кто_читает);
-        # убираем, чтобы ⑩ мерил отметку показа подставной роли, а не той, что зовёт приёмку.
-        env.pop("MEZO_ROLE", None)
-
         def run(script: Path, role: str, *extra, full: bool = True, with_db: bool = True):
+            # Среда закреплена за стендом ЗДЕСЬ, у самого вызова: check-acceptance-env.py
+            # прослеживает переменную только внутри функции вызова, внешняя ей не видна.
+            run_env = mezo_stand.stand_env(stand, PYTHONIOENCODING="utf-8")
+            # Показ подсказки засчитывается роли из MEZO_ROLE вызывающего, если она задана (кто_читает);
+            # убираем, чтобы ⑩ мерил отметку показа подставной роли, а не той, что зовёт приёмку.
+            run_env.pop("MEZO_ROLE", None)
             r = subprocess.run([sys.executable, "-B", str(script),
                                 *(["--db", str(db)] if with_db else []),
                                 "--role", role, *(["--full"] if full else []), *extra],
                                capture_output=True, text=True, encoding="utf-8",
-                               timeout=180, env=env)
+                               timeout=180, env=run_env)
             return r.stdout or "", r.stderr or "", r.returncode
 
         def head(key):

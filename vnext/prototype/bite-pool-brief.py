@@ -240,7 +240,7 @@ if len(l9) == 1 and named_tools_exist(l9[0]):
     cmd9 = re.findall(r"python (\S+\.py)", l9[0])[0]
     p9 = subprocess.run([sys.executable, cmd9, "--key", VIEWER_RULE, "--show", "--db", str(db9)],
                         capture_output=True, text=True, encoding="utf-8", errors="replace",
-                        env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+                        env=mezo_stand.stand_env(stand, PYTHONIOENCODING="utf-8"))
     show9 = (p9.stdout or "") + (p9.stderr or "")
 case("⑨ правило действует → ОДНА строка «ПЕРИСКОП» со ссылкой на правило, и ссылка ведёт к нему",
      rc9 == 0 and len(l9) == 1 and f"set-rule.py --key {VIEWER_RULE} --show" in l9[0]
