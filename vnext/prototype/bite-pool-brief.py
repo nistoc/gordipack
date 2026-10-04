@@ -21,8 +21,20 @@ bite-pool-brief.py — приёмка захода 2.1 + П⑥: собираем
      РАЗНИЦЕЙ числа, не абсолютным «активных 0» — иначе контур без единого
      активного набора красил бы ложно при каждом прогоне (карточка #667, см. ниже
      у самого случая: сверено чтением, что role-brief.py тут ни при чём)
+  ⑨ строка о службе просмотра базы (слово владельца 2026-10-04 07:38 UTC, чат PROTO):
+     правило periscope-viewer действует → ОДНА строка «ПЕРИСКОП» со ссылкой
+     «set-rule.py --key periscope-viewer --show»
+  ⑨-бис ВСТРЕЧНЫЙ: правила в своде НЕТ → строка ведёт в ПАКЕТ («rules-from-pack.py
+     --show periscope-viewer»), ссылки на set-rule.py нет — она отдала бы отказ
+  ⑨-тер правило СНЯТО → строка «снято» с пометкой о снятии, ссылки на пакет нет
+  Р1 нарочная поломка (копия role-brief.py в стенде): раздел не спрашивает свод и всегда
+     печатает ссылку на правило → ⑨-бис на копии обязан провалиться ПО СВОЕЙ причине
+     (строка есть и зовёт set-rule.py к отсутствующему ключу)
+  Р2 нарочная поломка: раздел «просмотр базы» не вызывается → ⑨ на копии обязан
+     провалиться (строки нет)
 """
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -73,13 +85,57 @@ def case(name, cond, detail=""):
     OK, FAIL = OK + (1 if cond else 0), FAIL + (0 if cond else 1)
 
 
-def brief(db, role):
+def brief(db, role, tool=None):
+    """tool — копия испытуемого с нарочной поломкой (лежит в стенде): её соседей
+    (mezo_paths, mezo_hints) берём из каталога испытуемого через PYTHONPATH."""
     env = dict(os.environ, PYTHONIOENCODING="utf-8")
-    p = subprocess.run([sys.executable, str(ИСПЫТУЕМЫЙ),
+    if tool is not None:
+        env["PYTHONPATH"] = str(Path(ИСПЫТУЕМЫЙ).parent)
+    p = subprocess.run([sys.executable, str(tool or ИСПЫТУЕМЫЙ),
                         "--role", role, "--db", str(db)],
                        capture_output=True, text=True, encoding="utf-8",
                        errors="replace", env=env)
     return p.returncode, (p.stdout or "") + (p.stderr or "")
+
+
+def broken_copy(out_dir, name, anchor, replacement):
+    """Копия испытуемого с нарочной поломкой. Якорь обязан найтись РОВНО один раз —
+    иначе «ПРИЁМКА НЕ СОСТОЯЛАСЬ», а не поломка мимо цели. Окончания строк якоря —
+    как у самого файла (копия из клона пакета бывает с CRLF, карточка #667)."""
+    text = Path(ИСПЫТУЕМЫЙ).read_bytes().decode("utf-8")
+    if "\r\n" in text:
+        anchor = anchor.replace("\r\n", "\n").replace("\n", "\r\n")
+        replacement = replacement.replace("\r\n", "\n").replace("\n", "\r\n")
+    if text.count(anchor) != 1:
+        raise SystemExit(f"ПРИЁМКА НЕ СОСТОЯЛАСЬ: якорь поломки {name} найден "
+                         f"{text.count(anchor)} раз в role-brief.py (нужен ровно 1)")
+    path = Path(out_dir) / f"role-brief-{name}.py"
+    path.write_bytes(text.replace(anchor, replacement).encode("utf-8"))
+    return path
+
+
+VIEWER_RULE = "periscope-viewer"
+VIEWER_PROBE_BODY = "проба сводки: правило о службе просмотра базы"
+
+
+def set_viewer_rule(path, state):
+    """Состояние правила periscope-viewer на КОПИИ базы стенда:
+    'active' · 'revoked' · 'absent'. Тело — подставное, со своей приметой для суда ⑧."""
+    con = sqlite3.connect(str(path))
+    con.execute("DELETE FROM rules WHERE rule_key=?", (VIEWER_RULE,))
+    if state != "absent":
+        con.execute("INSERT INTO rules (rule_key, body, locked_by, version) VALUES (?,?,?,1)",
+                    (VIEWER_RULE, VIEWER_PROBE_BODY, "coord"))
+    if state == "revoked":
+        con.execute("UPDATE rules SET status='revoked', revoked_at='2026-10-04 08:00 UTC', "
+                    "revoked_by='owner', revoked_reason='проба сводки: снято' "
+                    "WHERE rule_key=?", (VIEWER_RULE,))
+    con.commit()
+    con.close()
+
+
+def viewer_lines(out):
+    return [line for line in out.splitlines() if "ПЕРИСКОП" in line]
 
 
 stand = mezo_stand.new("pool-brief-")
@@ -159,6 +215,87 @@ for tbl, метка in [("role_rights", "права"), ("role_skill", "умен�
 rc7, out7 = brief(stand / "нет-такой.db", "ZZB")
 case("⑦ базы нет → «НАКАЗ НЕ СОБРАН», не пустой наказ", rc7 != 0 and "НЕ СОБРАН" in out7)
 
+# ═══ ⑨ СТРОКА О СЛУЖБЕ ПРОСМОТРА БАЗЫ (слово владельца 2026-10-04 07:38 UTC, чат PROTO:
+# «реализовать правила в своде пакета плюс строка в стартовой сводке»). Три исхода — три
+# РАЗНЫЕ строки, и каждый суд требует то, чего у соседнего исхода нет: иначе зелень одного
+# ничего не говорит о другом. Правило ставится и снимается в ТОЙ ЖЕ копии стенда (db): суды
+# на копии до этого места его не читают, а лишняя копия базы стоила бы стенду ещё ~80 МБ.
+# ⚖️ Ссылка обязана вести к правилу, а не к отказу: в ⑨ названная строкой команда ЗАПУСКАЕТСЯ
+# на той же копии и обязана напечатать подставное тело (класс карточки #124 — обещанный
+# вызов, которого нет; класс карточки #647 — подсказка «--key X --show» к отсутствующему
+# ключу). Файл каждой названной команды обязан существовать.
+db9 = db
+
+
+def named_tools_exist(line):
+    paths = re.findall(r"python (\S+\.py)", line)
+    return bool(paths) and all(Path(p).exists() for p in paths)
+
+
+set_viewer_rule(db9, "active")
+rc9, out9 = brief(db9, "ZZB")
+l9 = viewer_lines(out9)
+show9 = ""
+if len(l9) == 1 and named_tools_exist(l9[0]):
+    cmd9 = re.findall(r"python (\S+\.py)", l9[0])[0]
+    p9 = subprocess.run([sys.executable, cmd9, "--key", VIEWER_RULE, "--show", "--db", str(db9)],
+                        capture_output=True, text=True, encoding="utf-8", errors="replace",
+                        env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+    show9 = (p9.stdout or "") + (p9.stderr or "")
+case("⑨ правило действует → ОДНА строка «ПЕРИСКОП» со ссылкой на правило, и ссылка ведёт к нему",
+     rc9 == 0 and len(l9) == 1 and f"set-rule.py --key {VIEWER_RULE} --show" in l9[0]
+     and "только чтение" in l9[0] and "rules-from-pack.py" not in l9[0]
+     and named_tools_exist(l9[0]) and VIEWER_PROBE_BODY in show9,
+     f"строк «ПЕРИСКОП»: {len(l9)} (ждём 1) · {l9[0][:150] if l9 else 'СТРОКИ НЕТ'} · "
+     f"названная команда напечатала тело правила: {VIEWER_PROBE_BODY in show9}")
+
+set_viewer_rule(db9, "absent")
+rc9b, out9b = brief(db9, "ZZB")
+l9b = viewer_lines(out9b)
+case("⑨-бис ВСТРЕЧНЫЙ: правила в своде НЕТ → строка ведёт в пакет, к set-rule.py не зовёт",
+     rc9b == 0 and len(l9b) == 1 and f"rules-from-pack.py --show {VIEWER_RULE}" in l9b[0]
+     and f"--key {VIEWER_RULE}" not in l9b[0] and named_tools_exist(l9b[0]),
+     f"строк «ПЕРИСКОП»: {len(l9b)} (ждём 1) · {l9b[0][:150] if l9b else 'СТРОКИ НЕТ'}")
+
+set_viewer_rule(db9, "revoked")
+rc9c, out9c = brief(db9, "ZZB")
+l9c = viewer_lines(out9c)
+case("⑨-тер правило СНЯТО → строка «снято» с пометкой о снятии, в пакет не зовёт",
+     rc9c == 0 and len(l9c) == 1 and "снято" in l9c[0]
+     and f"set-rule.py --key {VIEWER_RULE} --show" in l9c[0] and "rules-from-pack.py" not in l9c[0],
+     f"строк «ПЕРИСКОП»: {len(l9c)} (ждём 1) · {l9c[0][:150] if l9c else 'СТРОКИ НЕТ'}")
+
+# ── нарочные поломки на КОПИЯХ испытуемого в стенде: каждая обязана уронить РОВНО свой суд ──
+# Р1 — поломка, какой она была бы в жизни: раздел перестаёт спрашивать свод и всегда
+# печатает ссылку на правило (как соседний раздел ответов владельцу). Суд требует, чтобы
+# ⑨-бис пал ПО СВОЕЙ ПРИЧИНЕ — строка есть и зовёт set-rule.py к отсутствующему ключу, — а
+# не оттого, что раздел упал и строки нет вовсе (первая редакция поломки роняла раздел
+# ошибкой, и суд был зелёным не по своей причине).
+tool_r1 = broken_copy(stand, "r1",
+                      "        st = conn.execute(\n"
+                      "            \"SELECT status FROM rules WHERE rule_key='periscope-viewer'\").fetchone()\n",
+                      "        st = (\"active\",)\n")
+set_viewer_rule(db9, "absent")
+_, out_r1 = brief(db9, "ZZB", tool=tool_r1)
+l_r1 = viewer_lines(out_r1)
+r1_would_pass = (len(l_r1) == 1 and f"rules-from-pack.py --show {VIEWER_RULE}" in l_r1[0]
+                 and f"--key {VIEWER_RULE}" not in l_r1[0])
+case("Р1 поломка «раздел не спрашивает свод» поймана: ⑨-бис на копии пал ПО СВОЕЙ причине "
+     "(строка зовёт set-rule.py к отсутствующему ключу)",
+     not r1_would_pass and len(l_r1) == 1 and f"set-rule.py --key {VIEWER_RULE}" in l_r1[0],
+     f"под поломкой строка: {l_r1[0][:150] if l_r1 else 'СТРОКИ НЕТ'}")
+
+tool_r2 = broken_copy(stand, "r2", "    section(\"просмотр базы\", periscope_view, out)\n",
+                      "    pass\n")
+set_viewer_rule(db9, "active")
+rc_r2, out_r2 = brief(db9, "ZZB", tool=tool_r2)
+l_r2 = viewer_lines(out_r2)
+r2_would_pass = len(l_r2) == 1 and f"set-rule.py --key {VIEWER_RULE} --show" in l_r2[0]
+case("Р2 поломка «раздел не вызывается» поймана: суд ⑨ на копии проваливается (строки нет, "
+     "сводка при этом собралась без ошибок)",
+     rc_r2 == 0 and not r2_would_pass and not l_r2 and "НЕ ПРОЧИТАН" not in out_r2,
+     f"код копии {rc_r2} (ждём 0 — сводка собралась, только без строки) · строк «ПЕРИСКОП»: {len(l_r2)}")
+
 # ═══ Карточка #444 (STUD, доказано четырьмя прогонами): прежний случай сравнивал
 # размер и время правки ОБЩЕЙ базы — в неё пишут все роли (запись ~раз в 9 секунд),
 # и цвет зависел от занятости соседей, а не от инструмента. Приёмщик, дважды
@@ -172,7 +309,9 @@ for sql, имя in [
         ("SELECT COUNT(*) FROM roles WHERE role='ZZB'", "роль ZZB"),
         ("SELECT COUNT(*) FROM tracks WHERE track_id='TRACK-ZZBR'", "пул TRACK-ZZBR"),
         ("SELECT COUNT(*) FROM backlog WHERE title='часть сводки'", "карточка пробы"),
-        ("SELECT COUNT(*) FROM role_skill WHERE skill LIKE '%умение пробы%'", "умения пробы")]:
+        ("SELECT COUNT(*) FROM role_skill WHERE skill LIKE '%умение пробы%'", "умения пробы"),
+        ("SELECT COUNT(*) FROM rules WHERE body LIKE '%проба сводки: правило о службе%'",
+         "правило пробы ⑨")]:
     n = con.execute(sql).fetchone()[0]
     if n:
         следы.append(f"{имя}: {n}")
@@ -180,7 +319,7 @@ con.close()
 case("⑧ СВОИХ следов приёмки в живой базе нет (чужие записи не судятся)",
      not следы,
      f"НАЙДЕНО В ЖИВОЙ: {' · '.join(следы)}" if следы else
-     "проверены роль/пул/карточка/умения подсадки — живая база чиста ОТ НАШЕГО")
+     "проверены роль/пул/карточка/умения/правило подсадки — живая база чиста ОТ НАШЕГО")
 
 # ═══ Карточка #455 (TAXO): суд ⑧ ловил только ВСТАВЛЕННОЕ подсадкой и был слеп
 # к её ПЕРВОМУ ходу — массовой ПОРЧЕ чужих строк. ⚠️ Уточнение по чтению кода
