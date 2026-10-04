@@ -38,6 +38,32 @@ def section(title, fn, out):
                    f"наказ НЕПОЛОН, это не «пусто»")
 
 
+def find_coordinator(conn):
+    """(имя_или_None, пояснение) — кто в этом контуре назван координатором, ИЗ ДАННЫХ.
+
+    Образец — _find_coordinator в gordi-issue.py (там же разобраны причины). Источник —
+    roles.lifecycle_reason живых ролей: слово «координатор» ищется ЗДЕСЬ, через casefold(),
+    а не в SQL — LIKE в SQLite не сворачивает регистр кириллицы. Назван РОВНО ОДИН — вернём
+    его имя в верхнем регистре, пояснение пустое. Нашлось 0 или больше одного, либо таблицу
+    ролей не прочитать — имя None, а пояснение — готовая скобка для конца строки: роль
+    подставлять нельзя (у контура dominal координатор 3P, у onto не назван никто).
+    """
+    everyone_tail = " — строку видят все роли)"
+    try:
+        rows = conn.execute(
+            "SELECT role, lifecycle_reason FROM roles WHERE lifecycle='alive' "
+            "AND lifecycle_reason IS NOT NULL").fetchall()
+    except sqlite3.Error:
+        return None, "(координатор контура в таблице ролей не назван: таблица не читается" + everyone_tail
+    names = sorted(r.upper() for r, why in rows if "координатор" in (why or "").casefold())
+    if len(names) == 1:
+        return names[0], ""
+    if not names:
+        return None, "(координатор контура в таблице ролей не назван" + everyone_tail
+    return None, (f"(координатор контура в таблице ролей не назван однозначно: найдено "
+                  f"{len(names)}" + everyone_tail)
+
+
 def build(conn, role, полный=False, full=False, db_path=None):
     """полный=True (флаг --waiting) — раздел «ТЕБЯ ЖДУТ» печатает СПИСОК ЦЕЛИКОМ.
     Команда в строке остатка обязана существовать: обещать несуществующий вызов —
@@ -77,7 +103,7 @@ def build(conn, role, полный=False, full=False, db_path=None):
                 ("read-phoenix.py", f" --role {role}", "сохранённая память"),
                 ("read-messages.py", f" --role {role}", "лента; дочитай и --ack"),
                 ("backlog.py", f" list --role {role}", "карточки (пул первым)"),
-                ("track.py", " view", "витрина пула"),
+                ("track.py", " view", "сводка активного пула"),
                 ("write-message.py", f" --role {role} --file <нота.md>", "писать (длинное — файлом)"),
                 ("save-phoenix.py", f" --role {role} --section state --file <f>", "сохранить память")]:
             out.append(f"   {что:32} python {S}/{name}{tail}")
@@ -366,20 +392,30 @@ def build(conn, role, полный=False, full=False, db_path=None):
         # исход у них первый.
         # ⚖️ Правило СНЯТО — строка говорит «снято» и где пометка: снятое словом владельца
         # контура не навязывается, а молчание раздела не отличить от несобравшегося.
+        # ⚖️ КОМУ показывать (слово владельца 2026-10-04 09:29 UTC, чат COORD: «Про перископ вообще
+        # не обязательно знать всем ролям контура» — службу поднимает координатор и дальше она
+        # работает сама): строка — ТОЛЬКО координатору. Он берётся ИЗ ДАННЫХ (find_coordinator), а
+        # не литералом «COORD»: у dominal это 3P, у onto не назван никто. Не назван однозначно —
+        # строку видят ВСЕ роли и в конце сказано почему: пропажа строки у всех неотличима от
+        # несобравшегося раздела.
+        coordinator, everyone_note = find_coordinator(conn)
+        if coordinator is not None and coordinator != role.upper():
+            return
+        tail = f" {everyone_note}" if everyone_note else ""
         st = conn.execute(
             "SELECT status FROM rules WHERE rule_key='periscope-viewer'").fetchone()
         if not st:
             out.append("🔭 ПЕРИСКОП (просмотр базы координации глазами, только чтение): правила "
                        "periscope-viewer в своде нет — оно в пакете: "
-                       f"python {S}/rules-from-pack.py --show periscope-viewer")
+                       f"python {S}/rules-from-pack.py --show periscope-viewer" + tail)
             return
         if st[0] != "active":
             out.append("🔭 ПЕРИСКОП: правило periscope-viewer в этом контуре снято — пометка "
-                       f"о снятии: python {S}/set-rule.py --key periscope-viewer --show")
+                       f"о снятии: python {S}/set-rule.py --key periscope-viewer --show" + tail)
             return
         out.append("🔭 ПЕРИСКОП — просмотр базы координации глазами, только чтение (задачи, "
                    "лента, правила); как поднять и проверить, что база своя: "
-                   f"python {S}/set-rule.py --key periscope-viewer --show")
+                   f"python {S}/set-rule.py --key periscope-viewer --show" + tail)
     section("просмотр базы", periscope_view, out)
     return out
 

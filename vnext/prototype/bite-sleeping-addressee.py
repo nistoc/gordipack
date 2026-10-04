@@ -256,13 +256,16 @@ def main() -> int:
                "без этого ⑦ зеленел бы у писателя, который отвергает всех подряд")
 
     # ⑨⑩ ОБРАТНЫЙ ХОД — ослабляем ровно ту ветку, которую стережёт встречный
-    for which, case_label, role, output_prev in (("нота", "③", READS, output3),
-                                       ("курсор", "④", WRITES, output4)):
+    # `which` — ключ ослабляемой ветки (имя копии и словарь в weaken), человеку его не
+    # показываем: в заголовке стоит обычное слово из второй позиции (`shown_name`).
+    for which, shown_name, case_label, role, output_prev in (
+            ("нота", "нота", "③", READS, output3),
+            ("курсор", "отметка прочитанного", "④", WRITES, output4)):
         weak_tool = weaken(root, which)
         code_x, output_x = run(weak_tool, "--role", "PROTO", "--db", str(db),
                               "--body", f"обратный ход {which}", "--to", role)
         named = role in sleeping_section(output_x)
-        ok &= case(f"{'⑨' if which == 'нота' else '⑩'} ОБРАТНЫЙ ХОД «только {which}»:"
+        ok &= case(f"{'⑨' if which == 'нота' else '⑩'} ОБРАТНЫЙ ХОД «только {shown_name}»:"
                    f" случай {case_label} у ослабленной копии КРАСНЕЕТ",
                    named and code_x == 0,
                    f"ослабленный признак обязан назвать {role}; если он молчит и тут — "

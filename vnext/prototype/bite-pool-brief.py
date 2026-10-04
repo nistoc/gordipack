@@ -24,14 +24,25 @@ bite-pool-brief.py — приёмка захода 2.1 + П⑥: собираем
   ⑨ строка о службе просмотра базы (слово владельца 2026-10-04 07:38 UTC, чат PROTO):
      правило periscope-viewer действует → ОДНА строка «ПЕРИСКОП» со ссылкой
      «set-rule.py --key periscope-viewer --show»
+     ⚖️ С 2026-10-04 (слово владельца 09:29 UTC, чат COORD) строку видит ТОЛЬКО координатор
+     контура, поэтому ⑨ · ⑨-бис · ⑨-тер · Р1 · Р2 идут от КООРДИНАТОРА СТЕНДА — пробной роли
+     ZZK, которую стенд называет сам (пометки «координатор» у прочих ролей в копии базы
+     снимаются: приёмка не зависит от состава живого контура); ZZB — не координатор
   ⑨-бис ВСТРЕЧНЫЙ: правила в своде НЕТ → строка ведёт в ПАКЕТ («rules-from-pack.py
      --show periscope-viewer»), ссылки на set-rule.py нет — она отдала бы отказ
   ⑨-тер правило СНЯТО → строка «снято» с пометкой о снятии, ссылки на пакет нет
+  ⑨-кватер ВСТРЕЧНЫЙ: правило действует, сводка для НЕ-координатора → строк «ПЕРИСКОП» 0
+     (координатору в том же состоянии базы — 1)
+  ⑨-квинт координатор НЕ определён (ни одной пометки · две · таблицы ролей нет) → строку
+     видит и не-координатор, и в ней пояснение «не назван»
   Р1 нарочная поломка (копия role-brief.py в стенде): раздел не спрашивает свод и всегда
      печатает ссылку на правило → ⑨-бис на копии обязан провалиться ПО СВОЕЙ причине
      (строка есть и зовёт set-rule.py к отсутствующему ключу)
   Р2 нарочная поломка: раздел «просмотр базы» не вызывается → ⑨ на копии обязан
      провалиться (строки нет)
+  Р3 нарочная поломка: проверка «это координатор?» выключена (раздел печатает всем) →
+     ⑨-кватер на копии обязан провалиться ПО СВОЕЙ причине (у не-координатора строка есть,
+     хотя координатор назван и сводка собралась целиком)
 """
 import os
 import re
@@ -138,6 +149,56 @@ def viewer_lines(out):
     return [line for line in out.splitlines() if "ПЕРИСКОП" in line]
 
 
+# ═══ Кто на стенде координатор. Строку «ПЕРИСКОП» видит только координатор контура (слово
+# владельца 2026-10-04 09:29 UTC, чат COORD), а роль-координатор — факт КОНТУРА: у dominal это
+# 3P, у onto не назван никто. Поэтому стенд называет своего сам и от состава живого контура
+# не зависит: пробная роль ZZK получает пометку «координатор» в roles.lifecycle_reason, а у
+# ВСЕХ прочих ролей копии такая пометка снимается (иначе в контуре с живым координатором их
+# стало бы двое, а в контуре без него ⑨ не имел бы от кого идти). ZZB — не координатор.
+COORD_ROLE = "ZZK"
+PLAIN_ROLE = "ZZB"
+COORD_MARK = "координатор контура (проба сводки)"
+# 🪤 Текст снятой пометки НЕ должен содержать корень «координатор» — первая редакция писала
+# «пометка координатора снята», и сама же снятая пометка находилась поиском: на стенде оказалось
+# трое «координаторов», а ⑨-квинт «ни одной пометки» был зелёным по чужой причине. Поэтому
+# set_coordinators ниже САМА сверяет, сколько ролей названо, с тем, что просили.
+COORD_MARK_REMOVED = "проба сводки: пометка снята на копии"
+
+
+def set_coordinators(path, mode):
+    """Кто на КОПИИ базы стенда назван координатором: 'one' — только ZZK; 'none' — никто;
+    'two' — ZZK и ZZB. Состояние ставится целиком каждый раз (как set_viewer_rule): случаи
+    не зависят от порядка. Слово ищется через casefold() — так же, как в самом инструменте.
+    Подсадка сверяет себя: названных живых ролей должно выйти ровно столько, сколько просили."""
+    con = sqlite3.connect(str(path))
+    for name, why in con.execute("SELECT role, lifecycle_reason FROM roles "
+                                 "WHERE lifecycle_reason IS NOT NULL").fetchall():
+        if "координатор" in why.casefold():
+            con.execute("UPDATE roles SET lifecycle_reason=? WHERE role=?",
+                        (COORD_MARK_REMOVED, name))
+    named = {"one": [COORD_ROLE], "none": [], "two": [COORD_ROLE, PLAIN_ROLE]}[mode]
+    for name in named:
+        con.execute("UPDATE roles SET lifecycle_reason=? WHERE role=?", (COORD_MARK, name))
+    marked = sorted(r for r, why in con.execute(
+        "SELECT role, lifecycle_reason FROM roles WHERE lifecycle='alive' "
+        "AND lifecycle_reason IS NOT NULL").fetchall() if "координатор" in why.casefold())
+    con.commit()
+    con.close()
+    if marked != sorted(named):
+        raise SystemExit(f"ПРИЁМКА НЕ СОСТОЯЛАСЬ: подсадка координаторов «{mode}» дала на копии "
+                         f"{marked}, ждали {sorted(named)}")
+
+
+def brief_assembled(rc, out):
+    """Сводка собралась целиком: код 0, без «НЕ ПРОЧИТАН», формы вызова и свод на месте.
+    Без этого «строки нет» не отличить от упавшего раздела."""
+    return rc == 0 and "НЕ ПРОЧИТАН" not in out and "ФОРМЫ ВЫЗОВА" in out and "СВОД" in out
+
+
+def silent_for_non_coordinator(rc, out):
+    return brief_assembled(rc, out) and not viewer_lines(out)
+
+
 stand = mezo_stand.new("pool-brief-")
 db = stand / "mezosync.db"
 mezo_stand.snapshot_db(LIVE_DB, db)
@@ -146,6 +207,7 @@ con.execute("UPDATE tracks SET status='paused' WHERE status='active'")
 con.execute("INSERT INTO tracks (track_id, title, status, skills) VALUES "
             "('TRACK-ZZBR','пул сводки','active','скилл-до-задачи: чинить предикаты')")
 con.execute("INSERT INTO roles (role, lifecycle, zone) VALUES ('ZZB','alive','проба сводки')")
+con.execute("INSERT INTO roles (role, lifecycle, zone) VALUES ('ZZK','alive','проба сводки: координатор')")
 con.execute("INSERT INTO backlog (role, title, body_md, status, priority, tags, parent_track, "
             "created_by, done_when) VALUES ('ZZB','часть сводки','тело','open','normal','[]',"
             "'TRACK-ZZBR','PROTO','критерий')")
@@ -156,6 +218,7 @@ con.execute("INSERT INTO role_skill (role, skill, evidence, measured_at, written
             "'2026-08-01 10:00','ZZB','2026-08-27 09:00','условие наступило пробой')")
 con.commit()
 con.close()
+set_coordinators(db, "one")
 
 # ①② участница пула
 rc, out = brief(db, "ZZB")
@@ -232,8 +295,9 @@ def named_tools_exist(line):
     return bool(paths) and all(Path(p).exists() for p in paths)
 
 
+set_coordinators(db9, "one")
 set_viewer_rule(db9, "active")
-rc9, out9 = brief(db9, "ZZB")
+rc9, out9 = brief(db9, COORD_ROLE)
 l9 = viewer_lines(out9)
 show9 = ""
 if len(l9) == 1 and named_tools_exist(l9[0]):
@@ -242,28 +306,93 @@ if len(l9) == 1 and named_tools_exist(l9[0]):
                         capture_output=True, text=True, encoding="utf-8", errors="replace",
                         env=mezo_stand.stand_env(stand, PYTHONIOENCODING="utf-8"))
     show9 = (p9.stdout or "") + (p9.stderr or "")
-case("⑨ правило действует → ОДНА строка «ПЕРИСКОП» со ссылкой на правило, и ссылка ведёт к нему",
+case("⑨ правило действует → координатору ОДНА строка «ПЕРИСКОП» со ссылкой на правило, и ссылка "
+     "ведёт к нему",
      rc9 == 0 and len(l9) == 1 and f"set-rule.py --key {VIEWER_RULE} --show" in l9[0]
      and "только чтение" in l9[0] and "rules-from-pack.py" not in l9[0]
+     and "не назван" not in l9[0]
      and named_tools_exist(l9[0]) and VIEWER_PROBE_BODY in show9,
      f"строк «ПЕРИСКОП»: {len(l9)} (ждём 1) · {l9[0][:150] if l9 else 'СТРОКИ НЕТ'} · "
      f"названная команда напечатала тело правила: {VIEWER_PROBE_BODY in show9}")
 
 set_viewer_rule(db9, "absent")
-rc9b, out9b = brief(db9, "ZZB")
+rc9b, out9b = brief(db9, COORD_ROLE)
 l9b = viewer_lines(out9b)
 case("⑨-бис ВСТРЕЧНЫЙ: правила в своде НЕТ → строка ведёт в пакет, к set-rule.py не зовёт",
      rc9b == 0 and len(l9b) == 1 and f"rules-from-pack.py --show {VIEWER_RULE}" in l9b[0]
-     and f"--key {VIEWER_RULE}" not in l9b[0] and named_tools_exist(l9b[0]),
+     and f"--key {VIEWER_RULE}" not in l9b[0] and "не назван" not in l9b[0]
+     and named_tools_exist(l9b[0]),
      f"строк «ПЕРИСКОП»: {len(l9b)} (ждём 1) · {l9b[0][:150] if l9b else 'СТРОКИ НЕТ'}")
 
 set_viewer_rule(db9, "revoked")
-rc9c, out9c = brief(db9, "ZZB")
+rc9c, out9c = brief(db9, COORD_ROLE)
 l9c = viewer_lines(out9c)
 case("⑨-тер правило СНЯТО → строка «снято» с пометкой о снятии, в пакет не зовёт",
      rc9c == 0 and len(l9c) == 1 and "снято" in l9c[0]
-     and f"set-rule.py --key {VIEWER_RULE} --show" in l9c[0] and "rules-from-pack.py" not in l9c[0],
+     and f"set-rule.py --key {VIEWER_RULE} --show" in l9c[0] and "rules-from-pack.py" not in l9c[0]
+     and "не назван" not in l9c[0],
      f"строк «ПЕРИСКОП»: {len(l9c)} (ждём 1) · {l9c[0][:150] if l9c else 'СТРОКИ НЕТ'}")
+
+# ⑨-кватер ВСТРЕЧНЫЙ (слово владельца 2026-10-04 09:29 UTC, чат COORD): правило действует, а
+# сводку собирают для роли, которая НЕ координатор → строки нет. «Нет строки» судится только
+# при собравшейся целиком сводке (иначе упавший раздел выглядел бы как верное молчание), и в
+# том же состоянии базы координатору строка ПРИХОДИТ — иначе «0» не отличить от правила, которого
+# нет, или от раздела, который не печатает никому.
+set_coordinators(db9, "one")
+set_viewer_rule(db9, "active")
+rc9d, out9d = brief(db9, PLAIN_ROLE)
+rc9e, out9e = brief(db9, COORD_ROLE)
+l9d, l9e = viewer_lines(out9d), viewer_lines(out9e)
+case("⑨-кватер ВСТРЕЧНЫЙ: правило действует, сводка для НЕ-координатора → строк «ПЕРИСКОП» 0 "
+     "(координатору в том же состоянии базы — 1)",
+     silent_for_non_coordinator(rc9d, out9d) and rc9e == 0 and len(l9e) == 1,
+     f"не-координатор {PLAIN_ROLE}: строк {len(l9d)} (ждём 0), сводка собралась целиком: "
+     f"{brief_assembled(rc9d, out9d)} · координатор {COORD_ROLE}: строк {len(l9e)} (ждём 1)")
+
+# ⑨-квинт: координатор НЕ определён → строку видят ВСЕ роли, и в конце сказано почему. Три
+# способа «не определён» — три отдельных ветки инструмента: ни одной пометки · две · таблицы
+# ролей нет вовсе (на отдельной копии: из неё таблицу роняют, обратно её не вернуть).
+set_viewer_rule(db9, "active")
+undefined = []
+for label, mode in [("ни одной пометки", "none"), ("две пометки", "two")]:
+    set_coordinators(db9, mode)
+    undefined.append((label, (brief(db9, PLAIN_ROLE), brief(db9, COORD_ROLE))))
+db_noroles = stand / "broke-roles.db"
+shutil.copy(db9, db_noroles)
+con = sqlite3.connect(str(db_noroles))
+con.execute("DROP TABLE roles")
+con.commit()
+con.close()
+undefined.append(("таблицы ролей нет",
+                  (brief(db_noroles, PLAIN_ROLE), brief(db_noroles, COORD_ROLE))))
+set_coordinators(db9, "one")
+
+
+def undefined_shows_line(results):
+    """У обеих ролей — ровно одна строка, в ней пояснение «не назван» и ссылка на правило (оно
+    действует)."""
+    for rc, out in results:
+        lines = viewer_lines(out)
+        if not (rc == 0 and len(lines) == 1 and "не назван" in lines[0]
+                and f"set-rule.py --key {VIEWER_RULE} --show" in lines[0]
+                and "только чтение" in lines[0]):
+            return False
+    return True
+
+
+def undefined_detail(label, results):
+    parts = []
+    for who, (rc, out) in zip((PLAIN_ROLE, COORD_ROLE), results):
+        lines = viewer_lines(out)
+        parts.append(f"{who}: код {rc}, строк {len(lines)}, «не назван»: "
+                     f"{'да' if lines and 'не назван' in lines[0] else 'НЕТ'}")
+    return f"{label} — " + "; ".join(parts)
+
+
+case("⑨-квинт координатор НЕ определён (ни одной пометки · две · таблицы ролей нет) → строку "
+     "видит и не-координатор, и в ней пояснение «не назван»",
+     all(undefined_shows_line(results) for _label, results in undefined),
+     " · ".join(undefined_detail(label, results) for label, results in undefined))
 
 # ── нарочные поломки на КОПИЯХ испытуемого в стенде: каждая обязана уронить РОВНО свой суд ──
 # Р1 — поломка, какой она была бы в жизни: раздел перестаёт спрашивать свод и всегда
@@ -275,8 +404,9 @@ tool_r1 = broken_copy(stand, "r1",
                       "        st = conn.execute(\n"
                       "            \"SELECT status FROM rules WHERE rule_key='periscope-viewer'\").fetchone()\n",
                       "        st = (\"active\",)\n")
+set_coordinators(db9, "one")
 set_viewer_rule(db9, "absent")
-_, out_r1 = brief(db9, "ZZB", tool=tool_r1)
+_, out_r1 = brief(db9, COORD_ROLE, tool=tool_r1)
 l_r1 = viewer_lines(out_r1)
 r1_would_pass = (len(l_r1) == 1 and f"rules-from-pack.py --show {VIEWER_RULE}" in l_r1[0]
                  and f"--key {VIEWER_RULE}" not in l_r1[0])
@@ -288,13 +418,36 @@ case("Р1 поломка «раздел не спрашивает свод» п�
 tool_r2 = broken_copy(stand, "r2", "    section(\"просмотр базы\", periscope_view, out)\n",
                       "    pass\n")
 set_viewer_rule(db9, "active")
-rc_r2, out_r2 = brief(db9, "ZZB", tool=tool_r2)
+rc_r2, out_r2 = brief(db9, COORD_ROLE, tool=tool_r2)
 l_r2 = viewer_lines(out_r2)
 r2_would_pass = len(l_r2) == 1 and f"set-rule.py --key {VIEWER_RULE} --show" in l_r2[0]
 case("Р2 поломка «раздел не вызывается» поймана: суд ⑨ на копии проваливается (строки нет, "
      "сводка при этом собралась без ошибок)",
      rc_r2 == 0 and not r2_would_pass and not l_r2 and "НЕ ПРОЧИТАН" not in out_r2,
      f"код копии {rc_r2} (ждём 0 — сводка собралась, только без строки) · строк «ПЕРИСКОП»: {len(l_r2)}")
+
+# Р3 — поломка, какой она была бы в жизни: проверка «это координатор?» выключена, и раздел
+# снова печатает строку всем (как до слова владельца 09:29 UTC). Якорь — две строки самой
+# проверки; если инструмент перепишут и якорь пропадёт, broken_copy остановит приёмку, а не
+# даст ей пройти поломкой мимо цели. Суд требует, чтобы ⑨-кватер пал ПО СВОЕЙ причине: сводка
+# собралась целиком, координатор назван (в строке нет «не назван»), а строка у не-координатора
+# есть — не оттого, что координатора не нашли (тогда строку видят все по замыслу).
+tool_r3 = broken_copy(stand, "r3",
+                      "        if coordinator is not None and coordinator != role.upper():\n"
+                      "            return\n",
+                      "        pass\n")
+set_coordinators(db9, "one")
+set_viewer_rule(db9, "active")
+rc_r3, out_r3 = brief(db9, PLAIN_ROLE, tool=tool_r3)
+l_r3 = viewer_lines(out_r3)
+r3_would_pass = silent_for_non_coordinator(rc_r3, out_r3)
+case("Р3 поломка «проверка «это координатор?» выключена» поймана: ⑨-кватер на копии пал ПО СВОЕЙ "
+     "причине (у не-координатора строка есть, хотя координатор назван и сводка собралась целиком)",
+     brief_assembled(rc_r3, out_r3) and not r3_would_pass and len(l_r3) == 1
+     and "не назван" not in l_r3[0],
+     f"под поломкой у {PLAIN_ROLE} строк «ПЕРИСКОП»: {len(l_r3)} (ждём 1, а без поломки 0) · "
+     f"сводка собралась целиком: {brief_assembled(rc_r3, out_r3)} · "
+     f"{l_r3[0][:110] if l_r3 else 'СТРОКИ НЕТ'}")
 
 # ═══ Карточка #444 (STUD, доказано четырьмя прогонами): прежний случай сравнивал
 # размер и время правки ОБЩЕЙ базы — в неё пишут все роли (запись ~раз в 9 секунд),
@@ -307,6 +460,7 @@ con = sqlite3.connect(f"file:{LIVE_DB.as_posix()}?mode=ro", uri=True)
 следы = []
 for sql, имя in [
         ("SELECT COUNT(*) FROM roles WHERE role='ZZB'", "роль ZZB"),
+        ("SELECT COUNT(*) FROM roles WHERE role='ZZK'", "роль-координатор пробы ZZK"),
         ("SELECT COUNT(*) FROM tracks WHERE track_id='TRACK-ZZBR'", "пул TRACK-ZZBR"),
         ("SELECT COUNT(*) FROM backlog WHERE title='часть сводки'", "карточка пробы"),
         ("SELECT COUNT(*) FROM role_skill WHERE skill LIKE '%умение пробы%'", "умения пробы"),

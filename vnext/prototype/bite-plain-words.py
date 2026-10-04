@@ -30,6 +30,20 @@
      ЦЕЛИКОМ, а не только этот аргумент, хотя два соседних вида подстановки (`%s % (...)`
      и склейка `+`) уже судились: они не Call, а BinOp, и разбор в них заходит. ИМЯ
      переменной среди аргументов `.format(...)` по-прежнему НЕ судится — та же граница ⑩.
+  ✅ ОБНОВЛЕНО 2026-10-04 UTC (слово владельца 09:19 UTC, чат PROTO: «исправить … пробел в
+     проверке слов»): строковые литералы в элементах ЛИТЕРАЛЬНОГО списка/кортежа в заголовке
+     цикла (`for a, b, c in [(…), (…)]` и одиночное `for x in […]`) — тоже показываемый текст,
+     ЕСЛИ переменная цикла, стоящая на их позиции, попадает в показываемое выражение ТЕЛА
+     этого цикла СВОИМ ЗНАЧЕНИЕМ (f-строка, аргумент print / накопителя / печатающего
+     помощника; условие тернарника и сравнение значения не показывают). Позиция важна:
+     литерал в позиции, чья переменная не печатается (ключ, путь), не судится.
+     До правки такой текст был невидим — проверка судила строки вызовов, а строка кортежа
+     в заголовке цикла вызовом не была (живой пример: подпись «…пула» в role-brief.py).
+     ⛔ НЕ покрыто, названо прямо: литерал, собранный ЗАРАНЕЕ в переменную (`for a in ROWS:`) ·
+     `dict.items()` · `zip(…)` · `enumerate(…)` · склейка списков · генераторы списков ·
+     переменная цикла, ушедшая в печать через вложенный вызов (`.format(x)`, `str(x)`,
+     `", ".join(x)`) или через промежуточное присвоение · кортеж другой длины, чем левая
+     часть цикла, и звёздочка слева (позиции не сопоставить).
   ⛔ НЕ судит комментарии и пояснения в шапках: их роль читает, только когда правит
      инструмент, и там иносказание — не ложь, а история. Отдельная работа, не эта.
   ⛔ НЕ судит ОБРАЗЦЫ ПОИСКА (re.compile и подобное): они ищут старые слова В ПАМЯТЯХ
@@ -69,6 +83,12 @@
      аргументов `.format` отключён → та же проба снова невидима; контроль —
      два соседних вида подстановки из того же возврата COORD (%-формат и
      склейка строк) продолжают судиться, как и раньше                        РАЗЛИЧАЮЩИЙ
+  ㉖ слово владельца 2026-10-04 09:19 UTC (чат PROTO): литерал в кортеже/списке
+     заголовка цикла судится, когда печатается переменная его позиции (ещё один путь
+     доставки, после .format ㉒ и псевдонимов ㉓); встречный — то же слово в позиции, чья переменная
+     не печатается, и цикл, чьё тело ничего не печатает, не судятся; обратный ход —
+     прослеживание литералов цикла отключено → та же проба снова невидима;
+     граница — комментарий у строки кортежа не судится                       РАЗЛИЧАЮЩИЙ
 
 ⛔ Живого контура НЕ касается: разбор исходников + нарочные поломки во ВРЕМЕННОЙ копии.
 """
@@ -418,15 +438,129 @@ def _format_call_literals(tree: ast.AST) -> dict[int, list[str]]:
     return by_line
 
 
-def shown_lines(src: str) -> tuple[set[int], dict[int, list[str]]]:
+def _own_string_constants(node: ast.AST):
+    """Строковые литералы выражения БЕЗ спуска во вложенные вызовы (граница ⑨ — как у
+    _own_text): данные, отданные другому вызову, читает испытуемый механизм, а не человек.
+    Исключение то же, что у _own_text: `.format(...)` на строковом выражении — способ
+    подстановки в тот же текст, его литералы свои.
+    Имя (ast.Name) и атрибут (ast.Attribute) Constant-ом не бывают — граница ⑩ остаётся
+    свойством разбора, а не списком исключений."""
+    if isinstance(node, ast.Call) and not (
+            isinstance(node.func, ast.Attribute) and node.func.attr == "format"
+            and _text_receiver(node.func.value)):
+        return
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        yield node
+    for child in ast.iter_child_nodes(node):
+        yield from _own_string_constants(child)
+
+
+def _shown_value_names(node: ast.AST) -> set[str]:
+    """Имена, чьё ЗНАЧЕНИЕ человек прочтёт в этом выражении, — уже, чем _own_names.
+
+    🪤 НАЙДЕНО ПЕРВЫМ ЖЕ ПРОГОНОМ ПРОСЛЕЖИВАНИЯ ЦИКЛА на живом файле (bite-sleeping-addressee.py):
+    после того как слово из заголовка убрали, переменная цикла осталась в
+    `f"{'⑨' if which == 'нота' else '⑩'} …"` — как УСЛОВИЕ выбора значка, а не как значение, —
+    и _own_names (он берёт ЛЮБОЕ имя вне вложенных вызовов, включая условие тернарника
+    и сравнение) снова объявлял её показываемой. Лишняя находка, которую правкой текста
+    не погасить: человек значения этой переменной не читает.
+    ⚖️ Поэтому здесь значение смотрится по ходу данных к печати: имя само · ветки тернарника
+    (но не его условие) · части склейки, подстановки f-строки (но не её формат-спецификатор) ·
+    элементы кортежа/списка · значение элемента или атрибута. Сравнение даёт «да/нет» —
+    имён не отдаёт. Вложенный вызов, как и у _own_names, не разбирается (граница ⑨).
+    ⛔ ИСПОЛЬЗУЕТСЯ ТОЛЬКО прослеживанием заголовка цикла: путь переменной ⑭ остался на
+    _own_names, как был, — его случаи приёмки не тронуты."""
+    if isinstance(node, ast.Name):
+        return {node.id}
+    if isinstance(node, (ast.Call, ast.Compare)):
+        return set()
+    if isinstance(node, ast.IfExp):
+        return _shown_value_names(node.body) | _shown_value_names(node.orelse)
+    if isinstance(node, ast.FormattedValue):
+        return _shown_value_names(node.value)
+    if isinstance(node, (ast.Subscript, ast.Attribute)):
+        return _shown_value_names(node.value)
+    names: set[str] = set()
+    for child in ast.iter_child_nodes(node):
+        names.update(_shown_value_names(child))
+    return names
+
+
+def _paired_positions(target: ast.AST, value: ast.AST):
+    """Пары (имена цели, выражение-значение), сопоставленные ПО ПОЗИЦИИ при распаковке
+    `target = value` в заголовке цикла: `a, b, c` против `(x, y, z)` даёт три пары.
+
+    Одиночное имя забирает значение целиком (кортеж-элемент — весь, со всем, что в нём).
+    ⛔ ГРАНИЦА, НАЗВАННАЯ ПРЯМО: если слева и справа не кортежи одной длины или есть
+    звёздочка, позиции не сопоставить — пары не выдаются, и такой элемент не судится.
+    Гадать «печатается ли хоть что-то из них» нельзя: слово в позиции, чья переменная
+    не печатается, стало бы находкой, которую правкой текста не погасить."""
+    if isinstance(target, ast.Name):
+        yield {target.id}, value
+    elif (isinstance(target, (ast.Tuple, ast.List)) and isinstance(value, (ast.Tuple, ast.List))
+          and len(target.elts) == len(value.elts)
+          and not any(isinstance(e, ast.Starred) for e in target.elts + value.elts)):
+        for sub_target, sub_value in zip(target.elts, value.elts):
+            yield from _paired_positions(sub_target, sub_value)
+
+
+def _loop_literals(tree: ast.AST, is_shown_call) -> dict[int, list[str]]:
+    """Строковые литералы в элементах ЛИТЕРАЛЬНОГО списка/кортежа в заголовке цикла,
+    по номеру строки, где они стоят — для позиций, чья переменная цикла печатается.
+
+    🪤 ПОВОД — слово владельца 2026-10-04 09:19 UTC (чат PROTO). Живой пример — подпись
+    в стартовой сводке: `for name, tail, label in [("track.py", " view", "<подпись>"), …]:`
+    и в теле `out.append(f"   {label:32} python {S}/{name}{tail}")`. Человек читает подпись,
+    а проверка судит СТРОКИ ВЫЗОВОВ печати: строка кортежа в заголовке цикла вызовом не
+    была, и прежнее слово доезжало до человека при зелёной приёмке. Тот же класс, что
+    у ⑭ (текст, присвоенный переменной): путь доставки — через переменную, только не
+    присвоения, а ЦИКЛА. Тот же приём: судится значение, имя переменной — нет (граница ⑩).
+    ⚖️ ПОЗИЦИЯ ВАЖНА. Из элемента `("track.py", " view", "<подпись>")` судится только то,
+    чья переменная (`name` / `tail` / `label`) попала в показываемое выражение тела: слово
+    в позиции, которую цикл лишь использует как ключ или путь, находкой не считается.
+    ⚖️ ОБЛАСТЬ — тело ЭТОГО цикла (без вложенных функций, как у _alias_calls), а не весь
+    модуль: одноимённая переменная в другом месте файла ничего не значит.
+    ⛔ ГРАНИЦА ⑨ НАСЛЕДУЕТСЯ: имя считается показанным, когда его ЗНАЧЕНИЕ идёт в печать
+    (_shown_value_names: условие тернарника и сравнение имя не показывают; во вложенный
+    вызов не заходим), литерал берётся без спуска в вложенные вызовы
+    (_own_string_constants). Остальное, чего это прослеживание НЕ видит, перечислено
+    в шапке файла.
+    """
+    by_line: dict[int, list[str]] = {}
+    for loop in ast.walk(tree):
+        if not (isinstance(loop, (ast.For, ast.AsyncFor))
+                and isinstance(loop.iter, (ast.List, ast.Tuple))):
+            continue
+        printed: set[str] = set()
+        for stmt in loop.body:
+            for node in _walk_own_scope(stmt):
+                if isinstance(node, ast.Call) and is_shown_call(node):
+                    for arg in list(node.args) + [kw.value for kw in node.keywords]:
+                        printed.update(_shown_value_names(arg))
+        if not printed:
+            continue
+        for element in loop.iter.elts:
+            for names, value in _paired_positions(loop.target, element):
+                if not names & printed:
+                    continue
+                for c in _own_string_constants(value):
+                    end = getattr(c, "end_lineno", None) or c.lineno
+                    for line in range(c.lineno, end + 1):
+                        by_line.setdefault(line, []).append(c.value)
+    return by_line
+
+
+def shown_lines(src: str) -> tuple[set[int], dict[int, list[str]], dict[int, list[str]]]:
     """Номера строк с ПОКАЗЫВАЕМЫМ текстом + литералы внутри {…}-подстановок и внутри
     аргументов `.format(...)` по строкам (карточки #592) — второе судится отдельно от
     текста строки, потому что имя переменной внутри {…} / `.format(...)` судить нельзя
-    (граница ⑩), а литерал там же — можно и нужно."""
+    (граница ⑩), а литерал там же — можно и нужно. Третье — литералы заголовков циклов
+    (см. _loop_literals): судятся ТОЛЬКО сами литералы, а не текст строки целиком, — на
+    одной строке с печатаемой подписью стоит и непечатаемый путь."""
     try:
         tree = ast.parse(src)
     except SyntaxError:
-        return set(), {}
+        return set(), {}, {}
     out: set[int] = set()
     helpers = printing_helpers(tree)
     # Приёмники: восемь имён списком (как было) ПЛЮС выведенные из кода этого файла.
@@ -434,26 +568,29 @@ def shown_lines(src: str) -> tuple[set[int], dict[int, list[str]]]:
     # наружу, — а туда разбор не заходит (граница названа в доезжают_до_человека).
     receivers = COLLECTORS | reach_human_output(tree, helpers)
     alias_calls = _alias_calls(tree)
+
+    def is_shown_call(n: ast.Call) -> bool:
+        nm = getattr(n.func, "id", None) or getattr(n.func, "attr", None)
+        shown = nm in SHOWN_CALLS or nm in helpers
+        if nm in ("append", "extend") and isinstance(n.func, ast.Attribute):
+            recv = getattr(n.func.value, "id", None)
+            shown = shown or (recv in receivers)
+        # ㉓ КАРТОЧКА #594: вызов через ПСЕВДОНИМ накопителя/печати
+        # (a = out.append; a("…")) сводится к тому же приёмнику, каким уже
+        # судится прямой вызов, — так наследуется граница ⑯-бис без нового списка.
+        if not shown and isinstance(n.func, ast.Name):
+            alias = alias_calls.get(id(n))
+            if alias:
+                kind, receiver = alias
+                shown = kind in ("call", "write") or (kind == "attr" and receiver in receivers)
+        return shown
+
     shown_names: set[str] = set()
     for n in ast.walk(tree):
-        if isinstance(n, ast.Call):
-            nm = getattr(n.func, "id", None) or getattr(n.func, "attr", None)
-            shown = nm in SHOWN_CALLS or nm in helpers
-            if nm in ("append", "extend") and isinstance(n.func, ast.Attribute):
-                recv = getattr(n.func.value, "id", None)
-                shown = shown or (recv in receivers)
-            # ㉓ КАРТОЧКА #594: вызов через ПСЕВДОНИМ накопителя/печати
-            # (a = out.append; a("…")) сводится к тому же приёмнику, каким уже
-            # судится прямой вызов, — так наследуется граница ⑯-бис без нового списка.
-            if not shown and isinstance(n.func, ast.Name):
-                alias = alias_calls.get(id(n))
-                if alias:
-                    kind, receiver = alias
-                    shown = kind in ("call", "write") or (kind == "attr" and receiver in receivers)
-            if shown:
-                for arg in list(n.args) + [kw.value for kw in n.keywords]:
-                    out.update(_own_text(arg))
-                    shown_names.update(_own_names(arg))
+        if isinstance(n, ast.Call) and is_shown_call(n):
+            for arg in list(n.args) + [kw.value for kw in n.keywords]:
+                out.update(_own_text(arg))
+                shown_names.update(_own_names(arg))
     # ═══ Карточка #416: ЧЕТВЁРТЫЙ путь доставки текста человеку — через переменную.
     # `дела = "…(пайка)"` затем `print(f"…{дела}…")`: человек видит обе формы одинаково,
     # признак видел только явную. Опыт TAXO: то же слово в явном print — 1 находка,
@@ -474,7 +611,7 @@ def shown_lines(src: str) -> tuple[set[int], dict[int, list[str]]]:
     for source in (_substitution_literals(tree), _format_call_literals(tree)):
         for line, words in source.items():
             literals.setdefault(line, []).extend(words)
-    return out, literals
+    return out, literals, _loop_literals(tree, is_shown_call)
 
 
 def _own_names(node: ast.AST) -> set[str]:
@@ -589,25 +726,34 @@ def scan(root: Path) -> tuple[list[str], int, int]:
         if any(l.startswith("#") and DISCUSSES_WORDS_MARKER in l for l in header):
             exempted.append(p.name)
             continue
-        shown, literals = shown_lines(src)
-        if not shown:
+        shown, literals, loop_literals = shown_lines(src)
+        if not shown and not loop_literals:
             continue
         files += 1
         comments = _comment_starts(src)
         for i, line in enumerate(src.splitlines(), 1):
-            if i not in shown:
+            if i not in shown and i not in loop_literals:
                 continue
             lines += 1
-            judged_text = line[:comments[i]] if i in comments else line
-            judged_text = _without_target_name(_without_format_args(_without_substitutions(judged_text)))
-            # ═══ Карточка #592: _без_подстановок вырезала {…} ЦЕЛИКОМ, _без_format_аргументов
-            # так же вырезает аргументы `.format(...)` ЦЕЛИКОМ — вместе с именем (которое
-            # судить нельзя, граница ⑩) вырезался и строковый литерал внутри (который судить
-            # нужно). Литералы, отдельно найденные ast-ом (обе подстановки), возвращаются
-            # в судимый текст здесь — имена в них уже не попадают ни разу.
-            if i in literals:
-                judged_text += " " + " ".join(literals[i])
-            if INVENTED.search(judged_text):
+            found = False
+            if i in shown:
+                judged_text = line[:comments[i]] if i in comments else line
+                judged_text = _without_target_name(_without_format_args(_without_substitutions(judged_text)))
+                # ═══ Карточка #592: _без_подстановок вырезала {…} ЦЕЛИКОМ, _без_format_аргументов
+                # так же вырезает аргументы `.format(...)` ЦЕЛИКОМ — вместе с именем (которое
+                # судить нельзя, граница ⑩) вырезался и строковый литерал внутри (который судить
+                # нужно). Литералы, отдельно найденные ast-ом (обе подстановки), возвращаются
+                # в судимый текст здесь — имена в них уже не попадают ни разу.
+                if i in literals:
+                    judged_text += " " + " ".join(literals[i])
+                found = bool(INVENTED.search(judged_text))
+            # ═══ Слово владельца 2026-10-04: литералы заголовка цикла судятся САМИ, по одному,
+            # а не текстом строки: на строке кортежа рядом с печатаемой подписью стоят и
+            # непечатаемые элементы (путь, ключ), и комментарий в конце строки. Из ast
+            # приходят только значения литералов нужных позиций — ни имён, ни комментариев.
+            if not found and i in loop_literals:
+                found = any(INVENTED.search(value) for value in loop_literals[i])
+            if found:
                 hits.append(f"{p.name}:{i} {line.strip()[:90]}")
     if exempted:
         print(f"📝 отпущены как ОБСУЖДАЮЩИЕ слова ({len(exempted)}): {', '.join(exempted)}"
@@ -1611,6 +1757,134 @@ def main() -> int:
                f"находок {len(mirror_probe_hits)} — если бы scan() был слеп к такому "
                "каталогу, дыра #621 вернулась бы незаметно", differ=True)
     mezo_stand.release(d25)
+
+    # ── ㉖ СЛОВО ВЛАДЕЛЬЦА 2026-10-04 09:19 UTC (чат PROTO): ЛИТЕРАЛ В ЗАГОЛОВКЕ ЦИКЛА ──
+    # 🩸 Найдено на живой стартовой сводке (role-brief.py:80): подпись стояла в кортеже
+    # списка, по которому идёт `for name, tail, label in [...]`, а в теле цикла печаталась
+    # f-строкой. Приёмка была зелёной: строка кортежа вызовом печати не является.
+    # Проба повторяет форму живого места: три позиции, печатаются все три, слово — в третьей.
+    # ⚖️ Заголовки случаев НЕ цитируют слово дословно (иначе печатаемый текст этой приёмки
+    # нарушал бы то же правило, которое она стережёт — урок ㉔ и ㉕).
+    d26 = mezo_stand.new("bite-words-loop-")
+    loop_seed = (
+        '# -*- coding: utf-8 -*-\n'
+        'def main(out):\n'
+        '    for name, tail, label in [\n'
+        '            ("track.py", " view", "витрина пула"),\n'
+        '            ("guard-all.py", "", "шаг один")]:\n'
+        '        out.append(f"   {label:32} python {name}{tail}")\n')
+    (d26 / "probe_loop.py").write_text(loop_seed, encoding="utf-8")
+    loop_hits, _, _ = scan(d26)
+    ok &= case("㉖ литерал в кортеже списка заголовка цикла судится, когда печатается его позиция",
+               len(loop_hits) == 1 and any("probe_loop.py:4" in h for h in loop_hits),
+               f"находок {len(loop_hits)}, ждём ровно одну — строку кортежа с прежним словом "
+               "(probe_loop.py:4); соседняя чистая строка (probe_loop.py:5) находкой не стала. "
+               "До починки строка кортежа вызовом печати не была, и слово доезжало до человека "
+               "при зелёной приёмке", differ=True)
+
+    # ㉖-бис ВСТРЕЧНЫЙ, БЕЗ КОТОРОГО ㉖ НИЧЕГО НЕ ЗНАЧИТ: то же слово в позиции, чья
+    # переменная не печатается, а служит ключом. Форма пробы — та же, что у ㉖, слово
+    # переехало на другую позицию. Без этого случая ㉖ зелен и у признака, который судит
+    # ЛЮБОЙ литерал заголовка цикла, — а такой красит и пути, и ключи, и подопытные данные.
+    (d26 / "probe_loop.py").write_text(
+        '# -*- coding: utf-8 -*-\n'
+        'def main(out, registry):\n'
+        '    for key, label in [\n'
+        '            ("витрина", "шаг один"),\n'
+        '            ("guard-all.py", "шаг два")]:\n'
+        '        registry[key] = 1\n'
+        '        out.append(f"   {label}")\n', encoding="utf-8")
+    loop_key_hits, _, _ = scan(d26)
+    ok &= case("㉖-бис ВСТРЕЧНЫЙ: то же слово в позиции, чья переменная НЕ печатается, не красится",
+               not loop_key_hits,
+               f"находок {len(loop_key_hits)} — позиция важна: слово в ключе или пути не видит "
+               "человек, и правкой текста такую находку не погасить, не ломая ключ", differ=True)
+
+    # ㉖-тер ВСТРЕЧНЫЙ: тело цикла ничего не печатает — содержимое уезжает в базу.
+    # Граница ⑯-бис на новом пути: слово здесь стоит в печатаемой по форме позиции,
+    # но человеку не доезжает.
+    (d26 / "probe_loop.py").write_text(
+        '# -*- coding: utf-8 -*-\n'
+        'def main(cur):\n'
+        '    for name, label in [("guard-all.py", "витрина пула")]:\n'
+        '        cur.execute("INSERT INTO t VALUES (?, ?)", (name, label))\n', encoding="utf-8")
+    loop_quiet_hits, _, _ = scan(d26)
+    ok &= case("㉖-тер ВСТРЕЧНЫЙ: цикл по литералу, тело которого ничего не печатает, не красится",
+               not loop_quiet_hits,
+               f"находок {len(loop_quiet_hits)} — иначе признак судил бы ЛЮБОЙ список в заголовке "
+               "цикла и красил подопытные данные приёмок", differ=True)
+
+    # ㉖-кватер ОБРАТНЫЙ ХОД: прослеживание литералов цикла отключено → проба ㉖ снова
+    # невидима. Разница двух прогонов и есть починка; сойдись они — ㉖ красил бы файл
+    # по посторонней причине, а не по литералам заголовка цикла.
+    (d26 / "probe_loop.py").write_text(loop_seed, encoding="utf-8")
+    whole_loop_literals = globals()["_loop_literals"]
+    globals()["_loop_literals"] = lambda tree, is_shown_call: {}
+    try:
+        loop_blind, _, _ = scan(d26)
+    finally:
+        globals()["_loop_literals"] = whole_loop_literals
+    ok &= case("㉖-кватер ОБРАТНЫЙ ХОД: прослеживание литералов цикла отключено → снова невидим",
+               not any("probe_loop.py" in h for h in loop_blind)
+               and any("probe_loop.py:4" in h for h in loop_hits),
+               "разница двух прогонов и есть починка; сойдись они — ㉖ красил бы файл по "
+               "другой причине, а не по литералам заголовка цикла", differ=True)
+
+    # ㉖-квинт ОДИНОЧНАЯ ПЕРЕМЕННАЯ и КОРТЕЖ в заголовке: `for x in (...)` — печатается элемент
+    # целиком. Проба ㉖ ходит по СПИСКУ кортежей, эта — по кортежу строк: оба вида заголовка.
+    (d26 / "probe_loop.py").write_text(
+        '# -*- coding: utf-8 -*-\n'
+        'def main():\n'
+        '    for step in ("шаг один", "витрина пула"):\n'
+        '        print(f"   {step}")\n', encoding="utf-8")
+    loop_single_hits, _, _ = scan(d26)
+    ok &= case("㉖-квинт одиночная переменная цикла по кортежу: печатаемый элемент судится",
+               len(loop_single_hits) == 1 and any("probe_loop.py:3" in h for h in loop_single_hits),
+               f"находок {len(loop_single_hits)}, ждём ровно одну — строку кортежа (probe_loop.py:3): "
+               "второй вид заголовка из слова владельца, не только распаковка в списке кортежей",
+               differ=True)
+
+    # ㉖-секст ГРАНИЦА: комментарий в конце строки кортежа не судится. Литералы приходят
+    # из ast, а не из текста строки, — комментарий в них не попадает, как и у ⑰.
+    (d26 / "probe_loop.py").write_text(
+        '# -*- coding: utf-8 -*-\n'
+        'def main(out):\n'
+        '    for name, label in [\n'
+        '            ("guard-all.py", "шаг один"),   # раньше это звали витриной пула\n'
+        '            ("read-phoenix.py", "шаг два")]:\n'
+        '        out.append(f"   {label} {name}")\n', encoding="utf-8")
+    loop_comment_hits, _, _ = scan(d26)
+    ok &= case("㉖-секст ГРАНИЦА: прежнее слово в комментарии у строки кортежа не красит",
+               not loop_comment_hits,
+               f"находок {len(loop_comment_hits)} — комментарии приёмка не судит и на этом "
+               "пути; слово остаётся причиной решения, а не ложью читателю", differ=True)
+
+    # ㉖-септ ВСТРЕЧНЫЙ: переменная позиции стоит в печатаемой f-строке лишь УСЛОВИЕМ
+    # выбора значка, а её значение человек не читает. Найдено первым прогоном на живом
+    # файле (bite-sleeping-addressee.py): сбор имён вне вложенных вызовов (_own_names)
+    # брал и условие, и красил слово, которое человеку не показывают. Обратный ход
+    # прямо здесь: вернуть прежний сбор имён → ложная находка возвращается.
+    (d26 / "probe_loop.py").write_text(
+        '# -*- coding: utf-8 -*-\n'
+        'def main(out):\n'
+        '    for which, label in [\n'
+        '            ("витрина", "шаг один"),\n'
+        '            ("guard-all.py", "шаг два")]:\n'
+        '        out.append(f"{\'A\' if which == \'x\' else \'B\'} {label}")\n', encoding="utf-8")
+    loop_cond_hits, _, _ = scan(d26)
+    whole_value_names = globals()["_shown_value_names"]
+    globals()["_shown_value_names"] = globals()["_own_names"]
+    try:
+        loop_cond_old, _, _ = scan(d26)
+    finally:
+        globals()["_shown_value_names"] = whole_value_names
+    ok &= case("㉖-септ ВСТРЕЧНЫЙ: переменная позиции только в УСЛОВИИ подстановки не красит; "
+               "прежний сбор имён её красил",
+               not loop_cond_hits and any("probe_loop.py:4" in h for h in loop_cond_old),
+               f"с уточнённым сбором находок {len(loop_cond_hits)}, с прежним {len(loop_cond_old)} — "
+               "человек читает значок, а не значение переменной, по которой он выбран; "
+               "правкой текста такую находку не погасить", differ=True)
+    mezo_stand.release(d26)
 
     # ── ⑤ КОНТРОЛЬ: ПРИЁМКА ВООБЩЕ СМОТРИТ ───────────────────────────────────
     ok &= case("⑤ контроль: приёмке было на что смотреть",
