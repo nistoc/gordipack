@@ -93,6 +93,76 @@ def _bridge_dirs(root):
     return _by_marker(root, "bridges")
 
 
+def _old_name_by(second: str, group: str) -> bool:
+    """Старое имя «вид.<автор>-<тема>.md»: автор — это group (имя и дефис, а не просто начало
+    строки: иначе контур «at» оказался бы автором писем «atlas-…»)."""
+    return bool(group) and (second == group or second.startswith(group + "-"))
+
+
+def _neighbor_ask_kind(name: str, box_name: str, group: str, our_group: str) -> str:
+    """Чей вопрос «ask.*.md» лежит в папке СОСЕДА и кому он — по виду имени (карточка #673).
+
+    «to_us» — вопрос к нам, судится · «ours» — НАШЕ письмо старого вида, вопросом к нам не
+    считается · «history» — вопрос соседа старого вида в общей с нами папке · «not_ours» —
+    не к нам.
+
+    🪤 НАШЛИ AIA (их карточка 147, письмо 27.09). Цикл по папкам соседа брал второе слово имени
+    за АДРЕСАТА у всех имён. У старого имени второе слово — АВТОР, поэтому два письма AIA
+    в общей папке старого обмена «aia-stud-exchange» (она лежит у нас) числились у них
+    вопросами к ним самим. С 27.09 их же ответы на те же темы гасили признак — проверка
+    проходила по неверной причине: «отвечен НАШИМ ответом ЕМУ ЖЕ».
+    ⚖️ Почему не та же функция, что в ветке «у соседа своих папок нет» (`_is_neighbor_question`),
+    как предлагали AIA: там общая папка — НАША, и старый вопрос соседа в ней — живой вопрос,
+    ответ на него мы кладём рядом. Здесь общая папка — ЕГО, у соседа уже есть исходящая
+    нового вида, и старый обмен — история: ответы на него лежат в той же общей папке, а не
+    в нашей. Та же функция сделала бы у AIA все 11 старых вопросов Atlas из общей папки
+    вопросами к ним, а ответы на них искала бы только в их папке: «без ответа» 11 из 11
+    (замер 04.10 21:47 UTC по именам файлов обеих папок) — провал, который нельзя погасить
+    ничем своим. Поэтому такие
+    вопросы называются числом, но не судятся. Граница вида — та же, что у `_topic`: число точек.
+    ⚖️ Без своего имени группы различать нечего — прежнее правило, все вопросы судятся."""
+    dots = name.count(".")
+    second = name.split(".")[1] if dots >= 2 else ""
+    if dots != 2 or not our_group:
+        # новое имя «ask.<кому>.<тема>.md» и всё, что видом не различить, — прежнее правило
+        return "to_us" if not our_group or second.startswith(our_group) else "not_ours"
+    if _old_name_by(second, our_group):
+        return "ours"
+    if _old_name_by(second, group) and our_group in box_name.split("-"):
+        return "history"
+    return "not_ours"
+
+
+def _neighbor_answers_to_our_old(ask_name: str, boxes, group: str, our_group: str) -> list:
+    """Ответы соседа на НАШЕ письмо старого вида, найденные У НЕГО (карточка #673, критерий
+    AIA «наше письмо — ответ соседа найден у него»): новое имя «answer.<мы>.<тема>.md» в любой
+    его папке либо старое «answer.<сосед>-<тема>.md» в общей с нами папке. Сверяются ИМЕНА тем,
+    как и везде в этой проверке: полон ли ответ, машина не знает."""
+    topic = ask_name[len("ask."):-len(".md")]
+    for nm in (our_group, group):
+        if nm and topic.startswith(nm + "-"):
+            topic = topic[len(nm) + 1:]
+    hits = []
+    for box in boxes:
+        for f in sorted(box.glob("answer.*.md")):
+            parts = f.name.split(".")
+            if len(parts) > 3:                                   # новое имя: второе слово — КОМУ
+                if not parts[1].startswith(our_group):
+                    continue
+                theirs = ".".join(parts[2:-1])
+            elif len(parts) == 3 and our_group in box.name.split("-"):   # старое: второе — АВТОР
+                if not _old_name_by(parts[1], group):
+                    continue
+                theirs = parts[1][len(group):].lstrip("-")
+                if theirs.startswith(our_group + "-"):
+                    theirs = theirs[len(our_group) + 1:]
+            else:
+                continue
+            if theirs and topic and (theirs in topic or topic in theirs):
+                hits.append(f"{box.name}/{f.name}")
+    return hits
+
+
 WHERE_SEARCHED = ("<корень контура>/coordination либо "
               "<корень контура>/<любой репозиторий>/.mezosync/coordination")
 COORDINATIONS = _coordination_dirs(mezo_paths.container_root(__file__))
@@ -1426,6 +1496,7 @@ def main():
             else:
                 unreachable.append(f"{group} (искали в {container})")
             continue
+        old_ours, old_theirs = [], 0                     # общие папки старого вида у соседа
         for box in boxes:
             for ask in sorted(box.glob("ask.*.md")):
                 # 🔴 ВОПРОС СЧИТАЕТСЯ НАШИМ, ТОЛЬКО ЕСЛИ ОН АДРЕСОВАН НАМ. Сосед смотрит
@@ -1441,8 +1512,17 @@ def main():
                 # Правило, снявшее адресата, переехало вместе с кодом и стало своей
                 # противоположностью. Адресат нужен ИМЕННО ЗДЕСЬ, а тема — для связывания
                 # вопроса с ответом ниже.
-                to_whom = ask.name.split(".")[1] if ask.name.count(".") >= 2 else ""
-                if our_group and not to_whom.startswith(our_group):
+                # 🪤 И ВИД ИМЕНИ (карточка #673): у старого имени второе слово — АВТОР, а не
+                # адресат. Своё письмо старого вида — не вопрос к нам; старый вопрос соседа
+                # в общей с нами папке — история (разбор — в `_neighbor_ask_kind`).
+                kind = _neighbor_ask_kind(ask.name, box.name, group, our_group)
+                if kind == "ours":
+                    old_ours.append((box, ask))
+                    continue
+                if kind == "history":
+                    old_theirs += 1
+                    continue
+                if kind != "to_us":
                     continue
                 # 🪤 СВЕРЯЕТСЯ ТЕМА, А НЕ АДРЕСАТ. В имени файла второе слово — КОМУ он
                 # адресован: у вопроса к нам это «atlas», у ответа им — «tapas». Первая
@@ -1475,6 +1555,22 @@ def main():
                     continue
                 age_h = (datetime.now(timezone.utc).timestamp() - ask.stat().st_mtime) / 3600
                 waiting.append((age_h, group, ask.name))
+        # Общие папки старого вида у соседа: что выведено из-под суда — называется числом,
+        # иначе «вопросов без ответа нет» читалось бы как «всё просмотрено» (карточка #673).
+        if old_ours or old_theirs:
+            ours_answered = 0
+            for box, ask in old_ours:
+                found = _neighbor_answers_to_our_old(ask.name, boxes, group, our_group)
+                ours_answered += bool(found)
+                if FULL:
+                    print(f"ℹ️ мост соседей [{group}]: «{box.name}/{ask.name}» — НАШЕ письмо старого "
+                          "вида (второе слово старого имени — автор), вопросом к нам не считается; "
+                          + (f"ответ соседа у него: {' · '.join(found)}" if found
+                             else "ответа соседа у него по имени темы не нашлось"))
+            print(f"ℹ️ мост соседей [{group}]: в общих папках старого вида у соседа — наших писем "
+                  f"{len(old_ours)} (ответ соседа у него найден: {ours_answered}), его вопросов "
+                  f"{old_theirs}; вопросами к нам не судятся — обмен старого вида старше его "
+                  "исходящей папки, ответы на него лежат в той же общей папке")
     # ⚡ КРАТКИЙ ИТОГ МОСТА (карточка #593): счёт из обеих веток цикла выше — одной строкой,
     # только когда не FULL (при --full каждый ответ уже назван построчно).
     if not FULL and bridge_answered:

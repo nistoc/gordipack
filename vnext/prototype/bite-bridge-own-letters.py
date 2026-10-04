@@ -32,6 +32,27 @@ r"""bite-bridge-own-letters.py — приёмка карточки #573: про�
 «<сосед>-<мы>» (встречная ⑭ + поломка ⑮ «папка содержит имя») и места вызова сличения
 ответов в самой проверке (⑯ + поломка ⑰ «вызов без имени вопроса»).
 
+═══ ⑱–㉖ — КАРТОЧКА #673 (04.10, находка контура AIA, их карточка 147)
+Во втором слове старого имени «ask.<автор>-<тема>.md» стоит АВТОР, а цикл по папкам соседа
+читал его как АДРЕСАТА у всех имён. Два письма AIA в общей папке старого обмена
+«aia-stud-exchange» числились у них вопросами к ним самим, а с 27.09 их ответы на те же темы
+гасили признак: проверка проходила по неверной причине («отвечен НАШИМ ответом ЕМУ ЖЕ»).
+Разбор вида имени вынесен в функции уровня модуля, и приёмка берёт их ИЗ ИСХОДНИКА проверки
+(через ast), а не переписывает. ⑱ наше письмо старого вида — «ours» · ⑲ ВСТРЕЧНЫЙ: старый
+вопрос соседа в общей с нами папке — «history» · ⑳ новое имя судится как прежде · ㉑ ГРАНИЦА:
+папка не наша и имя без дефиса · ㉒ без своего имени группы — прежнее правило · ㉓ ответ соседа
+на наше старое письмо ищется У НЕГО. ㉔ — прогон проверки ЦЕЛИКОМ (--full) на КОПИИ контура
+«aia» с папками соседа «atlas»; ㉕ ㉖ — две нарочные поломки, каждая на своей копии: ㉕ возвращает
+прежнее поведение (наше письмо — вопрос к нам: ложное «отвечен НАШИМ ответом ЕМУ ЖЕ»), ㉖ — путь
+AIA буквально (старый вопрос соседа судится: он среди вопросов без ответа).
+⛔ ГРАНИЦА ЭТОЙ ЧАСТИ, НАЗВАНА ПРЯМО: ㉔ мерит на ПОДСТАВНЫХ именах и ОДНОЙ связи (мы «aia»,
+сосед «atlas»). Живые папки AIA и их 11 старых вопросов приёмка не читает: тот замер (04.10
+21:47 UTC) остаётся замером по именам файлов. Ветку «у соседа своих папок нет» эта часть не
+судит: её правило не менялось. Сличение идёт по ИМЕНАМ тем — полон ли ответ, машина не знает.
+Базу соседа проверка не открывает (из записи о соседе берётся только каталог его контура, а
+дальше читаются файлы его папок), поэтому на копии её нет. Возраст вопросов задан временем файла
+(30 суток назад): свежие в «без ответа» не попадают (окно 48 ч).
+
 ═══ ГРАНИЦА ЭТОЙ ПРИЁМКИ, НАЗВАНА ПРЯМО
 Судится ПРИЗНАК различения на подопытных файлах и его влияние на живой прогон.
 ⛔ Приёмка НЕ строит целый стенд контура (база + каталоги обмена) и потому не судит,
@@ -43,12 +64,14 @@ r"""bite-bridge-own-letters.py — приёмка карточки #573: про�
 два подставных письма (наше и соседа); ждём «наших 1» — ровно одно, не ноль и не оба.
 """
 import ast
+import os
 import re
 import shutil
 import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -120,6 +143,115 @@ def seeded_bridge_run(stand: Path) -> str:
                        capture_output=True, text=True, encoding="utf-8", timeout=900,
                        env=mezo_stand.stand_env(root))  # копия — контур, где лежит её guard-all
     return (r.stdout or "") + (r.stderr or "")
+
+
+OLD_NAME_FUNCTIONS = ("_old_name_by", "_neighbor_ask_kind", "_neighbor_answers_to_our_old")
+
+
+def module_function_namespace(names: tuple, source: str = "") -> dict:
+    """Функции уровня модуля с этими именами — ИЗ ИСХОДНИКА проверки через ast, а не
+    переписанные здесь (переписанная копия зелена к себе самой). Отсутствующих в словаре нет:
+    вызывающий сам называет, чего не нашлось. source — подменённый текст; по умолчанию живой."""
+    text = source or SOURCE_TEXT
+    namespace: dict = {"Path": Path}
+    for node in ast.parse(text).body:
+        if isinstance(node, ast.FunctionDef) and node.name in names:
+            exec(ast.get_source_segment(text, node), namespace)    # noqa: S102 — свой же исходник
+    return namespace
+
+
+def lines_with(output: str, *needles: str) -> list:
+    """Строки вывода (без краевых пробелов), где встретились ВСЕ подстроки."""
+    return [ln.strip() for ln in output.splitlines() if all(n in ln for n in needles)]
+
+
+def neighbor_old_names_run(stand: Path, tag: str, break_from: str = "", break_to: str = "") -> tuple:
+    """Прогон проверки целиком (--full) на КОПИИ контура «aia» с папками соседа «atlas» (㉔–㉖).
+
+    Копия — как в seeded_bridge_run: инструменты контура + снимок его базы (живая только
+    читается). В базе копии имя группы «aia» и ОДНА связь — с соседом «atlas», чей каталог лежит
+    на стенде (nb/…); в настоящие соседние контуры проверка не ходит. Саму базу соседа проверка
+    не открывает: из записи о нём берётся только каталог его контура, дальше читаются файлы
+    его папок, — поэтому её на стенде нет.
+    Папки соседа: общая старого обмена «aia-stud-exchange» (наше письмо старого вида и его старый
+    вопрос) и его исходящая «atlas-aia» (его ответ нам и его новый вопрос без ответа). Наша
+    исходящая «aia-atlas» несёт наш ответ ему по той же теме, что и наше старое письмо: он-то до
+    правки и давал ложное «отвечен НАШИМ ответом ЕМУ ЖЕ». Вопросам выставлено время файла
+    «30 суток назад»: свежие в «без ответа» не попадают (окно 48 ч).
+    break_from/break_to — нарочная поломка в КОПИИ guard-all.py: подстрока должна встретиться
+    ровно один раз, иначе поломка не применилась и прогон не делается.
+    → (применена ли поломка, вывод проверки: stdout + stderr)."""
+    live = mezo_paths.container_root(__file__) / ".mezosync"
+    root = stand / tag / "own"
+    shutil.copytree(live / "scripts", root / ".mezosync" / "scripts")
+    if break_from:
+        copy_path = root / ".mezosync" / "scripts" / "guard-all.py"
+        text = copy_path.read_bytes().decode("utf-8")
+        if text.count(break_from) != 1:
+            return False, ""
+        copy_path.write_bytes(text.replace(break_from, break_to).encode("utf-8"))
+    neighbor = stand / tag / "nb"
+    db = mezo_stand.snapshot_db(live / "mezosync.db", root / ".mezosync" / "mezosync.db")
+    con = sqlite3.connect(db)
+    con.execute("INSERT INTO meta (key, value) VALUES ('group_name', 'aia') "
+                "ON CONFLICT(key) DO UPDATE SET value = 'aia'")
+    con.execute("DELETE FROM cross_links")
+    con.execute("INSERT INTO cross_links (source_group, target_group, target_db_path) "
+                "VALUES ('aia', 'atlas', ?)", (str(neighbor / ".mezosync" / "mezosync.db"),))
+    con.commit()
+    con.close()
+    their_bridges = neighbor / "repo" / ".mezosync" / "bridges"
+    letters = [
+        (their_bridges / "aia-stud-exchange" / "ask.aia-проба.md", True,
+         "2026-09-06 02:40 UTC · пишет **COORD контура Aia**: наше письмо старого вида."),
+        (their_bridges / "aia-stud-exchange" / "ask.atlas-aia-старое.md", True,
+         "2026-09-06 02:41 UTC · пишет **COORD контура Atlas**: его старый вопрос в общей папке."),
+        (their_bridges / "atlas-aia" / "answer.aia.проба.md", False,
+         "2026-09-07 10:00 UTC · пишет **COORD контура Atlas**: его ответ нам."),
+        (their_bridges / "atlas-aia" / "ask.aia.живой-вопрос.md", True,
+         "2026-09-07 10:01 UTC · пишет **COORD контура Atlas**: его новый вопрос нам."),
+        (root / "bridges" / "aia-atlas" / "answer.atlas.проба.md", False,
+         "2026-09-08 09:00 UTC · пишет **PROTO контура Aia**: наш ответ ему по той же теме."),
+    ]
+    long_ago = time.time() - 30 * 86400
+    for path, is_question, first_line in letters:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(first_line + "\nтело письма\n", encoding="utf-8")
+        if is_question:
+            os.utime(path, (long_ago, long_ago))
+    r = subprocess.run([sys.executable, str(root / ".mezosync" / "scripts" / "guard-all.py"), "--full"],
+                       capture_output=True, text=True, encoding="utf-8", timeout=900,
+                       env=mezo_stand.stand_env(root))       # копия — контур, где лежит её guard-all
+    return True, (r.stdout or "") + (r.stderr or "")
+
+
+def judge_old_names(output: str) -> list:
+    """Шесть ожиданий случая ㉔ к выводу прогона. Каждое — (ключ, что ждём, выполнено ли, что найдено).
+
+    Первое — предпосылка: прогон дошёл до конца раздела моста. Без неё «строки нет» в остальных
+    ожиданиях ничего бы не значило: оборванный прогон молчит обо всём."""
+    def shown(hits: list) -> str:
+        if not hits:
+            return "строк нет"
+        return f"«{hits[0][:150]}»" + (f" (и ещё {len(hits) - 1})" if len(hits) > 1 else "")
+
+    reached = lines_with(output, "📤 мост: наших собственных писем")
+    false_answered = lines_with(output, "«ask.aia-проба.md» отвечен НАШИМ ответом ЕМУ ЖЕ")
+    own_old = lines_with(output, "НАШЕ письмо старого вида", "atlas-aia/answer.aia.проба.md")
+    counts = lines_with(output, "наших писем 1 (ответ соседа у него найден: 1), его вопросов 1")
+    their_old = lines_with(output, "ask.atlas-aia-старое.md")
+    live_question = lines_with(output, "· atlas: ask.aia.живой-вопрос.md — лежит")
+    return [
+        ("reached", "прогон дошёл до конца раздела моста", bool(reached), shown(reached)),
+        ("no_false_answered", "наше письмо не «отвечено НАШИМ ответом ЕМУ ЖЕ»",
+         not false_answered, shown(false_answered)),
+        ("own_old_named", "наше письмо старого вида названо, ответ соседа у него найден",
+         bool(own_old), shown(own_old)),
+        ("counts", "итог: наших писем 1 (ответ найден 1), его вопросов 1", bool(counts), shown(counts)),
+        ("their_old_not_waiting", "его старый вопрос не среди «без ответа»", not their_old, shown(their_old)),
+        ("live_question_waiting", "контроль: его новый вопрос без ответа по-прежнему судится",
+         bool(live_question), shown(live_question)),
+    ]
 
 
 def own_letter_predicate(group_name: str):
@@ -324,11 +456,99 @@ def main() -> int:
                 unnamed_src != SOURCE_TEXT and broken_total == total_calls and broken_named < broken_total,
                 f"под поломкой: мест вызова {broken_total}, с именем вопроса {broken_named}")
 
+    # ── ⑱–㉖ КАРТОЧКА #673 (04.10, находка контура AIA, их карточка 147): ВИД ИМЕНИ ВОПРОСА В
+    #    ПАПКАХ СОСЕДА. Второе слово старого имени — АВТОР, нового — АДРЕСАТ. Функции разбора
+    #    берутся ИЗ ИСХОДНИКА проверки (уровень модуля, через ast), а не переписаны здесь.
+    old_ns = module_function_namespace(OLD_NAME_FUNCTIONS)
+    missing = [fn for fn in OLD_NAME_FUNCTIONS if fn not in old_ns]
+    if missing:
+        record_case("⑱–㉓ разбор вида имени берётся из исходника проверки", False,
+                    f"в исходнике нет функций уровня модуля: {', '.join(missing)} — судить нечем")
+    else:
+        ask_kind = old_ns["_neighbor_ask_kind"]
+        answers_to_our_old = old_ns["_neighbor_answers_to_our_old"]
+        own_old_kind = ask_kind("ask.aia-тема.md", "aia-stud-exchange", "atlas", "aia")
+        record_case("⑱ наше письмо старого вида «ask.<мы>-<тема>.md» в папке соседа — «ours», не вопрос к нам",
+                    own_old_kind == "ours",
+                    f"признано: {own_old_kind} — второе слово старого имени автор, а не адресат")
+        their_old_kind = ask_kind("ask.atlas-aia-тема.md", "aia-stud-exchange", "atlas", "aia")
+        record_case("⑲ ВСТРЕЧНЫЙ: старый вопрос соседа в общей с нами папке — «history», не судится",
+                    their_old_kind == "history",
+                    f"признано: {their_old_kind} — иначе ⑱ зеленел бы от «ours для всего»")
+        new_to_us = ask_kind("ask.aia.тема.md", "atlas-aia", "atlas", "aia")
+        new_not_ours = ask_kind("ask.tapas.тема.md", "atlas-tapas", "atlas", "aia")
+        record_case("⑳ новое имя «ask.<кому>.<тема>.md» судится как прежде: к нам — «to_us», к третьему — «not_ours»",
+                    new_to_us == "to_us" and new_not_ours == "not_ours",
+                    f"к нам: {new_to_us} · к третьему: {new_not_ours}")
+        foreign_box_kind = ask_kind("ask.atlas-тема.md", "atlas-tapas", "atlas", "aia")
+        no_dash_kind = ask_kind("ask.aiax-тема.md", "aia-stud-exchange", "atlas", "aia")
+        record_case("㉑ ГРАНИЦА: старое имя в чужой папке — «not_ours», а автор «aiax» без дефиса — не «ours»",
+                    foreign_box_kind == "not_ours" and no_dash_kind != "ours",
+                    f"чужая папка: {foreign_box_kind} · «aiax-…»: {no_dash_kind} "
+                    "(нужен дефис после имени: иначе контур «aia» присвоил бы письма «aiax-…»)")
+        no_group_kind = ask_kind("ask.aia-тема.md", "aia-stud-exchange", "atlas", "")
+        record_case("㉒ без своего имени группы различать нечего — прежнее правило, вопрос судится («to_us»)",
+                    no_group_kind == "to_us", f"признано: {no_group_kind}")
+        old_exchange = stand / "old-answers"
+        old_boxes = []
+        for box_name, answer_name in (("atlas-aia", "answer.aia.тема.md"),
+                                      ("aia-stud-exchange", "answer.atlas-aia-другое.md"),
+                                      ("atlas-tapas", "answer.tapas.тема.md")):
+            box = old_exchange / box_name
+            box.mkdir(parents=True)
+            (box / answer_name).write_text("ответ\n", encoding="utf-8")
+            old_boxes.append(box)
+        old_answers = answers_to_our_old("ask.aia-тема.md", old_boxes, "atlas", "aia")
+        record_case("㉓ ответ соседа на наше старое письмо найден У НЕГО: ровно «answer.aia.тема.md» его исходящей",
+                    old_answers == ["atlas-aia/answer.aia.тема.md"],
+                    f"найдено: {old_answers} — другая тема в общей папке и ответ третьему не засчитаны")
+
+    # ㉔ прогон проверки ЦЕЛИКОМ на копии контура «aia»: четыре письма в папках соседа и наш ответ ему
+    applied, good_output = neighbor_old_names_run(stand, "good")
+    good_verdict = judge_old_names(good_output)
+    record_case("㉔ прогон на копии контура «aia»: наше старое письмо не вопрос к нам, его старый вопрос не судится, "
+                "его новый вопрос судится",
+                applied and all(ok for _, _, ok, _ in good_verdict),
+                " · ".join(f"{'✓' if ok else '✗'} {tag}: {found}" for _, tag, ok, found in good_verdict))
+
+    # ㉕ НАРОЧНАЯ ПОЛОМКА А — прежнее поведение: наше письмо старого вида разбирается как вопрос к нам
+    applied_a, break_a_output = neighbor_old_names_run(stand, "break-a", '        return "ours"',
+                                                       '        return "to_us"')
+    if applied_a:
+        verdict_a = judge_old_names(break_a_output)
+        by_key_a = {key: ok for key, _, ok, _ in verdict_a}
+        fell_a = [tag for _, tag, ok, _ in verdict_a if not ok]
+        held_a = [tag for _, tag, ok, _ in verdict_a if ok]
+        record_case("㉕ ПОЛОМКА: «ours» → «to_us» возвращает ложное «отвечен НАШИМ ответом ЕМУ ЖЕ» и красит ㉔",
+                    by_key_a["reached"] and not by_key_a["no_false_answered"],
+                    f"под поломкой пали: {fell_a} · устояли: {held_a}")
+    else:
+        record_case("㉕ ПОЛОМКА: «ours» → «to_us» возвращает ложное «отвечен НАШИМ ответом ЕМУ ЖЕ» и красит ㉔",
+                    False, "поломка не применилась: подстрока не встретилась в исходнике ровно один раз")
+
+    # ㉖ НАРОЧНАЯ ПОЛОМКА Б — путь AIA буквально: старый вопрос соседа в общей папке судится как вопрос к нам
+    applied_b, break_b_output = neighbor_old_names_run(stand, "break-b", '        return "history"',
+                                                       '        return "to_us"')
+    if applied_b:
+        verdict_b = judge_old_names(break_b_output)
+        by_key_b = {key: ok for key, _, ok, _ in verdict_b}
+        waiting_line = lines_with(break_b_output, "· atlas: ask.atlas-aia-старое.md — лежит")
+        fell_b = [tag for _, tag, ok, _ in verdict_b if not ok]
+        held_b = [tag for _, tag, ok, _ in verdict_b if ok]
+        record_case("㉖ ПОЛОМКА: «history» → «to_us» ставит его старый вопрос среди «без ответа» и красит ㉔",
+                    by_key_b["reached"] and bool(waiting_line),
+                    (f"в списке: «{waiting_line[0]}»" if waiting_line else "его старого вопроса в списке нет")
+                    + f" · пали: {fell_b} · устояли: {held_b}")
+    else:
+        record_case("㉖ ПОЛОМКА: «history» → «to_us» ставит его старый вопрос среди «без ответа» и красит ㉔",
+                    False, "поломка не применилась: подстрока не встретилась в исходнике ровно один раз")
+
     failed = [case_name for case_name, ok, _ in results if not ok]
     print("")
     print("=" * 78)
-    print(f"РАЗЛИЧАЮЩИХ СЛУЧАЕВ {len(results)}, из них ВСТРЕЧНЫХ 5 (② ③ ⑧ ⑩ ⑭), ОБРАТНЫХ ХОДОВ 2 (⑪ ⑬)"
-          " и НАРОЧНЫХ ПОЛОМОК 2 (⑮ ⑰); ⑥ добавлен по границе @COORD, ⑦–⑰ — карточка #665")
+    print(f"РАЗЛИЧАЮЩИХ СЛУЧАЕВ {len(results)}, из них ВСТРЕЧНЫХ 9 (② ③ ⑧ ⑩ ⑭ ⑲ ⑳ ㉑ ㉒), ОБРАТНЫХ ХОДОВ 2 (⑪ ⑬)"
+          " и НАРОЧНЫХ ПОЛОМОК 4 (⑮ ⑰ ㉕ ㉖); ⑥ добавлен по границе @COORD, ⑦–⑰ — карточка #665,"
+          " ⑱–㉖ — карточка #673")
     print("⚖️ Признак берётся ИЗ ЖИВОГО инструмента, а не переписан здесь: переписанная")
     print("   копия зелена к себе самой и о предмете не говорит ничего.")
     if failed:
