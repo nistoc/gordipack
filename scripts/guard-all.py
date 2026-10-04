@@ -99,6 +99,22 @@ def _old_name_by(second: str, group: str) -> bool:
     return bool(group) and (second == group or second.startswith(group + "-"))
 
 
+def _is_shared_old_box(box_name: str, group: str, our_group: str) -> bool:
+    """Папка соседа — ОБЩАЯ папка старого обмена: наше имя — отдельное слово в имени папки,
+    и имя папки НЕ начинается с «<сосед>-» (карточка #673, доработка 04.10 22:21 UTC по слову владельца).
+
+    Папка «<сосед>-…» — его исходящая по тому же соглашению, по которому наша — «<мы>-…»
+    (случаи ⑭ ⑮ приёмки bite-bridge-own-letters.py). Только в общей папке второе слово имени
+    с двумя точками — АВТОР; в исходящей соседа письмо судится по прежнему правилу.
+    🪤 Без этой границы вопрос, по ошибке названный соседом с дефисом в его новой исходящей
+    («atlas-aia/ask.aia-тема.md» у контура «aia»), стал бы нашим письмом и ушёл из-под суда,
+    а до #673 он судился. Таких имён пока нет (все вопросы в atlas-aia и atlas-tapas — с тремя
+    точками и больше), но строка «вопросов без ответа нет» не должна держаться на везении."""
+    if not our_group or our_group not in box_name.split("-"):
+        return False
+    return not (group and box_name.startswith(group + "-"))
+
+
 def _neighbor_ask_kind(name: str, box_name: str, group: str, our_group: str) -> str:
     """Чей вопрос «ask.*.md» лежит в папке СОСЕДА и кому он — по виду имени (карточка #673).
 
@@ -120,15 +136,18 @@ def _neighbor_ask_kind(name: str, box_name: str, group: str, our_group: str) -> 
     (замер 04.10 21:47 UTC по именам файлов обеих папок) — провал, который нельзя погасить
     ничем своим. Поэтому такие
     вопросы называются числом, но не судятся. Граница вида — та же, что у `_topic`: число точек.
+    ⚖️ Старые правила имён действуют ТОЛЬКО в общей папке старого обмена (`_is_shared_old_box`);
+    в исходящей соседа и в чужих папках — прежнее правило, как до #673.
     ⚖️ Без своего имени группы различать нечего — прежнее правило, все вопросы судятся."""
     dots = name.count(".")
     second = name.split(".")[1] if dots >= 2 else ""
-    if dots != 2 or not our_group:
-        # новое имя «ask.<кому>.<тема>.md» и всё, что видом не различить, — прежнее правило
+    if dots != 2 or not _is_shared_old_box(box_name, group, our_group):
+        # новое имя «ask.<кому>.<тема>.md», любое имя вне общей папки старого обмена и всё,
+        # что видом не различить, — прежнее правило
         return "to_us" if not our_group or second.startswith(our_group) else "not_ours"
     if _old_name_by(second, our_group):
         return "ours"
-    if _old_name_by(second, group) and our_group in box_name.split("-"):
+    if _old_name_by(second, group):
         return "history"
     return "not_ours"
 
@@ -150,7 +169,7 @@ def _neighbor_answers_to_our_old(ask_name: str, boxes, group: str, our_group: st
                 if not parts[1].startswith(our_group):
                     continue
                 theirs = ".".join(parts[2:-1])
-            elif len(parts) == 3 and our_group in box.name.split("-"):   # старое: второе — АВТОР
+            elif len(parts) == 3 and _is_shared_old_box(box.name, group, our_group):  # старое: второе — АВТОР
                 if not _old_name_by(parts[1], group):
                     continue
                 theirs = parts[1][len(group):].lstrip("-")

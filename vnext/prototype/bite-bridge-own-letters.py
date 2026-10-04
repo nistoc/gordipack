@@ -53,6 +53,28 @@ AIA буквально (старый вопрос соседа судится: �
 дальше читаются файлы его папок), поэтому на копии её нет. Возраст вопросов задан временем файла
 (30 суток назад): свежие в «без ответа» не попадают (окно 48 ч).
 
+═══ ㉗–㉙ — ДОРАБОТКА КАРТОЧКИ #673 (04.10 22:21 UTC, слово владельца)
+Признаки «наше письмо» и «история» не смотрели, в какой папке лежит письмо. Вопрос, по ошибке
+названный соседом с дефисом в его новой исходящей («atlas-aia/ask.aia-тема.md» у контура «aia»),
+стал бы нашим письмом и ушёл из-под суда, а до #673 он судился. Теперь старые правила имён
+действуют только в общей папке старого обмена (функция `_is_shared_old_box`: наше имя — отдельное
+слово в имени папки, и имя НЕ начинается с «<сосед>-»). ㉗ вопрос с дефисом в исходящей соседа —
+«to_us» · ㉘ ВСТРЕЧНЫЙ: старое имя соседа там же — «not_ours», не «история» · ㉙ НАРОЧНАЯ ПОЛОМКА:
+без условия «не начинается с <сосед>-» падают ровно ㉗ ㉘ ㉚, ⑱–㉓ держатся.
+㉚–㉛ — ВТОРОЕ МЕСТО ВЫЗОВА того же признака (находка проверки чужой рукой 04.10): поиск ответов
+соседа на наше старое письмо (`_neighbor_answers_to_our_old`) тоже зовёт `_is_shared_old_box`, а
+ни один случай этого не судил — поломка там оставляла ㉗–㉙ зелёными. ㉚ старый ответ соседа
+«answer.<сосед>-<тема>.md» в его исходящей ответом на наше старое письмо не засчитан · ㉛ НАРОЧНАЯ
+ПОЛОМКА: в этом месте прежнее условие (67874cb: «наше имя — слово в имени папки») — падает ровно ㉚.
+Прогон копии под поломкой ㉙ — НАСТОЯЩИЙ (прежде он держался по построению: на стенде ㉔ не было
+письма, которое поломка могла задеть): к стенду добавлен вопрос с дефисом в исходящей соседа
+«atlas-aia/ask.aia-дефис.md»; на исправной проверке он среди «без ответа» (контрольный прогон
+«good-c»), под поломкой пропадает оттуда и становится «нашим письмом». Стенд самого ㉔ не тронут.
+⛔ ГРАНИЦА: таких имён в живых папках сегодня нет (все вопросы atlas-aia и atlas-tapas — с тремя
+точками и больше); ㉗–㉛ судят функции на подставных именах и прогон копии под поломкой ㉙.
+㉛ судит только функцию: на стенде ㉔ старого ответа в исходящей соседа нет, и итог прогона
+считает письма с найденным ответом, а не число ответов — лишний ответ строку не меняет.
+
 ═══ ГРАНИЦА ЭТОЙ ПРИЁМКИ, НАЗВАНА ПРЯМО
 Судится ПРИЗНАК различения на подопытных файлах и его влияние на живой прогон.
 ⛔ Приёмка НЕ строит целый стенд контура (база + каталоги обмена) и потому не судит,
@@ -145,7 +167,39 @@ def seeded_bridge_run(stand: Path) -> str:
     return (r.stdout or "") + (r.stderr or "")
 
 
-OLD_NAME_FUNCTIONS = ("_old_name_by", "_neighbor_ask_kind", "_neighbor_answers_to_our_old")
+OLD_NAME_FUNCTIONS = ("_old_name_by", "_is_shared_old_box", "_neighbor_ask_kind",
+                      "_neighbor_answers_to_our_old")
+# ㉙: признак общей папки без условия «не начинается с <сосед>-» — каждая папка с нашим именем общая
+SHARED_BOX_BREAK = ('    return not (group and box_name.startswith(group + "-"))', "    return True")
+# ㉛: во втором месте вызова — прежнее условие 67874cb («наше имя — слово в имени папки»)
+ANSWERS_SITE_BREAK = ("elif len(parts) == 3 and _is_shared_old_box(box.name, group, our_group):",
+                      'elif len(parts) == 3 and our_group in box.name.split("-"):')
+# ㉙: вопрос с дефисом в исходящей соседа — на стенде ㉔ его нет, без него прогон под поломкой
+#    держался бы по построению. (путь от каталога соседа, первая строка, вопрос ли)
+DASH_QUESTION = (("atlas-aia", "ask.aia-дефис.md"),
+                 "2026-09-07 10:02 UTC · пишет **COORD контура Atlas**: его вопрос нам с дефисом в имени.", True)
+DASH_WAITING = "· atlas: ask.aia-дефис.md — лежит"
+
+
+def old_name_unit_verdicts(ask_kind, answers_to_our_old, old_boxes, outbox_boxes) -> list:
+    """Ожидания ⑱–㉓, ㉗, ㉘ и ㉚ к функциям разбора вида имени — для нарочных поломок ㉙ и ㉛, где
+    те же вызовы делаются над функциями из ПОДМЕНЁННОГО исходника. Вызовы и ожидания — те же, что в
+    случаях ниже; поломки сверяют эту таблицу с живыми функциями и называют расхождение, если оно есть.
+    → [(номер случая, выполнено ли)]."""
+    return [
+        ("⑱", ask_kind("ask.aia-тема.md", "aia-stud-exchange", "atlas", "aia") == "ours"),
+        ("⑲", ask_kind("ask.atlas-aia-тема.md", "aia-stud-exchange", "atlas", "aia") == "history"),
+        ("⑳", ask_kind("ask.aia.тема.md", "atlas-aia", "atlas", "aia") == "to_us"
+              and ask_kind("ask.tapas.тема.md", "atlas-tapas", "atlas", "aia") == "not_ours"),
+        ("㉑", ask_kind("ask.atlas-тема.md", "atlas-tapas", "atlas", "aia") == "not_ours"
+              and ask_kind("ask.aiax-тема.md", "aia-stud-exchange", "atlas", "aia") != "ours"),
+        ("㉒", ask_kind("ask.aia-тема.md", "aia-stud-exchange", "atlas", "") == "to_us"),
+        ("㉓", answers_to_our_old("ask.aia-тема.md", old_boxes, "atlas", "aia")
+              == ["atlas-aia/answer.aia.тема.md"]),
+        ("㉗", ask_kind("ask.aia-тема.md", "atlas-aia", "atlas", "aia") == "to_us"),
+        ("㉘", ask_kind("ask.atlas-тема.md", "atlas-aia", "atlas", "aia") == "not_ours"),
+        ("㉚", answers_to_our_old("ask.aia-тема.md", outbox_boxes, "atlas", "aia") == []),
+    ]
 
 
 def module_function_namespace(names: tuple, source: str = "") -> dict:
@@ -165,7 +219,8 @@ def lines_with(output: str, *needles: str) -> list:
     return [ln.strip() for ln in output.splitlines() if all(n in ln for n in needles)]
 
 
-def neighbor_old_names_run(stand: Path, tag: str, break_from: str = "", break_to: str = "") -> tuple:
+def neighbor_old_names_run(stand: Path, tag: str, break_from: str = "", break_to: str = "",
+                           extra_letters: tuple = ()) -> tuple:
     """Прогон проверки целиком (--full) на КОПИИ контура «aia» с папками соседа «atlas» (㉔–㉖).
 
     Копия — как в seeded_bridge_run: инструменты контура + снимок его базы (живая только
@@ -180,6 +235,8 @@ def neighbor_old_names_run(stand: Path, tag: str, break_from: str = "", break_to
     «30 суток назад»: свежие в «без ответа» не попадают (окно 48 ч).
     break_from/break_to — нарочная поломка в КОПИИ guard-all.py: подстрока должна встретиться
     ровно один раз, иначе поломка не применилась и прогон не делается.
+    extra_letters — письма СВЕРХ стенда ㉔ в папках соседа: ((папка, имя), первая строка, вопрос ли);
+    стенд самого ㉔ ими не меняется (㉙ кладёт их только в свои прогоны «good-c» и «break-c»).
     → (применена ли поломка, вывод проверки: stdout + stderr)."""
     live = mezo_paths.container_root(__file__) / ".mezosync"
     root = stand / tag / "own"
@@ -212,7 +269,8 @@ def neighbor_old_names_run(stand: Path, tag: str, break_from: str = "", break_to
          "2026-09-07 10:01 UTC · пишет **COORD контура Atlas**: его новый вопрос нам."),
         (root / "bridges" / "aia-atlas" / "answer.atlas.проба.md", False,
          "2026-09-08 09:00 UTC · пишет **PROTO контура Aia**: наш ответ ему по той же теме."),
-    ]
+    ] + [(their_bridges / box_name / file_name, is_question, first_line)
+         for (box_name, file_name), first_line, is_question in extra_letters]
     long_ago = time.time() - 30 * 86400
     for path, is_question, first_line in letters:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -502,6 +560,26 @@ def main() -> int:
         record_case("㉓ ответ соседа на наше старое письмо найден У НЕГО: ровно «answer.aia.тема.md» его исходящей",
                     old_answers == ["atlas-aia/answer.aia.тема.md"],
                     f"найдено: {old_answers} — другая тема в общей папке и ответ третьему не засчитаны")
+        # ㉗ ㉘ ДОРАБОТКА карточки #673 (04.10 22:21 UTC): старые правила имён — только в общей папке старого обмена
+        dash_in_outbox = ask_kind("ask.aia-тема.md", "atlas-aia", "atlas", "aia")
+        record_case("㉗ вопрос с дефисом «ask.<мы>-<тема>.md» в ИСХОДЯЩЕЙ соседа «atlas-aia» судится, как до #673 («to_us»)",
+                    dash_in_outbox == "to_us",
+                    f"признано: {dash_in_outbox} — папка «<сосед>-…» его исходящая, не общая папка старого обмена")
+        their_dash_in_outbox = ask_kind("ask.atlas-тема.md", "atlas-aia", "atlas", "aia")
+        record_case("㉘ ВСТРЕЧНЫЙ: «ask.<сосед>-<тема>.md» в его исходящей — «not_ours», не «history»",
+                    their_dash_in_outbox == "not_ours",
+                    f"признано: {their_dash_in_outbox} — иначе ㉗ зеленел бы от «в исходящей соседа всё к нам»")
+        # ㉚ ВТОРОЕ МЕСТО ВЫЗОВА признака общей папки — поиск ответов соседа на наше старое письмо
+        outbox_box = stand / "outbox-old-answer" / "atlas-aia"
+        outbox_box.mkdir(parents=True)
+        (outbox_box / "answer.atlas-тема.md").write_text("ответ\n", encoding="utf-8")
+        outbox_boxes = [outbox_box]
+        outbox_answers = answers_to_our_old("ask.aia-тема.md", outbox_boxes, "atlas", "aia")
+        record_case("㉚ старый ответ «answer.<сосед>-<тема>.md» в ИСХОДЯЩЕЙ соседа «atlas-aia» ответом на наше "
+                    "старое письмо не засчитан",
+                    outbox_answers == [],
+                    f"найдено: {outbox_answers} — второе место вызова признака общей папки: старые правила "
+                    "имён и тут только в общей папке старого обмена")
 
     # ㉔ прогон проверки ЦЕЛИКОМ на копии контура «aia»: четыре письма в папках соседа и наш ответ ему
     applied, good_output = neighbor_old_names_run(stand, "good")
@@ -543,12 +621,72 @@ def main() -> int:
         record_case("㉖ ПОЛОМКА: «history» → «to_us» ставит его старый вопрос среди «без ответа» и красит ㉔",
                     False, "поломка не применилась: подстрока не встретилась в исходнике ровно один раз")
 
+    # Таблица ожиданий для поломок ㉙ и ㉛ сперва сверяется с живыми функциями: разойдись она с
+    # случаями выше — поломки судили бы не те вызовы.
+    if not missing:
+        live_table = old_name_unit_verdicts(ask_kind, answers_to_our_old, old_boxes, outbox_boxes)
+        table_diverged = [n for n, ok in live_table if not ok]
+        diverged_note = (f" · ⚠️ таблица ожиданий разошлась с живыми функциями: {table_diverged}"
+                         if table_diverged else "")
+
+    # ㉙ НАРОЧНАЯ ПОЛОМКА В — признак общей папки без условия «не начинается с <сосед>-»: исходящая
+    #    соседа «atlas-aia» становится общей ОБОИМ местам вызова. Падать обязаны ровно ㉗ ㉘ ㉚; ⑱–㉓ —
+    #    держаться. Прогон копии — со стендом ㉔ и вопросом с дефисом в исходящей соседа: на исправной
+    #    проверке он среди «без ответа» (контроль «good-c»), под поломкой — «наше письмо».
+    name_29 = ("㉙ ПОЛОМКА: без условия «не начинается с <сосед>-» падают ровно ㉗ ㉘ ㉚, а на прогоне копии "
+               "вопрос с дефисом в исходящей соседа уходит из «без ответа» в «наши письма»")
+    if missing:
+        record_case(name_29, False, f"в исходнике нет функций уровня модуля: {', '.join(missing)} — судить нечем")
+    elif SOURCE_TEXT.count(SHARED_BOX_BREAK[0]) != 1:
+        record_case(name_29, False, "поломка не применилась: подстрока не встретилась в исходнике ровно один раз")
+    else:
+        broken_ns = module_function_namespace(OLD_NAME_FUNCTIONS, SOURCE_TEXT.replace(*SHARED_BOX_BREAK))
+        broken_table = old_name_unit_verdicts(broken_ns["_neighbor_ask_kind"],
+                                              broken_ns["_neighbor_answers_to_our_old"], old_boxes, outbox_boxes)
+        fell_c = [n for n, ok in broken_table if not ok]
+        _, good_c_output = neighbor_old_names_run(stand, "good-c", extra_letters=(DASH_QUESTION,))
+        good_c_fell = [tag for _, tag, ok, _ in judge_old_names(good_c_output) if not ok]
+        dash_good = lines_with(good_c_output, DASH_WAITING)
+        applied_c, break_c_output = neighbor_old_names_run(stand, "break-c", *SHARED_BOX_BREAK,
+                                                           extra_letters=(DASH_QUESTION,))
+        run_fell_c = [tag for _, tag, ok, _ in judge_old_names(break_c_output) if not ok]
+        dash_broken = lines_with(break_c_output, DASH_WAITING)
+        counts_tag = "итог: наших писем 1 (ответ найден 1), его вопросов 1"
+        record_case(name_29,
+                    not table_diverged and fell_c == ["㉗", "㉘", "㉚"]
+                    and not good_c_fell and bool(dash_good)
+                    and applied_c and not dash_broken and run_fell_c == [counts_tag],
+                    f"под поломкой пали: {fell_c} · контроль «good-c»: "
+                    + (f"«{dash_good[0]}»" if dash_good else "вопроса с дефисом среди «без ответа» НЕТ")
+                    + (f", пали {good_c_fell}" if good_c_fell else ", шесть ожиданий ㉔ держатся")
+                    + " · под поломкой: "
+                    + ("вопрос с дефисом всё ещё среди «без ответа»" if dash_broken
+                       else "вопроса с дефисом среди «без ответа» нет")
+                    + f", пали {run_fell_c}"
+                    + ("" if applied_c else " · ⚠️ поломка в копии проверки не применилась")
+                    + diverged_note)
+
+    # ㉛ НАРОЧНАЯ ПОЛОМКА Г — во втором месте вызова (поиск ответов соседа на наше старое письмо)
+    #    прежнее условие 67874cb «наше имя — слово в имени папки». Падать обязан ровно ㉚.
+    name_31 = "㉛ ПОЛОМКА: во втором месте вызова прежнее условие 67874cb — падает ровно ㉚"
+    if missing:
+        record_case(name_31, False, f"в исходнике нет функций уровня модуля: {', '.join(missing)} — судить нечем")
+    elif SOURCE_TEXT.count(ANSWERS_SITE_BREAK[0]) != 1:
+        record_case(name_31, False, "поломка не применилась: подстрока не встретилась в исходнике ровно один раз")
+    else:
+        broken_ns_d = module_function_namespace(OLD_NAME_FUNCTIONS, SOURCE_TEXT.replace(*ANSWERS_SITE_BREAK))
+        fell_d = [n for n, ok in old_name_unit_verdicts(broken_ns_d["_neighbor_ask_kind"],
+                                                         broken_ns_d["_neighbor_answers_to_our_old"],
+                                                         old_boxes, outbox_boxes) if not ok]
+        record_case(name_31, not table_diverged and fell_d == ["㉚"],
+                    f"под поломкой пали: {fell_d}" + diverged_note)
+
     failed = [case_name for case_name, ok, _ in results if not ok]
     print("")
     print("=" * 78)
-    print(f"РАЗЛИЧАЮЩИХ СЛУЧАЕВ {len(results)}, из них ВСТРЕЧНЫХ 9 (② ③ ⑧ ⑩ ⑭ ⑲ ⑳ ㉑ ㉒), ОБРАТНЫХ ХОДОВ 2 (⑪ ⑬)"
-          " и НАРОЧНЫХ ПОЛОМОК 4 (⑮ ⑰ ㉕ ㉖); ⑥ добавлен по границе @COORD, ⑦–⑰ — карточка #665,"
-          " ⑱–㉖ — карточка #673")
+    print(f"РАЗЛИЧАЮЩИХ СЛУЧАЕВ {len(results)}, из них ВСТРЕЧНЫХ 10 (② ③ ⑧ ⑩ ⑭ ⑲ ⑳ ㉑ ㉒ ㉘), ОБРАТНЫХ ХОДОВ 2"
+          " (⑪ ⑬) и НАРОЧНЫХ ПОЛОМОК 6 (⑮ ⑰ ㉕ ㉖ ㉙ ㉛); ⑥ добавлен по границе @COORD, ⑦–⑰ — карточка #665,"
+          " ⑱–㉛ — карточка #673 (㉗–㉛ — доработка 04.10 22:21 UTC)")
     print("⚖️ Признак берётся ИЗ ЖИВОГО инструмента, а не переписан здесь: переписанная")
     print("   копия зелена к себе самой и о предмете не говорит ничего.")
     if failed:
