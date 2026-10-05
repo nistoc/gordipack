@@ -26,7 +26,10 @@ mezo_paths.py — ПРОТОТИП механизма R15a: инструмент
     db = resolve_db(args.db, __file__)
 """
 from pathlib import Path
+from typing import NamedTuple
+from urllib.parse import quote
 import os
+import sqlite3
 import sys
 
 DB_NAME = "mezosync.db"
@@ -444,3 +447,75 @@ def annex_dir(db_path) -> Path:
 def annex_path(db_path, key: str) -> Path:
     """Путь к приложению ОДНОГО правила — см. annex_dir()."""
     return annex_dir(db_path) / f"{key}.md"
+
+
+# ═══ КТО КООРДИНАТОР КОНТУРА — ОДНО ПРАВИЛО ОТБОРА НА ВЕСЬ КОНТУР ══════════════════════
+# Карточка #677, этап Э3, работа Р1. Прежде правило несли ТРИ копии кода: gordi-issue.py,
+# role-brief.py и rules-from-pack.py. Первые две уже искали слово в Python через casefold()
+# (карточка #645: LIKE в SQLite сворачивает регистр только у латиницы, и причина
+# «Координатор контура…» с заглавной не находилась вовсе). Третья осталась на SQL LIKE и
+# не находила такую причину молча: готовая команда режима --propose получала заполнитель
+# «<координатор>» вместо имени. Три копии одного правила разошлись, и никто не заметил;
+# одна функция разойтись сама с собой не может.
+# ⚖️ ЧТО ЗДЕСЬ, А ЧТО У ВЫЗЫВАЮЩИХ. Здесь — только ОТБОР (живые роли · непустая причина ·
+# слово «координатор» без учёта регистра) и честный ИТОГ (одно имя · список найденных ·
+# класс сбоя чтения). Слова сообщений остаются у вызывающих: каждый говорит со своим
+# читателем и держит свой договор о том, что возвращает и что печатает.
+# ⚖️ ПОЧЕМУ СЛОВО ИЩЕТСЯ В PYTHON, А НЕ В SQL: LIKE не сворачивает регистр кириллицы
+# («Координатор» ≠ «координатор»), а casefold() сворачивает регистр любого письма. Запрос
+# берёт живые роли с непустой причиной, дальше судит Python.
+# ⛔ Функция НЕ ЗОВЁТ container_root / live_db / live_scripts / template_root — иначе
+# разбор «нужен ли второй замок» (_заразные_имена) записал бы её в заразные, и короткий
+# совет в отказах поменялся бы у всех, кто её зовёт.
+COORDINATOR_WORD = "координатор"
+_ALIVE_ROLES_SQL = ("SELECT role, lifecycle_reason FROM roles "
+                    "WHERE lifecycle='alive' AND lifecycle_reason IS NOT NULL")
+
+
+class CoordinatorLookup(NamedTuple):
+    """Итог поиска координатора.
+
+    name  — имя в ВЕРХНЕМ регистре, когда названа РОВНО ОДНА живая роль; иначе None;
+    found — отсортированные имена ВСЕХ найденных (пусто · одно · несколько);
+    error — класс исключения, если таблицу ролей прочитать не удалось; иначе None.
+    """
+    name: str | None
+    found: list
+    error: str | None
+
+
+def _alive_roles(con):
+    return con.execute(_ALIVE_ROLES_SQL).fetchall()
+
+
+def find_coordinator(source) -> CoordinatorLookup:
+    """Кто в этом контуре назван координатором — ИЗ ДАННЫХ (roles.lifecycle_reason живых ролей).
+
+    source — соединение sqlite3 ИЛИ путь к базе. Путь открывается ТОЛЬКО на чтение
+    (URI mode=ro): поиск не вправе ни записать в базу, ни создать пустую базу по опечатке
+    пути. Соединение вызывающего не закрывается и не меняется.
+
+    Исходы (name · found · error):
+      · назван РОВНО ОДИН          → имя · [имя] · None
+      · не назван никто            → None · [] · None
+      · названо больше одного      → None · [все имена по алфавиту] · None
+      · таблицу не прочитать       → None · [] · «класс исключения» (например OperationalError)
+    Сбой чтения не поднимается исключением: вызывающий обязан назвать причину своими
+    словами, а не упасть трассировкой там, где ждал имя.
+    """
+    try:
+        if isinstance(source, sqlite3.Connection):
+            rows = _alive_roles(source)
+        else:
+            uri = "file:" + quote(Path(source).as_posix(), safe="/:") + "?mode=ro"
+            con = sqlite3.connect(uri, uri=True, timeout=3)
+            try:
+                rows = _alive_roles(con)
+            finally:
+                con.close()
+    except Exception as e:  # noqa: BLE001 — сбой чтения называется классом, а не роняет вызывающего
+        return CoordinatorLookup(None, [], e.__class__.__name__)
+    found = sorted(role.upper() for role, reason in rows
+                   if reason and COORDINATOR_WORD in reason.casefold())
+    name = found[0] if len(found) == 1 else None
+    return CoordinatorLookup(name, found, None)

@@ -66,9 +66,11 @@ def _find_coordinator(db_path=None):
     (нашлось 0, нашлось больше 1, база недоступна) — имя None, а пояснение называет,
     ЧТО НАЙДЕНО (сколько и какие) и КАК назвать координатора в контуре: писателя
     подставлять НЕЛЬЗЯ, литерал здесь и был дефектом.
+
+    Сам ОТБОР — не здесь, а в mezo_paths.find_coordinator (карточка #677, этап Э3): единственное
+    место правила на весь контур. Здесь остаются слова отказа; договор функции прежний.
     """
     import mezo_paths
-    import sqlite3
     set_rule = (Path(__file__).resolve().parent / "set-rule.py").as_posix()
     how_to_name = (
         "назвать координатора в контуре: вписать слово «координатор» в "
@@ -76,28 +78,24 @@ def _find_coordinator(db_path=None):
         f"python {set_rule} --key role-roster-and-zones --show")
     try:
         db = db_path or mezo_paths.live_db(__file__)
-        con = sqlite3.connect(f"file:{Path(db).as_posix()}?mode=ro", uri=True, timeout=3)
-        try:
-            rows = con.execute(
-                "SELECT role, lifecycle_reason FROM roles WHERE lifecycle='alive' "
-                "AND lifecycle_reason IS NOT NULL").fetchall()
-        finally:
-            con.close()
-    except Exception as e:  # noqa: BLE001 — база недоступна: координатора НЕ НАШЛИ, не литерал
+    except Exception as e:  # noqa: BLE001 — путь к базе не вычислить: координатора НЕ НАШЛИ, не литерал
         return None, (f"база координатора недоступна ({e.__class__.__name__}) — "
                        f"найдено 0 ролей. {how_to_name}")
-    # 🪤 ВТОРАЯ ПОЛОВИНА ТОЙ ЖЕ БЕДЫ, нашла COORD приёмкой 2026-09-15 (карточка #645):
-    # в SQLite LIKE сворачивает регистр ТОЛЬКО у латиницы, у кириллицы — нет. Роль,
-    # у которой причина начинается с заглавной («Координатор контура…»), не находилась
-    # вовсе, и инструмент отказывал словами «вписать слово «координатор»» — то есть
-    # велел вписать уже вписанное. Поэтому живые роли берутся запросом, а слово ищется
-    # здесь, через casefold(): он сворачивает регистр любого письма.
-    names = sorted(role.upper() for role, reason in rows
-                   if "координатор" in (reason or "").casefold())
-    if len(names) == 1:
-        return names[0], "roles.lifecycle_reason (таблица ролей контура)"
-    found = ("найдено 0 живых ролей-координаторов" if not names
-             else f"найдено {len(names)}: {', '.join(names)}")
+    # 🪤 ОТБОР ПЕРЕЕХАЛ В mezo_paths.find_coordinator (карточка #677, этап Э3, работа Р1):
+    # три копии правила (здесь, в role-brief.py и в rules-from-pack.py) заменила ОДНА функция.
+    # Почему слово ищется в Python, а не в SQL (карточка #645, возврат COORD 2026-09-15):
+    # в SQLite LIKE сворачивает регистр ТОЛЬКО у латиницы, у кириллицы — нет. Роль, у которой
+    # причина начинается с заглавной («Координатор контура…»), не находилась вовсе, и
+    # инструмент отказывал словами «вписать слово «координатор»» — то есть велел вписать
+    # уже вписанное. Здесь остаются ТОЛЬКО слова отказа.
+    lookup = mezo_paths.find_coordinator(db)
+    if lookup.error:
+        return None, (f"база координатора недоступна ({lookup.error}) — "
+                       f"найдено 0 ролей. {how_to_name}")
+    if lookup.name:
+        return lookup.name, "roles.lifecycle_reason (таблица ролей контура)"
+    found = ("найдено 0 живых ролей-координаторов" if not lookup.found
+             else f"найдено {len(lookup.found)}: {', '.join(lookup.found)}")
     return None, f"{found} в roles.lifecycle_reason. {how_to_name}"
 
 

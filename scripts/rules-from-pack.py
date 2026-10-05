@@ -800,19 +800,10 @@ def print_listing(rows: list, only_yours: list, state_filter, db_path=None) -> N
 
 # ── КООРДИНАТОР И ОБЕЗЛИЧИВАНИЕ (для --propose) ─────────────────────────────────────
 
-def find_coordinator(conn):
-    """Имя живой роли-координатора ИЗ ДАННЫХ (тот же приём, что у gordi-issue.py) —
-    None, если не нашлась РОВНО одна такая роль."""
-    try:
-        rows = conn.execute(
-            "SELECT role FROM roles WHERE lifecycle='alive' "
-            "AND lifecycle_reason LIKE '%координатор%'").fetchall()
-    except sqlite3.OperationalError:
-        rows = []
-    if len(rows) == 1:
-        return rows[0][0].upper()
-    return None
-
+# Координатор контура ищется ОБЩЕЙ функцией mezo_paths.find_coordinator (карточка #677, этап
+# Э3, работа Р1) — её зовёт write_proposal_letter ниже. Прежде здесь стояла своя копия на SQL
+# LIKE: в SQLite LIKE не сворачивает регистр кириллицы, и причина «Координатор контура…» с
+# заглавной не находилась — готовая команда --propose получала заполнитель вместо имени.
 
 def redact_machine_paths(text: str):
     found = sorted({m.group(0) for m in MACHINE_PATH.finditer(text)})
@@ -1383,11 +1374,18 @@ def write_proposal_letter(conn, title: str, body: str, out_path) -> int:
     if found:
         print(f"⚠️ обезличены пути машины ({len(found)} шт.) — проверь текст глазами перед отправкой")
 
-    coordinator = find_coordinator(conn)
+    lookup = mezo_paths.find_coordinator(conn)
+    coordinator = lookup.name
     role_for_cmd = coordinator or "<координатор>"
     if coordinator is None:
-        print("⚠️ не нашёл РОВНО ОДНУ живую роль-координатора в roles.lifecycle_reason — "
-              "подставь имя координатора сам")
+        if lookup.error:
+            found_note = f"таблица ролей не читается: {lookup.error}"
+        elif not lookup.found:
+            found_note = "найдено 0 живых ролей-координаторов"
+        else:
+            found_note = f"найдено {len(lookup.found)}: {', '.join(lookup.found)}"
+        print("⚠️ не нашёл РОВНО ОДНУ живую роль-координатора в roles.lifecycle_reason "
+              f"({found_note}) — подставь имя координатора сам")
     print("👉 сначала холостой прогон канала issues, затем — по слову координатора:")
     print(f'   python {GORDI_ISSUE_PY} create '
           f'--role {role_for_cmd} --title "{title}" --body-file {out_path} --dry-run')

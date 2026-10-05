@@ -25,8 +25,14 @@ r"""bite-gordi-issue.py — приёмка гейта писателя кана�
 ждём красным РОВНО ④ (роль-координатор из данных «TAXO» перестаёт писать, а «COORD» —
 роль, переставшая быть координатором — снова пишет); ① ② ③ целы, потому что в них
 координатор данных СОВПАДАЕТ с «COORD» и литерал их не различает.
-ВТОРАЯ НАРОЧНАЯ ПОЛОМКА (--porcha revert-to-like): слово ищется запросом LIKE вместо
-casefold() — ждём красным РОВНО ⑤ и ⑤-бис; ①–④ целы (там причина записана строчными).
+ВТОРАЯ НАРОЧНАЯ ПОЛОМКА (--porcha revert-to-like): ОБЩАЯ функция поиска координатора
+(mezo_paths.find_coordinator — с карточки #677, этап Э3, отбор живёт там, а не в gordi-issue.py)
+ищет слово запросом LIKE вместо casefold(). Портится копия mezo_paths.py В СТЕНДЕ, а не
+gordi-issue.py: поломка, оставшаяся в старом месте, молча перестала бы что-либо ломать.
+Ждём красным РОВНО ⑤ и ⑤-бис; ①–④ целы (там причина записана строчными).
+ТРЕТЬЯ (--porcha common-first): при двух ролях общая функция берёт первую — ждём красным
+РОВНО ③-бис. ЧЕТВЁРТАЯ (--porcha common-literal): общая функция отвечает литералом «COORD» —
+ждём красным ③-бис и ④ (координатор TAXO перестаёт писать).
 
 ⛔ Живой базы не касается: работает на КОПИИ (backup API) в своём временном контейнере
 (структура `<конт>/.mezosync/mezosync.db`, опознаётся `MEZO_CONTAINER`). Сеть (`gh`) не
@@ -62,6 +68,27 @@ def case(title, verdict, detail, differ=False):
 
 BODY = "## ЗАМЕР\nтест\n## КЛАСС\nтест\n## ПРЕДЛОЖЕНИЕ\nтест\n"
 
+# Нарочные поломки ОБЩЕЙ функции mezo_paths.find_coordinator (карточка #677, этап Э3):
+# (якорь — строка самой функции, порча, что печатаем). Якорь обязан найтись РОВНО один раз.
+LIKE_ANCHOR = "\"WHERE lifecycle='alive' AND lifecycle_reason IS NOT NULL\")"
+LIKE_BROKEN = "\"WHERE lifecycle='alive' AND lifecycle_reason LIKE '%координатор%'\")"
+PICK_ANCHOR = "    name = found[0] if len(found) == 1 else None"
+COMMON_BREAKS = {
+    "revert-to-like": (
+        LIKE_ANCHOR, LIKE_BROKEN,
+        "🧪 НАРОЧНАЯ ПОЛОМКА «revert-to-like»: ОБЩАЯ функция поиска координатора ищет слово "
+        "запросом LIKE (слеп к заглавной кириллице), портится копия mezo_paths.py в стенде. "
+        "Ждём красным РОВНО ⑤ и ⑤-бис; ①–④ целы"),
+    "common-first": (
+        PICK_ANCHOR, "    name = found[0] if found else None",
+        "🧪 НАРОЧНАЯ ПОЛОМКА «common-first»: при двух ролях общая функция берёт первую. "
+        "Ждём красным РОВНО ③-бис; остальные целы"),
+    "common-literal": (
+        PICK_ANCHOR, '    name = "COORD" if found else None',
+        "🧪 НАРОЧНАЯ ПОЛОМКА «common-literal»: общая функция отвечает литералом «COORD». "
+        "Ждём красным ③-бис и ④ (координатор TAXO перестаёт писать); ①②③⑤ целы"),
+}
+
 
 def call_tool(tool: Path, container: Path, *args):
     r = subprocess.run(
@@ -74,10 +101,11 @@ def call_tool(tool: Path, container: Path, *args):
 def main() -> int:
     import argparse
     ap = argparse.ArgumentParser()
-    ap.add_argument("--porcha", choices=["revert-to-literal", "revert-to-like"],
+    ap.add_argument("--porcha", choices=["revert-to-literal", *COMMON_BREAKS],
                     help="нарочная поломка: revert-to-literal — вернуть проверку писателя "
-                         "к литералу «COORD»; revert-to-like — вернуть отбор слова запросом "
-                         "LIKE, слепым к заглавной кириллице")
+                         "к литералу «COORD»; revert-to-like — общая функция поиска координатора "
+                         "ищет слово запросом LIKE, слепым к заглавной кириллице; common-first — "
+                         "при двух ролях берёт первую; common-literal — отвечает литералом «COORD»")
     a = ap.parse_args()
 
     # было: live_tool = Path(__file__).resolve().parent.parent / ".mezosync" / "scripts" / "gordi-issue.py"
@@ -148,23 +176,22 @@ def main() -> int:
                   "③-бис; ①②④ целы (там всегда ровно одна роль, путь через литерал не "
                   "задействован)\n")
 
-        if a.porcha == "revert-to-like":
-            # 🎯 Порча возвращает ВТОРУЮ половину карточки #645: регистр слова больше
-            # не сворачивается — ровно так вела себя прежняя выборка запросом LIKE
-            # (в SQLite он сворачивает регистр только у латиницы). Краснеют РОВНО
-            # ⑤ и ⑤-бис (причина с заглавной кириллицы); ①–④ целы: там причина
-            # записана строчными, и слепой к регистру поиск её находит.
-            text = tool.read_text(encoding="utf-8")
-            old = '\n'.join([
-                '    names = sorted(role.upper() for role, reason in rows',
-                '                   if "координатор" in (reason or "").casefold())'])
-            new = '\n'.join([
-                '    names = sorted(role.upper() for role, reason in rows',
-                '                   if "координатор" in (reason or ""))'])
-            assert text.count(old) == 1, f"поломка НЕ ЛЕГЛА: найдено {text.count(old)}"
-            tool.write_text(text.replace(old, new), encoding="utf-8")
-            print("🧪 НАРОЧНАЯ ПОЛОМКА «revert-to-like»: регистр слова больше не сворачивается. "
-                  "Ждём красным РОВНО ⑤ и ⑤-бис; ①–④ целы\n")
+        if a.porcha in COMMON_BREAKS:
+            # 🎯 Порча кладётся в КОПИЮ ОБЩЕЙ ФУНКЦИИ (mezo_paths.py рядом с копией инструмента:
+            # инструмент берёт модуль из своего каталога), а не в gordi-issue.py. С карточки #677
+            # (этап Э3) отбор координатора живёт в mezo_paths.find_coordinator, и прежняя
+            # поломка «регистр не сворачивается», оставленная в gordi-issue.py, молча
+            # перестала бы что-либо ломать: искать там стало бы нечего.
+            # revert-to-like возвращает ВТОРУЮ половину карточки #645 — запрос LIKE (в SQLite
+            # он сворачивает регистр только у латиницы): краснеют РОВНО ⑤ и ⑤-бис (причина с
+            # заглавной кириллицы); ①–④ целы, там причина записана строчными.
+            anchor, broken, said = COMMON_BREAKS[a.porcha]
+            shared_copy = scripts_dir / "mezo_paths.py"
+            shared_text = shared_copy.read_text(encoding="utf-8")
+            assert shared_text.count(anchor) == 1, (
+                f"поломка НЕ ЛЕГЛА: найдено {shared_text.count(anchor)}")
+            shared_copy.write_text(shared_text.replace(anchor, broken), encoding="utf-8")
+            print(said + "\n")
 
         # ① координатор из данных (сейчас — COORD) пишет
         code1, out1 = call_tool(tool, container, "--role", "COORD", "--title", "t",

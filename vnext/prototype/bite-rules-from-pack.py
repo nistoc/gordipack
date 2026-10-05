@@ -54,6 +54,14 @@ UTC): ㊼/поломка — --show на «изменено с обеих сто
 телу. ⑰б получил свой подстенд с согласованным снимком живой базы
 (mezo_stand.snapshot_db); общий root снимка не получает. Встречный случай — поломка (С)
 сразу после ⑰б: пустой раздел под заголовком письма ловит РОВНО ⑰б, не ⑰а.
+
+КАРТОЧКА #677, ЭТАП Э3, РАБОТА Р1 (2026-10-05): поиск координатора для готовой команды --propose
+переехал из СВОЕГО запроса LIKE в ОБЩУЮ функцию mezo_paths.find_coordinator. Случаи: №52 (причина
+с заглавной и ПРОПИСНЫМИ находится — раньше команда получала заполнитель «<координатор>») ·
+№52-бис (координатор с именем не COORD) · №52-тер (две роли со словом — имени нет, названы обе).
+Поломки: У (общая функция ищет запросом LIKE) · Ф (rules-from-pack.py снова со своим запросом LIKE) ·
+Х (предупреждение не называет найденных) · Ц (общая функция отвечает литералом «COORD») ·
+Ч (при двух ролях общая функция берёт первую). Каждая красит ровно названные случаи.
 """
 from __future__ import annotations
 
@@ -415,6 +423,83 @@ def patch_propose_section_empty(src: str):
         '        f""  # ПОЛОМКА (С): текст раздела пропал, заголовок остался\n'
     )
     return src.replace(old, new), src.count(old)
+
+
+# ── ПОЛОМКИ ПОИСКА КООРДИНАТОРА (карточка #677, этап Э3, работа Р1) ───────────────────────
+# Отбор координатора переехал из rules-from-pack.py в ОБЩУЮ функцию mezo_paths.find_coordinator.
+# Поломки ОБЩЕЙ функции правят ТЕКСТ mezo_paths.py В ПАМЯТИ (load_broken_mezo_paths) и подменяют им
+# модуль у испытуемого; поломки самого rules-from-pack.py — обычные patch_* выше. Якорь обязан
+# найтись РОВНО один раз: иначе испытуемое изменилось и поломка бьёт мимо цели.
+
+def patch_common_like(src: str):
+    """(У) ОБЩАЯ функция снова ищет слово запросом LIKE: в SQLite он не сворачивает регистр
+    кириллицы, причина «Координатор контура…» с заглавной не находится. Красит №52 (оба вида
+    записи); №52-бис и №52-тер целы — строчная пометка находится и так."""
+    old = "\"WHERE lifecycle='alive' AND lifecycle_reason IS NOT NULL\")"
+    new = "\"WHERE lifecycle='alive' AND lifecycle_reason LIKE '%координатор%'\")"
+    return src.replace(old, new), src.count(old)
+
+
+def patch_common_first(src: str):
+    """(Ч) ОБЩАЯ функция при двух ролях берёт первую вместо «имени нет». Красит №52-тер."""
+    old = "    name = found[0] if len(found) == 1 else None\n"
+    new = "    name = found[0] if found else None  # ПОЛОМКА (Ч): при двух ролях берётся первая\n"
+    return src.replace(old, new), src.count(old)
+
+
+def patch_common_literal(src: str):
+    """(Ц) ОБЩАЯ функция отвечает литералом «COORD» при любом найденном. Красит №52-бис
+    (координатор COORD-A) и №52-тер (две роли — имени быть не должно)."""
+    old = "    name = found[0] if len(found) == 1 else None\n"
+    new = "    name = \"COORD\" if found else None  # ПОЛОМКА (Ц): литерал вместо найденного имени\n"
+    return src.replace(old, new), src.count(old)
+
+
+def patch_own_like(src: str):
+    """(Ф) rules-from-pack.py снова ищет координатора СВОИМ запросом LIKE, мимо общей функции —
+    тот самый прежний дефект, ради которого правка. Красит ровно №52: строчная пометка
+    находится и так, а две роли и имя не COORD запрос находит как раньше."""
+    old = "    lookup = mezo_paths.find_coordinator(conn)\n"
+    new = ("    rows_like = conn.execute(\n"
+           "        \"SELECT role FROM roles WHERE lifecycle='alive' \"\n"
+           "        \"AND lifecycle_reason LIKE '%координатор%'\").fetchall()  # ПОЛОМКА (Ф)\n"
+           "    lookup = mezo_paths.CoordinatorLookup(\n"
+           "        rows_like[0][0].upper() if len(rows_like) == 1 else None,\n"
+           "        sorted(r[0].upper() for r in rows_like), None)\n")
+    return src.replace(old, new), src.count(old)
+
+
+def patch_names_hidden(src: str):
+    """(Х) предупреждение при нескольких найденных говорит только число, а не имена. Красит
+    №52-тер: «названы обе» перестаёт выполняться."""
+    old = "            found_note = f\"найдено {len(lookup.found)}: {', '.join(lookup.found)}\"\n"
+    new = "            found_note = f\"найдено {len(lookup.found)}\"  # ПОЛОМКА (Х): имена не названы\n"
+    return src.replace(old, new), src.count(old)
+
+
+def load_broken_mezo_paths(patch, name):
+    """Общий модуль mezo_paths с нарочной поломкой — В ПАМЯТИ, на диск ничего не пишется (тот же
+    приём, что у load_rfp). Берётся файл ИСПЫТУЕМОГО каталога — рядом с rules-from-pack.py."""
+    shared = RFP_PATH.parent / "mezo_paths.py"
+    src = shared.read_text(encoding="utf-8")
+    new_src, n = patch(src)
+    if n != 1:
+        raise AssertionError(f"поломка общего модуля не нашла ровно одну строку-цель (нашла {n}) — "
+                             f"функция изменилась, поломку надо пересмотреть")
+    spec = importlib.util.spec_from_file_location(name, str(shared))
+    broken = importlib.util.module_from_spec(spec)
+    sys.modules[name] = broken
+    exec(compile(new_src, str(shared), "exec"), broken.__dict__)
+    return broken
+
+
+# Контуры для №52: таблица ролей перезаписывается ЗАДАННЫМИ строками (причины пишутся нарочно).
+CAPITAL_ROLES = [("COORD", "alive", "Координатор контура; проба заглавной")]
+UPPER_ROLES = [("COORD", "alive", "КООРДИНАТОР КОНТУРА; ПРОБА ПРОПИСНЫХ")]
+OTHER_NAME_ROLES = [("COORD", "alive", "рядовая зона контура"),
+                    ("COORD-A", "alive", "координатор контура; проба")]
+TWO_ROLES = [("COORD", "alive", "координатор контура; проба"),
+             ("TAXO", "alive", "координатор (проба множественности)")]
 
 
 # ── СХЕМА (та же, что у живой mezosync.db, — только то, что нужно испытуемому) ──────
@@ -1025,6 +1110,101 @@ def main() -> int:
               f"обязана его сдвинуть); отказ по пустому разделу ПРЕДЛОЖЕНИЕ: {empty_refusal_c}; "
               f"вывод: {refusal_c.strip()[:160]}")
     conn7c.close(); pack_conn7c.close()
+
+    # ═══ №52 КАРТОЧКА #677, ЭТАП Э3, РАБОТА Р1: координатор для готовой команды --propose ищется
+    # ОБЩЕЙ функцией mezo_paths.find_coordinator, а не своим запросом LIKE. В SQLite LIKE не
+    # сворачивает регистр кириллицы: причина «Координатор контура…» с заглавной не находилась, и
+    # команда получала заполнитель «<координатор>» вместо имени (у gordi-issue.py и role-brief.py
+    # та же беда исправлена карточкой #645 — здесь она дожила до этого дня). Три случая на ОДНОМ
+    # испытуемом модуле; ниже каждый получает свою поломку.
+    def command_role(printed):
+        """Имя роли в напечатанной готовой команде gordi-issue.py (после «--role»); None — команды нет."""
+        marker = " create --role "
+        if marker not in printed:
+            return None
+        return printed.split(marker, 1)[1].split()[0]
+
+    def propose_printed(tested, sub_dir, roles):
+        """Печать --propose на свежем контуре с ЗАДАННЫМИ ролями. Возвращает (код, напечатанное)."""
+        circuit, pack, _expected, _only = build_state_fixture(sub_dir, tested.text_sha)
+        edit = sqlite3.connect(str(circuit))
+        edit.execute("DELETE FROM roles")
+        edit.executemany("INSERT INTO roles(role, lifecycle, lifecycle_reason) VALUES (?,?,?)", roles)
+        edit.commit()
+        edit.close()
+        conn_p = sqlite3.connect(f"file:{circuit.as_posix()}?mode=ro", uri=True)
+        pack_p = tested.open_pack_db(pack)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = tested.propose(conn_p, pack_p, pack, PREFIX + "local-changed",
+                                "проба поиска координатора", str(sub_dir / "letter.md"), None)
+        conn_p.close()
+        pack_p.close()
+        return rc, buf.getvalue()
+
+    def coordinator_checks(tested, tag):
+        """Три встречных случая на одном испытуемом модуле: (заглавная · имя не COORD · две роли)
+        — три вердикта и три подписи."""
+        capital_ok, capital_bits = True, []
+        for i, (label, roles) in enumerate((("с заглавной", CAPITAL_ROLES),
+                                            ("прописными", UPPER_ROLES))):
+            rc_c, printed_c = propose_printed(tested, root / "coordinator" / f"{tag}-cap{i}", roles)
+            capital_ok &= (rc_c == 0 and command_role(printed_c) == "COORD"
+                           and "<координатор>" not in printed_c and "не нашёл" not in printed_c)
+            capital_bits.append(f"{label}: команда зовёт «{command_role(printed_c)}» (ждём COORD)")
+        rc_a, printed_a = propose_printed(tested, root / "coordinator" / f"{tag}-name",
+                                          OTHER_NAME_ROLES)
+        name_ok = (rc_a == 0 and command_role(printed_a) == "COORD-A"
+                   and "<координатор>" not in printed_a)
+        rc_t, printed_t = propose_printed(tested, root / "coordinator" / f"{tag}-two", TWO_ROLES)
+        both_named = "найдено 2: COORD, TAXO" in printed_t
+        two_ok = rc_t == 0 and command_role(printed_t) == "<координатор>" and both_named
+        return ((capital_ok, name_ok, two_ok),
+                ("; ".join(capital_bits),
+                 f"команда зовёт «{command_role(printed_a)}» (ждём COORD-A, рядом роль COORD "
+                 f"без пометки)",
+                 f"команда зовёт «{command_role(printed_t)}» (ждём заполнитель «<координатор>»); "
+                 f"в предупреждении названы обе роли: {both_named}"))
+
+    verdicts52, details52 = coordinator_checks(mod, "live")
+    ok &= case("№52 «Координатор контура…» с ЗАГЛАВНОЙ и «КООРДИНАТОР КОНТУРА…» ПРОПИСНЫМИ в причине "
+               "роли — готовая команда --propose называет координатора, а не заполнитель "
+               "«<координатор>» (у --propose это новый случай: прежний запрос LIKE такую причину "
+               "не находил)",
+               verdicts52[0], details52[0])
+    ok &= case("№52-бис координатор с именем НЕ COORD (COORD-A) находится: в команде его имя, "
+               "а не буквальное «COORD»",
+               verdicts52[1], details52[1])
+    ok &= case("№52-тер две роли со словом «координатор» → имени нет: в команде заполнитель, а в "
+               "предупреждении названы ОБЕ (найдено 2: COORD, TAXO)",
+               verdicts52[2], details52[2])
+
+    # ── №52 ПОЛОМКИ: каждая красит ровно названные случаи, остальные из трёх целы ──────────────
+    case_names52 = ("№52", "№52-бис", "№52-тер")
+    breaks52 = [
+        ("Ф", "rules-from-pack.py снова ищет координатора своим запросом LIKE",
+         patch_own_like, None, (False, True, True)),
+        ("У", "общая функция ищет запросом LIKE", None, patch_common_like, (False, True, True)),
+        ("Х", "предупреждение не называет найденных", patch_names_hidden, None,
+         (True, True, False)),
+        ("Ц", "общая функция отвечает литералом COORD", None, patch_common_literal,
+         (True, False, False)),
+        ("Ч", "при двух ролях общая функция берёт первую", None, patch_common_first,
+         (True, True, False)),
+    ]
+    for letter, what, rfp_patch, common_patch, expected52 in breaks52:
+        tested52 = load_rfp(patch=rfp_patch, name=f"rfp_bite_52_{ord(letter)}")
+        if common_patch is not None:
+            tested52.mezo_paths = load_broken_mezo_paths(
+                common_patch, f"mezo_paths_bite_52_{ord(letter)}")
+        got52, got_details52 = coordinator_checks(tested52, f"b{ord(letter)}")
+        reds52 = [n for n, want in zip(case_names52, expected52) if not want]
+        shown52 = " · ".join(f"{n} {'цел' if g else 'КРАСНЫЙ'}" for n, g in zip(case_names52, got52))
+        ok &= case(f"№52 ПОЛОМКА ({letter}) «{what}» красит РОВНО {', '.join(reds52)}: остальные "
+                   f"из трёх случаев целы",
+                   got52 == expected52,
+                   f"под поломкой: {shown52}; ждали красными только: {', '.join(reds52)}. "
+                   + " | ".join(d for d, g in zip(got_details52, got52) if not g))
 
     # ── ㉒ возврат приёмщика: --apply без --actor у --adopt отказывает ДО связи с базой ──
     circuit_db8, pack_dir8, _, _ = build_state_fixture(root / "actor-gate", mod.text_sha)

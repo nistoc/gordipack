@@ -43,6 +43,17 @@ bite-pool-brief.py — приёмка захода 2.1 + П⑥: собираем
   Р3 нарочная поломка: проверка «это координатор?» выключена (раздел печатает всем) →
      ⑨-кватер на копии обязан провалиться ПО СВОЕЙ причине (у не-координатора строка есть,
      хотя координатор назван и сводка собралась целиком)
+  ⑨-секст РЕГИСТР КИРИЛЛИЦЫ (карточка #677, этап Э3, работа Р1: поиск координатора теперь в
+     ОБЩЕЙ функции mezo_paths.find_coordinator): пометка «Координатор…» с заглавной и
+     «КООРДИНАТОР…» прописными — координатор найден: не-координатору строки нет, координатору
+     одна и без пояснения «не назван»
+  Р4 · Р5 · Р6 нарочные поломки ОБЩЕЙ функции (в стенде лежит копия role-brief.py ВМЕСТЕ с
+     копией mezo_paths.py; живые файлы не трогаются):
+     Р4 поиск запросом LIKE (слеп к заглавной кириллице) → ⑨-секст падает, а строчная пометка
+        на той же копии по-прежнему находится (поломка бьёт ровно по регистру)
+     Р5 при двух пометках берётся первая → «две пометки» из ⑨-квинт падает (одна роль из двух
+        получает строку без «не назван», другая — молчание)
+     Р6 ответ всегда литерал «COORD» → ⑨ падает (настоящий координатор стенда остаётся без строки)
 """
 import os
 import re
@@ -125,6 +136,28 @@ def broken_copy(out_dir, name, anchor, replacement):
     return path
 
 
+def broken_common_copy(out_dir, name, anchor, replacement):
+    """Копия role-brief.py ВМЕСТЕ с СВОЕЙ копией mezo_paths.py, где нарочно испорчена ОБЩАЯ
+    функция поиска координатора (карточка #677, этап Э3). Живые файлы не трогаются: обе копии
+    лежат в стенде, а сводка собирается из каталога копии — первым в пути поиска модулей
+    стоит каталог запускаемого файла, поэтому испорченный mezo_paths.py и подхватывается.
+    local.paths рядом с копией называет настоящий контур — без него копия не нашла бы каталог
+    инструментов. Якорь обязан найтись РОВНО один раз: иначе «ПРИЁМКА НЕ СОСТОЯЛАСЬ», а не
+    поломка мимо цели."""
+    shared = Path(ИСПЫТУЕМЫЙ).parent / "mezo_paths.py"
+    text = shared.read_bytes().decode("utf-8")
+    if text.count(anchor) != 1:
+        raise SystemExit(f"ПРИЁМКА НЕ СОСТОЯЛАСЬ: якорь поломки {name} найден "
+                         f"{text.count(anchor)} раз в общем mezo_paths.py (нужен ровно 1)")
+    folder = Path(out_dir) / f"common-{name}"
+    folder.mkdir(parents=True, exist_ok=True)
+    shutil.copy(ИСПЫТУЕМЫЙ, folder / "role-brief.py")
+    (folder / "mezo_paths.py").write_bytes(text.replace(anchor, replacement).encode("utf-8"))
+    (folder / "local.paths").write_text(f"container={mezo_paths.container_root()}\n",
+                                        encoding="utf-8")
+    return folder / "role-brief.py"
+
+
 VIEWER_RULE = "periscope-viewer"
 VIEWER_PROBE_BODY = "проба сводки: правило о службе просмотра базы"
 
@@ -165,10 +198,11 @@ COORD_MARK = "координатор контура (проба сводки)"
 COORD_MARK_REMOVED = "проба сводки: пометка снята на копии"
 
 
-def set_coordinators(path, mode):
+def set_coordinators(path, mode, mark=COORD_MARK):
     """Кто на КОПИИ базы стенда назван координатором: 'one' — только ZZK; 'none' — никто;
     'two' — ZZK и ZZB. Состояние ставится целиком каждый раз (как set_viewer_rule): случаи
     не зависят от порядка. Слово ищется через casefold() — так же, как в самом инструменте.
+    mark — текст пометки (по умолчанию строчная; ⑨-секст пробует заглавную и прописные).
     Подсадка сверяет себя: названных живых ролей должно выйти ровно столько, сколько просили."""
     con = sqlite3.connect(str(path))
     for name, why in con.execute("SELECT role, lifecycle_reason FROM roles "
@@ -178,7 +212,7 @@ def set_coordinators(path, mode):
                         (COORD_MARK_REMOVED, name))
     named = {"one": [COORD_ROLE], "none": [], "two": [COORD_ROLE, PLAIN_ROLE]}[mode]
     for name in named:
-        con.execute("UPDATE roles SET lifecycle_reason=? WHERE role=?", (COORD_MARK, name))
+        con.execute("UPDATE roles SET lifecycle_reason=? WHERE role=?", (mark, name))
     marked = sorted(r for r, why in con.execute(
         "SELECT role, lifecycle_reason FROM roles WHERE lifecycle='alive' "
         "AND lifecycle_reason IS NOT NULL").fetchall() if "координатор" in why.casefold())
@@ -394,6 +428,54 @@ case("⑨-квинт координатор НЕ определён (ни одн
      all(undefined_shows_line(results) for _label, results in undefined),
      " · ".join(undefined_detail(label, results) for label, results in undefined))
 
+# ⑨-секст РЕГИСТР КИРИЛЛИЦЫ (карточка #677, этап Э3, работа Р1). Поиск координатора переехал в
+# общую функцию mezo_paths.find_coordinator. Прежняя выборка запросом LIKE не сворачивала регистр
+# кириллицы и не находила пометку, начатую с заглавной («Координатор контура…»): такая пометка
+# читалась как «не назван», и строку видели все роли. Здесь пометка пишется заглавной и
+# ПРОПИСНЫМИ: координатор обязан найтись так же, как по строчной (⑨ выше).
+CAPITAL_MARKS = [("с заглавной", "Координатор контура (проба сводки)"),
+                 ("прописными", "КООРДИНАТОР КОНТУРА (ПРОБА СВОДКИ)")]
+
+
+def capital_results(tool=None):
+    """Сводки не-координатора и координатора при каждой записи пометки; состояние ставится
+    заново на копии db9, в конце возвращается строчная пометка."""
+    found = []
+    for label, mark in CAPITAL_MARKS:
+        set_coordinators(db9, "one", mark)
+        found.append((label, brief(db9, PLAIN_ROLE, tool=tool),
+                      brief(db9, COORD_ROLE, tool=tool)))
+    set_coordinators(db9, "one")
+    return found
+
+
+def capital_found(results):
+    """Координатор найден: у не-координатора строки нет (сводка собралась целиком), у
+    координатора — одна и без «не назван»."""
+    for _label, (rc_b, out_b), (rc_k, out_k) in results:
+        lines_k = viewer_lines(out_k)
+        if not (silent_for_non_coordinator(rc_b, out_b) and rc_k == 0 and len(lines_k) == 1
+                and "не назван" not in lines_k[0]):
+            return False
+    return True
+
+
+def capital_detail(results):
+    parts = []
+    for label, (_rc_b, out_b), (_rc_k, out_k) in results:
+        lines_b, lines_k = viewer_lines(out_b), viewer_lines(out_k)
+        parts.append(f"{label} — {PLAIN_ROLE}: строк {len(lines_b)} (ждём 0) · {COORD_ROLE}: "
+                     f"строк {len(lines_k)} (ждём 1), «не назван» у {COORD_ROLE}: "
+                     f"{'да' if lines_k and 'не назван' in lines_k[0] else 'нет'}")
+    return " · ".join(parts)
+
+
+set_viewer_rule(db9, "active")
+res_capital = capital_results()
+case("⑨-секст РЕГИСТР КИРИЛЛИЦЫ: пометка «Координатор…» с заглавной и «КООРДИНАТОР…» прописными — "
+     "координатор найден (не-координатору строки нет, координатору одна и без «не назван»)",
+     capital_found(res_capital), capital_detail(res_capital))
+
 # ── нарочные поломки на КОПИЯХ испытуемого в стенде: каждая обязана уронить РОВНО свой суд ──
 # Р1 — поломка, какой она была бы в жизни: раздел перестаёт спрашивать свод и всегда
 # печатает ссылку на правило (как соседний раздел ответов владельцу). Суд требует, чтобы
@@ -448,6 +530,73 @@ case("Р3 поломка «проверка «это координатор?» �
      f"под поломкой у {PLAIN_ROLE} строк «ПЕРИСКОП»: {len(l_r3)} (ждём 1, а без поломки 0) · "
      f"сводка собралась целиком: {brief_assembled(rc_r3, out_r3)} · "
      f"{l_r3[0][:110] if l_r3 else 'СТРОКИ НЕТ'}")
+
+# ═══ Р4–Р6: нарочные поломки ОБЩЕЙ функции поиска координатора (карточка #677, этап Э3). Якоря —
+# строки самой функции в mezo_paths.py; если её перепишут и якорь пропадёт, broken_common_copy
+# остановит приёмку, а не даст поломке пройти мимо цели. Каждая поломка называет, КАКОЙ случай
+# обязана уронить, и держит КОНТРОЛЬ на той же копии: поломка бьёт ровно по своему предмету, а не
+# по функции целиком (иначе «упало» ничего не доказывало бы).
+LIKE_ANCHOR = "\"WHERE lifecycle='alive' AND lifecycle_reason IS NOT NULL\")"
+LIKE_BROKEN = "\"WHERE lifecycle='alive' AND lifecycle_reason LIKE '%координатор%'\")"
+PICK_ANCHOR = "    name = found[0] if len(found) == 1 else None"
+FIRST_BROKEN = "    name = found[0] if found else None"
+LITERAL_BROKEN = '    name = "COORD" if found else None'
+
+
+def sees_undefined_line(rc, out):
+    """Сводка собралась целиком, строка одна и в ней пояснение «не назван»."""
+    lines = viewer_lines(out)
+    return brief_assembled(rc, out) and len(lines) == 1 and "не назван" in lines[0]
+
+
+# Р4 — запрос LIKE вместо casefold: заглавная и прописные пометки не находятся.
+tool_r4 = broken_common_copy(stand, "like", LIKE_ANCHOR, LIKE_BROKEN)
+set_viewer_rule(db9, "active")
+res_r4 = capital_results(tool=tool_r4)
+set_coordinators(db9, "one")
+rc_r4b, out_r4b = brief(db9, PLAIN_ROLE, tool=tool_r4)
+rc_r4k, out_r4k = brief(db9, COORD_ROLE, tool=tool_r4)
+l_r4k = viewer_lines(out_r4k)
+r4_control = (silent_for_non_coordinator(rc_r4b, out_r4b) and rc_r4k == 0 and len(l_r4k) == 1
+              and "не назван" not in l_r4k[0])
+r4_reason = all(sees_undefined_line(rc_b, out_b) and sees_undefined_line(rc_k, out_k)
+                for _label, (rc_b, out_b), (rc_k, out_k) in res_r4)
+case("Р4 поломка «общая функция ищет запросом LIKE» поймана: ⑨-секст на копии пал ПО СВОЕЙ причине "
+     "(обе роли видят строку с «не назван» — пометка с заглавной не найдена), а строчная пометка "
+     "на той же копии находится (бьёт ровно по регистру)",
+     not capital_found(res_r4) and r4_reason and r4_control,
+     f"{capital_detail(res_r4)} · контроль (строчная пометка, та же копия): {PLAIN_ROLE} "
+     f"молчит и {COORD_ROLE} получает строку без «не назван»: {r4_control}")
+
+# Р5 — при двух ролях берётся первая: имя есть там, где его быть не должно.
+tool_r5 = broken_common_copy(stand, "first", PICK_ANCHOR, FIRST_BROKEN)
+set_viewer_rule(db9, "active")
+set_coordinators(db9, "two")
+res_r5 = [brief(db9, PLAIN_ROLE, tool=tool_r5), brief(db9, COORD_ROLE, tool=tool_r5)]
+set_coordinators(db9, "one")
+counts_r5 = sorted(len(viewer_lines(o)) for _rc, o in res_r5)
+single_r5 = [l for _rc, o in res_r5 for l in viewer_lines(o)]
+case("Р5 поломка «при двух ролях берётся первая» поймана: «две пометки» из ⑨-квинт на копии пали "
+     "ПО СВОЕЙ причине (одна роль из двух получает строку БЕЗ «не назван», другая — молчание)",
+     not undefined_shows_line(res_r5) and counts_r5 == [0, 1] and len(single_r5) == 1
+     and "не назван" not in single_r5[0] and all(brief_assembled(rc, o) for rc, o in res_r5),
+     f"строк у ролей {PLAIN_ROLE}/{COORD_ROLE}: "
+     f"{len(viewer_lines(res_r5[0][1]))}/{len(viewer_lines(res_r5[1][1]))} (верный код: 1/1, "
+     f"обе с «не назван»); сводки собрались целиком: "
+     f"{all(brief_assembled(rc, o) for rc, o in res_r5)}")
+
+# Р6 — ответ всегда литерал «COORD»: настоящий координатор стенда остаётся без строки.
+tool_r6 = broken_common_copy(stand, "literal", PICK_ANCHOR, LITERAL_BROKEN)
+set_viewer_rule(db9, "active")
+set_coordinators(db9, "one")
+rc_r6k, out_r6k = brief(db9, COORD_ROLE, tool=tool_r6)
+rc_r6b, out_r6b = brief(db9, PLAIN_ROLE, tool=tool_r6)
+case("Р6 поломка «общая функция отвечает литералом COORD» поймана: ⑨ на копии пал ПО СВОЕЙ причине "
+     "(координатор стенда назван в данных, сводка собралась целиком, а строки у него нет)",
+     silent_for_non_coordinator(rc_r6k, out_r6k) and silent_for_non_coordinator(rc_r6b, out_r6b),
+     f"строк у {COORD_ROLE}: {len(viewer_lines(out_r6k))} (верный код: 1) · у {PLAIN_ROLE}: "
+     f"{len(viewer_lines(out_r6b))}; сводки собрались целиком: "
+     f"{brief_assembled(rc_r6k, out_r6k) and brief_assembled(rc_r6b, out_r6b)}")
 
 # ═══ Карточка #444 (STUD, доказано четырьмя прогонами): прежний случай сравнивал
 # размер и время правки ОБЩЕЙ базы — в неё пишут все роли (запись ~раз в 9 секунд),

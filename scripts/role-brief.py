@@ -41,27 +41,30 @@ def section(title, fn, out):
 def find_coordinator(conn):
     """(имя_или_None, пояснение) — кто в этом контуре назван координатором, ИЗ ДАННЫХ.
 
-    Образец — _find_coordinator в gordi-issue.py (там же разобраны причины). Источник —
-    roles.lifecycle_reason живых ролей: слово «координатор» ищется ЗДЕСЬ, через casefold(),
-    а не в SQL — LIKE в SQLite не сворачивает регистр кириллицы. Назван РОВНО ОДИН — вернём
-    его имя в верхнем регистре, пояснение пустое. Нашлось 0 или больше одного, либо таблицу
-    ролей не прочитать — имя None, а пояснение — готовая скобка для конца строки: роль
-    подставлять нельзя (у контура dominal координатор 3P, у onto не назван никто).
+    Сам ОТБОР — не здесь, а в mezo_paths.find_coordinator (карточка #677, этап Э3, работа Р1):
+    единственное место правила на весь контур; прежде тут была своя копия (образец —
+    _find_coordinator в gordi-issue.py, там же разобраны причины). Источник —
+    roles.lifecycle_reason живых ролей: слово «координатор» ищется через casefold(), а не в
+    SQL — LIKE в SQLite не сворачивает регистр кириллицы. Здесь остаются слова для читателя
+    сводки. Назван РОВНО ОДИН — вернём его имя в верхнем регистре, пояснение пустое. Нашлось
+    0 или больше одного, либо таблицу ролей не прочитать — имя None, а пояснение — готовая
+    скобка для конца строки: роль подставлять нельзя (у контура dominal координатор 3P,
+    у onto не назван никто).
     """
+    # ⚖️ Модуль берётся ЗДЕСЬ, а не вверху файла: сводку читает каждая роль каждую сверку, и
+    # старый общий модуль без этой функции не должен обрушить её целиком — сбой останется
+    # в разделе, который его назовёт (section), а остальные разделы соберутся.
+    import mezo_paths
     everyone_tail = " — строку видят все роли)"
-    try:
-        rows = conn.execute(
-            "SELECT role, lifecycle_reason FROM roles WHERE lifecycle='alive' "
-            "AND lifecycle_reason IS NOT NULL").fetchall()
-    except sqlite3.Error:
+    lookup = mezo_paths.find_coordinator(conn)
+    if lookup.error:
         return None, "(координатор контура в таблице ролей не назван: таблица не читается" + everyone_tail
-    names = sorted(r.upper() for r, why in rows if "координатор" in (why or "").casefold())
-    if len(names) == 1:
-        return names[0], ""
-    if not names:
+    if lookup.name:
+        return lookup.name, ""
+    if not lookup.found:
         return None, "(координатор контура в таблице ролей не назван" + everyone_tail
     return None, (f"(координатор контура в таблице ролей не назван однозначно: найдено "
-                  f"{len(names)}" + everyone_tail)
+                  f"{len(lookup.found)}" + everyone_tail)
 
 
 def build(conn, role, полный=False, full=False, db_path=None):

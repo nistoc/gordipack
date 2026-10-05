@@ -1187,82 +1187,146 @@ READ_CMDS = {"show", "list", "queue"}
 
 
 def main():
-    p = argparse.ArgumentParser(description="Durable per-role backlog (B1 CRUD)")
+    # Справка (Э3, заявка пакета 26): у КАЖДОЙ подкоманды — строка «что делает» и пример вызова,
+    # без номеров карточек. RawDescription — чтобы пример остался на своей строке.
+    raw = argparse.RawDescriptionHelpFormatter
+    p = argparse.ArgumentParser(
+        formatter_class=raw,
+        description="Список задач (карточек) по ролям. Хранится в базе и переживает\n"
+                    "перезапуск агента.",
+        epilog=("с чего начать:\n"
+                "  backlog.py list --role <РОЛЬ>     свои открытые карточки и общие (SHARED)\n"
+                "  backlog.py show <номер>           одна карточка целиком: тело, критерий, история\n"
+                "  backlog.py <подкоманда> --help    подробности и пример вызова\n"
+                "\n"
+                "два имени роли в флагах:\n"
+                "  --role   ЧЬЯ карточка (владелец); есть у add и list\n"
+                "  --actor  КТО делает вызов; обязателен у criterion, status, claim, comment, edit;\n"
+                "           у add и list необязателен\n"
+                "  у show и queue роли не нужны вовсе\n"
+                "\n"
+                "общий флаг --db (путь к базе) ставится ДО названия подкоманды; обычно не нужен."))
     # R15a: --db не обязателен, резолвится от расположения СКРИПТА (не от CWD).
-    p.add_argument("--db", default=None, help="Путь к mezosync.db (по умолчанию — рядом со скриптом)")
-    sub = p.add_subparsers(dest="cmd", required=True)
+    p.add_argument("--db", default=None,
+                   help="путь к базе mezosync.db (по умолчанию — рядом со скриптом); "
+                        "ставится ДО названия подкоманды")
+    sub = p.add_subparsers(dest="cmd", required=True,
+                           title="подкоманды (подробности: backlog.py <подкоманда> --help)")
 
-    pa = sub.add_parser("add")
+    pa = sub.add_parser(
+        "add", formatter_class=raw,
+        help="завести новую карточку (нужны владелец, заголовок, тело и критерий приёмки)",
+        description="Завести новую карточку. Обязательны: --role (чья карточка), --title, тело\n"
+                    "(--body или --body-file) и критерий приёмки (--done-when или --done-when-file).\n"
+                    "Пример: backlog.py add --role <РОЛЬ> --title \"заголовок\" --body-file тело.md --done-when-file критерий.md")
     dryrun.add_argument(pa)
-    pa.add_argument("--role", required=True)
-    pa.add_argument("--title", required=True)
-    pa.add_argument("--body", default="")
-    pa.add_argument("--body-file", dest="body_file")
-    pa.add_argument("--priority", default="normal", choices=["low", "normal", "high", "critical"])
+    pa.add_argument("--role", required=True,
+                    help="роль-ВЛАДЕЛЕЦ карточки (чья она); не путать с --actor — тем, кто делает вызов")
+    pa.add_argument("--title", required=True, help="заголовок карточки — его видно в списках")
+    pa.add_argument("--body", default="",
+                    help="тело карточки (описание предмета) строкой; длинное лучше файлом: --body-file")
+    pa.add_argument("--body-file", dest="body_file", help="то же, что --body, но из файла")
+    pa.add_argument("--priority", default="normal", choices=["low", "normal", "high", "critical"],
+                    help="срочность (по умолчанию normal)")
     pa.add_argument("--tags", default="",
                     # Карточка #447: справка обязана НАЗВАТЬ форму — прежде молчала,
                     # и роль передавала JSON, который портился молча.
                     help='метки через запятую: "a,b,c" — единственная форма; '
                          "JSON и пустые метки отклоняются со словом")
-    pa.add_argument("--parent", type=int)
-    pa.add_argument("--track")
-    pa.add_argument("--actor")
+    pa.add_argument("--parent", type=int, help="номер родительской карточки")
+    pa.add_argument("--track",
+                    help="набор задач (пул), к которому относится карточка; если в контуре один "
+                         "активный набор, карточка вне него заводится замороженной")
+    pa.add_argument("--actor",
+                    help="кто заводит (роль руки); если не указан — владелец из --role")
     pa.add_argument("--done-when", dest="done_when", default="",
                     # Строка называет МОМЕНТ принуждения, а не просто «обязателен»: завести
                     # карточку без критерия можно, ЗАКРЫТЬ как done — нельзя (отказ введён 07.08).
                     # Прежняя формулировка «обязателен» была объявлением без механизма и год
                     # держалась при счёте 37 закрытых из 41 без критерия (замер @PROTO #3164).
-                    help="критерий приёмки: чем докажешь, что сделано. Можно дописать позже "
-                         "(backlog.py criterion), но БЕЗ него карточку не закрыть как done")
+                    help="критерий приёмки: чем докажешь, что сделано. Без него карточка "
+                         "не заводится; позже его меняют командой criterion")
     # Парный файл — по замечанию @CORE (#3006), первого потребителя: у --body файл-двойник есть,
     # у критерия не было, и критерий из четырёх пунктов пришлось сплющивать в одну строку.
     # 🪤 Класс, ради которого правка: ФОРМА АРГУМЕНТА ПОДТАЛКИВАЕТ ПИСАТЬ КРИТЕРИЙ КОРОТКО,
     #    а короткий критерий легче сделать неопровержимым. «Работает» помещается в строку,
     #    «приёмка краснеет, если убрать запись» — уже с трудом. Проверяемость обычно длиннее фразы.
-    pa.add_argument("--done-when-file", dest="done_when_file")
+    pa.add_argument("--done-when-file", dest="done_when_file",
+                    help="то же, что --done-when, но из файла (длинный критерий удобнее файлом)")
     pa.add_argument("--full", action="store_true",
                     help="печатать общие подсказки полностью, даже если уже показывались")
 
-    pk = sub.add_parser("criterion", help="записать/изменить критерий приёмки существующей карточки")
+    pk = sub.add_parser(
+        "criterion", formatter_class=raw,
+        help="записать или изменить критерий приёмки у уже заведённой карточки",
+        description="Записать или изменить критерий приёмки у существующей карточки\n"
+                    "(прежний критерий сохраняется в истории).\n"
+                    "Пример: backlog.py criterion <номер> --actor <РОЛЬ> --text \"чем докажешь, что сделано\"")
     dryrun.add_argument(pk)
-    pk.add_argument("id", type=int)
-    pk.add_argument("--actor", required=True)
-    pk.add_argument("--text", default="")
-    pk.add_argument("--text-file", dest="text_file")
+    pk.add_argument("id", type=int, help="номер карточки (его показывает list)")
+    pk.add_argument("--actor", required=True, help="кто записывает (роль руки)")
+    # Один смысл — «текст критерия» — у add зовётся --done-when, здесь --text: принимаются оба
+    # имени (старое остаётся переходным синонимом).
+    pk.add_argument("--text", "--done-when", dest="text", default="",
+                    help="текст критерия приёмки; второе имя такое же, как у add")
+    pk.add_argument("--text-file", "--done-when-file", dest="text_file",
+                    help="то же, что --text, но из файла; второе имя такое же, как у add")
 
-    pl = sub.add_parser("list")
-    pl.add_argument("--role", required=True)
-    pl.add_argument("--status", default="open", help="open|all|<конкретный статус>")
-    pl.add_argument("--only-mine", action="store_true", dest="only_mine", help="без SHARED")
+    pl = sub.add_parser(
+        "list", formatter_class=raw,
+        help="показать карточки роли и общие (SHARED); по умолчанию — только открытые",
+        description="Показать карточки роли и общие (роль SHARED). По умолчанию только открытые;\n"
+                    "все, включая закрытые, — флаг --status all.\n"
+                    "Пример: backlog.py list --role <РОЛЬ>")
+    pl.add_argument("--role", required=True, help="чьи карточки показать (владелец)")
+    pl.add_argument("--status", default="open",
+                    help="open (по умолчанию) | all | конкретное состояние, например done")
+    pl.add_argument("--only-mine", action="store_true", dest="only_mine",
+                    help="только карточки этой роли, без общих (SHARED)")
     pl.add_argument("--older-than-days", type=int, default=None, dest="older_than_days",
-                    help="только карточки СТАРШЕ N суток — напоминание о залежавшемся "
-                         "(карточка #86 ⑧): свежие не показываются")
+                    help="только карточки СТАРШЕ N суток — напоминание о залежавшемся: "
+                         "свежие не показываются")
     pl.add_argument("--full", action="store_true",
                     help="печатать срез критерия у каждой карточки и общие подсказки полностью")
     pl.add_argument("--actor", help="кто читает (роль руки); без него показ подсказки "
                     "засчитывается роли из --role")
 
-    ps = sub.add_parser("show")
-    ps.add_argument("id", type=int)
+    ps = sub.add_parser(
+        "show", formatter_class=raw,
+        help="показать одну карточку целиком: тело, критерий, история",
+        description="Показать одну карточку целиком: тело, критерий приёмки, связи, историю.\n"
+                    "Принимает только номер карточки (роль не нужна).\n"
+                    "Пример: backlog.py show <номер>")
+    ps.add_argument("id", type=int, help="номер карточки (его показывает list)")
 
-    pt = sub.add_parser("status")
+    pt = sub.add_parser(
+        "status", formatter_class=raw,
+        help="сменить состояние карточки (в работе, на приёмке, готово и т.д.)",
+        description="Сменить состояние карточки. Для done нужен записанный критерий; для dropped,\n"
+                    "failed, frozen и awaiting_word — пояснение --note. Чужую карточку — с --foreign.\n"
+                    "Пример: backlog.py status <номер> in_review --actor <РОЛЬ> --reviewer <РОЛЬ-приёмщик>")
     dryrun.add_argument(pt)
-    pt.add_argument("id", type=int)
-    pt.add_argument("new_status")
-    pt.add_argument("--actor", required=True)
+    pt.add_argument("id", type=int, help="номер карточки (его показывает list)")
+    pt.add_argument("new_status",
+                    help="новое состояние: open | in_progress (в работе) | blocked (жду чужую работу) "
+                         "| awaiting_word (жду слова владельца) | in_review (на приёмке) | done "
+                         "(готово) | failed (пробовали, не вышло) | dropped (отменена) | frozen "
+                         "(заморожена до названного условия)")
+    pt.add_argument("--actor", required=True, help="кто меняет состояние (роль руки)")
     pt.add_argument("--foreign", default=None, metavar="РОЛЬ",
                     help="меняешь статус ЧУЖОЙ карточки — назови её владельца. Инструмент "
                          "сверит имя с базой: не совпало — откажет и покажет верное")
-    pt.add_argument("--note", default="")
-    pt.add_argument("--note-file", dest="note_file")
+    pt.add_argument("--note", default="",
+                    help="пояснение к смене; обязательно для dropped, failed, frozen и awaiting_word")
+    pt.add_argument("--note-file", dest="note_file", help="то же, что --note, но из файла")
     pt.add_argument("--interviewed", action="store_true",
-                    help="разбор замысла пройден — предупреждение при «жду слова» молчит "
-                         "(карточка #430 ②; протокол вопросов не требуется)")
+                    help="разбор замысла пройден — предупреждение при «жду слова» (awaiting_word) "
+                         "молчит; ответы на вопросы разбора не требуются")
     pt.add_argument("--reviewer", default=None, metavar="КТО",
-                    help="КТО ПРИНИМАЕТ работу: имя роли (TAXO) ЛИБО правило словами "
+                    help="КТО ПРИНИМАЕТ работу: имя роли ЛИБО правило словами "
                          "(\"любая, не писавшая правку\") — законны обе формы. Без него "
-                         "сдача на приёмку проходит, но говорит вслух, что рук не назначено "
-                         "(карточка #482: такая работа ждёт втрое дольше)")
+                         "сдача на приёмку проходит, но говорит вслух, что приёмщик не назначен "
+                         "(такая работа ждёт приёмки втрое дольше)")
 
     # 🪤 «В РАБОТЕ» СТАВИЛИ ТРИ РАЗА ЗА МЕСЯЦ (замер 19.08: 3 перевода против 142 закрытий,
     # последний 07.08). Состояние существовало и было мертво: ставящий не получал НИЧЕГО,
@@ -1270,36 +1334,51 @@ def main():
     # роль работает час, никто об этом не знает, и её будят второй раз или берут её же задачу.
     # ⇒ Отдельная команда с ЯВНЫМ СРОКОМ и рассказом, что делаешь. Гаснет сама, как
     # объявление о правке инструмента: забыть снять не страшно, вечный захват — страшно.
-    pw = sub.add_parser("claim", help="объявить, что берёшь карточку в работу (видно коллегам)")
+    pw = sub.add_parser(
+        "claim", formatter_class=raw,
+        help="объявить, что берёшь карточку в работу (видно коллегам)",
+        description="Объявить коллегам, что берёшь карточку в работу и на сколько;\n"
+                    "объявление гаснет само.\n"
+                    "Пример: backlog.py claim <номер> --actor <РОЛЬ> --note \"что делаешь\"\n"
+                    "Снять досрочно: backlog.py claim <номер> --actor <РОЛЬ> --release --note \"что получилось\"")
     dryrun.add_argument(pw)
-    pw.add_argument("id", type=int)
-    pw.add_argument("--actor", required=True)
+    pw.add_argument("id", type=int, help="номер карточки (его показывает list)")
+    pw.add_argument("--actor", required=True, help="кто объявляет (роль руки)")
     pw.add_argument("--minutes", type=int, default=None,
-                    help="на сколько берёшь (по умолчанию: карточка пула 60 мин — П②, "
-                         "прочие 2 ч)")
+                    help="на сколько минут берёшь (по умолчанию: карточка из активного набора — 60, "
+                         "прочие — 120; для карточки набора больше 90 — предупреждение)")
     pw.add_argument("--note", default="", help="что именно делаешь — это увидят коллеги")
-    pw.add_argument("--release", action="store_true", help="снять объявление досрочно")
+    pw.add_argument("--release", action="store_true",
+                    help="снять объявление досрочно (нужен --note: что получилось)")
     pw.add_argument("--off-pool", dest="off_pool", default=None,
-                    help="причина взятия карточки ВНЕ направления контура (карточка #399): "
-                         "непустая, ложится событием в журнал карточки. Слово владельца "
-                         "и срочная починка инструмента — законные причины")
+                    help="причина взятия карточки ВНЕ текущего направления контура (когда активен "
+                         "один набор задач): непустая, ложится событием в журнал карточки. "
+                         "Слово владельца и срочная починка инструмента — законные причины")
     pw.add_argument("--full", action="store_true",
                     help="печатать общие подсказки полностью, даже если уже показывались")
 
-    pc = sub.add_parser("comment")
+    pc = sub.add_parser(
+        "comment", formatter_class=raw,
+        help="добавить комментарий к карточке",
+        description="Добавить комментарий к карточке (виден в её истории).\n"
+                    "Пример: backlog.py comment <номер> --actor <РОЛЬ> --body-file комментарий.md")
     dryrun.add_argument(pc)
-    pc.add_argument("id", type=int)
-    pc.add_argument("--actor", required=True)
-    pc.add_argument("--body", default="")
-    pc.add_argument("--body-file", dest="body_file")
+    pc.add_argument("id", type=int, help="номер карточки (его показывает list)")
+    pc.add_argument("--actor", required=True, help="кто пишет (роль руки)")
+    pc.add_argument("--body", default="", help="текст комментария строкой; длинный лучше файлом")
+    pc.add_argument("--body-file", dest="body_file", help="то же, что --body, но из файла")
     pc.add_argument("--full", action="store_true",
                     help="печатать общие подсказки полностью, даже если уже показывались")
 
-    pe = sub.add_parser("edit", help="править ЗАГОЛОВОК/НАБОР заведённой карточки — "
-                                     "со следом-событием (карточка #452)")
+    pe = sub.add_parser(
+        "edit", formatter_class=raw,
+        help="править заголовок и/или набор заведённой карточки; прежнее значение сохраняется в истории",
+        description="Править заголовок и/или набор уже заведённой карточки. Прежнее значение\n"
+                    "ложится в историю событием. Тело здесь не правится; критерий — командой criterion.\n"
+                    "Пример: backlog.py edit <номер> --actor <РОЛЬ> --title \"новое имя\" --note \"причина\"")
     dryrun.add_argument(pe)
-    pe.add_argument("id", type=int)
-    pe.add_argument("--actor", required=True)
+    pe.add_argument("id", type=int, help="номер карточки (его показывает list)")
+    pe.add_argument("--actor", required=True, help="кто правит (роль руки)")
     pe.add_argument("--title", default=None, help="новое имя (прежнее ляжет событием)")
     pe.add_argument("--track", default=None,
                     help="новый набор; пустая строка = убрать из набора")
@@ -1307,8 +1386,12 @@ def main():
                     help="правишь ЧУЖУЮ карточку — назови её владельца (сверяется с базой)")
     pe.add_argument("--note", default="", help="причина правки — ляжет в событие")
 
-    pq = sub.add_parser("queue", help="очередь приёмок по ВСЕМ ролям одной командой, "
-                                      "час замера механизмом (карточка #422)")
+    pq = sub.add_parser(
+        "queue", formatter_class=raw,
+        help="показать очередь карточек на приёмке (in_review) по ВСЕМ ролям сразу",
+        description="Показать очередь карточек на приёмке (состояние in_review) по всем ролям\n"
+                    "одной командой; час замера печатает сама команда.\n"
+                    "Пример: backlog.py queue")
     pq.add_argument("--since", default=None, metavar="ЧАС",
                     help="час прошлого запроса (скопируй из шапки прошлого вывода) — "
                          "сданное позже помечается 🆕")
