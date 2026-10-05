@@ -22,6 +22,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import pathlib
+import sqlite3
 import subprocess
 import sys
 
@@ -86,8 +87,31 @@ def прогон_контура(каталог: pathlib.Path, на: dt.datetime)
     return _зов(каталог, на, [])
 
 
+_БАЗА_РОЛЕЙ: pathlib.Path | None = None
+
+
+def база_ролей() -> pathlib.Path:
+    """База стенда с таблицей roles: имена ролей прибор берёт из данных контура.
+
+    ⚡ Найдено 2026-10-05 полным прогоном на свежем контуре (карточка #677, этап Э3):
+    без своей базы прибор читал таблицу roles контура, где запущен, — на свежем контуре
+    там одна роль, TAXO и CORE не опознавались, и 11 случаев из 13 отвечали отказом
+    мерить. На живом контуре приёмка проходила, потому что эти роли в нём есть.
+    """
+    global _БАЗА_РОЛЕЙ
+    if _БАЗА_РОЛЕЙ is None:
+        путь = mezo_stand.new("bite-rhythm-роли-") / "roles.db"
+        con = sqlite3.connect(путь)
+        con.execute("CREATE TABLE roles (role TEXT PRIMARY KEY)")
+        con.executemany("INSERT INTO roles (role) VALUES (?)", [(РОЛЬ,), ("CORE",)])
+        con.commit()
+        con.close()
+        _БАЗА_РОЛЕЙ = путь
+    return _БАЗА_РОЛЕЙ
+
+
 def _зов(каталог: pathlib.Path, на: dt.datetime, ещё: list[str]) -> tuple[str, int]:
-    r = subprocess.run([sys.executable, str(ПРИБОР), *ещё,
+    r = subprocess.run([sys.executable, str(ПРИБОР), *ещё, "--db", str(база_ролей()),
                         "--каталог", str(каталог), "--на", на.strftime("%Y-%m-%dT%H:%M:%S")],
                        capture_output=True, text=True, encoding="utf-8", timeout=300)
     return (r.stdout or "") + (r.stderr or ""), r.returncode

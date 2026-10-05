@@ -131,6 +131,7 @@ ROLE_ENV = "zzx"            # имя из переменной среды, ре�
 ROLE_FLAG = "qqr"           # имя из флага, регистр нарочно нижний
 OLD_LITERALS = ("PROTO", "COORD", "CORE", "ING", "STUD", "TAXO", "OPSSRE", "RCC", "CHROME")
 GROUP = "zzx"               # имя контура стенда (meta.group_name)
+ARCHIVE_STEP = "20260905-messages-archive"   # шаг, заводящий архив ленты (случай ⑫)
 
 # Нарочные поломки: имя → (номер случая, [(ключ инструмента, якорь, замена)], что ломаем).
 # Якорь обязан найтись в копии РОВНО ОДИН раз — иначе поломка «не легла» и прогон не засчитывается.
@@ -396,8 +397,8 @@ def make_roles_db(path: Path, roles: list[tuple[str, str, str | None]], group: s
     con.close()
 
 
-def find_pack_schema() -> Path:
-    """Схема пакета (образец контура): из неё строятся базы второй части — настоящая схема, подставные данные."""
+def template_roots() -> list[Path]:
+    """Где искать образец пакета: сперва MEZO_TEMPLATE, затем то, что знает mezo_paths."""
     roots: list[Path] = []
     if os.environ.get("MEZO_TEMPLATE"):
         roots.append(Path(os.environ["MEZO_TEMPLATE"]))
@@ -405,7 +406,30 @@ def find_pack_schema() -> Path:
         roots.append(mezo_paths.template_root())
     except SystemExit:
         pass
-    for root in roots:
+    return roots
+
+
+# Сборщик контура в собранный контур не копируется (init-group.py: «сборщик живёт в шаблоне,
+# а не в контуре»). ⚡ Найдено 2026-10-05 полным прогоном на свежем контуре (карточка #677,
+# этап Э3): приёмка искала его только в каталоге механизма контура и отказывала мерить; на
+# живом контуре он лежит рядом, поэтому прежде это не было видно.
+TEMPLATE_ONLY = {"init-group.py"}
+
+
+def sut_file(scripts_dir: Path, fname: str) -> Path:
+    """Файл испытуемого инструмента механизма: из каталога механизма, сборщик — ещё и из образца."""
+    path = scripts_dir / fname
+    if path.exists() or fname not in TEMPLATE_ONLY:
+        return path
+    for root in template_roots():
+        if (root / "scripts" / fname).exists():
+            return root / "scripts" / fname
+    return path
+
+
+def find_pack_schema() -> Path:
+    """Схема пакета (образец контура): из неё строятся базы второй части — настоящая схема, подставные данные."""
+    for root in template_roots():
         found = sorted((root / "schema").glob("mezosync_v*.sql"),
                        key=lambda p: int(re.search(r"_v(\d+)", p.name).group(1)))
         if found:
@@ -423,7 +447,7 @@ def build_stand(tools_dir: Path, scripts_dir: Path, break_name: str | None) -> S
     if not (tools_dir / "schema_vnext.sql").exists():
         raise NotRun(f"⛔ ПРИЁМКА НЕ СОСТОЯЛАСЬ: схемы нового контура нет — {tools_dir / 'schema_vnext.sql'}")
     for fname in SUT.values():
-        if not (scripts_dir / fname).exists():
+        if not sut_file(scripts_dir, fname).exists():
             raise NotRun(f"⛔ ПРИЁМКА НЕ СОСТОЯЛАСЬ: инструмента механизма нет — {scripts_dir / fname}")
     schema = find_pack_schema()
     st = Stand(mezo_stand.new("bite-roles-from-data-"))
@@ -456,6 +480,9 @@ def build_stand(tools_dir: Path, scripts_dir: Path, break_name: str | None) -> S
     (st.pack / "scripts").mkdir(parents=True)
     for src in scripts_dir.glob("*.py"):
         shutil.copy2(src, st.pack / "scripts" / src.name)
+    for fname in TEMPLATE_ONLY & set(SUT.values()):
+        if not (st.pack / "scripts" / fname).exists():
+            shutil.copy2(sut_file(scripts_dir, fname), st.pack / "scripts" / fname)
     if (scripts_dir / "migrations").is_dir():
         shutil.copytree(scripts_dir / "migrations", st.pack / "scripts" / "migrations")
     (st.pack / "schema").mkdir()
@@ -893,7 +920,24 @@ def fold_db(st: Stand, name: str) -> Path:
          (i, ROLE_ENV.upper(), "2026-01-01 00:00:00", f"старая записка {i}")) for i in (1, 2, 3)]
     rows += [("INSERT INTO read_cursors (reader_role, last_read_id) VALUES (?,?)", (r, 3))
              for r in (ROLE_ENV.upper(), ROLE_FLAG.upper())]
-    return pack_db(st, name, roles_without_coordinator(), rows)
+    db = pack_db(st, name, roles_without_coordinator(), rows)
+    # Таблицы архива ленты нет в файле схемы пакета до v6: её заводит шаг 20260905-messages-archive,
+    # и у живого контура она есть потому, что шаг применён (сборкой или обновлением). Стенд делает
+    # то же — штатным шагом из копии механизма, а не своей таблицей.
+    # ⚡ Найдено 2026-10-05 проверкой документа обновления (Р9) на ВЫГРУЗКЕ пакета: в клоне автора лежала
+    # незакоммиченная schema/mezosync_v6.sql (коммитить её нельзя — слово владельца 14.09), и случай ⑫
+    # проходил только на этой машине; на чистом пакете — «no such table: messages_archive».
+    if not scalar(db, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='messages_archive'"):
+        step = st.pack / "scripts" / "migrations" / f"{ARCHIVE_STEP}.py"
+        if not step.exists():
+            raise NotRun(f"⛔ ПРИЁМКА НЕ СОСТОЯЛАСЬ: в схеме пакета нет таблицы messages_archive, а шага "
+                         f"{ARCHIVE_STEP} среди шагов механизма нет — {step}")
+        rc, out = call(st, [str(step), "--db", str(db)])
+        if rc != 0 or not scalar(db, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' "
+                                     "AND name='messages_archive'"):
+            raise NotRun(f"⛔ ПРИЁМКА НЕ СОСТОЯЛАСЬ: шаг {ARCHIVE_STEP} на базе стенда не завёл архив ленты "
+                         f"(код {rc}): {out.strip()[-300:]}")
+    return db
 
 
 def fold_state(db: Path) -> tuple[int, int, list[str]]:
@@ -1131,7 +1175,7 @@ def case_retired(st: Stand) -> list[tuple[str, bool, str]]:
 
 # ⑲ контроль второй части ─────────────────────────────────────────────────────
 def case_control_two(st: Stand, scripts_dir: Path) -> list[tuple[str, bool, str]]:
-    sizes = {k: (scripts_dir / f).stat().st_size for k, f in SUT.items()}
+    sizes = {k: sut_file(scripts_dir, f).stat().st_size for k, f in SUT.items()}
     names = {COORD_NAME, ROLE_ENV.upper(), ROLE_FLAG.upper(), "AAA", "DDD", "CCC"}
     clash = names & set(OLD_LITERALS)
     return [
@@ -1158,6 +1202,10 @@ def run_cases(tools_dir: Path, scripts_dir: Path, break_name: str | None) -> int
         print(f"   ждём провала РОВНО: {' '.join(BREAK_FAILS[break_name])}")
     print(f"⚖️ испытываются инструменты из: {tools_dir}")
     print(f"⚖️ механизм со-работы (вторая часть) испытывается из: {scripts_dir}")
+    for fname in sorted(TEMPLATE_ONLY & set(SUT.values())):
+        src = sut_file(scripts_dir, fname)
+        if src.parent != scripts_dir:
+            print(f"   сборщик {fname} в контур не копируется — взят из образца: {src}")
     safe_case("① init-group-vnext.py: роли названы вызовом, умолчания нет", lambda: case_init(st, tools_dir))
     safe_case("② guard-printed-forms.py, observe(): без роли память не читается",
               lambda: case_guard_observe(st))
