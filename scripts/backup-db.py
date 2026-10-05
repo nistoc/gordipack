@@ -42,8 +42,17 @@ CREATE VIRTUAL TABLE из sqlite_master и команда перестройки
 базу → только при успехе меняем местами с целью; проверка происходит ВСЕГДА
 (--apply и без него), временной базы после любого исхода не остаётся.
 
-ВОССТАНОВЛЕНИЕ:
-    sqlite3 mezosync-restored.db < atlas.agents-sync.db/mezosync.dump.sql
+ВОССТАНОВЛЕНИЕ (два шага — база и файл путей):
+    sqlite3 mezosync-restored.db < <зеркало>/mezosync.dump.sql
+    и положить <зеркало>/local-paths.json как <контейнер>/.mezosync/local/paths.json —
+    без этого файла восстановленный контур не знает, где его зеркало, образец и каталоги
+    раскладки (карточка #677, Э3-Р5: файл путей едет в копию вместе с базой).
+
+КУДА ПИШЕТ. Папка зеркала — ключ mirror_repo файла путей контура (.mezosync/local/paths.json;
+относительный путь считается от контейнера). Ключ не объявлен либо каталога по нему нет —
+выгрузка идёт в <каталог базы>/backups, и об этом сказано строкой. --out называет файл прямо.
+Рядом с выгрузкой кладётся копия файла путей под именем local-paths.json; файла путей нет —
+строка «файла путей нет — в копию не попал», это не отказ.
 
 ЗАПУСК:
     python <КОНТУР>/.mezosync/scripts/backup-db.py            # dry-run: покажет размер/дельту
@@ -61,16 +70,59 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+import mezo_paths
 from mezo_paths import resolve_db   # R15a: путь к БД — от расположения скрипта, не от CWD
 
-# 🪤 ЗДЕСЬ СТОЯЛ ПУТЬ В НАШ РЕПОЗИТОРИЙ-ЗЕРКАЛО. Найдено пробной сборкой нового проекта
-# 18.08: свежий контур клал бы свой дамп В ЧУЖОЙ репозиторий — и владелец нового проекта
-# увидел бы это не скоро. Путь выводится от своего контейнера; прежний остаётся запасным
-# для нашего контура, где такой репозиторий действительно есть.
-_own = Path(__file__).resolve().parent.parent.parent
-_mirror = _own / "atlas.agents-sync.db"
-OUT = (_mirror / "mezosync.dump.sql" if _mirror.is_dir()
-       else _own / ".mezosync" / "backups" / "mezosync.dump.sql")
+# 🪤 ПУТЬ В ЗЕРКАЛО БЕРЁТСЯ ИЗ ФАЙЛА ПУТЕЙ, А НЕ ВПЕЧАТАН (карточка #677, Э3-Р5). Здесь стоял
+# путь в наш репозиторий-зеркало (его имя — литералом), прежде найденный пробной сборкой нового
+# проекта 18.08: свежий контур клал бы свой дамп В ЧУЖОЙ репозиторий. Имя выводилось от своего
+# контейнера, а запасным оставалось наше. Теперь имени в коде нет вовсе: ключ mirror_repo
+# файла путей (.mezosync/local/paths.json) называет папку, не объявлен — запасное место
+# <каталог базы>/backups и строка об этом. Функция default_out() ниже — единственное место.
+PATHS_COPY_NAME = "local-paths.json"    # имя копии файла путей рядом с выгрузкой
+
+
+def default_out(db_path: Path):
+    """→ (файл выгрузки по умолчанию, строка о том, откуда взято место).
+
+    Зеркало — ключ mirror_repo файла путей ЭТОЙ базы (каталог .mezosync базы), а не контейнера
+    вызывающего: бэкап песочницы идёт за песочницей, как annex_dir. Не объявлен, нет каталога
+    по объявленному либо файл не читается — выгрузка идёт в <каталог базы>/backups, и строка
+    называет причину. Литерала с именем зеркала здесь нет.
+    """
+    fallback = db_path.parent / "backups" / "mezosync.dump.sql"
+    res = mezo_paths.local_path("mirror_repo", __file__, mezo_dir=db_path.parent)
+    if res.outcome == mezo_paths.LOCAL_DECLARED and res.exists:
+        return res.path / "mezosync.dump.sql", f"зеркало из файла путей: {res.path.as_posix()}"
+    if res.outcome == mezo_paths.LOCAL_DECLARED:
+        why = f"зеркало объявлено, но каталога нет: {res.path.as_posix()}"
+    else:
+        why = res.words
+    note = f"{why} — выгрузка идёт в запасное место {fallback.parent.as_posix()}"
+    if res.hint:
+        note += f"\n   ⚠️ {res.hint}"
+    return fallback, note
+
+
+def paths_file_line(db_path: Path, out: Path, apply: bool) -> str:
+    """Копия файла путей рядом с выгрузкой (при записи) либо строка, почему её нет.
+
+    Берётся тот же файл, что читал default_out(): файл ЭТОЙ базы. Нет файла — строка
+    «файла путей нет — в копию не попал», не отказ. Файл есть, но не читается — всё равно
+    копируется как есть (его байты — улика для восстановления), и это сказано.
+    """
+    res = mezo_paths.local_path("mirror_repo", __file__, mezo_dir=db_path.parent)
+    if res.outcome == mezo_paths.LOCAL_NO_FILE or res.file is None or not res.file.exists():
+        return "файла путей нет — в копию не попал"
+    dst = out.parent / PATHS_COPY_NAME
+    if not apply:
+        return f"файл путей {res.file.as_posix()} попадёт в копию как {dst.as_posix()}"
+    tmp = dst.with_name(dst.name + ".tmp")
+    tmp.write_bytes(res.file.read_bytes())
+    os.replace(tmp, dst)
+    note = " (файл не читается как JSON — скопирован как есть)" \
+        if res.outcome == mezo_paths.LOCAL_UNREADABLE else ""
+    return f"файл путей скопирован: {dst.as_posix()}{note}"
 
 # ⚰️ Здесь стояла посылка «данные append-only ⇒ дамп уменьшаться не должен». Она умерла
 # 24.08 с защитой сохранённой памяти: чистка истории версий ШТАТНО УДАЛЯЕТ строки
@@ -584,18 +636,29 @@ def open_snapshot(db_path: str) -> sqlite3.Connection:
 
 
 def main():
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(
+        description="текстовая выгрузка базы контура в папку зеркала (ключ mirror_repo файла путей "
+                    ".mezosync/local/paths.json) и копия файла путей рядом с ней. Восстановление: "
+                    "sqlite3 новая.db < mezosync.dump.sql, затем local-paths.json положить как "
+                    "<контейнер>/.mezosync/local/paths.json. Без --apply ничего не пишет.")
         # R15a довезён 27.07 (замер PROTO #2867: справка не может обещать то, чего
     # механизм не умеет). Проверка готовности — ПРОГОН из чужого каталога.
 
     ap.add_argument("--db", default=None, help="Путь к mezosync.db (по умолчанию — рядом со скриптом)")
-    ap.add_argument("--out", default=str(OUT))
+    ap.add_argument("--out", default=None,
+                    help="файл выгрузки; без него — папка зеркала из файла путей (ключ "
+                         "mirror_repo), а если ключа нет — <каталог базы>/backups")
     ap.add_argument("--apply", action="store_true")
     ap.add_argument("--verify", action="store_true",
                     help="ничего не меняет: разворот теперь проверяется ВСЕГДА, "
                          "с этим флагом и без него — оставлен для прежних вызовов")
     args = ap.parse_args()
     args.db = str(resolve_db(args.db, __file__))   # R15a: от расположения скрипта
+    # Карточка #677 (Э3-Р5): место выгрузки по умолчанию — из файла путей ЭТОЙ базы.
+    out_note = None
+    if args.out is None:
+        default_file, out_note = default_out(Path(args.db))
+        args.out = str(default_file)
 
     conn = open_snapshot(args.db)   # источник открыт mode=ro один раз; дальше — по срезу
 
@@ -699,11 +762,19 @@ def main():
         print(f"  ⚠️  в выгрузке остались знаки CR вне значений ({leftover_cr}) — хранилище"
               " с eol=lf заменит их при коммите, и копия разойдётся с базой в этих местах")
     print(f"Цель: {out}")
+    if out_note:
+        print(f"  ℹ️  {out_note}")
 
     if not args.apply:
         print("\n[DRY-RUN] Не записано. Для записи — флаг --apply")
 
     ok, outcome = write_and_verify(conn, dump, counts, virtual_sql, out, args.apply)
+
+    # Карточка #677 (Э3-Р5): файл путей едет в копию вместе с базой — рядом с выгрузкой, под
+    # именем local-paths.json. Нет файла — строка, не отказ. Выгрузка не удалась — файл путей
+    # не копируется (копия без базы ничего не восстанавливает).
+    if ok:
+        print(f"  📄 {paths_file_line(Path(args.db), out, args.apply)}")
 
     if args.apply and ok:
         print(f"\n✅ Дамп записан: {out.name}")

@@ -17,19 +17,49 @@ backlog_tests, templates.
     python <КОНТУР>/.mezosync/scripts/set-registry.py invariant --code VERIFY-AT-SOURCE --desc "..."
     python <КОНТУР>/.mezosync/scripts/set-registry.py test      --backlog-id 5 --title "..." --method "..." \
                                               [--command "..."] [--expected "..."]
-    python <КОНТУР>/.mezosync/scripts/set-registry.py template  --role-type coord --name "COORD" --prompt-file f
+    python <КОНТУР>/.mezosync/scripts/set-registry.py template  --role-type <тип роли> --name "<имя>" --prompt-file f
     python <КОНТУР>/.mezosync/scripts/set-registry.py list      [track|invariant|test|template]
 
 Все подкоманды идемпотентны (INSERT OR REPLACE по ключу) и пишут в audit_log.
 Без --apply — dry-run.
+
+КТО ПИШЕТ (для записи, --apply): флаг --actor <РОЛЬ> → переменная среды MEZO_ROLE →
+координатор контура из данных (печатается строкой «пишет: …») → отказ словами. Чтение
+(list) и холостой прогон руки не ищут и не требуют.
 """
 
 import argparse
+import os
 import sqlite3
 import sys
 from pathlib import Path
 
 from mezo_paths import resolve_db   # R15a: путь к БД — от расположения скрипта, не от CWD
+from mezo_paths import find_coordinator   # кто в контуре координатор — из данных, не из литерала
+
+
+def pick_actor(conn, flag):
+    """Кто ПИШЕТ: флаг --actor → MEZO_ROLE (верхний регистр) → координатор контура из данных
+    (одна печатная строка) → отказ словами. Зовётся только на записи (карточка #677, Э3, Р2):
+    прежде умолчание было впечатанным именем роли."""
+    name = (flag or "").strip() or (os.environ.get("MEZO_ROLE") or "").strip().upper()
+    if name:
+        return name
+    found = find_coordinator(conn)
+    if found.name:
+        print(f"пишет: {found.name} (координатор контура; --actor не дан)")
+        return found.name
+    if found.error:
+        why = f"таблицу ролей прочитать не удалось ({found.error})"
+    elif found.found:
+        why = (f"в данных координаторами названы {len(found.found)} роли: "
+               f"{', '.join(found.found)} — выбрать одну нечем")
+    else:
+        why = "ни у одной живой роли в причине нет слова «координатор»"
+    sys.exit("⛔ ЗАПИСЬ НЕ СДЕЛАНА — не названа рука: от чьего имени запись попадёт в журнал правок.\n"
+             "   Назови её флагом --actor <РОЛЬ> или переменной среды MEZO_ROLE=<РОЛЬ>.\n"
+             f"   Взять координатора контура из данных тоже нельзя: {why}.\n"
+             "   База не тронута.")
 
 
 def audit(conn, actor, action, target, diff):
@@ -69,7 +99,7 @@ def cmd_invariant(conn, a):
     conn.execute(
         "INSERT INTO invariants (code, description, established_by) VALUES (?,?,?) "
         "ON CONFLICT(code) DO UPDATE SET description=excluded.description",
-        (a.code, a.desc, a.by))
+        (a.code, a.desc, a.by or a.actor))
     audit(conn, a.actor, "update_invariant" if old else "create_invariant", a.code, a.desc)
     conn.commit()
     print(f"✅ инвариант {a.code} записан")
@@ -143,7 +173,10 @@ def main():
 
     for name in ("track", "invariant", "test", "template", "list"):
         p = sub.add_parser(name)
-        p.add_argument("--actor", default="COORD")
+        # ⛔ Умолчания у руки НЕТ: см. pick_actor(). Рука нужна только записи (--apply).
+        p.add_argument("--actor", default=None,
+                       help="кто пишет (для --apply): иначе MEZO_ROLE, иначе координатор "
+                            "контура из данных")
         p.add_argument("--apply", action="store_true", help="без него — dry-run")
         if name == "track":
             p.add_argument("--id", required=True)
@@ -154,7 +187,8 @@ def main():
         elif name == "invariant":
             p.add_argument("--code", required=True)
             p.add_argument("--desc", required=True)
-            p.add_argument("--by", default="coord")
+            p.add_argument("--by", default=None,
+                           help="кто установил инвариант; по умолчанию — тот, кто пишет")
         elif name == "test":
             p.add_argument("--backlog-id", dest="backlog_id", type=int, required=True)
             p.add_argument("--title", required=True)
@@ -175,6 +209,8 @@ def main():
         conn = sqlite3.connect(f"file:{a.db}?mode=rw", uri=True)
     except sqlite3.OperationalError:
         sys.exit(f"ERR: БД не найдена: {a.db}")
+    if a.cmd != "list" and a.apply:
+        a.actor = pick_actor(conn, a.actor)   # рука нужна только записи, до её первой строки
     {"track": cmd_track, "invariant": cmd_invariant, "test": cmd_test,
      "template": cmd_template, "list": cmd_list}[a.cmd](conn, a)
     if a.cmd != "list" and not a.apply:

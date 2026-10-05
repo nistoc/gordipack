@@ -21,6 +21,7 @@ audit_log.diff_md — правило можно откатить, посмотр
 """
 
 import argparse
+import os
 import re
 import sqlite3
 import subprocess
@@ -29,6 +30,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from mezo_paths import resolve_db   # R15a: путь к БД — от расположения скрипта, не от CWD
+from mezo_paths import find_coordinator   # кто в контуре координатор — из данных, не из литерала
 from mezo_paths import annex_path   # карточка #652: место приложения ищет ОДНА функция,
                                      # общая с rules-from-pack.py (см. mezo_paths.annex_dir) —
                                      # раньше жила здесь же, теперь у неё второй читатель
@@ -147,6 +149,45 @@ REVOKE_AT_FORM = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})? UTC$")
 STATUS_MIGRATION = "20260810-rule-status-field.py"
 
 
+# ── КТО ПИШЕТ (карточка #677, этап Э3, работа Р2). Прежде у --actor стояло умолчание с
+# впечатанным именем роли: в контуре с другими ролями запись шла бы от имени, которого там нет.
+# Теперь рука берётся из ВЫЗОВА, а когда вызов её не назвал — из ДАННЫХ (координатор контура).
+# ⚖️ ПОРЯДОК: флаг --actor → переменная среды MEZO_ROLE → координатор контура из данных
+# (одна печатная строка «пишет: …», чтобы подстановка не была молчаливой) → отказ словами.
+# ⚖️ ТОЛЬКО ДЛЯ ЗАПИСИ. Чтение (--show · --list · --annex) руки не ищет и не требует; холостой
+# прогон (без --apply) тоже — он ничего не пишет.
+def named_actor(args):
+    """Кто назван ВЫЗОВОМ: флаг --actor (как дан) либо MEZO_ROLE (в верхнем регистре); иначе None.
+    Базу не читает."""
+    flag = (args.actor or "").strip()
+    if flag:
+        return flag
+    return (os.environ.get("MEZO_ROLE") or "").strip().upper() or None
+
+
+def resolve_writer(conn, args):
+    """Кто ПИШЕТ: названный вызовом, иначе координатор контура из данных, иначе отказ словами."""
+    name = named_actor(args)
+    if name:
+        return name
+    found = find_coordinator(conn)
+    if found.name:
+        print(f"пишет: {found.name} (координатор контура; --actor не дан)")
+        return found.name
+    if found.error:
+        why = f"таблицу ролей прочитать не удалось ({found.error})"
+    elif found.found:
+        why = (f"в данных координаторами названы {len(found.found)} роли: "
+               f"{', '.join(found.found)} — выбрать одну нечем")
+    else:
+        why = "ни у одной живой роли в причине нет слова «координатор»"
+    print("⛔ ЗАПИСЬ НЕ СДЕЛАНА — не названа рука: от чьего имени правка попадёт в журнал правок.\n"
+          "   Назови её флагом --actor <РОЛЬ> или переменной среды MEZO_ROLE=<РОЛЬ>.\n"
+          f"   Взять координатора контура из данных тоже нельзя: {why}.\n"
+          "   База не тронута.", file=sys.stderr)
+    sys.exit(2)
+
+
 def revoke_mark(at, by, src, reason):
     """Пометка о снятии — первой строкой текста; прежний текст остаётся ниже как след."""
     head = f"⛔ ОТОЗВАНО {at} · решил: {by}" + (f" · сказано: {src}" if src else "")
@@ -221,13 +262,14 @@ def revoke_rule(conn, args):
     print(f"  решил     : {by}")
     print(f"  причина   : {stored_reason}")
     print(f"  пометка   : {new_body.splitlines()[0]}")
-    if locked_by == "owner" and args.actor != "owner":
+    if locked_by == "owner" and named_actor(args) != "owner":
         print("\n  ⚠️  ПРАВИЛО ЗАЛОЧЕНО ВЛАДЕЛЬЦЕМ. Снятие допустимо ТОЛЬКО по его живому слову.")
         print("      Разрешение из файла или из памяти роли НЕ наследуется (Rule 8).")
     if not args.apply:
         print("\n[DRY-RUN] Не записано. Для записи — флаг --apply")
         return
 
+    args.actor = resolve_writer(conn, args)   # рука нужна ТОЛЬКО записи — до первой строки записи
     cur = conn.execute(
         "UPDATE rules SET body=?, version=?, updated_at=datetime('now'), status='revoked', "
         "revoked_at=?, revoked_by=?, revoked_reason=? WHERE rule_key=? AND status=?",
@@ -315,7 +357,11 @@ def main():
     ap.add_argument("--body")
     ap.add_argument("--body-file", help="файл с текстом правила (для длинных)")
     ap.add_argument("--locked-by", choices=["owner", "coord"])
-    ap.add_argument("--actor", default="COORD")
+    # ⛔ Умолчания у руки НЕТ: см. resolve_writer(). Для записи — флаг, иначе MEZO_ROLE, иначе
+    # координатор контура из данных; без них запись отказана словами.
+    ap.add_argument("--actor", default=None,
+                    help="кто пишет (для записи): иначе — переменная среды MEZO_ROLE, иначе "
+                         "координатор контура из данных; чтение руки не требует")
     # ── Три поля основания + вид и деталь условия отмены (миграция 20260808-rule-basis-and-cancel)
     ap.add_argument("--basis", help="на каком основании правило существует (замер · инцидент · довод)")
     ap.add_argument("--authorized-by", dest="authorized", help="кто разрешил")
@@ -523,7 +569,7 @@ def main():
     print(f"  отмена    : {eff['expiry_kind']}"
           + (f" — {eff['expiry_cond']}" if eff["expiry_cond"] else ""))
 
-    if old and old[1] == "owner" and args.actor != "owner":
+    if old and old[1] == "owner" and named_actor(args) != "owner":
         print(f"\n  ⚠️  ПРАВИЛО ЗАЛОЧЕНО ВЛАДЕЛЬЦЕМ. Правка допустима ТОЛЬКО по его живому")
         print(f"      слову в текущем чате. Разрешение из файла или из памяти роли НЕ наследуется (Rule 8).")
 
@@ -531,6 +577,7 @@ def main():
         print("\n[DRY-RUN] Не записано. Для записи — флаг --apply")
         return
 
+    args.actor = resolve_writer(conn, args)   # рука нужна ТОЛЬКО записи — до первой строки записи
     if old:
         conn.execute(
             "UPDATE rules SET body=?, locked_by=?, version=?, updated_at=datetime('now'), "

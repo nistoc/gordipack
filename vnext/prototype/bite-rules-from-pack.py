@@ -62,6 +62,25 @@ UTC): ㊼/поломка — --show на «изменено с обеих сто
 Поломки: У (общая функция ищет запросом LIKE) · Ф (rules-from-pack.py снова со своим запросом LIKE) ·
 Х (предупреждение не называет найденных) · Ц (общая функция отвечает литералом «COORD») ·
 Ч (при двух ролях общая функция берёт первую). Каждая красит ровно названные случаи.
+
+КАРТОЧКА #677, ЭТАП Э3, РАБОТА Р3 (2026-10-05, заявка пакета №36 от контура AIA; слово владельца
+2026-10-05 10:53 UTC, В4 1: случай ⑰б проверяется на стенде в Atlas с раскладкой AIA, в чужой контур
+не ходим). БЕДА: gordi-issue.py пускает писать только координатора контура ИЗ ДАННЫХ, а ⑰б и поломка
+(С) звали его с писателем «COORD». У AIA координатор — COORD-A, у COORD пометки нет: на копии их базы
+оба случая падали отказом «не координатор» РАНЬШЕ, чем доходило до тела письма. Приёмка зависела от
+состава ролей испытуемого контура, а не от свойства, которое проверяет (разбор тела письма).
+ЛЕЧЕНИЕ: на копии базы подстенда приёмка САМА называет своего координатора — пробную роль ZZK, у всех
+прочих ролей копии пометку снимает и сверяет через mezo_paths.find_coordinator, что назван РОВНО ZZK
+(иначе «приёмка не состоялась» словами и код 2, а не провал случая). Писатель в вызове — ZZK.
+Случаи (новые, именные): ⑰б ВСТРЕЧНЫЙ в четырёх раскладках исходной копии — «Atlas» (пометка у COORD) ·
+«AIA» (пометка у COORD-A, у COORD нет) · «никто не назван» · «названы двое» — во всех ⑰б проходит, а
+(С) отказывает именно по пустому разделу ПРЕДЛОЖЕНИЕ; ⑰б ВСТРЕЧНЫЙ самопроверка (не снялась пометка у
+прочих — отказ мерить со словами и код 2); ⑰б ВСТРЕЧНЫЙ «отказ по другому пустому разделу не считается
+отказом по ПРЕДЛОЖЕНИЮ» (в хвосте любого отказа этого вида слово ПРЕДЛОЖЕНИЕ стоит в образце формата).
+Поломки (механизм приёмки — прогон тех же функций с нарочно испорченным параметром): Ш (вернуть
+--role COORD) · Щ (текст снятой пометки несёт слово «координатор» — «бывший координатор» пометку не
+снимает) · Э (сверка названного выключена) · Ю (прежняя слабая проверка слов отказа). Каждая красит
+ровно названные случаи.
 """
 from __future__ import annotations
 
@@ -70,6 +89,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -546,6 +566,14 @@ def make_circuit_db(path: Path, rules=(), meta=None, roles=()) -> None:
              r.get("status", "active")))
     for k, v in (meta or {}).items():
         conn.execute("INSERT INTO meta(key, value) VALUES (?,?)", (k, v))
+    # Карточка #677 (Э3-Р5): папку клона пакета читают из ФАЙЛА ПУТЕЙ рядом с базой
+    # (<каталог базы>/local/paths.json, ключ template_checkout), а не из таблицы meta. Запись
+    # meta остаётся как прежний источник (он больше не читается): приёмке нужны оба, чтобы видеть,
+    # что чтение идёт из файла. Остальные случаи по-прежнему просто называют template_checkout в meta.
+    if meta and "template_checkout" in meta:
+        (path.parent / "local").mkdir(exist_ok=True)
+        (path.parent / "local" / "paths.json").write_text(
+            json.dumps({"template_checkout": meta["template_checkout"]}), encoding="utf-8")
     for role, lifecycle, reason in roles:
         conn.execute("INSERT INTO roles(role, lifecycle, lifecycle_reason) VALUES (?,?,?)",
                      (role, lifecycle, reason))
@@ -841,6 +869,141 @@ def build_state_fixture(root: Path, text_sha):
     return circuit_db, pack_dir, expected, only_yours
 
 
+# ═══ КТО НА ПОДСТЕНДЕ КООРДИНАТОР: ЕГО НАЗЫВАЕТ САМА ПРИЁМКА ═══════════════════════════════════
+# Карточка #677, этап Э3, работа Р3 (заявка пакета №36 от контура AIA; слово владельца
+# 2026-10-05 10:53 UTC, В4 1).
+# 🪤 БЕДА. gordi-issue.py пускает писать ТОЛЬКО координатора контура, а координатор — факт ДАННЫХ
+# контура (roles.lifecycle_reason), не константа кода: у Atlas это COORD, у AIA — COORD-A (у COORD
+# пометки нет), у иного контура не назван никто или названы двое. Случай ⑰б и поломка (С) звали его
+# с писателем «COORD»: на копии базы AIA оба падали отказом «не координатор» РАНЬШЕ, чем доходило до
+# тела письма, — приёмка зависела от состава ролей испытуемого контура, а не от того, что
+# проверяет (разбор тела). Класс «испытываем не то, что чиним».
+# ⚖️ ЛЕЧЕНИЕ. На КОПИИ базы подстенда приёмка называет своего координатора САМА — пробную роль ZZK —
+# и снимает пометку у всех прочих, затем сверяет через mezo_paths.find_coordinator, что назван
+# РОВНО ZZK. Не сошлось — «приёмка не состоялась» словами и код 2 (отказ мерить), а не провал
+# случая: судить тело письма на базе, где писателя назвать нечем, значило бы краснеть по чужой
+# причине.
+# ⚖️ ДУБЛЬ, НАЗВАННЫЙ ВСЛУХ. Приём (подсадить пробную роль · снять пометки у прочих · сверить)
+# повторяет set_coordinators из bite-pool-brief.py: общий модуль стенда (mezo_stand.py) по заданию
+# не правится, а у двух приёмок разные пробные роли и тексты пометок. Отличие: отбор помеченных —
+# не своя копия поиска слова, а mezo_paths.find_coordinator (одно место правила на весь контур).
+PROBE_ROLE = "ZZK"
+PROBE_MARK = "координатор контура (проба приёмки bite-rules-from-pack)"
+LAYOUT_MARK = "координатор контура (исходная раскладка пробы приёмки)"
+# 🪤 Текст снятой пометки НЕ должен нести корень «координатор» ни в каком виде: «бывший
+# координатор» пометку НЕ снимает (поиск смотрит на буквы, а не на смысл) — и на копии оказалось бы
+# двое названных. Поэтому текст другой, а итог сверяется ПОИСКОМ КОНТУРА, а не рассуждением.
+MARK_REMOVED = "проба приёмки bite-rules-from-pack: пометка снята на копии"
+# Нарочная ловушка для поломки (Щ) и самопроверки: слово в тексте остаётся, пометка НЕ снята.
+TRAP_REMOVED = "бывший координатор (ловушка пробы: слово осталось в тексте)"
+
+# Раскладки ИСХОДНОЙ копии базы: кто назван координатором ДО того, как приёмка назовёт своего.
+# Состояние ставится ЦЕЛИКОМ каждый раз (как у bite-pool-brief.py): случаи не зависят ни от
+# порядка, ни от того, как устроен живой контур сегодня. Роль, которой на копии нет, заводится.
+GORDI_LAYOUTS = (
+    ("Atlas", ("COORD",), "пометка у COORD"),
+    ("AIA", ("COORD-A",), "пометка у COORD-A, у COORD её нет; роль COORD-A заводится на копии"),
+    ("никто не назван", (), "пометки нет ни у кого"),
+    ("названы двое", ("COORD", "TAXO"), "пометка у COORD и у TAXO"),
+)
+
+
+class AcceptanceRefused(Exception):
+    """Приёмка не состоялась — мерить нечем. Это отказ словами (код 2), а не провал случая."""
+
+
+def mark_roles(db_path, named, removed_text=MARK_REMOVED, mark_text=PROBE_MARK):
+    """Ставит на КОПИИ базы состояние «названы ровно эти роли». У всех, кого поиск контура
+    сейчас называет координатором, пометка заменяется на removed_text; затем названным (named)
+    ставится mark_text, а недостающая строка роли заводится. Ничего не сверяет — сверка у
+    вызывающего."""
+    con = sqlite3.connect(str(db_path))
+    try:
+        lookup = mezo_paths.find_coordinator(con)
+        if lookup.error:
+            raise AcceptanceRefused(
+                f"таблица ролей на копии базы не читается ({lookup.error}) — координатора не назвать")
+        for name in lookup.found:
+            con.execute("UPDATE roles SET lifecycle_reason=? WHERE role=?", (removed_text, name))
+        for name in named:
+            con.execute(
+                "INSERT INTO roles (role, lifecycle, lifecycle_reason, zone) VALUES (?, 'alive', ?, ?) "
+                "ON CONFLICT(role) DO UPDATE SET lifecycle='alive', "
+                "lifecycle_reason=excluded.lifecycle_reason",
+                (name, mark_text, "проба приёмки"))
+        con.commit()
+    finally:
+        con.close()
+
+
+def apply_layout(db_path, named):
+    """Раскладка исходной копии: названы РОВНО named. Сверяется поиском контура; не встала —
+    отказ мерить. Возвращает список названных."""
+    mark_roles(db_path, named, mark_text=LAYOUT_MARK)
+    got = mezo_paths.find_coordinator(db_path)
+    if got.error or got.found != sorted(named):
+        raise AcceptanceRefused(
+            f"раскладка исходной копии не встала: названо {', '.join(got.found) or 'никого'}, "
+            f"ждали {', '.join(sorted(named)) or 'никого'}"
+            + (f" (чтение таблицы ролей: {got.error})" if got.error else ""))
+    return got.found
+
+
+def name_probe_coordinator(db_path, removed_text=MARK_REMOVED, verify=True):
+    """Шаг 1 приёмки: на копии базы координатором назван ровно ZZK. verify=False выключает
+    сверку — только для нарочной поломки (Э). Возвращает итог поиска контура."""
+    mark_roles(db_path, (PROBE_ROLE,), removed_text=removed_text)
+    lookup = mezo_paths.find_coordinator(db_path)
+    if verify and lookup.name != PROBE_ROLE:
+        raise AcceptanceRefused(
+            f"на копии базы назван не один пробный координатор {PROBE_ROLE}: найдено "
+            f"{len(lookup.found)}: {', '.join(lookup.found) or 'никого'}"
+            + (f"; чтение таблицы ролей не удалось ({lookup.error})" if lookup.error else "")
+            + ". Писателя для gordi-issue.py назвать нечем — случаи ⑰б и (С) здесь не судятся")
+    return lookup
+
+
+def run_gordi_create(stand_dir, body_file, title, role=PROBE_ROLE):
+    """Настоящий вызов gordi-issue.py create --dry-run на подстенде; писатель — role. Среда —
+    среды подстенда (живой MEZO_CONTAINER сюда попасть не должен)."""
+    return subprocess.run(
+        [sys.executable, str(GORDI_ISSUE_PY), "create", "--role", role,
+         "--title", title, "--body-file", str(body_file), "--dry-run"],
+        cwd=str(stand_dir), env=mezo_stand.stand_env(stand_dir), capture_output=True,
+        text=True, encoding="utf-8")
+
+
+def dry_run_accepted(proc) -> bool:
+    """Холостой прогон принял тело: код 0 и слова «разделы полны» (разделы найдены настоящими)."""
+    return proc.returncode == 0 and "разделы полны" in (proc.stdout or "")
+
+
+def refused_by_empty_proposal(proc, exact=True) -> bool:
+    """Отказ именно по пустому разделу ПРЕДЛОЖЕНИЕ: ненулевой код И слова отказа.
+    ⚖️ Слово «ПРЕДЛОЖЕНИЕ» стоит и в образце формата в хвосте КАЖДОГО отказа этого вида
+    («## ПРЕДЛОЖЕНИЕ (предмет и цена)») — поэтому подстрока не доказывает, какой раздел пуст;
+    судится список пустых разделов: «пустые разделы: ПРЕДЛОЖЕНИЕ.» и ничего больше.
+    exact=False — прежняя слабая проверка (две подстроки), нужна только нарочной поломке (Ю)."""
+    refusal = proc.stderr or ""
+    if proc.returncode == 0:
+        return False
+    if exact:
+        return "пустые разделы: ПРЕДЛОЖЕНИЕ." in refusal
+    return "пустые разделы" in refusal and "ПРЕДЛОЖЕНИЕ" in refusal
+
+
+def probe_layout(db_path, stand_dir, named, good_body, bad_body, role=PROBE_ROLE,
+                 removed_text=MARK_REMOVED, verify=True):
+    """Один прогон раскладки: раскладка исходной копии → шаг 1 (приёмка называет своего) →
+    два настоящих вызова gordi-issue.py (верное тело и тело с пустым ПРЕДЛОЖЕНИЕМ).
+    Возвращает (названные исходно, итог поиска после шага 1, верный прогон, прогон с пустым)."""
+    initial = apply_layout(db_path, named)
+    lookup = name_probe_coordinator(db_path, removed_text=removed_text, verify=verify)
+    good = run_gordi_create(stand_dir, good_body, "проба раскладки: верное тело", role)
+    bad = run_gordi_create(stand_dir, bad_body, "проба раскладки: пустое ПРЕДЛОЖЕНИЕ", role)
+    return initial, lookup, good, bad
+
+
 # ── ГЛАВНЫЙ ПРОГОН ───────────────────────────────────────────────────────────────────
 
 def main() -> int:
@@ -1066,16 +1229,19 @@ def main() -> int:
     # далее идут по нему как раньше, без базы вовсе.
     gordi_stand = mezo_stand.new("bite-rfp-gordi-")
     (gordi_stand / ".mezosync").mkdir(parents=True, exist_ok=True)
-    mezo_stand.snapshot_db(live_db, gordi_stand / ".mezosync" / "mezosync.db")
-    dry = subprocess.run(
-        [sys.executable, str(GORDI_ISSUE_PY), "create", "--role", "COORD",
-         "--title", "тест приёмки bite-rules-from-pack", "--body-file", str(out_file),
-         "--dry-run"],
-        cwd=str(gordi_stand), env=mezo_stand.stand_env(gordi_stand), capture_output=True,
-        text=True, encoding="utf-8")
+    gordi_db = gordi_stand / ".mezosync" / "mezosync.db"
+    mezo_stand.snapshot_db(live_db, gordi_db)
+    # ⚠️ КАРТОЧКА #677, ЭТАП Э3, РАБОТА Р3: писателя («--role») НЕ берём из состава ролей живого
+    # контура — координатор там факт данных (у Atlas COORD, у AIA COORD-A, у иного не назван никто),
+    # и приёмка с литералом «COORD» краснела бы на чужом контуре по чужой причине. Шаг 1: на копии
+    # приёмка называет своего координатора (ZZK), у прочих ролей пометку снимает и сверяет поиском
+    # контура. Не сошлось — AcceptanceRefused: отказ мерить со словами и код 2 (см. run()).
+    name_probe_coordinator(gordi_db)
+    dry = run_gordi_create(gordi_stand, out_file, "тест приёмки bite-rules-from-pack")
     ok &= case("⑰б тело предложения принимает холостой прогон gordi-issue.py (свои "
-              "разделы он находит настоящими, не выдуманными)",
-              dry.returncode == 0 and "разделы полны" in dry.stdout,
+              "разделы он находит настоящими, не выдуманными); писателя называет сама приёмка "
+              "на копии базы, а не состав ролей испытуемого контура",
+              dry_run_accepted(dry),
               f"код {dry.returncode}; вывод: {(dry.stdout or dry.stderr).strip()[:200]}")
     conn7.close(); pack_conn7.close()
 
@@ -1091,25 +1257,154 @@ def main() -> int:
                   "у нас переписано понятнее", str(out_file_c), None)
     proposal_text_c = out_file_c.read_text(encoding="utf-8")
     sections_ok_c = all(f"## {s}" in proposal_text_c for s in ("ЗАМЕР", "КЛАСС", "ПРЕДЛОЖЕНИЕ"))
-    dry_c = subprocess.run(
-        [sys.executable, str(GORDI_ISSUE_PY), "create", "--role", "COORD",
-         "--title", "тест приёмки bite-rules-from-pack, поломка (С)", "--body-file",
-         str(out_file_c), "--dry-run"],
-        cwd=str(gordi_stand), env=mezo_stand.stand_env(gordi_stand), capture_output=True,
-        text=True, encoding="utf-8")
+    dry_c = run_gordi_create(gordi_stand, out_file_c,
+                             "тест приёмки bite-rules-from-pack, поломка (С)")
     # ⚖️ Ненулевого кода МАЛО: отказ по посторонней причине (координатор не найден, нет
     # файла тела) тоже ненулевой — и случай прошёл бы, ничего не доказав. Требуется отказ
     # ИМЕННО по пустому разделу, названному по имени (правка PROTO при установке, 24.09).
+    # Р3 (05.10): и подстроки мало — слово «ПРЕДЛОЖЕНИЕ» стоит в образце формата в хвосте любого
+    # отказа этого вида; судится список пустых разделов (см. refused_by_empty_proposal).
     refusal_c = dry_c.stderr or ""
-    empty_refusal_c = "пустые разделы" in refusal_c and "ПРЕДЛОЖЕНИЕ" in refusal_c
+    empty_refusal_c = refused_by_empty_proposal(dry_c)
     ok &= case("⑰б ПОЛОМКА (С) «раздел ПРЕДЛОЖЕНИЕ пуст под заголовком» ловит только ⑰б: "
               "⑰а (заголовок подстрокой) её не видит, gordi-issue.py отказывает по пустому разделу",
-              sections_ok_c and dry_c.returncode != 0 and empty_refusal_c,
+              sections_ok_c and empty_refusal_c,
               f"⑰а-проверка под поломкой (ждём не тронута — заголовки есть): {sections_ok_c}; "
               f"код холостого прогона {dry_c.returncode} (под верным кодом ⑰б — 0; поломка "
               f"обязана его сдвинуть); отказ по пустому разделу ПРЕДЛОЖЕНИЕ: {empty_refusal_c}; "
               f"вывод: {refusal_c.strip()[:160]}")
     conn7c.close(); pack_conn7c.close()
+
+    # ═══ КАРТОЧКА #677, ЭТАП Э3, РАБОТА Р3: ⑰б и (С) не зависят от состава ролей испытуемого
+    # контура. Исходная копия базы ставится в четыре раскладки; после шага 1 (приёмка называет
+    # своего координатора) во ВСЕХ ⑰б проходит, а (С) отказывает именно по пустому разделу.
+    for layout_name, layout_named, layout_words in GORDI_LAYOUTS:
+        initial, lookup, good, bad = probe_layout(gordi_db, gordi_stand, layout_named,
+                                                  out_file, out_file_c)
+        accepted = dry_run_accepted(good)
+        refused = refused_by_empty_proposal(bad)
+        good_words = "разделы полны" in (good.stdout or "")
+        ok &= case(f"⑰б ВСТРЕЧНЫЙ раскладка «{layout_name}» ({layout_words}): после шага 1 ⑰б "
+                   f"проходит, а (С) отказывает именно по пустому разделу ПРЕДЛОЖЕНИЕ",
+                   accepted and refused and lookup.name == PROBE_ROLE,
+                   f"исходно названо: {', '.join(initial) or 'никого'}; после шага 1 назван: "
+                   f"{lookup.name}; верное тело: код {good.returncode} (ждём 0), разделы найдены: "
+                   f"{good_words}; пустое ПРЕДЛОЖЕНИЕ: код {bad.returncode}, отказ по пустому "
+                   f"разделу: {refused}; слова отказа: {(bad.stderr or '').strip()[:90]}")
+
+    # ── ⑰б ВСТРЕЧНЫЙ: отказ по ДРУГОМУ пустому разделу не считается отказом по ПРЕДЛОЖЕНИЮ ──
+    # Слово «ПРЕДЛОЖЕНИЕ» стоит в образце формата в хвосте КАЖДОГО отказа «пустые разделы» —
+    # прежняя проверка (две подстроки) принимала за отказ по ПРЕДЛОЖЕНИЮ и отказ по ЗАМЕРУ.
+    name_probe_coordinator(gordi_db)
+    other_empty_body = root / "proposal-empty-zamer.md"
+    other_empty_body.write_text("## ЗАМЕР\n\n## КЛАСС\nкласс ошибки одним предложением\n"
+                                "## ПРЕДЛОЖЕНИЕ\nпредмет и цена\n", encoding="utf-8")
+    other_empty = run_gordi_create(gordi_stand, other_empty_body,
+                                   "проба: пуст ЗАМЕР, ПРЕДЛОЖЕНИЕ заполнено")
+    other_words = (other_empty.stderr or "").strip()
+    ok &= case("⑰б ВСТРЕЧНЫЙ: отказ по пустому разделу ЗАМЕР не принимается за отказ по пустому "
+               "разделу ПРЕДЛОЖЕНИЕ, хотя слово ПРЕДЛОЖЕНИЕ стоит в хвосте этого отказа",
+               other_empty.returncode != 0 and "пустые разделы: ЗАМЕР." in other_words
+               and not refused_by_empty_proposal(other_empty),
+               f"код {other_empty.returncode} (ждём не 0); слова отказа называют ЗАМЕР: "
+               f"{'пустые разделы: ЗАМЕР.' in other_words}; проверка причины принимает его "
+               f"за отказ по ПРЕДЛОЖЕНИЮ: {refused_by_empty_proposal(other_empty)} (ждём False); "
+               f"вывод: {other_words[:120]}")
+
+    # ── ⑰б ВСТРЕЧНЫЙ: самопроверка — не снялась пометка у прочих → отказ мерить, не провал ──
+    # Раскладка «Atlas», но текст снятой пометки несёт слово «координатор» (ловушка): пометка у
+    # COORD остаётся, и на копии названы двое — COORD и ZZK. Приёмка обязана не судить, а отказаться
+    # словами с именами названных и кодом 2 (run() ловит отказ мерить).
+    def sabotaged_naming(verify):
+        apply_layout(gordi_db, ("COORD",))
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            code = run(lambda: name_probe_coordinator(gordi_db, removed_text=TRAP_REMOVED,
+                                                      verify=verify))
+        # без отказа run() отдаёт то, что вернул шаг 1 (итог поиска), а не число — числом кода
+        # считается только отказ мерить
+        return (code if isinstance(code, int) else None), printed.getvalue()
+
+    code_v, printed_v = sabotaged_naming(True)
+    ok &= case("⑰б ВСТРЕЧНЫЙ самопроверка: если на копии назван не один пробный координатор "
+               "(пометка у прочих не снялась) — приёмка не состоялась: слова с именами названных и "
+               "код 2, а не провал случая",
+               code_v == 2 and "ПРИЁМКА НЕ СОСТОЯЛАСЬ" in printed_v and "найдено 2: COORD, ZZK"
+               in printed_v,
+               f"код {code_v} (ждём 2); слова отказа: {printed_v.strip()[:170]}")
+
+    # ═══ Р3 ПОЛОМКИ — прогон ТЕХ ЖЕ функций с нарочно испорченным параметром. Каждая красит ровно
+    # названные случаи; предикаты — те же dry_run_accepted / refused_by_empty_proposal, что у
+    # ⑰б и (С), а не их копии.
+
+    # ── ⑰б ПОЛОМКА (Ш) «вернуть --role COORD»: писатель снова литерал COORD ─────────────────────
+    # Красит ⑰б и проверку причины отказа у (С) во ВСЕХ раскладках: на копии координатор — ZZK, и
+    # gordi-issue.py отказывает «не координатор» РАНЬШЕ, чем смотрит тело. Код отказа у (С) при этом
+    # остаётся НЕнулевым — проверка одного кода поломку бы не заметила (потому и судятся слова).
+    wrong_writer = []
+    for layout_name, layout_named, _words in GORDI_LAYOUTS:
+        _initial, _lookup, good, bad = probe_layout(gordi_db, gordi_stand, layout_named, out_file,
+                                                    out_file_c, role="COORD")
+        wrong_writer.append((layout_name, dry_run_accepted(good), refused_by_empty_proposal(bad),
+                             bad.returncode != 0,
+                             f"координатор {PROBE_ROLE}" in (good.stderr or "")
+                             and f"координатор {PROBE_ROLE}" in (bad.stderr or "")))
+    ok &= case("⑰б ПОЛОМКА (Ш) «вернуть --role COORD» красит ⑰б и проверку причины отказа у (С) "
+               "во всех раскладках; отказ при этом ненулевой — одной проверки кода хватило бы, "
+               "чтобы поломку не заметить",
+               all(not acc and not reason and code and named
+                   for _n, acc, reason, code, named in wrong_writer),
+               "под поломкой: " + " · ".join(
+                   f"«{n}»: ⑰б {'проходит' if acc else 'не проходит'}, причина отказа "
+                   f"{'та' if reason else 'не та'}, код отказа {'не 0' if code else '0'}, отказ "
+                   f"называет координатора {PROBE_ROLE}: {named}"
+                   for n, acc, reason, code, named in wrong_writer)
+               + " (под верным кодом — ⑰б проходит, причина та)")
+
+    # ── ⑰б ПОЛОМКА (Щ) «пометка у прочих не снимается» (текст снятия несёт слово) ────────────────
+    # Красит ⑰б и причину отказа у (С) в раскладках, где у исходной копии кто-то назван («Atlas» ·
+    # «AIA» · «названы двое»): на копии названо больше одного, gordi-issue.py отказывает «не
+    # определён однозначно». Раскладка «никто не назван» цела — снимать там нечего. Сверка
+    # названного (Э) здесь выключена: иначе она остановила бы приёмку раньше, чем случай судится.
+    expect_green = {"никто не назван"}
+    stale_marks = []
+    for layout_name, layout_named, _words in GORDI_LAYOUTS:
+        _initial, _lookup, good, bad = probe_layout(gordi_db, gordi_stand, layout_named, out_file,
+                                                    out_file_c, removed_text=TRAP_REMOVED,
+                                                    verify=False)
+        stale_marks.append((layout_name, dry_run_accepted(good), refused_by_empty_proposal(bad),
+                            "НЕ ОПРЕДЕЛЁН ОДНОЗНАЧНО" in (good.stderr or "")))
+    ok &= case("⑰б ПОЛОМКА (Щ) «пометка у прочих не снимается» красит ⑰б и причину отказа у (С) "
+               "ровно там, где у исходной копии кто-то назван; раскладка «никто не назван» цела",
+               all((acc and reason) if name in expect_green else
+                   (not acc and not reason and ambiguous)
+                   for name, acc, reason, ambiguous in stale_marks),
+               "под поломкой: " + " · ".join(
+                   f"«{name}»: ⑰б {'проходит' if acc else 'не проходит'}, причина отказа "
+                   f"{'та' if reason else 'не та'}, отказ «не определён однозначно»: {ambiguous}"
+                   for name, acc, reason, ambiguous in stale_marks)
+               + "; ждали красными: Atlas, AIA, названы двое; целой: никто не назван")
+
+    # ── ⑰б ПОЛОМКА (Э) «сверка названного выключена» ────────────────────────────────────────────
+    # Та же ловушка (слово в тексте снятия осталось), но сверки нет: приёмка не отказывается, кода 2
+    # и слов нет — красит ровно случай «самопроверка».
+    code_e, printed_e = sabotaged_naming(False)
+    ok &= case("⑰б ПОЛОМКА (Э) «сверка названного выключена» красит ровно самопроверку: та же "
+               "ловушка проходит молча — отказа мерить нет",
+               code_e != 2 and "ПРИЁМКА НЕ СОСТОЯЛАСЬ" not in printed_e,
+               f"код отказа мерить: {code_e} (под верным кодом — 2; None — отказа нет); слова "
+               f"отказа есть: {'ПРИЁМКА НЕ СОСТОЯЛАСЬ' in printed_e} (ждём False)")
+
+    # ── ⑰б ПОЛОМКА (Ю) «прежняя слабая проверка слов отказа» ────────────────────────────────────
+    # Красит ровно случай «отказ по другому пустому разделу»: две подстроки принимают отказ по
+    # ЗАМЕРУ за отказ по ПРЕДЛОЖЕНИЮ.
+    weak_accepts_other = refused_by_empty_proposal(other_empty, exact=False)
+    ok &= case("⑰б ПОЛОМКА (Ю) «прежняя слабая проверка слов отказа» красит ровно случай «отказ по "
+               "другому пустому разделу»: две подстроки принимают отказ по ЗАМЕРУ за отказ по "
+               "ПРЕДЛОЖЕНИЮ",
+               weak_accepts_other,
+               f"слабая проверка на отказе по ЗАМЕРУ: {weak_accepts_other} (под верным кодом — "
+               f"False; поломка обязана вернуть старую ложь)")
 
     # ═══ №52 КАРТОЧКА #677, ЭТАП Э3, РАБОТА Р1: координатор для готовой команды --propose ищется
     # ОБЩЕЙ функцией mezo_paths.find_coordinator, а не своим запросом LIKE. В SQLite LIKE не
@@ -2161,5 +2456,16 @@ def main() -> int:
     return 0 if ok else 1
 
 
+def run(entry=None):
+    """Запуск главной функции приёмки (entry — другая функция, нужна самопроверке шага 1).
+    Отказ мерить (AcceptanceRefused) — слова и код 2, а не трассировка и не провал случая:
+    mezo_stand читает код 2 как «прогон отказался мерить», а общий прогон — как отказ."""
+    try:
+        return (entry or main)()
+    except AcceptanceRefused as refusal:
+        print(f"⛔ ПРИЁМКА НЕ СОСТОЯЛАСЬ — мерить нечем: {refusal}")
+        return 2
+
+
 if __name__ == "__main__":
-    sys.exit(mezo_stand.finish(main()))
+    sys.exit(mezo_stand.finish(run()))

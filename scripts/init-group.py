@@ -1,9 +1,10 @@
 """
 init-group.py — Создаёт новую группу агентов (mezosync.db) по шаблону.
 
-Использование:
-    python init-group.py --name "atlas" --path "C:\\guts\\.atlas\\.mezosync" --domain data-platform
-    python init-group.py --name "webapp" --path "C:\\projects\\app\\.mezosync" --domain frontend-spa
+Использование (роли контура называет ВЫЗОВ — флаг --roles обязателен, умолчания нет):
+    python init-group.py --name "atlas" --path "C:\\guts\\.atlas\\.mezosync" --domain data-platform --roles <РОЛЬ1> <РОЛЬ2>
+    python init-group.py --name "webapp" --path "C:\\projects\\app\\.mezosync" --domain frontend-spa --roles <РОЛЬ1>
+Координатор контура — первая из --roles; другого называет флаг --coordinator <РОЛЬ> (она обязана быть среди --roles).
 """
 
 import argparse
@@ -46,13 +47,16 @@ def _latest_schema() -> Path:
 SCHEMA_FILE = _latest_schema()
 UNIVERSAL_RULES = REPO_ROOT / "rules" / "universal.sql"
 DOMAIN_RULES_DIR = REPO_ROOT / "rules" / "domain-specific"
-# Роль-координатор нового контура: ей кладётся заготовка coordinator.md, и она же
+# Роль-координатор нового контура (имя берётся из ВЫЗОВА: первая из --roles либо флаг
+# --coordinator; в коде имени нет): ей кладётся заготовка coordinator.md, и она же
 # называется координатором СТРУКТУРНО — словом «координатор» в roles.lifecycle_reason.
 # Так координатора ищет gordi-issue.py (писатель канала заявок соседям): по слову в причине
 # ровно одной живой роли, литерал имени ему запрещён (карточка #645). До 26.09 сборка
 # писала причину без этого слова, и свежий контур отвечал «координатор НЕ ОПРЕДЕЛЁН
 # ОДНОЗНАЧНО» на первую же заявку (карточка #659, группа F).
-COORDINATOR_ROLE = "COORD"
+# ⛔ До 05.10 имя координатора и список ролей по умолчанию были впечатаны в этот файл:
+# контур с другими ролями получал бы чужое имя и «координатора нет». Теперь имя — данные
+# вызова, а умолчания у списка ролей нет (карточка #677, этап Э3, работа Р2).
 
 
 def main():
@@ -61,9 +65,45 @@ def main():
     parser.add_argument("--path", required=True, help="Путь к директории .mezosync")
     parser.add_argument("--domain", default=None,
                         help="Доменный пресет правил (data-platform, frontend-spa)")
-    parser.add_argument("--roles", nargs="+", default=["coord"],
-                        help="Роли, которым завести отметку прочитанного (по умолчанию: coord)")
+    # ⛔ Умолчания у списка ролей НЕТ: имя роли — данные контура, а нового контура данных
+    # ещё нет. nargs="*" (а не "+") — чтобы голый `--roles` без значений тоже дошёл до нашего
+    # отказа словами, а не до английского текста argparse.
+    parser.add_argument("--roles", nargs="*", default=None,
+                        help="Роли контура, которым завести отметку прочитанного и запись "
+                             "в реестре ролей — ОБЯЗАТЕЛЬНО (регистр приводится к верхнему); "
+                             "по умолчанию ролей нет")
+    parser.add_argument("--coordinator", default=None,
+                        help="Какая из --roles — координатор контура; по умолчанию первая "
+                             "из --roles")
     args = parser.parse_args()
+
+    # Отказы ДО любой записи на диск (в том числе до создания каталога и базы): они не
+    # зависят ни от схемы, ни от диска. Пример вызова строится от расположения этого файла,
+    # чтобы его можно было скопировать как есть.
+    roles = list(dict.fromkeys(r.strip().upper() for r in (args.roles or []) if r.strip()))
+    if not roles:
+        print("⛔ НЕ ЗАВЕДЁН: не названы роли контура (флаг --roles обязателен).\n"
+              "   Роли берутся из данных контура, а у нового контура данных ещё нет —\n"
+              "   угадывать за тебя имя роли инструмент не будет. База не создана.\n"
+              "   Пример вызова:\n"
+              f"      python {Path(__file__).resolve().as_posix()} --name <имя контура> "
+              "--path <каталог .mezosync> --roles <РОЛЬ1> <РОЛЬ2>")
+        sys.exit(2)
+    if args.coordinator is not None:
+        coordinator = args.coordinator.strip().upper()
+        if coordinator not in roles:
+            print(f"⛔ НЕ ЗАВЕДЁН: координатор «{coordinator or args.coordinator}» не назван среди "
+                  f"--roles ({', '.join(roles)}).\n"
+                  "   Координатором может быть только одна из заводимых ролей. База не создана.\n"
+                  "   Пример вызова:\n"
+                  f"      python {Path(__file__).resolve().as_posix()} --name <имя контура> "
+                  f"--path <каталог .mezosync> --roles {' '.join(roles)} "
+                  f"--coordinator {roles[0]}")
+            sys.exit(2)
+        coordinator_how = "по флагу --coordinator"
+    else:
+        coordinator = roles[0]
+        coordinator_how = "первая из --roles; другой — флаг --coordinator"
 
     # ВОЗВРАТ PROTO (карточка #608, повторная приёмка Н1): --path резолвится в
     # АБСОЛЮТНЫЙ путь СРАЗУ, до первого использования. Раньше относительный --path
@@ -200,7 +240,7 @@ def main():
     # первой роли падала, и падала с подсказкой «заведи явно --register» — то есть звала
     # завести ВТОРУЮ роль-двойника поверх существующей.
     # ⚖️ Класс тот же, что у нас с токенами ролей: одно имя, два регистра, две правды.
-    roles = [r.upper() for r in args.roles]
+    # (список roles уже приведён к ВЕРХНЕМУ регистру в начале main(), до первой записи)
     # 🪤 НАЙДЕНО СОСЕДОМ (контур dominal, заявка 2026-09-26 00:34 UTC): сборка заводила
     # роли ТОЛЬКО как читателей (read_cursors), а строку в реестре ролей (roles) — нет.
     # Словарь адресатов write-message.py строится из реестра ⇒ у новорождённого контура
@@ -215,15 +255,13 @@ def main():
             "INSERT OR IGNORE INTO read_cursors (reader_role, last_read_id) VALUES (?, 0)",
             (role,)
         )
-        # причина роли-координатора несёт слово «координатор» — см. COORDINATOR_ROLE выше
+        # причина роли-координатора несёт слово «координатор» — см. комментарий у main()
         reason = ("координатор контура; заведена сборкой контура (--roles)"
-                  if role == COORDINATOR_ROLE else "заведена сборкой контура (--roles)")
+                  if role == coordinator else "заведена сборкой контура (--roles)")
         conn.execute(ROLE_REGISTRY_SQL, (role, reason))
     print(f"  ✅ Отметки прочитанного: {', '.join(roles)}")
-    print(f"  ✅ Реестр ролей: {', '.join(roles)} — живые, законные адресаты записок"
-          + (f"; координатор — {COORDINATOR_ROLE}" if COORDINATOR_ROLE in roles else
-             f"; ⚠️ роли {COORDINATOR_ROLE} среди --roles нет — координатора у контура нет, "
-             "канал заявок соседям (gordi-issue.py) без него нем"))
+    print(f"  ✅ Реестр ролей: {', '.join(roles)} — живые, законные адресаты записок")
+    print(f"     координатор — {coordinator} ({coordinator_how})")
 
     # 6. ЖУРНАЛ ШАГОВ — контур обязан знать СВОЮ версию (#145, замер 10.08 01:07 UTC).
     # 🪤 Свежесобранный контур отвечал `schema_version → (None, 0, 0)`: сосуды на месте,
@@ -347,8 +385,15 @@ def main():
     # ⛔ ФАЙЛ ШАГА В migrations/ (ПОСЛЕ БАЗОВОЙ ВЕХИ), КОТОРОГО НЕТ В СПИСКЕ (и наоборот), —
     # ГРОМКОЕ ПРЕДУПРЕЖДЕНИЕ С ИМЕНЕМ: список, отставший молча, хуже пустого — он выглядит
     # полным до первой проверки.
-    extra_on_disk = sorted(on_disk_since_base - listed)
+    # Шаги без изменения схемы (schema_step_order.NOT_SCHEMA_STEPS) лежат в migrations/
+    # законно: сборка их не применяет, их зовут рукой по документу выпуска. getattr — для
+    # списка шагов из пакета, где этого перечня ещё нет.
+    not_schema = set(getattr(schema_step_order, "NOT_SCHEMA_STEPS", ())) & on_disk_since_base
+    extra_on_disk = sorted(on_disk_since_base - listed - not_schema)
     missing_on_disk = sorted(listed - on_disk)
+    if not_schema:
+        print(f"  ℹ️ Шаги без изменения схемы сборкой не применяются (их зовут рукой по "
+              f"документу выпуска): {', '.join(sorted(not_schema))}")
     if extra_on_disk:
         print(f"  ⚠️ В migrations/ ЕСТЬ файлы, которых НЕТ в schema_step_order.STEPS: "
               f"{', '.join(extra_on_disk)} — список отстал, они применены НЕ БУДУТ")
@@ -509,7 +554,7 @@ def main():
         history_cols = [c[1] for c in conn2.execute("PRAGMA table_info(phoenix_history)")]
         now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         for role in roles:
-            tpl = tpl_dir / ("coordinator.md" if role == COORDINATOR_ROLE else "repo-dev.md")
+            tpl = tpl_dir / ("coordinator.md" if role == coordinator else "repo-dev.md")
             if not tpl.exists():
                 continue
             head = [
@@ -646,14 +691,14 @@ def main():
     else:
         print(f"\n🎉 Группа «{args.name}» готова: {db_path}")
     print("   ⚖️ ПРОВЕРЬ ЗАПУСКОМ, А НЕ ГЛАЗАМИ:")
-    print(f"     python {tools_dir / 'read-messages.py'} --role {args.roles[0].upper()}")
+    print(f"     python {tools_dir / 'read-messages.py'} --role {roles[0]}")
     # 🪤 ПОСЛЕДНЯЯ СТРОКА СБОРКИ НАЗЫВАЛА ФАЙЛ, КОТОРОГО НЕТ: «templates/coord.md» —
     # при том, что заготовка зовётся coordinator.md и лежала ТОЛЬКО в шаблоне, а не в
     # собранном контуре. Найдено 18.08 при запуске второго проекта: владелец пошёл бы
     # по указанному пути и не нашёл ничего. ⇒ заготовки кладутся В КОНТУР, а имя файла
     # в подсказке БЕРЁТСЯ ЗАМЕРОМ ПО ДИСКУ. Нет файла — так и сказано, без выдумки.
-    first = args.roles[0].upper()
-    wanted = "coordinator.md" if first == COORDINATOR_ROLE else "repo-dev.md"
+    first = roles[0]
+    wanted = "coordinator.md" if first == coordinator else "repo-dev.md"
     landed = mezosync_dir / "templates" / wanted
     if landed.exists():
         print(f"   Следующий шаг: запустить {first} текстом заготовки {landed}")

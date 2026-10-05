@@ -9,6 +9,9 @@
 Страница СТАТИЧНА — это снимок на момент генерации (время указано в шапке).
 Обновление = повторный запуск. Никаких внешних ресурсов: открывается офлайн, файлом.
 
+Карточки ролей берутся из таблицы roles этой базы (живые роли реестра): координатор — первым,
+остальные по имени, подпись — короткая зона роли. Списка имён в коде нет.
+
 Все метки времени — UTC с явным суффиксом (правило timestamp-utc-in-sqlite).
 """
 
@@ -19,16 +22,11 @@ import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-ROLES_ORDER = ["COORD", "CORE", "ING", "STUD", "TAXO", "RCC"]
-ROLE_TITLES = {
-    "COORD": "координатор",
-    "CORE": "ядро",
-    "ING": "ингест",
-    "STUD": "портал",
-    "TAXO": "таксономия",
-    "RCC": "мост DWH",
-}
+import mezo_paths
+
 OWNER_TAGS = ("owner-word", "needs-owner-word", "owner-decision")
+# Подпись роли — первое предложение её зоны, не длиннее этого числа знаков.
+ZONE_LABEL_LIMIT = 60
 
 
 # ─────────────────────────────── чтение БД ───────────────────────────────
@@ -63,6 +61,40 @@ def humanize_age(then, now):
     return f"{days} дн назад"
 
 
+def zone_label(zone):
+    """Короткая подпись роли из roles.zone: до конца первого предложения либо до 60 знаков.
+
+    Конец предложения — точка, за которой пробел или конец строки: точка внутри имени
+    («atlas.core») предложение не кончает, иначе подписью стало бы одно слово «atlas».
+    """
+    text = " ".join(str(zone or "").split())
+    end = re.search(r"\.(?:\s|$)", text)
+    if end:
+        text = text[:end.start()]
+    if len(text) > ZONE_LABEL_LIMIT:
+        text = text[:ZONE_LABEL_LIMIT].rstrip() + "…"
+    return text
+
+
+def roles_from_data(con):
+    """Роли для карточек — из таблицы roles, а не из списка в коде: [(роль, подпись)].
+
+    Берутся живые роли реестра (lifecycle='alive', не снятые с пометки in_roster).
+    Координатор контура — тот, кого называют данные (mezo_paths.find_coordinator) —
+    идёт первым, остальные по имени. Подпись — короткая зона роли (zone_label).
+    """
+    cols = {r[1] for r in con.execute("PRAGMA table_info(roles)")}
+    if not {"role", "lifecycle"} <= cols:
+        return []
+    roster = " AND COALESCE(in_roster, 1) = 1" if "in_roster" in cols else ""
+    zone = "zone" if "zone" in cols else "NULL"
+    rows = con.execute(
+        f"SELECT role, {zone} FROM roles WHERE lifecycle = 'alive'{roster}").fetchall()
+    coordinator = mezo_paths.find_coordinator(con).name
+    ordered = sorted(rows, key=lambda r: (r[0].upper() != coordinator, r[0]))
+    return [(r[0], zone_label(r[1])) for r in ordered]
+
+
 def collect(db_path):
     con = sqlite3.connect(db_path)
     con.row_factory = sqlite3.Row
@@ -92,7 +124,7 @@ def collect(db_path):
     )]
 
     roles = []
-    for role in ROLES_ORDER:
+    for role, title in roles_from_data(con):
         note = last_note.get(role)
         note_ts = parse_ts(note["ts"]) if note else None
         cur = cursors.get(role)
@@ -103,7 +135,7 @@ def collect(db_path):
         open_tasks = [b for b in backlog_rows if b["role"] == role]
         roles.append({
             "role": role,
-            "title": ROLE_TITLES.get(role, ""),
+            "title": title,
             "status_text": (st["status"] if st else None),
             "status_at": parse_ts(st["updated_at"]) if st else None,
             "last_note_id": note["id"] if note else None,
@@ -369,7 +401,8 @@ def render(d):
     open_total = len(d["backlog"])
     owner_waiting = len([b for b in d["backlog"] if b["tags"] and any(t in b["tags"] for t in OWNER_TAGS)])
 
-    cards = "".join(render_role_card(r, now) for r in roles)
+    cards = "".join(render_role_card(r, now) for r in roles) or (
+        '<p class="muted">В таблице roles нет живых ролей реестра — карточек нет.</p>')
 
     return f"""<!doctype html>
 <html lang="ru"><head><meta charset="utf-8">

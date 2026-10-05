@@ -1,0 +1,131 @@
+{
+  "format_version": 1,
+  "_about": "Имена контура-донора в коде пакета. Читает проверка guard-donor-literals.py через движок donor_scan.py; формат — шапка donor_scan.py. Группы path, role, contour, neighbor, port повторяют образцы замера Э2 (scan_names.py, commit 7e2d2b0 пакета); role_any_case и other_names — две группы, которых замер Э2 не видел (слово владельца 2026-10-05: строки init-group.py:64 и check-retired-mechanism.py:115).",
+  "lists": {
+    "roles": [
+      "COORD",
+      "PROTO",
+      "CORE",
+      "STUD",
+      "ING",
+      "TAXO",
+      "OPSSRE",
+      "CHROME",
+      "RCC",
+      "SEPA",
+      "EYE",
+      "GRF"
+    ],
+    "_roles_about": "Имена ролей донора. Правило words ловит их целым словом в ВЕРХНЕМ регистре; whole_literal — строковый литерал, целиком равный имени роли в ином регистре.",
+    "neighbors": [
+      "aia",
+      "tapas",
+      "dominal"
+    ]
+  },
+  "groups": {
+    "_path_about": "Пути донора: диск и каталог контейнера, сегмент .atlas, папка записей чатов, имена репозиториев, личный путь, клон пакета. Каждое совпадение «занимает место» (claims_span): слово контура внутри пути отдельно не считается.",
+    "path": [
+      {
+        "name": "C:/guts",
+        "regex": "[A-Za-z]:{SEP}+guts{RB}",
+        "claims_span": true
+      },
+      {
+        "name": "/c/guts",
+        "regex": "(?<![\\w.])/[cC]/guts{RB}",
+        "claims_span": true
+      },
+      {
+        "name": ".atlas",
+        "regex": "{SEP}\\.atlas{RB}",
+        "claims_span": true
+      },
+      {
+        "name": "C--guts--atlas",
+        "regex": "C--guts--atlas",
+        "ignore_case": true,
+        "claims_span": true
+      },
+      {
+        "name": "n.temnikov",
+        "regex": "{LB}n\\.temnikov{RB}",
+        "ignore_case": true,
+        "claims_span": true
+      },
+      {
+        "name": "C:/github/gordipack",
+        "regex": "[A-Za-z]:{SEP}+github{SEP}+gordipack{RB}",
+        "claims_span": true
+      },
+      {
+        "name_from_group": 1,
+        "lower": true,
+        "regex": "{LB}(atlas\\.(?:agents-sync\\.db|archs|core|studio|ingestion|chrome\\.extension)){RB}",
+        "claims_span": true,
+        "ignore_case": true
+      }
+    ],
+    "_role_about": "Имена ролей целым словом ТОЛЬКО в верхнем регистре; граница слова — не буква, не цифра, не подчёркивание.",
+    "role": [
+      {
+        "type": "words",
+        "list": "roles"
+      }
+    ],
+    "_role_any_case_about": "Новая группа (замер Э2 её не видел): строковый литерал, ЦЕЛИКОМ равный имени роли в ином регистре, например [\"coord\"] — роль по умолчанию строчными. Точное написание из списка ловит группа role. Подстрока в литерале («coordinator») не считается.",
+    "role_any_case": [
+      {
+        "type": "whole_literal",
+        "list": "roles"
+      }
+    ],
+    "_contour_about": "Слово контура в любом регистре (имя в выводе — строчными), не вошедшее в path; папки моста «<контур>-<сосед>» и «<сосед>-<контур>».",
+    "contour": [
+      {
+        "name_from_group": 1,
+        "lower": true,
+        "prefix": "папка моста ",
+        "ignore_case": true,
+        "claims_span": true,
+        "regex": "{LB}(atlas-(?:aia|tapas|dominal|onto)|(?:aia|tapas|dominal|onto)-atlas){RB}"
+      },
+      {
+        "name": "atlas",
+        "ignore_case": true,
+        "avoid_claimed": true,
+        "regex": "{LB}atlas{RB}"
+      }
+    ],
+    "_neighbor_about": "Соседние контуры целым словом любого регистра; короткое слово onto — только рядом с «-», «.», «/» или в кавычках.",
+    "neighbor": [
+      {
+        "type": "words",
+        "list": "neighbors",
+        "ignore_case": true,
+        "lower": true
+      },
+      {
+        "name": "onto",
+        "ignore_case": true,
+        "context_filter": "dash_dot_slash_quote",
+        "regex": "{LB}onto{RB}"
+      }
+    ],
+    "_port_about": "Порты донора целым числом (не часть более длинного числа, слова или десятичной дроби).",
+    "port": [
+      {
+        "name_from_group": 1,
+        "regex": "(?:(?<![\\w.])|(?<=\\\\[nrtb]))(5291|5297|5300|5400)(?!\\w)(?!\\.\\d)"
+      }
+    ],
+    "_other_names_about": "Новая группа (замер Э2 её не видел): прочие имена донора подстрокой в СТРОКОВОМ литерале кода. Образец один, имя находки — он же: так строка check-retired-mechanism.py:115 считается одной находкой, как в счёте Э3.",
+    "other_names": [
+      {
+        "name": "de-live|db_falcon|DE/DWH",
+        "only_in_strings": true,
+        "regex": "de-live|db_falcon|DE/DWH"
+      }
+    ]
+  }
+}

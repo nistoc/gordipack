@@ -47,6 +47,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib.util
+import json
 import pathlib
 import random
 import re
@@ -161,9 +162,10 @@ def weaken_self(d: pathlib.Path, anchor: str, replacement: str, label: str) -> p
     ⚠️ Эта копия исполняется ИЗ ПЕСОЧНИЦЫ (вне корня контура), а модульный код
     приёмки зовёт mezo_paths.container_root(__file__) уже при импорте (SCRIPTS/MIRROR/
     LIVE_DB) — без подсказки поиск контейнера от расположения копии упрётся вверх
-    в системный временный каталог и упадёт. local.paths рядом со СВОЕЙ же копией
-    mezo_paths.py — штатный, документированный в mezo_paths.py способ (③), не
-    переменная среды: она не течёт дальше этого прогона и не грозит классом
+    в системный временный каталог и упадёт. Файл путей рядом со СВОЕЙ же копией
+    mezo_paths.py (<каталог копии>/../local/paths.json, ключ container; с карточки #677 он
+    заменил строку container= в local.paths) — штатный, документированный в mezo_paths.py
+    способ (③), не переменная среды: она не течёт дальше этого прогона и не грозит классу
     «стенд наследует среду вызывающего» (MEZO_CONTAINER процессу не выставляется).
     """
     here = pathlib.Path(__file__).resolve()
@@ -174,8 +176,9 @@ def weaken_self(d: pathlib.Path, anchor: str, replacement: str, label: str) -> p
     weak_path = d / f"self-weak-{label}.py"
     weak_path.write_text(broken, encoding="utf-8")
     shutil.copy(SCRIPTS / "mezo_paths.py", d / "mezo_paths.py")
-    (d / "local.paths").write_text(f"container={mezo_paths.container_root(__file__)}\n",
-                                   encoding="utf-8")
+    (d.parent / "local").mkdir(exist_ok=True)
+    (d.parent / "local" / "paths.json").write_text(
+        json.dumps({"container": str(mezo_paths.container_root(__file__))}), encoding="utf-8")
     return weak_path
 
 

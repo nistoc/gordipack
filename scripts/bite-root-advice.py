@@ -10,6 +10,7 @@
 ⛔ Случай ① («без советов — отказ») без встречных ②③ доказывал бы только то, что механизм
 умеет падать. Именно так дефект и прожил: отказ был громким и выглядел исправным.
 """
+import json
 import os
 import pathlib
 import shutil
@@ -76,13 +77,34 @@ def main():
          code == 0 and "ОБЪЯВЛЕНИЯ О ПРАВКЕ" in out,
          f"код {code} · {out.splitlines()[0][:78] if out else 'пусто'}")
 
-    # ④ СОВЕТ ТРЕТИЙ: файл рядом с механизмом — ИСПОЛНЯЕТСЯ
-    (sirota / "local.paths").write_text(f"container={SCRIPTS.parent.parent}\n", encoding="utf-8")
+    # ④ СОВЕТ ТРЕТИЙ: файл путей рядом с механизмом — ИСПОЛНЯЕТСЯ. С карточки #677 (Э3-Р4) это
+    # <каталог скриптов>/../local/paths.json, ключ container; прежняя строка container= в
+    # local.paths больше не читается (случай ④-бис).
+    paths_file = box / "local" / "paths.json"
+    paths_file.parent.mkdir()
+    paths_file.write_text(json.dumps({"container": str(SCRIPTS.parent.parent)}), encoding="utf-8")
     out, code = run(sirota, [])
-    case("④ совет «строка container= в local.paths» РАБОТАЕТ",
+    case("④ совет «ключ container в файле путей» РАБОТАЕТ",
          code == 0 and "ОБЪЯВЛЕНИЯ О ПРАВКЕ" in out,
          f"код {code}")
+    paths_file.unlink()
+
+    # ④-бис ВСТРЕЧНЫЙ к ④: прежняя строка container= в local.paths значением НЕ служит — отказ
+    # остаётся, но называет перенос готовой командой шага (иначе старый совет молча умер бы).
+    (sirota / "local.paths").write_text(f"container={SCRIPTS.parent.parent}\n", encoding="utf-8")
+    out, code = run(sirota, [])
+    case("④-бис встречный: прежний local.paths как значение НЕ читается, отказ даёт команду переноса",
+         code != 0 and "больше не читается" in out and "20261005-local-paths-file.py" in out,
+         f"код {code}")
     (sirota / "local.paths").unlink()
+
+    # ④-тер ВСТРЕЧНЫЙ: файл путей есть, но ключа container в нём нет — отказ называет ЭТО словами
+    paths_file.write_text(json.dumps({"mirror_repo": "x"}), encoding="utf-8")
+    out, code = run(sirota, [])
+    case("④-тер встречный: файл путей без ключа container — отказ, а не тихий ход",
+         code != 0 and "корень мезосинка НЕ НАЙДЕН" in out,
+         f"код {code}")
+    paths_file.unlink()
 
     # ⑤ ВСТРЕЧНЫЙ к ②: переменная задана, но ведёт НЕ ТУДА — отказ НАЗЫВАЕТ это
     bad = box / "пусто"

@@ -12,7 +12,10 @@ r"""bite-rules-mirror-search.py — приёмка ПОИСКА файла-зе�
 
 СЛУЧАИ (различающий = обязан ответить ИНАЧЕ, а не одинаково):
   ① встречный/контроль: правил нет, файла нет НИГДЕ — «сверять нечего», код 0, не поломка
-  ② ГЛАВНЫЙ: раскладка Atlas (atlas.archs/.mezosync/coordination/sync.rules.md) — находит, код 0
+  ② ГЛАВНЫЙ: раскладка Atlas (atlas.archs/.mezosync/coordination/sync.rules.md) — находит, код 0.
+     С карточки #677 (Э3-Р4) раскладка автора НЕ ищется «по умолчанию»: контур ОБЪЯВЛЯЕТ каталог
+     координации ключом coordination_dir файла путей (.mezosync/local/paths.json), и стенды ②⑥⑦
+     этот ключ пишут. Что БЕЗ ключа раскладка автора не берётся, держит bite-local-paths.py (L1).
   ③ ВСТРЕЧНЫЙ к ②: раскладка контура из пакета (.mezosync/generated/sync.rules.md), файла
      Atlas при этом НЕТ ВООБЩЕ — тоже находит, код 0 (доказывает: ищутся ОБЕ раскладки,
      а не только та, что проверена случаем ②)
@@ -69,6 +72,7 @@ MEZO_CONTAINER указывает на РЕАЛЬНЫЙ контейнер ТО�
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -103,6 +107,13 @@ def build_db(path: Path, rules: dict) -> None:
                     (key, body, ver))
     con.commit()
     con.close()
+
+
+def declare_atlas_layout(root: Path) -> None:
+    """Объявить каталог координации раскладки Atlas в файле путей стенда (карточка #677, Э3-Р4)."""
+    f = root / ".mezosync" / "local" / "paths.json"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps({"coordination_dir": "atlas.archs/.mezosync/coordination"}), encoding="utf-8")
 
 
 def write_mirror(path: Path, entries: list, crlf: bool = False) -> None:
@@ -183,10 +194,9 @@ def run_cases(live_tool: Path, porcha) -> None:
 
         if porcha == "one-place":
             text = tool.read_text(encoding="utf-8")
-            old = ('return [\n        mezo.parent / "atlas.archs" / ".mezosync" / '
-                   '"coordination" / "sync.rules.md",\n        mezo / "generated" / '
-                   '"sync.rules.md",\n    ]')
-            new = 'return [\n        mezo / "generated" / "sync.rules.md",\n    ]'
+            old = ('    if place.outcome == mezo_paths.LOCAL_DECLARED:\n'
+                   '        found.append(place.path / "sync.rules.md")\n')
+            new = '    pass\n'
             assert text.count(old) == 1, f"поломка НЕ ЛЕГЛА: найдено {text.count(old)}"
             tool.write_text(text.replace(old, new), encoding="utf-8")
             print("🧪 НАРОЧНАЯ ПОЛОМКА «one-place»: mirror_candidates() урезан до "
@@ -226,6 +236,7 @@ def run_cases(live_tool: Path, porcha) -> None:
         build_db(db2, {"test-atlas": ("тело правила раскладки Atlas", 1)})
         mirror2 = root2 / "atlas.archs" / ".mezosync" / "coordination" / "sync.rules.md"
         write_mirror(mirror2, [("test-atlas", "coord", 1, "тело правила раскладки Atlas")])
+        declare_atlas_layout(root2)
         code2, out2 = call_tool(tool, db2)
         case("② ГЛАВНЫЙ: раскладка Atlas (atlas.archs/.mezosync/coordination) — находит, "
              "код 0, без литерала пути",
@@ -287,6 +298,7 @@ def run_cases(live_tool: Path, porcha) -> None:
         write_mirror(mirror6a, [("test-stale", "coord", 1, "тело правила, актуальное")])
         mirror6b = root6 / ".mezosync" / "generated" / "sync.rules.md"
         write_mirror(mirror6b, [("test-stale", "coord", 1, "тело правила, УСТАРЕВШЕЕ")])
+        declare_atlas_layout(root6)
         code6, out6 = call_tool(tool, db6)
         # ⚖️ Различитель — подстрока «второй файл» + «generated», а НЕ str(mirror6b) целиком
         # (тот же приём, что у случая ③ выше — "generated" in out3): mirror6b построен от
@@ -312,6 +324,7 @@ def run_cases(live_tool: Path, porcha) -> None:
         write_mirror(mirror7a, [("test-dup", "coord", 1, "тело правила, одно и то же")])
         mirror7b = root7 / ".mezosync" / "generated" / "sync.rules.md"
         write_mirror(mirror7b, [("test-dup", "coord", 1, "тело правила, одно и то же")])
+        declare_atlas_layout(root7)
         code7, out7 = call_tool(tool, db7)
         case("⑦ ВСТРЕЧНЫЙ к ⑥: оба файла есть, но ОДИНАКОВЫ (дубль, не расхождение) — "
              "строки про второй файл нет",

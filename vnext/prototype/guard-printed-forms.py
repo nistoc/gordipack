@@ -39,11 +39,21 @@ guard-printed-forms.py — УЧАЩАЯ ПОВЕРХНОСТЬ ШИРЕ ПАМЯ
 
 Живой субстрат ТОЛЬКО ЧИТАЕТСЯ. Ничего не правит и не предлагает автопочинку.
 
+ИМЕНА РОЛЕЙ — ИЗ ДАННЫХ, НЕ ИЗ ЛИТЕРАЛА (карточка #677, этап Э3, работа Р2):
+  · роль для наблюдения `read-phoenix --role` берётся по очереди: флаг `--role` →
+    переменная среды MEZO_ROLE → координатор из данных (mezo_paths.find_coordinator по
+    той же базе `--db`) → никакая. Никакой — это «не проверено: роль не названа»,
+    а не провал: наблюдение шапки пропускается вслух, остальное судится как прежде;
+  · имя навыка ответов владельцу строится из имени контура: «<meta.group_name>-owner-reply».
+    Имя контура не прочиталось — это сказано словами, и наказы судятся только по ключу
+    правила owner-reply-format.
+
     python <абсолютный путь>/guard-printed-forms.py            # живые скрипты + витрины
     python <абсолютный путь>/guard-printed-forms.py --selftest # доказать, что умеет краснеть
 """
 import argparse
 import ast
+import os
 import re
 import sqlite3
 import subprocess
@@ -53,7 +63,20 @@ import mezo_paths  # пути машины выводятся, не впечат
 
 SELF = Path(__file__).resolve()
 LIVE_SCRIPTS = mezo_paths.live_scripts()
-LIVE_ARTIFACTS = mezo_paths.container_root() / "atlas.archs" / ".mezosync" / "coordination" / "generated"
+
+
+def default_artifacts(db_path):
+    """Каталог готовых файлов каналов (.md) → (путь, исход чтения ключа mezo_paths.LocalPath).
+
+    Карточка #677, Э3-Р4: прежде здесь стоял каталог раскладки автора (имя чужого репозитория
+    внутри пакета). Теперь: ключ `generated_dir` файла путей контура ЭТОЙ базы (читает его
+    mezo_paths.local_path); ключа нет — стандартная раскладка пакета: <каталог базы>/generated
+    (её создаёт сборка нового контура)."""
+    mezo = Path(db_path).resolve().parent
+    res = mezo_paths.local_path("generated_dir", mezo_dir=mezo)
+    if res.outcome == mezo_paths.LOCAL_DECLARED:
+        return res.path, res
+    return mezo / "generated", res
 
 # Вызов скрипта: «python <что-то до имени><имя>.py». Голое имя без `python` — это ссылка
 # в прозе («см. read-messages.py:310»), а не форма вызова: такие НЕ трогаем.
@@ -557,7 +580,51 @@ def scan_tasks(tasks_dir, known, scripts, defs):
     return hits
 
 
-def observe(scripts, role="PROTO", timeout=25):
+def pick_role(flag, db):
+    """Какой ролью читать память при наблюдении: флаг → MEZO_ROLE → координатор из данных.
+
+    Возвращает (роль или None, откуда или причина — словами для печати). Литерала с именем
+    роли здесь нет и быть не должно: у контура-соседа такой роли может не существовать,
+    а наблюдение шапки молча читало бы чужую память (карточка #677, этап Э3).
+    Роль не названа нигде → None: наблюдение read-phoenix пропускается, и это «не проверено»,
+    а не провал."""
+    named = (flag or "").strip()
+    if named:
+        return named.upper(), "флаг --role"
+    from_env = os.environ.get("MEZO_ROLE", "").strip()
+    if from_env:
+        return from_env.upper(), "переменная среды MEZO_ROLE"
+    look = mezo_paths.find_coordinator(db)
+    if look.name:
+        return look.name, "координатор из данных контура"
+    if look.error:
+        return None, f"таблицу ролей прочитать не удалось ({look.error})"
+    if look.found:
+        return None, ("в данных координатором названо несколько ролей: "
+                      + ", ".join(look.found))
+    return None, "в данных контура координатор не назван"
+
+
+def owner_reply_skill_name(db):
+    """Имя навыка ответов владельцу этого контура: «<имя контура>-owner-reply».
+
+    Имя контура — meta.group_name из той же базы `--db`. Возвращает (имя или None, причина
+    словами): имя не прочиталось → None, и вызывающий судит наказы только по ключу правила."""
+    try:
+        conn = sqlite3.connect(f"file:{Path(db).as_posix()}?mode=ro", uri=True)
+        try:
+            row = conn.execute("SELECT value FROM meta WHERE key='group_name'").fetchone()
+        finally:
+            conn.close()
+    except sqlite3.Error as e:
+        return None, f"база не открылась или таблицы meta нет ({type(e).__name__})"
+    group = (row[0] or "").strip() if row else ""
+    if not group:
+        return None, "в таблице meta нет имени контура (group_name)"
+    return f"{group}-owner-reply", ""
+
+
+def observe(scripts, role=None, timeout=25):
     """НАБЛЮДЕНИЕ: запустить скрипты и разобрать то, что они РЕАЛЬНО печатают.
 
     Это вторая половина признака E и главная его часть (@COORD #2873): гард обязан читать
@@ -567,6 +634,7 @@ def observe(scripts, role="PROTO", timeout=25):
     ⚠️ ГРАНИЦА БЕЗОПАСНОСТИ: запускаем ТОЛЬКО `--help` (argparse печатает и выходит) и
     read-only `read-phoenix --role`. Скрипт без argparse НЕ запускаем вовсе — у него `--help`
     может уйти в основное действие, а гард не имеет права мутировать живое.
+    Роль не названа (None) → read-phoenix не запускается вовсе: читать память НЕ ЧЬЮ нельзя.
     Возвращает (находки, сколько прогнано, сколько пропущено).
     """
     cmds, skipped = [], []
@@ -576,7 +644,7 @@ def observe(scripts, role="PROTO", timeout=25):
             continue
         cmds.append((p.name + " --help", [sys.executable, str(p), "--help"]))
     rp = scripts / "read-phoenix.py"
-    if rp.exists():                       # шапка воскресшего — печатается только так
+    if rp.exists() and role:              # шапка воскресшего — печатается только так
         cmds.append((f"read-phoenix.py --role {role}",
                      [sys.executable, str(rp), "--role", role]))
     hits = []
@@ -602,7 +670,7 @@ def observe(scripts, role="PROTO", timeout=25):
     return hits, len(cmds), skipped
 
 
-def run(scripts, artifacts, quiet=False, do_run=True, role="PROTO"):
+def run(scripts, artifacts, quiet=False, do_run=True, role=None, role_note=""):
     if not scripts.exists():
         print(f"⛔ ГАРД НЕ ПОСТАВЛЕН: нет каталога скриптов {scripts}")
         return 2
@@ -617,8 +685,17 @@ def run(scripts, artifacts, quiet=False, do_run=True, role="PROTO"):
         print("   НЕ вижу: форму, собранную в рантайме · комментарии · память ролей "
               "(guard-launcher-forms) · ленту и историю · наказы в стенограммах\n")
     obs_hits, obs_n, obs_skip = ([], 0, []) if not do_run else observe(scripts, role)
+    if do_run and not role:
+        # Пропуск наблюдения шапки говорится ВСЛУХ и без оглядки на --quiet: молчаливый
+        # пропуск читался бы как «шапка проверена и чиста». Провалом он не считается.
+        print("⚠️ не проверено: роль не названа — шапка и вывод read-phoenix не наблюдались"
+              + (f" ({role_note})" if role_note else "")
+              + ". Назови роль флагом --role или переменной среды MEZO_ROLE.")
     if do_run and not quiet:
-        print(f"── НАБЛЮДЕНИЕ: прогнано {obs_n} команд (--help + read-phoenix --role {role})"
+        what = (f"--help + read-phoenix --role {role}" if role
+                else "--help; read-phoenix не запускался: роль не названа")
+        print(f"── НАБЛЮДЕНИЕ: прогнано {obs_n} команд ({what}"
+              + (f"; роль взята: {role_note}" if role and role_note else "") + ")"
               + (f" · НЕ запускались (нет argparse): {', '.join(obs_skip)}" if obs_skip else ""))
         for label, kind, line in obs_hits:
             print(f"   {kind}\n      {label}:  {line}")
@@ -775,13 +852,18 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--selftest", action="store_true", help="доказать, что гард умеет краснеть")
     ap.add_argument("--scripts", default=str(LIVE_SCRIPTS))
-    ap.add_argument("--artifacts", default=str(LIVE_ARTIFACTS))
+    ap.add_argument("--artifacts", default=None,
+                    help="каталог готовых файлов каналов; без него — ключ generated_dir файла "
+                         "путей контура, а когда ключа нет — <каталог базы>/generated")
     ap.add_argument("--canon", default=str(mezo_paths.container_root() / "CLAUDE.md"),
                     help="канон контейнера — самая читаемая учащая поверхность (#56). "
                          "Глобальный CLAUDE.md пользователя НЕ сканируется — граница вслух")
     ap.add_argument("--no-run", action="store_true",
                     help="не прогонять скрипты (без наблюдения шаблоны судить нечем)")
-    ap.add_argument("--role", default="PROTO", help="роль для read-only прогона read-phoenix")
+    ap.add_argument("--role", default=None,
+                    help="роль для read-only прогона read-phoenix; без флага — переменная среды "
+                         "MEZO_ROLE, затем координатор из данных (--db); роль не названа нигде — "
+                         "наблюдение шапки пропускается с пометкой «не проверено»")
     ap.add_argument("--db", default=str(mezo_paths.live_db()),
                     help="живая БД — источник СВОДА ПРАВИЛ (rules.body, active; с 27.08)")
     ap.add_argument("--no-rules", action="store_true", help="свод правил не судить")
@@ -799,7 +881,25 @@ def main():
             f"⛔ СУД НЕ СОСТОЯЛСЯ: в каталоге инструментов ({a.scripts}) нет ни одного "
             f".py — словарь известных имён ПУСТ, зелёное на нём было бы ложным алиби. "
             f"Сузил --scripts — сузь и суждение (карточка #368).")
-    rc = run(Path(a.scripts), Path(a.artifacts), do_run=not a.no_run, role=a.role)
+    # ── каталог готовых файлов каналов: объявлен · объявлен, а на диске нет · не объявлен ·
+    # файл путей не читается — слова РАЗНЫЕ (заявка №29 пакета); «нет каталога» говорится вслух
+    # и никогда не читается как «файлы проверены».
+    if a.artifacts is None:
+        art_dir, art_place = default_artifacts(a.db)
+        if art_place.outcome == mezo_paths.LOCAL_UNREADABLE:
+            print(f"⛔ СУД НЕ СОСТОЯЛСЯ: каталог готовых файлов каналов не определён — "
+                  f"{art_place.words}")
+            return 2
+        if art_place.outcome == mezo_paths.LOCAL_DECLARED and not art_dir.exists():
+            print(f"⚠️ каталог готовых файлов каналов: {art_place.words} — файлы из базы НЕ проверены")
+        elif art_place.outcome != mezo_paths.LOCAL_DECLARED and not art_dir.exists():
+            print(f"ℹ️ каталог готовых файлов каналов: {art_place.words}; стандартного каталога "
+                  f"{art_dir.as_posix()} на диске нет — файлы из базы НЕ проверены "
+                  f"(свойство контура, не долг)")
+        a.artifacts = str(art_dir)
+    role, role_note = pick_role(a.role, a.db)
+    rc = run(Path(a.scripts), Path(a.artifacts), do_run=not a.no_run, role=role,
+             role_note=role_note)
     # ── КАНОН: отдельной секцией ПОСЛЕ основного прогона, со своим счётом.
     canon = Path(a.canon)
     known = {p.name for p in Path(a.scripts).glob("*.py")}
@@ -859,6 +959,13 @@ def main():
         # ── карточка #375: наказ ОБЯЗАН вести к правилу ответов владельцу.
         # Ссылка (ключ правила или имя навыка) — да; СКОПИРОВАННОЕ тело — нет:
         # вторая редакция разошлась бы со сводом молча.
+        # Имя навыка — «<имя контура>-owner-reply» из данных (карточка #677, этап Э3):
+        # литерал с чужим именем контура сделал бы верную ссылку соседа «ложной находкой».
+        skill_name, skill_why = owner_reply_skill_name(a.db)
+        if skill_name is None and any(_p.parent.name not in dead
+                                      for _p in tdir.glob("*/SKILL.md")):
+            print(f"⚠️ имя навыка ответов владельцу не прочитано ({skill_why}) — наказы судятся "
+                  f"только по ключу правила owner-reply-format")
         for _tf in sorted(tdir.glob("*/SKILL.md")):
             if _tf.parent.name in dead:
                 continue
@@ -869,15 +976,15 @@ def main():
                               "🔴 ВТОРАЯ РЕДАКЦИЯ owner-reply-format — разойдётся со "
                               "сводом молча; держи ссылку, не тело",
                               "замени тело командой show (set-rule --key owner-reply-format)"))
-            elif "owner-reply-format" not in _tb and "atlas-owner-reply" not in _tb:
+            elif "owner-reply-format" not in _tb and not (skill_name and skill_name in _tb):
                 thits.append((f"{_tw}: ссылки на правило ответов НЕТ",
                               "🔴 наказ не ведёт к owner-reply-format — роль в сверке "
                               "ответит владельцу без формы (карточка #375)",
                               # ⚠️ путь и имя — В ОДНОМ литерале намеренно: разорви их
                               # переносом строки, и всякий разбор исходника (в том числе
                               # наш собственный) увидит голое имя без каталога
-                              "строка-ссылка: python <КОНТУР>/.mezosync/scripts/set-rule.py --key owner-reply-format --show "
-                              "или имя навыка atlas-owner-reply"))
+                              "строка-ссылка: python <КОНТУР>/.mezosync/scripts/set-rule.py --key owner-reply-format --show"
+                              + (f" или имя навыка {skill_name}" if skill_name else "")))
         tred = [(w, k, f) for w, k, f in thits if k.startswith("🔴")]
         tyel = [(w, k, f) for w, k, f in thits if k.startswith("🟡")]
         for w, k, f in tred + tyel:

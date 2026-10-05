@@ -113,8 +113,13 @@ def case(title, verdict, detail, differ=False):
     return verdict
 
 
+# Подставная рука: приёмка судит перенос, а не имя руки. У переноса умолчания руки нет —
+# без названной руки он отказывает (карточка #677, Э3, Р2), поэтому приёмка называет её сама.
+STAND_HAND = "ZZX"
+
+
 def call_tool(tool, db, *args):
-    r = subprocess.run([sys.executable, "-B", str(tool), "--db", str(db), *args],
+    r = subprocess.run([sys.executable, "-B", str(tool), "--db", str(db), "--role", STAND_HAND, *args],
                        capture_output=True, text=True, encoding="utf-8", errors="replace")
     return r.returncode, (r.stdout or "") + (r.stderr or "")
 

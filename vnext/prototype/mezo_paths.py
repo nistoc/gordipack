@@ -24,10 +24,21 @@ mezo_paths.py — ПРОТОТИП механизма R15a: инструмент
     from mezo_paths import resolve_db
     ap.add_argument("--db", default=None)      # больше не required
     db = resolve_db(args.db, __file__)
+
+ФАЙЛ ПУТЕЙ КОНТУРА (карточка #677, этап Э3; решение владельца В3 а′, 2026-10-05 10:53 UTC):
+пути, которые у каждого контура свои, лежат в ОДНОМ файле <контейнер>/.mezosync/local/paths.json
+(JSON: «ключ → путь»; относительный путь считается от контейнера). Читает его одна функция:
+    from mezo_paths import local_path
+    res = local_path("mirror_repo", __file__)      # → LocalPath: исход, путь, слова, подсказка
+У неё четыре РАЗНЫХ исхода (см. local_path): объявлено · не объявлено · файла путей нет ·
+файл не читается. Прежние места (строки local.paths и ключи mirror_repo / template_checkout /
+disk_layer_tool в таблице meta) как ЗНАЧЕНИЕ больше не читаются: их переносит шаг
+migrations/20261005-local-paths-file.py.
 """
 from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import quote
+import json
 import os
 import sqlite3
 import sys
@@ -216,9 +227,26 @@ def mezo_root(script_file) -> Path:
     # ⚖️ Развилка @PROTO решена в сторону «сделать советы правдой», а не «убрать их
     # из текста»: оба совета разумны, роль попробует их в любом случае, и текст без них
     # оставил бы читателя в тупике без выхода.
+    # ⚖️ ПОРЯДОК ЗДЕСЬ ОСТАВЛЕН ПРЕЖНИМ (признак ПЕРВЫМ, среда следом) — и это решение, а не
+    # недосмотр (карточка #677, Э3-Р4). Записанная норма для container_root — ① среда ② признак
+    # ③ файл путей ④ отказ. Привести к ней mezo_root значило бы поставить MEZO_CONTAINER
+    # ПЕРЕД признаком: инструмент, лежащий на стенде, послушал бы среду вызывающего и пошёл бы в
+    # ЖИВУЮ базу, если приёмка не закрепила среду за стендом. Закрепляет её только сам запускающий
+    # (mezo_stand.stand_env, а не mezo_stand.new), и реестр acceptance-env-debt.txt числом
+    # называет, сколько вызовов её не закрепляют: замер 2026-10-05 — 139 вызовов в 87 файлах
+    # (check-acceptance-env.py). Через эту функцию без --db ходят все, кто зовёт resolve_db:
+    # 45 файлов (39 в .mezosync/scripts, 6 в vnext-tools), и напрямую default_db/mezo_root —
+    # ещё 4 боевых инструмента (check-retired-mechanism.py, guard-all.py, guard-command-targets.py,
+    # rule_status.py) и приёмка bite-two-locks. Урок 13.09: копия приёмки с MEZO_CONTAINER
+    # живого записала meta Atlas. Пока долг в 139 вызовов не выплачен, порядок «среда первой»
+    # здесь опаснее прежнего. Объявленный путь (ключ container файла путей) стоит ПОСЛЕ
+    # признака и среды и сам стенд в живую базу не уведёт: файл путей стенда — свой.
+    # Среда здесь по-прежнему ПОМОГАЕТ там, где признака нет (копия вне контейнера), и громко
+    # отказывает, если названа, а базы по ней нет.
     env = os.environ.get("MEZO_CONTAINER")
-    loc = _local_get("container")
-    for src in (Path(env) if env else None, loc):
+    loc = local_path("container", script_file)
+    loc_dir = loc.path if loc.outcome == LOCAL_DECLARED else None
+    for src in (Path(env) if env else None, loc_dir):
         if src is None:
             continue
         # Обе раскладки, как и в отсечке template_root: база может лежать в подкаталоге
@@ -226,18 +254,21 @@ def mezo_root(script_file) -> Path:
         for cand in (src / ".mezosync", src):
             if (cand / DB_NAME).exists():
                 return cand
+    paths_file = _paths_file_for_advice(loc, script_file)
     sys.exit(
         f"ERR: корень мезосинка НЕ НАЙДЕН: файла {DB_NAME} нет ни в одном предке.\n"
         f"     Искал вверх от: {Path(script_file).resolve().parent}\n"
         + (f"     MEZO_CONTAINER={env} — задана, но {DB_NAME} по ней не найден.\n"
            if env else "")
-        + (f"     local.paths: container={loc} — задан, но {DB_NAME} по нему не найден.\n"
-           if loc else "")
+        + (f"     файл путей: container={loc_dir} — задан, но {DB_NAME} по нему не найден.\n"
+           if loc_dir else "")
+        + (f"     {loc.words}\n" if loc.outcome == LOCAL_UNREADABLE else "")
+        + (f"     ⚠️ {loc.hint}\n" if loc.hint else "")
         + f"     Прежде здесь молча возвращалось «ожидаемое место», и подключение к базе\n"
         f"     по этому пути создавало ПУСТУЮ базу вместо отказа.\n"
         f"     Выходы, и оба ПРОВЕРЕНЫ прогоном:\n"
-        f"       · MEZO_CONTAINER=<путь до контейнера>  (или строка container=<путь>\n"
-        f"         в файле local.paths рядом с mezo_paths.py) — снимает ОБА замка\n"
+        f"       · MEZO_CONTAINER=<путь до контейнера>  (или ключ container в файле\n"
+        f"         путей {paths_file}) — снимает ОБА замка\n"
         f"       · позвать с АБСОЛЮТНЫМ --db <путь до {DB_NAME}> — снимает ТОЛЬКО ЭТОТ\n"
         # 🪤 ХВОСТ ПРО ВТОРОЙ ЗАМОК — ТОЛЬКО ТЕМ, КОГО ОН ЖДЁТ (карточка #575 ②,
         # приёмка @COORD 2026-09-06). Полный хвост нужен 72% инструментов; остальным
@@ -274,8 +305,11 @@ def default_db(script_file) -> Path:
 # теперь ОДИН в обеих копиях:
 #   ① переменная среды MEZO_CONTAINER — явное сильнее выведенного;
 #   ② подъём от расположения файла по МАРКЕРУ (.mezosync/mezosync.db — признак, не глубина);
-#   ③ local.paths рядом с этим файлом — непубликуемый, для копии ВНЕ контейнера;
+#   ③ ключ container в ФАЙЛЕ ПУТЕЙ (<контейнер>/.mezosync/local/paths.json; для копии ВНЕ
+#      контейнера — <каталог скриптов>/../local/paths.json) — непубликуемый; с карточки #677
+#      он заменил строку container= в local.paths;
 #   ④ ГРОМКИЙ отказ с рецептом. Тихий дефолт был бы путём машины под другим именем.
+# ⚠️ ЭТО ПОРЯДОК container_root. У mezo_root признак стоит ПЕРВЫМ — причина названа в его теле.
 # ⚠️ ЧТО СОХРАНЕНО ЗДЕСЬ И ЧЕГО НЕТ У ОБРАЗЦА — @PROTO прямо предупредила, что переносить
 # «как есть» нельзя, у здешних функций свои потребители:
 #   · mezo_root/default_db — зовут 3 инструмента; у образца этих имён нет вовсе;
@@ -284,16 +318,176 @@ def default_db(script_file) -> Path:
 #   mezo_root      → каталог, ГДЕ ЛЕЖИТ база  (…/.atlas/.mezosync)
 #   container_root → каталог, ВНУТРИ которого лежит .mezosync  (…/.atlas)
 # Проверено прогоном до и после правки: все пять функций отдают то же, что отдавали.
-_LOCAL = Path(__file__).resolve().parent / "local.paths"
+# ═══ ФАЙЛ ПУТЕЙ КОНТУРА: ЕДИНСТВЕННОЕ ЧТЕНИЕ (карточка #677, этап Э3, работа Р4) ═══════════
+# Решение владельца В3 а′ (2026-10-05 10:53 UTC, чат COORD): «пути — в файле в отдельной местной
+# папке (например .mezosync/local/), которую Э5 берёт как есть. Файл заменяет local.paths и
+# ключи meta mirror_repo, template_checkout, disk_layer_tool: одно место для путей вместо
+# трёх. Нет файла или ключа — инструмент отказывает словами, а не берёт литерал.»
+# Прежде пути контура жили в ТРЁХ местах, и у каждого был свой читатель: строки local.paths
+# (_local_get), ключи таблицы meta (по запросу в каждом инструменте) и имена каталогов,
+# впечатанные в код. Теперь читатель ОДИН — local_path() ниже.
+# ⛔ ПРЕЖНИЕ ИСТОЧНИКИ КАК ЗНАЧЕНИЕ НЕ ЧИТАЮТСЯ — ни как запасной вариант, ни «на всякий случай»:
+# запасной вариант и есть то, из-за чего инструмент соседа шёл в каталог на чужой машине.
+# Прежний источник функция только ЗАМЕЧАЕТ и тогда добавляет к исходу подсказку с готовой
+# командой шага переноса — подсказку, а не значение.
+LOCAL_PATHS_PARTS = ("local", "paths.json")        # внутри каталога .mezosync
+LOCAL_PATHS_STEP = "20261005-local-paths-file.py"  # шаг переноса из прежних источников
+LOCAL_DECLARED = "declared"           # ключ объявлен: путь известен (на диске он есть или нет)
+LOCAL_NOT_DECLARED = "not_declared"   # файл есть, ключа в нём нет (или значение пусто)
+LOCAL_NO_FILE = "no_file"             # файла путей нет вовсе
+LOCAL_UNREADABLE = "unreadable"       # файл есть, но не читается (битый JSON, нет прав, не объект)
+_LEGACY_META_KEYS = ("mirror_repo", "template_checkout", "disk_layer_tool")
+_LEGACY_FILE_KEYS = ("container", "template")
 
 
-def _local_get(key: str):
-    if not _LOCAL.exists():
+class LocalPath(NamedTuple):
+    """Исход чтения ключа файла путей — четыре РАЗНЫХ исхода, каждый своими словами.
+
+    outcome — LOCAL_DECLARED · LOCAL_NOT_DECLARED · LOCAL_NO_FILE · LOCAL_UNREADABLE;
+    key     — какой ключ спрашивали;
+    path    — только при «объявлено»: полный путь (относительный считается от контейнера);
+    exists  — только при «объявлено»: есть ли этот путь на диске (иначе None);
+    file    — файл путей: прочитанный, а при «файла нет» — первый из искавшихся;
+    words   — исход одной строкой по-русски: ей и надо печатать причину;
+    hint    — готовая команда шага переноса, если ПРЕЖНИЙ источник ещё несёт этот ключ, а в
+              файле его нет; иначе None. Это подсказка, а не значение.
+    """
+    outcome: str
+    key: str
+    path: Path | None
+    exists: bool | None
+    file: Path | None
+    words: str
+    hint: str | None
+
+
+def _paths_file_candidates(script_file, mezo_dir) -> list:
+    """Где искать файл путей — по порядку. mezo_dir назван — только там (следуем за базой)."""
+    if mezo_dir is not None:
+        return [Path(mezo_dir) / LOCAL_PATHS_PARTS[0] / LOCAL_PATHS_PARTS[1]]
+    start = Path(script_file or __file__).resolve().parent
+    # ① каталог скриптов лежит в .mezosync, значит файл — рядом с ним: <скрипты>/../local/paths.json.
+    #    Так же ищет его копия инструментов ВНЕ контейнера (она несёт свой файл рядом).
+    found = [start.parent / LOCAL_PATHS_PARTS[0] / LOCAL_PATHS_PARTS[1]]
+    # ② инструмент лежит ВНУТРИ контейнера, но не в .mezosync (vnext-tools): файл — у предка.
+    for cand in (start, *start.parents):
+        p = cand / ".mezosync" / LOCAL_PATHS_PARTS[0] / LOCAL_PATHS_PARTS[1]
+        if p not in found:
+            found.append(p)
+    return found
+
+
+def _legacy_hint(key: str, candidates: list):
+    """Если прежний источник ещё несёт ключ — готовая команда шага переноса, иначе None.
+
+    Значение из прежнего источника НЕ возвращается и не используется: только факт и команда.
+    Любая беда чтения — None: подсказка не вправе уронить того, кто её просит.
+    """
+    where = None
+    db = None
+    try:
+        for c in candidates:
+            if (c.parent.parent / DB_NAME).is_file():
+                db = c.parent.parent / DB_NAME
+                break
+        if key in _LEGACY_FILE_KEYS:
+            old = Path(__file__).resolve().parent / "local.paths"
+            if old.is_file():
+                for line in old.read_text(encoding="utf-8").splitlines():
+                    if line.startswith(key + "=") and line.split("=", 1)[1].strip():
+                        where = f"строка {key}= в файле {old.as_posix()}"
+                        break
+        if where is None and key in _LEGACY_META_KEYS and db is not None:
+            uri = "file:" + quote(db.as_posix(), safe="/:") + "?mode=ro"
+            con = sqlite3.connect(uri, uri=True, timeout=2)
+            try:
+                row = con.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+            finally:
+                con.close()
+            if row and row[0]:
+                where = f"запись {key} в таблице meta базы {db.as_posix()}"
+    except Exception:  # noqa: BLE001 — подсказка не вправе ронять вызывающего
         return None
-    for line in _LOCAL.read_text(encoding="utf-8").splitlines():
-        if line.startswith(key + "="):
-            return Path(line.split("=", 1)[1].strip())
-    return None
+    if where is None:
+        return None
+    step_dir = (db.parent / "scripts" / "migrations") if db is not None \
+        else Path(__file__).resolve().parent / "migrations"
+    cmd = (f"python {(step_dir / LOCAL_PATHS_STEP).as_posix()}"
+           + (f" --db {db.as_posix()}" if db is not None else "") + " --apply")
+    return (f"прежний источник ещё несёт «{key}»: {where} — он больше не читается. "
+            f"Перенести в файл путей: {cmd}  (без --apply шаг только показывает)")
+
+
+def local_path(key: str, script_file=None, mezo_dir=None) -> LocalPath:
+    """Прочитать ключ из файла путей контура. Исключений наружу НЕ бросает (как find_coordinator).
+
+    Файл: <контейнер>/.mezosync/local/paths.json — JSON-объект «ключ → путь»; относительный
+    путь считается от контейнера. Где искать: mezo_dir (каталог с базой) назван — только в
+    <mezo_dir>/local/paths.json (так идут за базой песочницы); не назван — от расположения
+    script_file: <каталог скриптов>/../local/paths.json, затем у предков .mezosync/local/.
+
+    Четыре РАЗНЫХ исхода (поле outcome, фраза — в words):
+      · объявлено    — «объявлено: <путь> (есть на диске | на диске НЕТ)»;
+      · не объявлено — файл есть, ключа в нём нет (или значение пусто);
+      · файла нет    — файла путей нет ни в одном из мест поиска;
+      · не читается  — файл есть, но не читается: битый JSON, нет прав, верх не объект.
+    Слитые вместе, они дали бы ложный ноль: «нет файла» и «нет ключа» чинятся разными
+    действиями, а «не читается» нельзя выдавать за «не объявлено».
+
+    ⛔ НЕ ЗОВЁТ container_root / live_db / live_scripts / template_root: иначе разбор
+    «нужен ли второй замок» (_заразные_имена) записал бы её в заразные, а mezo_root и
+    container_root зовут её САМИ.
+    """
+    cands: list = []
+    try:
+        cands = _paths_file_candidates(script_file, mezo_dir)
+        found = next((c for c in cands if c.exists()), None)
+        if found is None:
+            first = cands[0]
+            tail = "" if mezo_dir is not None else \
+                " (и выше по дереву каталогов: .mezosync/local/paths.json)"
+            return LocalPath(LOCAL_NO_FILE, key, None, None, first,
+                             f"файла путей нет: {first.as_posix()}{tail}",
+                             _legacy_hint(key, cands))
+        try:
+            data = json.loads(found.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError) as e:        # битый JSON и непрочитанные байты — ValueError
+            return LocalPath(LOCAL_UNREADABLE, key, None, None, found,
+                             f"файл путей не читается: {found.as_posix()} — "
+                             f"{e.__class__.__name__}: {e}", None)
+        if not isinstance(data, dict):
+            return LocalPath(LOCAL_UNREADABLE, key, None, None, found,
+                             f"файл путей не читается: {found.as_posix()} — верхний уровень "
+                             f"не объект «ключ → путь»", None)
+        raw = data.get(key)
+        if key not in data or raw is None or (isinstance(raw, str) and not raw.strip()):
+            why = "значение пусто" if key in data else "ключа нет"
+            return LocalPath(LOCAL_NOT_DECLARED, key, None, None, found,
+                             f"не объявлено: в файле путей {found.as_posix()} {why}: «{key}»",
+                             _legacy_hint(key, cands))
+        if not isinstance(raw, str):
+            return LocalPath(LOCAL_UNREADABLE, key, None, None, found,
+                             f"файл путей не читается: {found.as_posix()} — значение ключа "
+                             f"«{key}» не строка", None)
+        p = Path(raw.strip())
+        if not p.is_absolute():
+            p = found.parent.parent.parent / p     # <контейнер> = над каталогом .mezosync
+        p = Path(os.path.normpath(str(p)))
+        there = p.exists()
+        return LocalPath(LOCAL_DECLARED, key, p, there, found,
+                         f"объявлено: {p.as_posix()} "
+                         f"({'есть на диске' if there else 'на диске НЕТ'})", None)
+    except Exception as e:  # noqa: BLE001 — исход называется словами, а не роняет вызывающего
+        return LocalPath(LOCAL_UNREADABLE, key, None, None, cands[0] if cands else None,
+                         f"файл путей не читается: {e.__class__.__name__}: {e}", None)
+
+
+def _paths_file_for_advice(res: LocalPath, script_file) -> str:
+    """Куда класть файл путей — текстом для отказа: тот, что искали, либо первый из мест."""
+    if res.file is not None:
+        return res.file.as_posix()
+    start = Path(script_file or __file__).resolve().parent
+    return (start.parent / LOCAL_PATHS_PARTS[0] / LOCAL_PATHS_PARTS[1]).as_posix()
 
 
 def container_root(script_file=None) -> Path:
@@ -306,19 +500,25 @@ def container_root(script_file=None) -> Path:
     for cand in (start, *start.parents):
         if (cand / ".mezosync" / DB_NAME).exists():
             return cand
-    loc = _local_get("container")
-    if loc and (loc / ".mezosync" / DB_NAME).exists():
-        return loc
+    loc = local_path("container", script_file)
+    loc_dir = loc.path if loc.outcome == LOCAL_DECLARED else None
+    if loc_dir and (loc_dir / ".mezosync" / DB_NAME).exists():
+        return loc_dir
     # ⚡ ССЫЛКА НА ПЕРВЫЙ ЗАМОК (карточка #575, находка @COORD): сюда чаще всего приходят
     # ПО СОВЕТУ соседнего отказа — он предлагает «--db абсолютным», и этот выход снимает
     # тот замок, но не этот. Роль, не знающая о двух замках, читает второй отказ как
     # «я не справился с первым» и идёт чинить не то. Три живых случая за сутки, последний —
     # внутри чужой приёмки, где он выдал себя за «поломки нет».
+    paths_file = _paths_file_for_advice(loc, script_file)
     sys.exit("ERR: контейнер группы НЕ НАЙДЕН (маркер .mezosync/mezosync.db не встретился "
-             "вверх по дереву).\n     Задай MEZO_CONTAINER=<путь> либо создай рядом с "
-             f"mezo_paths.py файл local.paths со строкой container=<путь>.\n"
+             "вверх по дереву).\n     Задай MEZO_CONTAINER=<путь> либо создай файл путей "
+             f"{paths_file} с ключом container.\n"
              f"     Искал от: {start}\n"
-             "     ⚠️ ЭТО ВТОРОЙ ЗАМОК. Если вы пришли сюда по совету «позвать с абсолютным"
+             + (f"     файл путей: container={loc_dir} — задан, но {DB_NAME} по нему не найден.\n"
+                if loc_dir else "")
+             + (f"     {loc.words}\n" if loc.outcome == LOCAL_UNREADABLE else "")
+             + (f"     ⚠️ {loc.hint}\n" if loc.hint else "")
+             + "     ⚠️ ЭТО ВТОРОЙ ЗАМОК. Если вы пришли сюда по совету «позвать с абсолютным"
              " --db» — тот совет верен про СВОЙ замок и не про этот: файл базы вы назвали,"
              " а каталог группы нужен инструменту (или его соседу) отдельно.\n"
              "     👉 MEZO_CONTAINER снимает оба; --db здесь не поможет.")
@@ -335,7 +535,7 @@ def live_scripts(script_file=None) -> Path:
 
 
 def template_root(script_file=None) -> Path:
-    """Корень репозитория-образца: маркер scripts/init-group.py; иначе local.paths/среда."""
+    """Корень репозитория-образца: маркер scripts/init-group.py; иначе ключ template файла путей/среда."""
     import os
     env = os.environ.get("MEZO_TEMPLATE")
     if env:
@@ -356,11 +556,17 @@ def template_root(script_file=None) -> Path:
             continue
         if (cand / "scripts" / "init-group.py").exists():
             return cand
-    loc = _local_get("template")
-    if loc and (loc / "scripts" / "init-group.py").exists():
-        return loc
-    sys.exit("ERR: корень образца НЕ НАЙДЕН (маркер scripts/init-group.py).\n"
-             "     Задай MEZO_TEMPLATE=<путь> либо строку template=<путь> в local.paths.")
+    loc = local_path("template", script_file)
+    loc_dir = loc.path if loc.outcome == LOCAL_DECLARED else None
+    if loc_dir and (loc_dir / "scripts" / "init-group.py").exists():
+        return loc_dir
+    paths_file = _paths_file_for_advice(loc, script_file)
+    sys.exit(("ERR: корень образца НЕ НАЙДЕН (маркер scripts/init-group.py).\n"
+              f"     Задай MEZO_TEMPLATE=<путь> либо ключ template в файле путей {paths_file}.\n"
+              + (f"     файл путей: template={loc_dir} — задан, но scripts/init-group.py по "
+                 f"нему не найден.\n" if loc_dir else "")
+              + (f"     {loc.words}\n" if loc.outcome == LOCAL_UNREADABLE else "")
+              + (f"     ⚠️ {loc.hint}\n" if loc.hint else "")).rstrip("\n"))
 
 
 def resolve_db(arg, script_file, must_exist: bool = True,
@@ -435,13 +641,23 @@ def resolve_db(arg, script_file, must_exist: bool = True,
 # дважды). Здесь, в mezo_paths.py, её читают ОБА инструмента импортом — не подпроцессом:
 # файл без дефиса в имени, обычный `import mezo_paths` уже стоит в обоих.
 def annex_dir(db_path) -> Path:
-    """Каталог приложений правил ЭТОЙ базы: раскладка контура-автора (рядом с
-    atlas.archs/.mezosync, если он есть рядом с контейнером) уважается, у контура без
-    неё — рядом с базой. Считается от db_path, а НЕ от container_root()/MEZO_CONTAINER:
-    вызывающий может сверяться с базой ПЕСОЧНИЦЫ, и приложение обязано идти за НЕЙ."""
+    """Каталог приложений правил ЭТОЙ базы: ключ annex_dir файла путей этой базы, а когда
+    ключа нет — стандартная раскладка пакета (<каталог базы>/rules-annex).
+
+    Карточка #677, Э3-Р4: здесь стояла раскладка контура-автора — каталог atlas.archs/.mezosync
+    рядом с контейнером, имя чужого репозитория внутри пакета. Теперь она объявляется ключом
+    annex_dir (контуру-автору его вписывает шаг переноса migrations/20261005-local-paths-file.py),
+    а у всех остальных место стандартное. Файл битый — отказ словами: молча положить приложение
+    не туда хуже, чем остановиться.
+    Считается от db_path, а НЕ от container_root()/MEZO_CONTAINER: вызывающий может
+    сверяться с базой ПЕСОЧНИЦЫ, и приложение обязано идти за НЕЙ."""
     root = Path(db_path).resolve().parent               # каталог .mezosync своей базы
-    legacy = root.parent / "atlas.archs" / ".mezosync"  # раскладка контура-автора
-    return (legacy if legacy.is_dir() else root) / "rules-annex"
+    res = local_path("annex_dir", mezo_dir=root)
+    if res.outcome == LOCAL_DECLARED:
+        return res.path
+    if res.outcome == LOCAL_UNREADABLE:
+        sys.exit(f"ERR: место приложений правил не определено — {res.words}")
+    return root / "rules-annex"
 
 
 def annex_path(db_path, key: str) -> Path:

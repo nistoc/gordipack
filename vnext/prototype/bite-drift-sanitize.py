@@ -23,6 +23,9 @@ r"""ПРИЁМКА сверки живого с образцом: обезлич
     остальные (①⑤ считают 0/1/обезличено) позиционного сдвига не видят вовсе
   ⑦ ВОЗВРАТ ПО G7: копия ВНЕ контура (mezo_paths.py рядом, .mezosync/mezosync.db     РАЗЛИЧАЮЩИЙ
     нигде вверх по дереву, MEZO_CONTAINER не задан) — без падения SystemExit'ом
+    (карточка #677: зеркало и образец читаются из файла путей, чтение само не падает;
+    ловушка SystemExit остаётся как вторая страховка, а поломка ⑦б возвращает ПРЕЖНИЙ
+    источник падения — вызов container_root() без указания файла — вместе с узким except)
 
 ═══ КАРТОЧКА #625 (2026-09-14) ═══
 guard-scripts-drift.py считал «строк по существу» построчным zip(a, b) — сравнением
@@ -276,18 +279,23 @@ def main() -> int:
         broken_copy7 = mezo_stand.copy_tool(GUARD_TOOL, tmp7 / "broken7")
         text7 = broken_copy7.read_text(encoding="utf-8")
         anchor7a = ("    except (SystemExit, Exception):                    # noqa: BLE001"
-                    "\n        name = None")
+                    "\n        path = None")
+        anchor7c = ("        path = _MIRROR.path if _MIRROR.outcome == \"declared\" else None")
         anchor7b = ("except (SystemExit, Exception):                        # noqa: BLE001"
                     "\n    VNEXT_TEMPLATE = None")
-        anchors7_found = text7.count(anchor7a) == 1 and text7.count(anchor7b) == 1
+        anchors7_found = (text7.count(anchor7a) == 1 and text7.count(anchor7b) == 1
+                          and text7.count(anchor7c) == 1)
         ok &= case("⑦ якоря поломки (оба места) найдены в живом тексте сверки",
                    anchors7_found,
                    "не найдены — переименование/рефакторинг увели поломку от настоящего "
                    "места; тогда ⑦б пройдёт без причины — ничего не докажет, не находка")
         if anchors7_found:
-            broken_text7 = text7.replace(
+            # Прежний источник падения возвращён вместе с узким except: чтение ключа само не
+            # бросает, и без возвращённого вызова поломка ничего бы не меняла.
+            broken_text7 = text7.replace(anchor7c, anchor7c + "\n        _mp.container_root()", 1)
+            broken_text7 = broken_text7.replace(
                 anchor7a, "    except Exception:                               # noqa: BLE001"
-                          "\n        name = None", 1)
+                          "\n        path = None", 1)
             broken_text7 = broken_text7.replace(
                 anchor7b, "except Exception:                                      # noqa: BLE001"
                           "\n    VNEXT_TEMPLATE = None", 1)

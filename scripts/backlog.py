@@ -1067,9 +1067,13 @@ def cmd_status(conn, a):
             tag_set = conn.execute("SELECT tags FROM backlog WHERE id=?", (a.id,)).fetchone()[0]
             m = re.search(r"gordi-issue #(\d+)", tag_set or "")
             if m:
+                # Закрывает issue рука координатора контура — имя берётся ИЗ ДАННЫХ
+                # (mezo_paths.find_coordinator), а не впечатано; не определилось — заполнитель.
+                from mezo_paths import find_coordinator
+                closer = find_coordinator(conn).name or "<координатор>"
                 print(f"📮 карточка несёт тег gordi-issue #{m.group(1)} — закрой и issue "
-                      f"ссылкой на коммит: gordi-issue.py close --role COORD "
-                      f"--number {m.group(1)} --note \"починено: <коммит>\" (рукой COORD)")
+                      f"ссылкой на коммит: gordi-issue.py close --role {closer} "
+                      f"--number {m.group(1)} --note \"починено: <коммит>\" (рукой {closer})")
         except Exception:                             # noqa: BLE001
             pass
 

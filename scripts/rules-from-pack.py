@@ -222,8 +222,23 @@ def text_sha(body: str) -> str:
 
 # ── ПУТИ И БАЗЫ ──────────────────────────────────────────────────────────────────────
 
+def _conn_mezo_dir(conn):
+    """Каталог .mezosync базы, к которой открыто соединение (там лежит local/paths.json).
+
+    Берётся из PRAGMA database_list — файл ТОЙ базы, с которой работаем (песочница ходит за
+    песочницей, как annex_dir), а не контейнер вызывающего. Не вышло определить — None, и
+    читатель файла путей ищет по расположению инструмента."""
+    try:
+        for _seq, name, file in conn.execute("PRAGMA database_list").fetchall():
+            if name == "main" and file:
+                return Path(file).resolve().parent
+    except sqlite3.Error:
+        pass
+    return None
+
+
 def find_pack_source(arg_source, conn) -> Path:
-    """Папка с клоном пакета: --source, meta.template_checkout (готовая папка на диске) —
+    """Папка с клоном пакета: --source, ключ template_checkout файла путей (готовая папка) —
     либо, когда контур знает только meta.template_source (карточка #614): АДРЕС УДАЛЁНКИ,
     как его пишет init-group.py (`git remote get-url origin`, а НЕ папка клона) — временный
     клон, ТЕМ ЖЕ приёмом, что update-tools.py берёт свежие инструменты (см. update-tools.py:
@@ -248,9 +263,14 @@ def find_pack_source(arg_source, conn) -> Path:
         if not p.is_dir():
             sys.exit(f"⛔ пакет не найден: папки «{p}» не существует. Укажи верный --source.")
         return p
-    row = conn.execute("SELECT value FROM meta WHERE key='template_checkout'").fetchone()
-    if row and row[0] and Path(row[0]).is_dir():
-        return Path(row[0])
+    # Карточка #677 (Э3-Р5, решение владельца В3 а′): папка клона — ключ template_checkout ФАЙЛА
+    # ПУТЕЙ этой базы (.mezosync/local/paths.json рядом с базой), а не строка таблицы meta.
+    # Читается только файл: прежняя строка meta значением НЕ служит. Ключ template_source
+    # (адрес пакета) остаётся в meta — ветка ниже без перемен.
+    checkout = mezo_paths.local_path("template_checkout", __file__,
+                                     mezo_dir=_conn_mezo_dir(conn))
+    if checkout.outcome == mezo_paths.LOCAL_DECLARED and checkout.exists:
+        return checkout.path
     src_row = conn.execute("SELECT value FROM meta WHERE key='template_source'").fetchone()
     source = ((src_row[0] if src_row else "") or "").strip()
     if source:
@@ -274,10 +294,14 @@ def find_pack_source(arg_source, conn) -> Path:
                 "укажи явно: --source <папка с клоном пакета GORDI>"
             )
         return tmp
-    meta_note = f" (в meta записано «{row[0]}», но это не папка)" if row and row[0] else ""
+    if checkout.outcome == mezo_paths.LOCAL_DECLARED:
+        file_note = f" (в файле путей записано «{checkout.path}», но такой папки нет)"
+    else:
+        file_note = f" ({checkout.words})"
+    hint_line = f"\n   {checkout.hint}" if checkout.hint else ""
     sys.exit(
-        "⛔ источник пакета GORDI неизвестен: --source не задан, meta.template_checkout"
-        f" контура{meta_note} не годится, а meta.template_source пусто.\n"
+        "⛔ источник пакета GORDI неизвестен: --source не задан, ключ template_checkout"
+        f" файла путей контура{file_note} не годится, а meta.template_source пусто.{hint_line}\n"
         "   Укажи явно: --source <папка с клоном пакета GORDI>"
     )
 
@@ -1491,7 +1515,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--db", default=None,
                     help="БД контура (по умолчанию — живая, от расположения скрипта)")
     ap.add_argument("--source", default=None,
-                    help="папка с клоном пакета (по умолчанию — meta.template_checkout контура)")
+                    help="папка с клоном пакета (по умолчанию — ключ template_checkout файла путей "
+                         "контура, .mezosync/local/paths.json)")
     ap.add_argument("--state", choices=STATE_NAMES, default=None,
                     help="показать только строки этого состояния")
     mode = ap.add_mutually_exclusive_group()

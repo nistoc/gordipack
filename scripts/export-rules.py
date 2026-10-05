@@ -24,22 +24,30 @@ export-rules.py — генерирует sync.rules.md из таблиц `rules`
 import argparse
 import datetime
 import sqlite3
+import sys
 from pathlib import Path
 
 from mezo_paths import resolve_db   # R15a: путь к БД — от расположения скрипта, не от CWD
+import mezo_paths                   # файл путей контура: каталог координации (карточка #677)
 import rule_status as RS            # отзыв правила — ОДИН признак на контур (карточка #89)
 
 # 🪤 ПРИЁМНИК ВЫВОДИТСЯ ОТ БАЗЫ, А НЕ ВПЕЧАТАН (#145, донесено #157 10.08).
 # Здесь стоял абсолютный путь этой машины — «заряженное ружьё в каждой копии»: стенд,
 # запущенный из чужого места, ДВАЖДЫ перезаписал живое зеркало правил (36 строк вместо 50).
-# ⇒ Производное живёт РЯДОМ СО СВОИМ ИСТОЧНИКОМ; раскладка контура-автора уважается,
-#    но определяется ЗАМЕРОМ, а не памятью.
+# ⇒ Производное живёт РЯДОМ СО СВОИМ ИСТОЧНИКОМ. Контур, у которого файл правил лежит
+#    не рядом с базой (у автора — в репозитории документов), объявляет это САМ: ключ
+#    `coordination_dir` файла путей <контейнер>/.mezosync/local/paths.json, читает его
+#    mezo_paths.local_path. Имени чужого репозитория здесь больше нет (карточка #677, Э3-Р4):
+#    нет ключа — стандартная раскладка пакета, а не раскладка автора.
 def _default_out(db_path: Path) -> Path:
     root = Path(db_path).resolve().parent          # каталог .mezosync своей базы
-    legacy = root.parent / "atlas.archs" / ".mezosync" / "coordination"
-    if legacy.is_dir():                            # раскладка контура-автора — уважаем
-        return legacy / "sync.rules.md"
-    return root / "generated" / "sync.rules.md"    # новорождённые: рядом с базой
+    res = mezo_paths.local_path("coordination_dir", mezo_dir=root)
+    if res.outcome == mezo_paths.LOCAL_DECLARED:   # контур объявил каталог координации
+        return res.path / "sync.rules.md"
+    if res.outcome == mezo_paths.LOCAL_UNREADABLE:
+        # файл путей, который не читается, — НЕ «ключа нет»: писать «куда-нибудь» хуже, чем остановиться
+        sys.exit(f"ERR: место файла правил не определено — {res.words}")
+    return root / "generated" / "sync.rules.md"    # стандартная раскладка пакета: рядом с базой
 
 # Порядок разделов: от «кто мы» к «как работаем» к «где что лежит».
 # Ключи, которых нет в БД, просто пропускаются; неупомянутые — падают в «Прочие».
@@ -120,6 +128,10 @@ def main():
     args.db = str(resolve_db(args.db, __file__))   # R15a: от расположения скрипта
     if args.out is None:                           # #157: приёмник — от базы, не впечатан
         args.out = str(_default_out(Path(args.db)))
+        _place = mezo_paths.local_path("coordination_dir", mezo_dir=Path(args.db).resolve().parent)
+        if _place.outcome == mezo_paths.LOCAL_DECLARED and not _place.exists:
+            # «объявлено, а на диске нет» — не то же самое, что «не объявлено»: говорим это вслух
+            print(f"ℹ️ {_place.words} — каталог будет создан")
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)
 
     conn = sqlite3.connect(args.db)

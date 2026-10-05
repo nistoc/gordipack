@@ -55,6 +55,7 @@ bite-pool-brief.py — приёмка захода 2.1 + П⑥: собираем
         получает строку без «не назван», другая — молчание)
      Р6 ответ всегда литерал «COORD» → ⑨ падает (настоящий координатор стенда остаётся без строки)
 """
+import json
 import os
 import re
 import shutil
@@ -141,8 +142,9 @@ def broken_common_copy(out_dir, name, anchor, replacement):
     функция поиска координатора (карточка #677, этап Э3). Живые файлы не трогаются: обе копии
     лежат в стенде, а сводка собирается из каталога копии — первым в пути поиска модулей
     стоит каталог запускаемого файла, поэтому испорченный mezo_paths.py и подхватывается.
-    local.paths рядом с копией называет настоящий контур — без него копия не нашла бы каталог
-    инструментов. Якорь обязан найтись РОВНО один раз: иначе «ПРИЁМКА НЕ СОСТОЯЛАСЬ», а не
+    Файл путей рядом с копией (<каталог вывода>/local/paths.json, ключ container; с карточки #677
+    он заменил строку container= в local.paths) называет настоящий контур — без него копия не
+    нашла бы каталог инструментов. Якорь обязан найтись РОВНО один раз: иначе «ПРИЁМКА НЕ СОСТОЯЛАСЬ», а не
     поломка мимо цели."""
     shared = Path(ИСПЫТУЕМЫЙ).parent / "mezo_paths.py"
     text = shared.read_bytes().decode("utf-8")
@@ -153,8 +155,9 @@ def broken_common_copy(out_dir, name, anchor, replacement):
     folder.mkdir(parents=True, exist_ok=True)
     shutil.copy(ИСПЫТУЕМЫЙ, folder / "role-brief.py")
     (folder / "mezo_paths.py").write_bytes(text.replace(anchor, replacement).encode("utf-8"))
-    (folder / "local.paths").write_text(f"container={mezo_paths.container_root()}\n",
-                                        encoding="utf-8")
+    (Path(out_dir) / "local").mkdir(exist_ok=True)
+    (Path(out_dir) / "local" / "paths.json").write_text(
+        json.dumps({"container": str(mezo_paths.container_root())}), encoding="utf-8")
     return folder / "role-brief.py"
 
 

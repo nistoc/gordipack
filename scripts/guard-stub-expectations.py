@@ -49,10 +49,17 @@ import sqlite3
 import sys
 from pathlib import Path
 
-# 🪤 Путь в исходники НАШЕГО портала. В чужом контуре проверка либо молчала бы (каталога
-# нет — и это читается как «заглушек нет»), либо мерила наш код. Выводим от контейнера.
-_own = Path(__file__).resolve().parent.parent.parent
-SPA_SRC = _own / "atlas.studio" / "Src" / "Atlas.Studio.Spa" / "src"
+import mezo_paths   # файл путей контура: исходники портала (карточка #677, Э3-Р4)
+
+# 🪤 Путь в исходники портала. В чужом контуре проверка либо молчала бы (каталога нет — и это
+# читается как «заглушек нет»), либо мерила наш код. Карточка #677, Э3-Р4: имена каталогов
+# нашего портала из кода убраны — путь объявляет сам контур ключом `spa_src` файла путей
+# (<контейнер>/.mezosync/local/paths.json; читает его mezo_paths.local_path). У пакета
+# СТАНДАРТНОГО места для исходников портала нет: ключа нет — «не объявлено», и это СВОЙСТВО
+# контура (портала у него нет), а не долг: проверка пропускается строкой и НЕ краснеет.
+# SPA_SRC выставляет scan() — только когда ключ объявлен и каталог есть на диске.
+SPA_SRC = None
+SPA_PLACE = None    # исход чтения ключа (mezo_paths.LocalPath); main() печатает по нему слова
 
 STUB_MARKERS = re.compile(r"Демо|заглушк|подключается|появится позже|в разработке", re.IGNORECASE)
 
@@ -157,8 +164,11 @@ def verdict_for(lines, i):
 
 
 def scan():
-    if not SPA_SRC.exists():
+    global SPA_SRC, SPA_PLACE
+    SPA_PLACE = mezo_paths.local_path("spa_src", __file__)
+    if SPA_PLACE.outcome != mezo_paths.LOCAL_DECLARED or not SPA_PLACE.exists:
         return None, []
+    SPA_SRC = SPA_PLACE.path
     findings = []
     for path in sorted(SPA_SRC.rglob("*.ts*")):
         try:
@@ -211,7 +221,7 @@ def scan():
 def rel(path):
     try:
         return path.relative_to(SPA_SRC)
-    except ValueError:
+    except (ValueError, TypeError):
         return path
 
 
@@ -222,7 +232,19 @@ def main():
 
     exists, findings = scan()
     if exists is None:
-        print("⏭️ SPA недоступна (нет atlas.studio) — проверка пропущена, НЕ зелёная")
+        # Слова «объявлено, а на диске нет» и «не объявлено» — РАЗНЫЕ (заявка №29 пакета):
+        # первое — поломка объявления, второе — свойство контура. «Файла путей нет» и «файл
+        # не читается» тоже своими словами; не читающийся файл — отказ, а не пропуск.
+        place = SPA_PLACE
+        if place.outcome == mezo_paths.LOCAL_UNREADABLE:
+            print(f"⛔ исходники портала не определены — {place.words}. Проверка НЕ выполнена, "
+                  f"это не «чисто»")
+            sys.exit(1)
+        if place.outcome == mezo_paths.LOCAL_DECLARED:
+            print(f"⏭️ исходники портала: {place.words} — проверка пропущена, НЕ зелёная")
+        else:
+            print(f"⏭️ исходники портала: {place.words} — свойство контура (портала у него "
+                  f"нет), а не долг; проверка пропущена, НЕ зелёная")
         sys.exit(0)
 
     unmarked = [f for f in findings if f[4] == "UNMARKED"]

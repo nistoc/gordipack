@@ -19,6 +19,11 @@
 
 ⛔ Шаблон ПУБЛИЧЕН: имена коллег сюда не едут, только обозначения ролей. Приведение
    вырезает путь контейнера — единственное, что привязывает файл к машине владельца.
+
+🔎 В КОНЦЕ обоих режимов запускается проверка guard-donor-literals.py: в коде ядра пакета
+   (рабочее дерево, то есть и ещё не закоммиченные файлы переноса) не должно быть литералов
+   донора — имён ролей, путей, репозиториев. В режиме --apply находки дают код выхода 1 и
+   строку «commit не делать»: перенос уже сделан, но класть его в историю рано.
 """
 import argparse
 import hashlib
@@ -32,6 +37,7 @@ import mezo_paths  # пути машины выводятся, не впечат
 
 LIVE = mezo_paths.live_scripts()
 TEMPLATE = Path(__file__).resolve().parents[2] / "scripts"
+PARSED = {}   # разобранные ключи командной строки: ими пользуется итоговая проверка литералов донора
 
 # ⚰️ ЗДЕСЬ СТОЯЛИ ДВА РУКОПИСНЫХ СПИСКА — NEW и SHARED. Сняты 10.08 01:28 UTC (#145+).
 # 🎯 ПОВОД НАЗВАЛ @COORD В ТОТ ЖЕ ДЕНЬ, И ЭТО ЛУЧШАЯ ФОРМУЛИРОВКА КЛАССА: механизм был
@@ -140,8 +146,12 @@ def digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description="перенос живых механизмов в шаблон + сторож пары")
+def transfer() -> int:
+    ap = argparse.ArgumentParser(
+        description="перенос живых механизмов в шаблон + сторож пары",
+        epilog="В конце запускается проверка литералов донора в коде ядра пакета "
+               "(guard-donor-literals.py). С --apply находки дают код выхода 1; "
+               "в режиме замера код выхода от неё не меняется.")
     ap.add_argument("--apply", action="store_true", help="ПЕРЕНЕСТИ. Без него — только замер")
     # ⚖️ Ключ ИМЕНУЕТ файлы поимённо, а не гасит проверку целиком: «перезаписать всё»
     # вернуло бы ровно ту молчаливую потерю, ради которой манифест и заведён.
@@ -149,6 +159,7 @@ def main() -> int:
                     help="перенести НАЗВАННЫЕ файлы поверх шаблонной правки. Цена печатается "
                          "числом потерянных строк — смотри её ДО, а не после")
     a = ap.parse_args()
+    PARSED["args"] = a
 
     if not LIVE.exists():
         print(f"⚠️ живого каталога нет: {LIVE}")
@@ -268,6 +279,45 @@ def main() -> int:
     print(f"\n✅ Перенесено: {moved}. Дальше: собрать СВЕЖИЙ контур "
           "и прогнать приёмки НА НЁМ — приёмка на своей копии не доказывает ничего про чужую.")
     return 1 if conflicts else 0
+
+
+DONOR_GUARD = Path(__file__).resolve().parent / "guard-donor-literals.py"
+
+
+def donor_literals_check() -> int:
+    """Проверка литералов донора в коде ядра пакета (рабочее дерево). Зовётся импортом, не подпроцессом.
+
+    -> 0 прошла · 1 есть находки · 2 проверить не удалось (причина напечатана). Корень пакета —
+    каталог выше scripts/ шаблона: так проверка смотрит ровно тот пакет, куда идёт перенос."""
+    import importlib.util
+    try:
+        spec = importlib.util.spec_from_file_location("guard_donor_literals", str(DONOR_GUARD))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    except Exception as e:      # любой отказ загрузки — это «не проверено», а не «прошла»
+        print(f"НЕ ПРОВЕРЕНО: проверку литералов донора загрузить не удалось: {DONOR_GUARD}: {e}")
+        return 2
+    return mod.run_check(TEMPLATE.parent, DONOR_GUARD.parent)
+
+
+def main() -> int:
+    rc = transfer()
+    args = PARSED.get("args")
+    apply_mode = bool(args is not None and args.apply)
+    print()
+    print("=" * 78)
+    print("ЛИТЕРАЛЫ ДОНОРА В КОДЕ ЯДРА ПАКЕТА")
+    print("=" * 78)
+    code = donor_literals_check()
+    if apply_mode and code == 1:
+        print("⛔ перенос сделан, но в коде ядра пакета литералы донора — commit не делать, см. выше")
+        return 1
+    if apply_mode and code == 2:
+        print("⛔ перенос сделан, но проверку литералов донора выполнить не удалось — commit не делать, пока она не прошла")
+        return 1
+    if code != 0:
+        print("🔍 в режиме замера код выхода переноса из-за этой проверки не меняется (с --apply — меняется)")
+    return rc
 
 
 if __name__ == "__main__":

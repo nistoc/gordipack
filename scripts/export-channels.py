@@ -32,15 +32,29 @@ import json
 import os
 import re
 import sqlite3
+import sys
 from pathlib import Path
 
 from mezo_paths import resolve_db   # R15a: путь к БД — от расположения скрипта, не от CWD
+import mezo_paths                   # файл путей контура: каталог готовых файлов (карточка #677)
+
 
 # 🪤 Тот же класс: путь в каталог НАШЕГО репозитория документации. Новый контур писал бы
-# свои человекочитаемые файлы к нам. Выводим от контейнера, прежний — запасной.
-_own = Path(__file__).resolve().parent.parent.parent
-_archs = _own / "atlas.archs" / ".mezosync" / "coordination" / "generated"
-OUT_DIR = _archs if _archs.parent.parent.is_dir() else _own / ".mezosync" / "generated"
+# свои человекочитаемые файлы к нам. Карточка #677, Э3-Р4: имя чужого репозитория из кода
+# убрано совсем — каталог берётся из ключа `generated_dir` файла путей контура
+# (<контейнер>/.mezosync/local/paths.json; читает его mezo_paths.local_path), от БАЗЫ, а не от
+# расположения скрипта: приёмка на копии базы больше не пишет в живой каталог. Ключа нет —
+# стандартная раскладка пакета: <каталог базы>/generated (её создаёт сборка нового контура).
+def default_out_dir(db_path) -> tuple:
+    """→ (каталог, строка-пояснение или None). Файл путей не читается — отказ словами."""
+    mezo = Path(db_path).resolve().parent
+    res = mezo_paths.local_path("generated_dir", mezo_dir=mezo)
+    if res.outcome == mezo_paths.LOCAL_DECLARED:
+        # «объявлено, а на диске нет» — не то же самое, что «не объявлено»: говорим это вслух
+        return res.path, (None if res.exists else f"{res.words} — каталог будет создан")
+    if res.outcome == mezo_paths.LOCAL_UNREADABLE:
+        sys.exit(f"ERR: место готовых файлов не определено — {res.words}")
+    return mezo / "generated", None
 
 # Каталог ЭТОГО скрипта — им подставляется {s} в шаблонах ниже. ⚠️ Путь берётся СВОЙСТВОМ, а не
 # литералом: находка @STUD #2864 — этот генератор ПЛОДИЛ отозванную относительную форму
@@ -147,13 +161,20 @@ def main():
     # Класс «врезал механизм в пять CLI из шести»: полнота охвата проверяется ЗАПУСКОМ каждого,
     # а не памятью о списке.
     ap.add_argument("--db", default=None, help="Путь к mezosync.db (по умолчанию — рядом со скриптом)")
-    ap.add_argument("--out-dir", default=str(OUT_DIR))
+    ap.add_argument("--out-dir", default=None,
+                    help="каталог готовых файлов; без него — ключ generated_dir файла путей "
+                         "контура, а когда ключа нет — <каталог базы>/generated")
     ap.add_argument("--apply", action="store_true")
     args = ap.parse_args()
     args.db = str(resolve_db(args.db, __file__))   # R15a: от расположения скрипта, не от CWD
 
     conn = sqlite3.connect(args.db)
-    out_dir = Path(args.out_dir)
+    if args.out_dir:
+        out_dir = Path(args.out_dir)
+    else:
+        out_dir, out_note = default_out_dir(args.db)
+        if out_note:
+            print(f"ℹ️ {out_note}")
 
     # 🔧 2026-09-13 (слово владельца «3», чат COORD 10:57 UTC): закрытой роли канал не рендерим.
     # Прежний отбор «кто когда-либо писал» давал канал EYE и GRF при каждом прогоне —
@@ -256,7 +277,7 @@ def main():
         # Впечатанное разрешение пережило основание: с 2026-09-25 11:02:36 UTC отправка в GitLab
         # только по слову владельца (правило gitlab-push-frozen). Совет — из свода этой базы.
         import rule_status
-        print(f"Дальше: COORD коммитит generated/ в atlas.archs; "
+        print(f"Дальше: COORD коммитит каталог {out_dir.name}/ в том репозитории, где он лежит; "
               f"{rule_status.send_advice_for(__file__, db=args.db)}")
 
 

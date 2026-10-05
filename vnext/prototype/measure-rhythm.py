@@ -53,11 +53,19 @@ r"""МОЙ РИТМ НА СЕЙЧАС — ЗАМЕРОМ, А НЕ ПАМЯТЬЮ
      вызовах внутри чата. Доля печатается; ниже 80% инструмент отказывается назвать
      роль, а не гадает.
 
+  ⑤ ИМЕНА РОЛЕЙ — ИЗ ДАННЫХ КОНТУРА (карточка #677, этап Э3, работа Р2): все строки
+     таблицы roles базы `--db`, в любом состоянии жизни — и живые, и закрытые. Списка
+     имён в файле нет: состав живой, и впечатанный список молча не узнавал бы новую
+     роль. База не прочиталась — имена берутся ОБЩИМ ОБРАЗЦОМ [A-Z]{2,16}, и это
+     печатается строкой в выводе: образец принимает за роль и постороннее слово
+     в верхнем регистре после «--role».
+
 Зовут так:
-    python C:/guts/.atlas/vnext-tools/measure-rhythm.py --роль CHROME
-    python C:/guts/.atlas/vnext-tools/measure-rhythm.py                  # весь контур
-    python C:/guts/.atlas/vnext-tools/measure-rhythm.py --роль COORD --на 2026-08-31T03:00
-    python C:/guts/.atlas/vnext-tools/measure-rhythm.py --каталог <копия> --роль CHROME
+    python <КОНТУР>/vnext-tools/measure-rhythm.py --роль CHROME
+    python <КОНТУР>/vnext-tools/measure-rhythm.py                  # весь контур
+    python <КОНТУР>/vnext-tools/measure-rhythm.py --роль COORD --на 2026-08-31T03:00
+    python <КОНТУР>/vnext-tools/measure-rhythm.py --каталог <копия> --роль CHROME
+    python <КОНТУР>/vnext-tools/measure-rhythm.py --db <копия базы> --роль CHROME
 """
 from __future__ import annotations
 
@@ -68,21 +76,50 @@ import io
 import json
 import pathlib
 import re
+import sqlite3
 import statistics
 import sys
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import mezo_paths  # noqa: E402 — путь к базе контура выводится от расположения, не впечатан
+
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
-# Каталог записей разговоров контура. ⚖️ Выводится от домашнего каталога, а не впечатан:
-# впечатанный путь молчал бы на другой машине так же убедительно, как работал.
-ПО_УМОЛЧАНИЮ = pathlib.Path.home() / ".claude" / "projects" / "C--guts--atlas"
+# Каталог записей разговоров контура. ⚖️ Выводится, а не впечатан: впечатанный путь молчал бы
+# на другой машине так же убедительно, как работал. Карточка #677, Э3-Р4: имя папки контура-автора
+# из кода убрано. Порядок: ключ `chat_records` файла путей контура (читает его mezo_paths.local_path)
+# → иначе путь ВЫВОДИТСЯ из пути контейнера по правилу имён папок Claude Code (каждый знак, кроме
+# латинских букв и цифр, заменяется на «-»: <КОНТУР> → C--guts--atlas; папки лежат в
+# ~/.claude/projects) — и вывод печатается строкой, а не делается молча.
+ПАПКА_ПРОЕКТОВ = pathlib.Path.home() / ".claude" / "projects"
 
-# Токены ролей контура. ⛔ Список НЕ является реестром ролей и не претендует им быть:
-# состав живой, реестр — правило свода `role-roster-and-zones`. Здесь он нужен только
-# чтобы отличить токен роли от постороннего слова в верхнем регистре.
-ТОКЕНЫ = ("COORD", "CORE", "ING", "STUD", "TAXO", "OPSSRE", "PROTO", "RCC", "CHROME")
 
-ОБР_ТОКЕН = re.compile(r"--(?:role|роль)\s+([A-Z]{2,8})")
+def имя_папки_проекта(контейнер) -> str:
+    """Имя папки проекта в ~/.claude/projects для данного пути контейнера."""
+    return re.sub(r"[^A-Za-z0-9]", "-", str(контейнер))
+
+
+def каталог_записей():
+    """→ (путь, пояснение для печати, отказ). Отказ — слова, если файл путей не читается."""
+    контейнер = mezo_paths.container_root(__file__)
+    res = mezo_paths.local_path("chat_records", __file__, mezo_dir=контейнер / ".mezosync")
+    if res.outcome == mezo_paths.LOCAL_DECLARED:
+        return res.path, f"каталог записей: {res.words}", None
+    if res.outcome == mezo_paths.LOCAL_UNREADABLE:
+        return None, None, res.words
+    имя = имя_папки_проекта(контейнер)
+    return (ПАПКА_ПРОЕКТОВ / имя,
+            f"каталог записей не объявлен ({res.words}); выведен из пути контейнера "
+            f"{контейнер} по правилу имён папок Claude Code: {имя}", None)
+
+# Имена ролей берутся из таблицы roles (read_role_names), списка в файле НЕТ: состав живой
+# (роли рождаются, засыпают, закрываются), а впечатанный список молча не узнавал бы новую
+# роль и учил отвергать правду. ROLE_TOKEN_DATA — как выглядит токен в вызове, когда имена
+# известны из данных (длина и знаки — как у CHECK столбца roles.role); ОБР_ТОКЕН — ОБЩИЙ
+# ОБРАЗЕЦ на случай, когда база не прочиталась: он принимает за роль любое слово в верхнем
+# регистре из 2–16 букв, и вывод говорит об этом отдельной строкой.
+ROLE_TOKEN_DATA = re.compile(r"--(?:role|роль)\s+([A-Z][A-Z0-9_-]{1,15})")
+ОБР_ТОКЕН = re.compile(r"--(?:role|роль)\s+([A-Z]{2,16})")
 ОБР_НАКАЗ = re.compile(r"scheduled-tasks/([^/]+)/")
 ОБР_ШАГ_В_ИМЕНИ = re.compile(r"(\d+)\s*m$")
 БК = chr(92)
@@ -182,16 +219,54 @@ def текст_записи(d: dict) -> str:
     return c if isinstance(c, str) else ""
 
 
-def прочитать_чат(файл: pathlib.Path) -> tuple[collections.Counter, list[tuple[dt.datetime, str]]]:
-    """Возвращает (счётчик токенов роли, список ударов). Один проход по файлу."""
+def read_role_names(db_arg: str | None) -> tuple[frozenset[str] | None, str]:
+    """Имена ролей контура из таблицы roles (любое состояние жизни, без отбора).
+
+    Возвращает (множество имён | None, пояснение). None — база не прочиталась либо
+    таблица пуста: звавший переходит на общий образец и ГОВОРИТ об этом строкой в выводе.
+    Базу открываем только на чтение; ничего в ней не меняется.
+    """
+    try:
+        db_path = pathlib.Path(db_arg) if db_arg else pathlib.Path(mezo_paths.live_db())
+    except SystemExit as e:
+        return None, f"путь к базе контура не определён ({e})"
+    except Exception as e:  # noqa: BLE001 — причина уходит в печать, а не глотается
+        return None, f"путь к базе контура не определён ({type(e).__name__}: {e})"
+    if not db_path.is_file():
+        return None, f"базы нет по пути {db_path}"
+    try:
+        con = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
+        try:
+            names = frozenset(str(r).strip().upper() for (r,) in con.execute("SELECT role FROM roles"))
+        finally:
+            con.close()
+    except Exception as e:  # noqa: BLE001
+        return None, f"база {db_path} не прочиталась ({type(e).__name__}: {e})"
+    names = frozenset(n for n in names if n)
+    if not names:
+        return None, f"в таблице roles базы {db_path} нет ни одной строки"
+    return names, str(db_path)
+
+
+def прочитать_чат(файл: pathlib.Path, names: frozenset[str] | None = None
+                  ) -> tuple[collections.Counter, list[tuple[dt.datetime, str]]]:
+    """Возвращает (счётчик токенов роли, список ударов). Один проход по файлу.
+
+    names — имена ролей из данных контура; None — база не прочиталась, токеном
+    считается любое слово в верхнем регистре из 2–16 букв после «--role» (образец).
+    """
     токены: collections.Counter = collections.Counter()
     удары: list[tuple[dt.datetime, str]] = []
     with файл.open(encoding="utf-8", errors="replace") as fh:
         for строка in fh:
             if "--role" in строка or "--роль" in строка:
-                for t in ОБР_ТОКЕН.findall(строка):
-                    if t in ТОКЕНЫ:
+                if names is None:
+                    for t in ОБР_ТОКЕН.findall(строка):
                         токены[t] += 1
+                else:
+                    for t in ROLE_TOKEN_DATA.findall(строка):
+                        if t in names:
+                            токены[t] += 1
             if '"sdk"' not in строка:
                 continue
             try:
@@ -432,9 +507,20 @@ def main() -> int:
     p.add_argument("--каталог", dest="каталог", default=None, help="каталог записей (для опытов на копии)")
     p.add_argument("--на", dest="на", default=None, help="судить НА этот час UTC (ISO), а не на сейчас")
     p.add_argument("--подробно", action="store_true")
+    p.add_argument("--db", dest="db", default=None,
+                   help="база контура, откуда берутся имена ролей (по умолчанию — живая; "
+                        "для опытов — копия)")
     a = p.parse_args()
 
-    корень = pathlib.Path(a.каталог) if a.каталог else ПО_УМОЛЧАНИЮ
+    if a.каталог:
+        корень = pathlib.Path(a.каталог)
+    else:
+        корень, пояснение, отказ = каталог_записей()
+        if отказ:
+            print(f"⛔ ОТКАЗ МЕРИТЬ: каталог записей не определён — {отказ}")
+            print("   Это НЕ «ритм не бьётся»: искать было негде. Разные беды — разные ответы.")
+            return 2
+        print(f"ℹ️ {пояснение}")
     if not корень.is_dir():
         print(f"⛔ ОТКАЗ МЕРИТЬ: каталога записей нет — {корень}")
         print("   Это НЕ «ритм не бьётся»: искать было негде. Разные беды — разные ответы.")
@@ -450,10 +536,20 @@ def main() -> int:
     print(f"🕐 сужу на {сейчас.strftime('%Y-%m-%d %H:%M:%S')} UTC"
           + (f"  (час задан рукой «{a.на}» и прочитан КАК UTC)" if a.на else "  (час взят у системы)"))
 
+    # Имена ролей — из таблицы roles (любое состояние жизни). Источник называется строкой
+    # в выводе всегда: образец вместо данных — это другое поведение, и молчать о нём нельзя.
+    names, names_note = read_role_names(a.db)
+    if names is not None:
+        print(f"👥 имена ролей: таблица roles, {len(names)} шт., любое состояние жизни ({names_note})")
+    else:
+        print("⚖️ имена ролей взяты ОБРАЗЦОМ [A-Z]{2,16}, а не из данных контура: "
+              f"{names_note}. Образец принимает за роль и постороннее слово в верхнем "
+              "регистре после «--role».")
+
     по_ролям: dict[str, list[tuple[str, float, dict]]] = {}
     безымянных = 0
     for f in файлы:
-        токены, удары = прочитать_чат(f)
+        токены, удары = прочитать_чат(f, names)
         if not токены:
             безымянных += 1
             continue

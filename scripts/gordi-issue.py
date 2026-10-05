@@ -27,6 +27,7 @@ gordi-issue.py — КАНАЛ ПРОБЛЕМ ПРОЦЕССА → issues пуб�
 """
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -163,6 +164,16 @@ def _issues(a):
     return json.loads(out or "[]")
 
 
+def _card_owner(a, conn):
+    """Чья карточка в печатаемой команде «завести»: роль ЭТОГО вызова (--role) → MEZO_ROLE →
+    координатор контура из данных → заполнитель «<РОЛЬ>». Имя в команде не впечатано."""
+    named = (getattr(a, "role", None) or os.environ.get("MEZO_ROLE") or "").strip()
+    if named:
+        return named
+    import mezo_paths
+    return mezo_paths.find_coordinator(conn).name or "<РОЛЬ>"
+
+
 def cmd_poll(a):
     import sqlite3
     from mezo_paths import resolve_db
@@ -188,7 +199,7 @@ def cmd_poll(a):
             yellow += 1
             print(f"🟡 {line} — БЕЗ КАРТОЧКИ больше 7 суток: канал теряет заявку")
             print(f"   завести: python {Path(__file__).resolve().parent.as_posix()}/backlog.py "
-                  f"add --role PROTO --title \"gordi-issue #{num}: {title[:50]}\" "
+                  f"add --role {_card_owner(a, conn)} --title \"gordi-issue #{num}: {title[:50]}\" "
                   f"--tags \"gordi-issue #{num}\" --body \"...\" --done-when \"...\"")
         else:
             print(f"   {line} — карточки ещё нет (в пределах 7 суток)")

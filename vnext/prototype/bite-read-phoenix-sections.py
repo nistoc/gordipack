@@ -10,13 +10,14 @@
 выход из ВСЕГО main(), а не из ветки. Цикл по разделам стоял на state, и после него не
 печатались §5 ПЛАН, §6 ИСТОРИЯ, §7 LAUNCHER и строка «ОТСУТСТВУЮТ СЕКЦИИ». Код 0, stderr
 пуст, последняя строка вывода говорила «об этом сказано, а не промолчано» — обрыв ничем себя
-не выдавал. В Atlas сборщик объявлен (запись disk_layer_tool в meta), и ветка не открывалась;
+не выдавал. В Atlas сборщик объявлен (ключ disk_layer_tool файла путей; до карточки #677 —
+запись в meta), и ветка не открывалась;
 у свежего контура из пакета и у соседних контуров (dominal, onto) записи нет, и КАЖДАЯ роль
 при КАЖДОМ полном чтении теряла три раздела. Контур aia исправил это у себя 2026-09-09.
 
 ПОЧЕМУ НИ ОДНА ПРЕЖНЯЯ ПРИЁМКА ЭТОГО НЕ ВИДЕЛА. Обрыв виден, только когда сходятся три
 условия сразу: (1) полное чтение, без --section; (2) сборщик НЕ объявлен НА СТЕНДЕ —
-MEZO_CONTAINER указывает на стенд, а запись meta в копии базы удалена; (3) проверяются
+MEZO_CONTAINER указывает на стенд, а ключ файла путей стенда снят; (3) проверяются
 ЗАГОЛОВКИ разделов, а не код возврата. Прежние приёмки читали с --section, или судили код
 и шапку, или шли без среды стенда — тогда container_root находил ЖИВОЙ контур по месту
 скрипта, и отрабатывал живой сборщик Atlas. ⇒ Здесь все три условия соблюдены нарочно.
@@ -75,7 +76,7 @@ R670A — все семь разделов; R670B — без launcher; R670C —
     с телами целиком после блока «НЕ ОБЪЯВЛЕН»; R670B тем же вызовом — «⛔ §7 …» и
     «ОТСУТСТВУЮТ СЕКЦИИ: launcher». Обрыв, который срабатывает только без --db, остальные
     случаи пропустили бы: они передают --db (проверка 2026-10-03)              РАЗЛИЧАЮЩИЙ
-  ⑪ объявлен, файла нет: запись meta указывает путь, которого на стенде нет (каталог
+  ⑪ объявлен, файла нет: ключ файла путей указывает путь, которого на стенде нет (каталог
     переименовали, сосед объявил путь к неклонированному репозиторию) — ветка слоя
     диска открывается так же, как при «не объявлен»; полное чтение R670A печатает
     §5–§7 с телами целиком ПОСЛЕ раздела state, хвост с §5 побайтно равен объявленному
@@ -137,6 +138,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import json
 import sqlite3
 import subprocess
 import sys
@@ -162,6 +164,8 @@ MISSING_REL = "tools/нет_такого_670.py"
 DECLARED_PRINT = "print(_r.stdout.rstrip())"
 # Последняя печать ветки «не объявлен» — по ней находится место выхода из ветки.
 BRANCH_LAST_PRINT = '"и об этом сказано, а не промолчано.")'
+# Последняя печать вида «путь объявлен, а файла нет» (карточка #677: свой вид внутри ветки слоя диска).
+DECLARED_MISSING_LAST_PRINT = 'в файле путей {_paths_file}.")'
 HINT_REF = "ℹ️ подсказка «read-phoenix-canon» показана"   # строка-ссылка повторного вызова
 MISSING_PRINT = ("print(f\"⚠️ ОТСУТСТВУЮТ СЕКЦИИ: {', '.join(miss)} — сообщи COORD, "
                  "не додумывай их содержание.\")")
@@ -259,22 +263,22 @@ def set_branch_exit(raw: bytes, statement: str) -> bytes:
 
 
 def insert_declared_return(raw: bytes) -> bytes:
-    """Сразу после последней печати ветки — `return`, но только при объявленном пути.
+    """`return` в конце вида «путь объявлен, а файла по нему нет» — в ветке слоя диска.
 
-    Ветка при «не объявлен» остаётся как есть; обрыв появляется в одном случае ⑪.
+    С карточки #677 (Э3-Р4) этот вид — своя ветка («⚠️ СЛОЙ ДИСКА НЕ СОБРАН — путь объявлен…»),
+    а не общая с «не объявлен»: `return` кладётся после её последней печати. Ветка «не объявлен»
+    остаётся как есть; обрыв появляется в одном случае ⑪.
     """
-    if b"_declared_path" not in raw:
-        raise Refuse("в испытуемой редакции нет имени _declared_path — поломку не положить")
     nl = _newline(raw)
     lines = raw.split(nl)
-    hits = [i for i, l in enumerate(lines) if l.decode("utf-8").rstrip().endswith(BRANCH_LAST_PRINT)]
+    hits = [i for i, l in enumerate(lines)
+            if l.decode("utf-8").rstrip().endswith(DECLARED_MISSING_LAST_PRINT)]
     if len(hits) != 1:
-        raise Refuse(f"последняя печать ветки «не объявлен» найдена {len(hits)} раз — "
+        raise Refuse(f"последняя печать вида «объявлен, а файла нет» найдена {len(hits)} раз — "
                      f"место поломки не определить")
-    start = hits[0] + 1
-    indent = len(lines[start].decode("utf-8")) - len(lines[start].decode("utf-8").lstrip())
-    lines.insert(start, (" " * indent + "if _declared_path: return  "
-                         "# нарочная поломка приёмки #670").encode("utf-8"))
+    line = lines[hits[0]].decode("utf-8")
+    indent = line[:len(line) - len(line.lstrip())]
+    lines.insert(hits[0] + 1, (indent + "return  # нарочная поломка приёмки #670").encode("utf-8"))
     return nl.join(lines)
 
 
@@ -353,14 +357,21 @@ def titles_of(tool: Path) -> dict:
 
 
 def declare(db: Path, value: str | None) -> None:
+    """Объявить (value) или снять (None) сборщик слоя диска В ФАЙЛЕ ПУТЕЙ стенда
+    (<стенд>/.mezosync/local/paths.json; до карточки #677 — запись meta). Прежняя запись meta
+    всегда убирается: она значением больше не служит, а подсказка о ней не должна мешать глазу."""
     con = sqlite3.connect(str(db))
     try:
         con.execute("DELETE FROM meta WHERE key = 'disk_layer_tool'")
-        if value:
-            con.execute("INSERT INTO meta (key, value) VALUES ('disk_layer_tool', ?)", (value,))
         con.commit()
     finally:
         con.close()
+    f = db.parent / "local" / "paths.json"
+    if value:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps({"disk_layer_tool": value}, ensure_ascii=False), encoding="utf-8")
+    elif f.exists():
+        f.unlink()
 
 
 BODY_LINES = 12
@@ -692,8 +703,8 @@ def main() -> int:
                 if s in have:
                     whole[s] = pos_r >= 0 and body_under(out_r, head(s), bodies_r[s], pos_r)
             ok9 = clean(err_r, code_r) and pos_r >= 0 and all(named) and all(whole.values())
-            case("⑨", f"живой по форме: роль {role} (разделов {len(have)}), запись meta "
-                 f"удалена — каждый раздел после state назван, тела целиком",
+            case("⑨", f"живой по форме: роль {role} (разделов {len(have)}), ключ файла путей "
+                 f"снят — каждый раздел после state назван, тела целиком",
                  ok9, f"код {code_r} · знаков {len(out_r)} · названы после блока: "
                       f"{', '.join(f'{s}={n}' for s, n in zip(after_state, named))} · тела целиком: "
                       f"{', '.join(f'{s}={w}' for s, w in whole.items()) or 'нечего сверять'}"

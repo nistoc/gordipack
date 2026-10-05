@@ -142,6 +142,31 @@ def run(db_path, prompts_dir, verbose=False, only_role=None):
     return 0 if ok else 1
 
 
+def default_prompts(db_path):
+    """Каталог промптов пересоздания → (путь или None, строка для печати или None, отказ).
+
+    Карточка #677, Э3-Р4: прежде здесь стоял каталог раскладки автора (имя чужого репозитория
+    внутри пакета). Теперь: ключ `prompts_dir` файла путей ЭТОЙ базы (читает его
+    mezo_paths.local_path); ключа нет — стандартная раскладка пакета: <каталог базы>/templates
+    (заготовки запуска, их кладёт сборка нового контура). Четыре исхода — четыре разных слова:
+    объявлено · объявлено, а на диске нет · не объявлено (и стандартного каталога тоже нет — это
+    свойство контура, не долг) · файл путей не читается (отказ)."""
+    mezo = Path(db_path).resolve().parent
+    res = mezo_paths.local_path("prompts_dir", mezo_dir=mezo)
+    if res.outcome == mezo_paths.LOCAL_UNREADABLE:
+        return None, res.words, True
+    if res.outcome == mezo_paths.LOCAL_DECLARED:
+        if res.exists:
+            return res.path, None, False
+        return None, f"⚠️ каталог промптов: {res.words} — промпты не сверялись", False
+    standard = mezo / "templates"
+    if standard.is_dir():
+        return standard, None, False
+    return None, (f"ℹ️ каталог промптов: {res.words}; стандартного каталога "
+                  f"{standard.as_posix()} на диске нет — промпты не сверялись "
+                  f"(свойство контура, не долг)"), False
+
+
 def main():
     ap = argparse.ArgumentParser(description="Проверить, что напечатанные команды ведут к существующим файлам")
     ap.add_argument("--db", default=None)
@@ -155,8 +180,13 @@ def main():
     db = str(mezo_paths.resolve_db(a.db, __file__))
     prompts = a.prompts
     if prompts is None:
-        guess = mezo_paths.container_root(__file__) / "atlas.archs" / ".mezosync" / "prompts"
-        prompts = str(guess) if guess.is_dir() else None
+        found, note, refused = default_prompts(db)
+        if refused:
+            print(f"⛔ НЕ ЗАПУСТИЛСЯ: каталог промптов не определён — {note}")
+            return 2
+        if note:
+            print(note)
+        prompts = str(found) if found is not None else None
     return run(db, prompts, a.verbose, a.role)
 
 

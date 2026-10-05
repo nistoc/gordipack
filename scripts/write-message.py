@@ -54,6 +54,7 @@ from pathlib import Path
 # mezo_paths лежит рядом; каталог скрипта Python кладёт в sys.path[0] сам, поэтому импорт
 # работает независимо от того, откуда скрипт позвали (в этом и смысл R15a).
 from mezo_paths import resolve_db
+import mezo_paths      # файл путей контура: каталог каналов (карточка #677, Э3-Р4)
 import dryrun          # холостой прогон: посмотреть, не сделав (13.08)
 import mezo_refs       # ОДНО место разрешения номера «#N»: живая лента · архив по возрасту · ретро-импорт (карточка #538 шаг ③)
 # ⚠️ Импорт ОБЁРНУТ намеренно — правка @TAXO (её замер живой эксплуатации 13:18:06 UTC):
@@ -129,14 +130,23 @@ def warn_dangling(text, label="", *, role=None, full=False, db=None):
 POLL_RE = re.compile(r"^\[[^\]\n]{1,20}POLL\]", re.M)
 
 # Каналы лежат НЕ рядом со скриптами: скрипты+БД в <контейнер>/.mezosync/, а sync.<роль>.md —
-# в репозитории atlas.archs. Путь выводим из --db (он есть у всех ролей и всегда верен),
-# а не из CWD: роли зовут скрипт из разных мест.
-MD_SUBPATH = ("atlas.archs", ".mezosync", "coordination")
+# в каталоге координации контура. Каталог берём из --db (он есть у всех ролей и всегда верен),
+# а не из CWD: роли зовут скрипт из разных мест. Карточка #677, Э3-Р4: имя чужого репозитория
+# из кода убрано — каталог объявляет сам контур ключом coordination_dir файла путей
+# (<контейнер>/.mezosync/local/paths.json; читает mezo_paths.local_path), а когда ключа нет, берётся
+# стандартная раскладка пакета: <контейнер>/coordination (её создаёт сборка нового контура).
 
 
 def default_md_dir(db_path: Path) -> Path:
-    """<контейнер>/.mezosync/mezosync.db → <контейнер>/atlas.archs/.mezosync/coordination"""
-    return db_path.resolve().parent.parent.joinpath(*MD_SUBPATH)
+    """<контейнер>/.mezosync/mezosync.db → каталог координации: ключ coordination_dir файла
+    путей этой базы, а без ключа — <контейнер>/coordination. Файл путей не читается — отказ словами."""
+    mezo = db_path.resolve().parent
+    res = mezo_paths.local_path("coordination_dir", mezo_dir=mezo)
+    if res.outcome == mezo_paths.LOCAL_DECLARED:
+        return res.path
+    if res.outcome == mezo_paths.LOCAL_UNREADABLE:
+        raise OSError(f"каталог каналов не определён — {res.words}")
+    return mezo.parent / "coordination"
 
 
 def md_note(msg_id: int, role: str, tags_list, priority: str, body: str) -> str:

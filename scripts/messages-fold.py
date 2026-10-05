@@ -278,10 +278,25 @@ def main() -> int:
                     "По умолчанию — ВХОЛОСТУЮ: без --apply база не меняется.")
     ap.add_argument("--apply", action="store_true", help="применить (иначе холостой прогон)")
     ap.add_argument("--unfold", action="store_true", help="ОБРАТНЫЙ ход: вернуть всё из архива")
-    ap.add_argument("--role", default="PROTO", help="чья рука переносит")
+    # ⛔ Умолчания у руки НЕТ: имя роли — данные контура, а не свойство этого файла. Рука
+    # берётся из вызова: флаг --role, иначе переменная среды MEZO_ROLE. Для --apply она
+    # обязательна (в архив пишется, кто унёс), для холостого прогона и --unfold — нет.
+    ap.add_argument("--role", default=None,
+                    help="чья рука переносит (иначе — переменная среды MEZO_ROLE); "
+                         "для --apply обязательна")
     ap.add_argument("--limit", type=int, help="перенести не больше стольких (для осторожного шага)")
     ap.add_argument("--db")
     a = ap.parse_args()
+
+    hand = (a.role or os.environ.get("MEZO_ROLE") or "").strip().upper() or None
+    if a.apply and not a.unfold and hand is None:
+        print("⛔ ПЕРЕНОСА НЕТ — не названа рука: в архиве остаётся, чья рука унесла записки.\n"
+              "   Назови её флагом --role <РОЛЬ> или переменной среды MEZO_ROLE=<РОЛЬ>.\n"
+              "   Пример вызова:\n"
+              f"      python {os.path.abspath(__file__).replace(os.sep, '/')} --apply "
+              "--role <РОЛЬ>\n"
+              "   База не тронута. Холостой прогон (без --apply) руки не требует.")
+        return 2
 
     db = os.path.abspath(a.db or os.path.join(os.path.dirname(HERE), "mezosync.db"))
     if not os.path.isfile(db):
@@ -296,6 +311,9 @@ def main() -> int:
     print(f"ПЕРЕНОС ЗАПИСОК {'⟨ОБРАТНЫЙ ХОД⟩' if a.unfold else ''}"
           f"{'' if a.apply else '  ⟨ВХОЛОСТУЮ — база не меняется⟩'}")
     print(f"📂 БАЗА: {db}")
+    if not a.unfold:
+        print(f"🖐 рука: {hand}" if hand else
+              "🖐 рука не названа — для --apply назови её: --role <РОЛЬ> или MEZO_ROLE=<РОЛЬ>")
     print("=" * 78)
     before = fingerprint(conn)
     live_count = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
@@ -396,7 +414,7 @@ def main() -> int:
         return 0
 
     conn.execute("BEGIN")
-    n = move_out(conn, chosen, a.role.upper())
+    n = move_out(conn, chosen, hand)
     after = fingerprint(conn)
     if after != before:
         conn.rollback()

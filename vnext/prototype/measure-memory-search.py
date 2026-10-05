@@ -54,17 +54,24 @@ find-phoenix.py означает «слово есть в сыром текст�
   · код возврата 0 означает «прогон состоялся», а не «результат хороший» — числа
     в таблице и итоге судит тот, кто их читает, не этот код.
 
+РОЛЬ РУКИ — ИЗ ВЫЗОВА, НЕ ИЗ ЛИТЕРАЛА (карточка #677, этап Э3, работа Р2). Кто ищет —
+флаг --actor, а без него переменная среды MEZO_ROLE; не названа ни там, ни там — замер
+отказывает словами (код 2) и ничего не запускает. Прежде роль была зашита в файл, и замер
+молча шёл от чужого имени, если зовущий был другой ролью. Флаг --role — другое: ЧЬЯ
+память (сужение набора), на выбор руки он не влияет.
+
 ЗАПУСК:
-    python measure-memory-search.py --set <КОНТУР>/vnext-tools/measurements/memory-search-coord-10.json --db <копия>
-    python measure-memory-search.py --set <json> --db <копия> --out <результат.json>
-    python measure-memory-search.py --set <json> --db <копия> --use-section    # прежнее поведение, для сравнения
-    python measure-memory-search.py --set <json> --role COORD
+    python measure-memory-search.py --set <КОНТУР>/vnext-tools/measurements/memory-search-coord-10.json --db <копия> --actor <РОЛЬ>
+    python measure-memory-search.py --set <json> --db <копия> --actor <РОЛЬ> --out <результат.json>
+    python measure-memory-search.py --set <json> --db <копия> --actor <РОЛЬ> --use-section    # прежнее поведение, для сравнения
+    python measure-memory-search.py --set <json> --actor <РОЛЬ> --role COORD
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import subprocess
@@ -83,7 +90,6 @@ FIND_PHOENIX = HERE.parent / ".mezosync" / "scripts" / "find-phoenix.py"
 READ_PHOENIX = FIND_PHOENIX.parent / "read-phoenix.py"
 LIVE_DB = mezo_paths.live_db()   # дефолт --db, как у measure-context-cost.py
 
-ACTOR = "PROTO"                  # кто ищет (роль руки) — отдельно от --role (чья память)
 TIMEOUT_S = 60
 
 RESPONSE_LINE = re.compile(
@@ -124,12 +130,21 @@ def run_subprocess(argv: list[str]) -> tuple[str, str, int | None, float, str | 
         return "", "", None, elapsed, str(e)
 
 
+def pick_actor(flag: str | None) -> str | None:
+    """Кто ищет (роль руки — отдельно от --role, чья память): флаг --actor, иначе MEZO_ROLE.
+
+    Нигде не названа → None, и замер отказывает словами. Литерала с именем роли здесь нет:
+    замер от чужого имени засчитывал бы показ подсказок не той роли."""
+    actor = (flag or os.environ.get("MEZO_ROLE") or "").strip().upper()
+    return actor or None
+
+
 def run_find_phoenix(role: str, query: str, section: str | None,
-                      db_arg: str) -> tuple[str, str, int | None, float, str | None]:
+                      db_arg: str, actor: str) -> tuple[str, str, int | None, float, str | None]:
     argv = [sys.executable, str(FIND_PHOENIX), "--role", role, query]
     if section:
         argv += ["--section", section]
-    argv += ["--db", db_arg, "--actor", ACTOR]
+    argv += ["--db", db_arg, "--actor", actor]
     return run_subprocess(argv)
 
 
@@ -188,7 +203,7 @@ def match_status(conn: sqlite3.Connection, record_ids: list[str],
 
 
 def measure_one(q: dict, db_arg: str, before_cache: dict[str, int],
-                 conn: sqlite3.Connection, use_section: bool) -> dict:
+                 conn: sqlite3.Connection, use_section: bool, actor: str) -> dict:
     role = str(q["role"]).upper()
     query_text = str(q["query"])
     expected_section = q.get("section")
@@ -196,7 +211,8 @@ def measure_one(q: dict, db_arg: str, before_cache: dict[str, int],
     expect_word = str(q.get("expect_word", ""))
 
     before = chars_before(role, db_arg, before_cache)
-    out, err, code, elapsed, error = run_find_phoenix(role, query_text, section_arg, db_arg)
+    out, err, code, elapsed, error = run_find_phoenix(role, query_text, section_arg, db_arg,
+                                                      actor)
     text = out + err
 
     m = RESPONSE_LINE.search(text)
@@ -316,12 +332,23 @@ def main() -> int:
     ap.add_argument("--out", default=None, help="куда сохранить результаты замера в JSON")
     ap.add_argument("--role", default=None,
                      help="сузить набор до одной роли (регистр не важен)")
+    ap.add_argument("--actor", default=None,
+                     help="кто ищет — роль руки (отдельно от --role: чья память); "
+                          "без флага берётся переменная среды MEZO_ROLE, нет и её — отказ")
     ap.add_argument("--use-section", dest="use_section", action="store_true",
                      help="передавать find-phoenix.py раздел из набора как фильтр "
                           "--section (прежнее поведение); по умолчанию ВЫКЛЮЧЕНО — "
                           "поиск идёт по всей памяти роли, раздел из набора только "
                           "печатается рядом как ожидание составителя")
     args = ap.parse_args()
+
+    actor = pick_actor(args.actor)
+    if actor is None:
+        print("⛔ замер не состоялся: не названа роль руки, которая ищет. Задай её флагом "
+              "--actor <РОЛЬ> или переменной среды MEZO_ROLE. Роль не подставляется "
+              "сама: замер от чужого имени засчитал бы показ подсказок не той роли. "
+              "Ни один запрос не запускался.", file=sys.stderr)
+        return 2
 
     if not FIND_PHOENIX.exists():
         print(f"⛔ поиск не запускается: инструмент не найден: {FIND_PHOENIX}", file=sys.stderr)
@@ -361,7 +388,7 @@ def main() -> int:
         return 1
 
     before_cache: dict[str, int] = {}
-    rows = [measure_one(q, db_arg, before_cache, conn, args.use_section) for q in queries]
+    rows = [measure_one(q, db_arg, before_cache, conn, args.use_section, actor) for q in queries]
     conn.close()
 
     print_table(rows)

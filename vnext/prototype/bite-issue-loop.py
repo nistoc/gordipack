@@ -159,8 +159,12 @@ shutil.copy(SCRIPTS / "mezo_paths.py", weak / "mezo_paths.py")
 # и mezo_paths копии искал бы контейнер подъёмом от weak/ — не нашёл бы НИКОГДА и упал бы
 # отказом «контейнер группы не найден» ДО того, как дошёл бы до _writer_gate/секций (доказано
 # прогоном: без этой строки ⑨ падал именно так). Второй замок — тот же приём, что и у
-# рабочего контура: local.paths РЯДОМ с копией, а не переменная среды (её здесь неоткуда взять).
-(weak / "local.paths").write_text(f"container={CONTAINER_ROOT}\n", encoding="utf-8")
+# рабочего контура: файл путей РЯДОМ с копией (<каталог копии>/../local/paths.json, ключ container;
+# с карточки #677 он заменил строку container= в local.paths), а не переменная среды (её здесь
+# неоткуда взять).
+(stand / "local").mkdir(exist_ok=True)
+(stand / "local" / "paths.json").write_text(json.dumps({"container": str(CONTAINER_ROOT)}),
+                                            encoding="utf-8")
 src = (weak / "gordi-issue.py").read_text(encoding="utf-8")
 ANCHOR = "if missing:"
 if ANCHOR not in src:

@@ -31,7 +31,9 @@
   ⑲  правило под замком владельца, пишет не владелец — предупреждение
   ⑳  база без поля статуса — отказ со ссылкой на шаг схемы
   ㉑  обычная правка текста по-прежнему пересобирает зеркало (общая функция не сломала старый путь)
-  ㉒  раскладка контура-автора: приложение ищется в atlas.archs/.mezosync/rules-annex
+  ㉒  раскладка контура-автора ОБЪЯВЛЕНА ключом annex_dir файла путей: приложение ищется там
+  ㉒б встречный к ㉒: каталог автора есть на диске, а ключа нет — приложение там НЕ ищется
+      (с карточки #677 раскладка автора объявляется файлом путей, а не угадывается по каталогу)
   ㉓  без --revoked-at час ставится текущий UTC в нужной форме
   ㉔  --revoked-at записывается как дан
 
@@ -42,7 +44,8 @@
   double-mark ........... пометка ставится поверх уже стоящей           → ⑪
   annex-missing-silent .. нет приложения — молчаливый код 0             → ⑭
   no-annex-hint ......... --show не называет приложение                 → ⑯
-  legacy-ignored ........ раскладка контура-автора не учитывается       → ㉒
+  legacy-ignored ........ ключ annex_dir файла путей не читается        → ㉒
+  legacy-literal ........ без ключа берётся каталог автора, как литерал   → ㉒б
 
 Живой базы не касается: копия базы (mezo_stand.snapshot_db), подставные правила zz-*,
 инструменты — копиями в стенде, среда — mezo_stand.stand_env.
@@ -79,8 +82,18 @@ BREAKS = {
                       "    already_marked = False\n")], {"⑪"}),
     "annex-missing-silent": ([("        sys.exit(3)\n", "        return\n")], {"⑭"}),
     "no-annex-hint": ([("        if annex.is_file():\n", "        if False:\n")], {"⑯"}),
-    "legacy-ignored": ([("    base = (legacy if legacy.is_dir() else root) / \"rules-annex\"",
-                         "    base = root / \"rules-annex\"")], {"㉒"}),
+    # Место приложений ищет mezo_paths.annex_dir, а не set-rule.py: обе поломки вкладываются в
+    # КОПИЮ mezo_paths.py стенда (третий элемент — имя файла-цели). Прежняя поломка «legacy-ignored»
+    # целилась в строку, которой в set-rule.py давно нет (образец найден 0 раз), и не запускалась.
+    "legacy-ignored": ([("    if res.outcome == LOCAL_DECLARED:\n        return res.path\n"
+                         "    if res.outcome == LOCAL_UNREADABLE:",
+                         "    if False:\n        return res.path\n"
+                         "    if res.outcome == LOCAL_UNREADABLE:")], {"㉒"}, "mezo_paths.py"),
+    # Прежнее поведение (до карточки #677): без ключа каталог автора берётся, ЕСЛИ он есть на диске.
+    "legacy-literal": ([("    return root / \"rules-annex\"",
+                         "    legacy_dir = root.parent / \"atlas.archs\" / \".mezosync\" / \"rules-annex\"\n"
+                         "    return legacy_dir if legacy_dir.is_dir() else root / \"rules-annex\"")],
+                       {"㉒б"}, "mezo_paths.py"),
 }
 
 OK = FAIL = 0
@@ -146,13 +159,15 @@ def main() -> int:
         sys.exit(f"⛔ НЕ ЗАПУСТИЛАСЬ: рядом с испытуемым нет export-rules.py ({exporter})")
     mezo_stand.copy_tool(exporter, tools)
     if a.break_name:
-        text = tool.read_text(encoding="utf-8")
-        for old, new in BREAKS[a.break_name][0]:
+        spec = BREAKS[a.break_name]
+        victim = tool if len(spec) < 3 else tools / spec[2]
+        text = victim.read_text(encoding="utf-8")
+        for old, new in spec[0]:
             if text.count(old) != 1:
                 sys.exit(f"⛔ НЕ ЗАПУСТИЛАСЬ: поломку «{a.break_name}» вложить некуда "
                          f"(образец найден {text.count(old)} раз)")
             text = text.replace(old, new)
-        tool.write_text(text, encoding="utf-8")
+        victim.write_text(text, encoding="utf-8")
         print(f"🧪 НАРОЧНАЯ ПОЛОМКА «{a.break_name}» ВЛОЖЕНА. Ждём провала РОВНО: "
               f"{' '.join(sorted(BREAKS[a.break_name][1]))}")
 
@@ -336,12 +351,20 @@ def main() -> int:
     case("㉔", "--revoked-at записывается как дан",
          rc == 0 and row("zz-at")[3] == "2026-09-24 10:35:14 UTC", f"код {rc} · «{row('zz-at')[3]}»")
 
-    # ㉒ раскладка контура-автора — последним: меняет, где ищется приложение
+    # ㉒б · ㉒ раскладка контура-автора — последними: меняют, где ищется приложение.
+    # Каталог автора есть на диске, ключа annex_dir в файле путей ещё нет: приложение там НЕ ищется.
     legacy = container / "atlas.archs" / ".mezosync" / "rules-annex"
     legacy.mkdir(parents=True)
     (legacy / "zz-noannex.md").write_text("ПРИЛОЖЕНИЕ-АВТОРА", encoding="utf-8")
     rc, out = run("--key", "zz-noannex", "--annex")
-    case("㉒", "раскладка контура-автора: приложение из atlas.archs/.mezosync/rules-annex",
+    case("㉒б", "встречный к ㉒: каталог автора есть, ключа annex_dir нет — приложение там не ищется",
+         rc == 3 and "ПРИЛОЖЕНИЕ-АВТОРА" not in out, f"код {rc}")
+    # Контур-автор объявляет свою раскладку ключом (так её вписывает шаг переноса путей).
+    (container / ".mezosync" / "local").mkdir(exist_ok=True)
+    (container / ".mezosync" / "local" / "paths.json").write_text(
+        '{"annex_dir": "atlas.archs/.mezosync/rules-annex"}', encoding="utf-8")
+    rc, out = run("--key", "zz-noannex", "--annex")
+    case("㉒", "раскладка контура-автора объявлена ключом annex_dir: приложение из названного каталога",
          rc == 0 and "ПРИЛОЖЕНИЕ-АВТОРА" in out, f"код {rc}")
 
     print(f"\n{'✅' if FAIL == 0 else '🔴'} ИТОГ: {OK} из {OK + FAIL}")

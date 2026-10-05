@@ -71,7 +71,8 @@ def build_contour(root: Path) -> tuple:
     """Свежий контур ПО ШАБЛОНУ: init-group.py + копия скриптов рядом с базой."""
     mezo = root / ".mezosync"
     r = run(sys.executable, TPL_SCRIPTS / "init-group.py",
-            "--name", "проба", "--path", mezo)
+            "--name", "проба", "--path", mezo,
+            "--roles", "coord")   # роли называет вызов: умолчания у сборки нет (карточка #677, Э3, Р2)
     if r.returncode != 0:
         print("⛔ не смог собрать контур по шаблону:")
         print((r.stderr or r.stdout).strip()[:900])

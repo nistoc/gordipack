@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 """measure-tool-brevity.py — сколько СИМВОЛОВ И ОЦЕНОЧНЫХ ТОКЕНОВ печатает ФИКСИРОВАННЫЙ
-набор вызовов инструментов координации, от имени ОДНОЙ роли (PROTO).
+набор вызовов инструментов координации, от имени ОДНОЙ роли — той, что названа флагом
+--role (без него — переменная среды MEZO_ROLE; не названа нигде — отказ словами, код 2).
+Роли в файл не зашито (карточка #677, этап Э3, работа Р2): прежде замер молча шёл от
+чужого имени, если его звала другая роль.
 
 ЗАЧЕМ. measure-context-cost.py меряет цену ЛЕНТЫ и памяти роли. Этот файл меряет ДРУГОЕ:
 многословность САМИХ ИНСТРУМЕНТОВ — сколько текста они печатают в ответ на обычные вызовы
@@ -10,7 +13,7 @@ measure-context-cost.py: токенизатор не запускается, с�
 за замер, каким он не является).
 
 ЧТО ЭТО МЕРИТ.
-  Один прогон ФИКСИРОВАННОГО списка вызовов (см. CALLS ниже), от имени роли PROTO:
+  Один прогон ФИКСИРОВАННОГО списка вызовов (см. build_calls ниже), от имени названной роли:
   печатный вывод каждого вызова (stdout+stderr вместе) — в символах, строках и оценке
   токенов; код возврата; час UTC. Часть вызовов идёт по ЖИВОЙ базе (только чтение:
   read-phoenix, backlog list, guard-all), часть — на ВРЕМЕННОЙ КОПИИ базы (песочница
@@ -19,8 +22,9 @@ measure-context-cost.py: токенизатор не запускается, с�
 ЧЕГО ЭТО НЕ МЕРИТ (границы названы вслух, чтобы число не приняли за больше, чем оно есть):
   - НЕ все инструменты контура — только фиксированный список ниже. Другие инструменты
     (init-group, migrate-md-to-sqlite, ...) в замер не входят.
-  - НЕ разные роли — вызовы идут от PROTO. У другой роли другой долг ленты и другая
-    сохранённая память ⇒ цифры этого файла на другую роль не переносятся.
+  - НЕ разные роли — вызовы идут от ОДНОЙ роли за прогон. У другой роли другой долг ленты
+    и другая сохранённая память ⇒ цифры одного прогона на другую роль не переносятся, а
+    снимки двух разных ролей --compare не сводит (роль входит в аргументы вызова).
   - НЕ холодный/тёплый кэш — один прогон, случайный шум по времени диска/ОС не усреднён.
   - Песочница НЕ РАВНА живой базе ПО ДАННЫМ: живые вызовы (a, b, f ниже) видят настоящий
     объём ленты и бэклога на момент прогона; вызовы на песочнице (c, d, e) видят КОПИЮ
@@ -32,14 +36,15 @@ measure-context-cost.py: токенизатор не запускается, с�
 
 Дата: 2026-09-07.
 
-    python measure-tool-brevity.py --list
-    python measure-tool-brevity.py --out <КОНТУР>/vnext-tools/measurements/brevity-before.json
+    python measure-tool-brevity.py --role <РОЛЬ> --list
+    python measure-tool-brevity.py --role <РОЛЬ> --out <КОНТУР>/vnext-tools/measurements/brevity-before.json
     python measure-tool-brevity.py --compare до.json после.json
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -51,7 +56,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
 import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
 
-ROLE = "PROTO"
 LIVE_SCRIPTS = mezo_paths.live_scripts()
 LIVE_DB = mezo_paths.live_db()
 LO, HI = 3.5, 2.5          # симв/токен — тот же метод и те же числа, что в measure-context-cost.py
@@ -62,84 +66,100 @@ BODY_PLAIN = ("тело пробы замера объёма вывода коо
 BODY_BARE_REF = ("хвост пробы: см. #123 — голая ссылка для замера предупреждения о "
                  "неразличимости номера; #123 не существует, это не настоящая карточка.")
 DONE_WHEN = "вывод вызова сохранён измерителем в JSON и сверен глазами (--compare/--out)"
-SAVE_BODY_TEXT = (
-    "Проба замера объёма вывода (measure-tool-brevity.py, роль PROTO).\n"
-    "Вторая строка — техническая, без сведений о реальной работе роли.\n"
-    "Третья строка: этот файл безопасно перезаписывать при следующем прогоне.\n"
-)
+
+def save_body_text(role: str) -> str:
+    """Тело пробы сохранения памяти. Для роли PROTO побайтно то же, что до карточки #677:
+    длина тела входит в печать save-phoenix, и снимки «до/после» обязаны сойтись."""
+    return (
+        f"Проба замера объёма вывода (measure-tool-brevity.py, роль {role}).\n"
+        "Вторая строка — техническая, без сведений о реальной работе роли.\n"
+        "Третья строка: этот файл безопасно перезаписывать при следующем прогоне.\n"
+    )
+
+
+def pick_role(flag: str | None) -> str | None:
+    """От чьего имени идут вызовы: флаг --role, иначе переменная среды MEZO_ROLE.
+
+    Нигде не названа → None, и замер отказывает словами. Литерала с именем роли здесь нет:
+    замер от чужого имени читал бы не ту память и не тот долг ленты."""
+    role = (flag or os.environ.get("MEZO_ROLE") or "").strip().upper()
+    return role or None
+
 
 # ── ФИКСИРОВАННЫЙ НАБОР ВЫЗОВОВ ──────────────────────────────────────────────
 # where: 'live' — только чтение по живой базе; 'stand' — временная копия базы (mezo_stand),
 # живого хозяйства не касается. args — ШАБЛОН (id/пути карточек и объявлений неизвестны
 # заранее и подставляются во время прогона placeholder'ами вида "{ИМЯ}" — см. _resolve()).
-CALLS: list[dict] = [
-    dict(id="rp_full_1", where="live", tool="read-phoenix.py",
-         label="read-phoenix.py полный, повтор #1",
-         args=["--role", ROLE]),
-    dict(id="rp_full_2", where="live", tool="read-phoenix.py",
-         label="read-phoenix.py полный, повтор #2",
-         args=["--role", ROLE]),
-    dict(id="rp_state_1", where="live", tool="read-phoenix.py",
-         label="read-phoenix.py --section state, повтор #1",
-         args=["--role", ROLE, "--section", "state"]),
-    dict(id="rp_state_2", where="live", tool="read-phoenix.py",
-         label="read-phoenix.py --section state, повтор #2",
-         args=["--role", ROLE, "--section", "state"]),
-    dict(id="backlog_list", where="live", tool="backlog.py",
-         label="backlog.py list --status all (самый широкий разумный вид)",
-         args=["list", "--role", ROLE, "--status", "all"]),
-    dict(id="add_1", where="stand", tool="backlog.py",
-         label="backlog.py add «проба замера» #1",
-         args=["add", "--role", ROLE, "--title", TITLE, "--body", BODY_PLAIN,
-               "--done-when", DONE_WHEN]),
-    dict(id="add_2", where="stand", tool="backlog.py",
-         label="backlog.py add «проба замера» #2",
-         args=["add", "--role", ROLE, "--title", TITLE, "--body", BODY_PLAIN,
-               "--done-when", DONE_WHEN]),
-    dict(id="claim_1", where="stand", tool="backlog.py",
-         label="backlog.py claim <только что созданной> #1",
-         args=["claim", "{ADD_2_ID}", "--actor", ROLE, "--note", "проба замера"]),
-    dict(id="claim_2", where="stand", tool="backlog.py",
-         label="backlog.py claim <только что созданной> #2 (может отказать)",
-         args=["claim", "{ADD_2_ID}", "--actor", ROLE, "--note", "проба замера"]),
-    dict(id="lease_take_1", where="stand", tool="lease.py",
-         label="lease.py take backlog.py #1",
-         args=["take", "--role", ROLE, "--tools", "backlog.py",
-               "--reason", "проба замера", "--minutes", "5"]),
-    dict(id="lease_release_1", where="stand", tool="lease.py",
-         label="lease.py release #1",
-         args=["release", "--role", ROLE, "--id", "{LEASE_TAKE_1_ID}"]),
-    dict(id="lease_take_2", where="stand", tool="lease.py",
-         label="lease.py take backlog.py #2",
-         args=["take", "--role", ROLE, "--tools", "backlog.py",
-               "--reason", "проба замера", "--minutes", "5"]),
-    dict(id="lease_release_2", where="stand", tool="lease.py",
-         label="lease.py release #2",
-         args=["release", "--role", ROLE, "--id", "{LEASE_TAKE_2_ID}"]),
-    dict(id="add_bare_ref_1", where="stand", tool="backlog.py",
-         label="backlog.py add с голой ссылкой «см. #123» #1",
-         args=["add", "--role", ROLE, "--title", TITLE, "--body", BODY_BARE_REF,
-               "--done-when", DONE_WHEN]),
-    dict(id="add_bare_ref_2", where="stand", tool="backlog.py",
-         label="backlog.py add с голой ссылкой «см. #123» #2",
-         args=["add", "--role", ROLE, "--title", TITLE, "--body", BODY_BARE_REF,
-               "--done-when", DONE_WHEN]),
-    dict(id="save_phoenix", where="stand", tool="save-phoenix.py",
-         label="save-phoenix.py --section state, тело из 3 строк (без --allow-shrink)",
-         args=["--role", ROLE, "--section", "state", "--file", "{SAVE_BODY_FILE}"]),
-    dict(id="guard_all", where="live", tool="guard-all.py",
-         label="guard-all.py — полный прогон проверок (только чтение)",
-         args=[]),
-    dict(id="backlog_list_open", where="live", tool="backlog.py",
-         label="backlog.py list --role PROTO (открытые, по умолчанию)",
-         args=["list", "--role", ROLE]),
-    dict(id="role_brief_1", where="live", tool="role-brief.py",
-         label="role-brief.py повтор #1",
-         args=["--role", ROLE]),
-    dict(id="role_brief_2", where="live", tool="role-brief.py",
-         label="role-brief.py повтор #2",
-         args=["--role", ROLE]),
-]
+# Набор строится ПОД НАЗВАННУЮ РОЛЬ: сам набор прежний, роль в нём — параметр.
+def build_calls(role: str) -> list[dict]:
+    return [
+        dict(id="rp_full_1", where="live", tool="read-phoenix.py",
+             label="read-phoenix.py полный, повтор #1",
+             args=["--role", role]),
+        dict(id="rp_full_2", where="live", tool="read-phoenix.py",
+             label="read-phoenix.py полный, повтор #2",
+             args=["--role", role]),
+        dict(id="rp_state_1", where="live", tool="read-phoenix.py",
+             label="read-phoenix.py --section state, повтор #1",
+             args=["--role", role, "--section", "state"]),
+        dict(id="rp_state_2", where="live", tool="read-phoenix.py",
+             label="read-phoenix.py --section state, повтор #2",
+             args=["--role", role, "--section", "state"]),
+        dict(id="backlog_list", where="live", tool="backlog.py",
+             label="backlog.py list --status all (самый широкий разумный вид)",
+             args=["list", "--role", role, "--status", "all"]),
+        dict(id="add_1", where="stand", tool="backlog.py",
+             label="backlog.py add «проба замера» #1",
+             args=["add", "--role", role, "--title", TITLE, "--body", BODY_PLAIN,
+                   "--done-when", DONE_WHEN]),
+        dict(id="add_2", where="stand", tool="backlog.py",
+             label="backlog.py add «проба замера» #2",
+             args=["add", "--role", role, "--title", TITLE, "--body", BODY_PLAIN,
+                   "--done-when", DONE_WHEN]),
+        dict(id="claim_1", where="stand", tool="backlog.py",
+             label="backlog.py claim <только что созданной> #1",
+             args=["claim", "{ADD_2_ID}", "--actor", role, "--note", "проба замера"]),
+        dict(id="claim_2", where="stand", tool="backlog.py",
+             label="backlog.py claim <только что созданной> #2 (может отказать)",
+             args=["claim", "{ADD_2_ID}", "--actor", role, "--note", "проба замера"]),
+        dict(id="lease_take_1", where="stand", tool="lease.py",
+             label="lease.py take backlog.py #1",
+             args=["take", "--role", role, "--tools", "backlog.py",
+                   "--reason", "проба замера", "--minutes", "5"]),
+        dict(id="lease_release_1", where="stand", tool="lease.py",
+             label="lease.py release #1",
+             args=["release", "--role", role, "--id", "{LEASE_TAKE_1_ID}"]),
+        dict(id="lease_take_2", where="stand", tool="lease.py",
+             label="lease.py take backlog.py #2",
+             args=["take", "--role", role, "--tools", "backlog.py",
+                   "--reason", "проба замера", "--minutes", "5"]),
+        dict(id="lease_release_2", where="stand", tool="lease.py",
+             label="lease.py release #2",
+             args=["release", "--role", role, "--id", "{LEASE_TAKE_2_ID}"]),
+        dict(id="add_bare_ref_1", where="stand", tool="backlog.py",
+             label="backlog.py add с голой ссылкой «см. #123» #1",
+             args=["add", "--role", role, "--title", TITLE, "--body", BODY_BARE_REF,
+                   "--done-when", DONE_WHEN]),
+        dict(id="add_bare_ref_2", where="stand", tool="backlog.py",
+             label="backlog.py add с голой ссылкой «см. #123» #2",
+             args=["add", "--role", role, "--title", TITLE, "--body", BODY_BARE_REF,
+                   "--done-when", DONE_WHEN]),
+        dict(id="save_phoenix", where="stand", tool="save-phoenix.py",
+             label="save-phoenix.py --section state, тело из 3 строк (без --allow-shrink)",
+             args=["--role", role, "--section", "state", "--file", "{SAVE_BODY_FILE}"]),
+        dict(id="guard_all", where="live", tool="guard-all.py",
+             label="guard-all.py — полный прогон проверок (только чтение)",
+             args=[]),
+        dict(id="backlog_list_open", where="live", tool="backlog.py",
+             label=f"backlog.py list --role {role} (открытые, по умолчанию)",
+             args=["list", "--role", role]),
+        dict(id="role_brief_1", where="live", tool="role-brief.py",
+             label="role-brief.py повтор #1",
+             args=["--role", role]),
+        dict(id="role_brief_2", where="live", tool="role-brief.py",
+             label="role-brief.py повтор #2",
+             args=["--role", role]),
+    ]
 
 
 def tok_range(chars: int) -> tuple[int, int]:
@@ -154,7 +174,7 @@ def _resolve(arg: str, ctx: dict) -> str:
     return arg
 
 
-def run_one(call: dict, ctx: dict, stand_db: Path) -> dict:
+def run_one(call: dict, ctx: dict, stand_db: Path, role: str) -> dict:
     tool_path = LIVE_SCRIPTS / call["tool"]
     db = LIVE_DB if call["where"] == "live" else stand_db
     resolved_args = [_resolve(a, ctx) for a in call["args"]]
@@ -172,7 +192,7 @@ def run_one(call: dict, ctx: dict, stand_db: Path) -> dict:
     lo, hi = tok_range(chars)
     return dict(
         id=call["id"], label=call["label"], tool=call["tool"], args=call["args"],
-        resolved_args=resolved_args, role=ROLE, where=call["where"],
+        resolved_args=resolved_args, role=role, where=call["where"],
         chars=chars, lines=lines, tokens_lo=lo, tokens_hi=hi,
         exit_code=code, ts_utc=ts, output=output,
     )
@@ -185,15 +205,15 @@ def make_stand() -> tuple[Path, Path]:
     return d, db
 
 
-def run_all(out_path: str | None) -> int:
+def run_all(out_path: str | None, role: str) -> int:
     stand_dir, stand_db = make_stand()
     save_body = stand_dir / "state-proba.md"
-    save_body.write_text(SAVE_BODY_TEXT, encoding="utf-8")
+    save_body.write_text(save_body_text(role), encoding="utf-8")
     ctx = {"SAVE_BODY_FILE": str(save_body)}
 
     records: list[dict] = []
-    for call in CALLS:
-        rec = run_one(call, ctx, stand_db)
+    for call in build_calls(role):
+        rec = run_one(call, ctx, stand_db, role)
         records.append(rec)
         if call["id"] == "add_2":
             m = re.search(r"backlog #(\d+)", rec["output"])
@@ -208,7 +228,7 @@ def run_all(out_path: str | None) -> int:
             if m:
                 ctx["LEASE_TAKE_2_ID"] = m.group(1)
 
-    print_table(records)
+    print_table(records, role)
 
     if out_path:
         outp = Path(out_path)
@@ -224,9 +244,9 @@ def run_all(out_path: str | None) -> int:
     return 0
 
 
-def print_table(records: list[dict]) -> None:
+def print_table(records: list[dict], role: str) -> None:
     print("=" * 104)
-    print(f"ЗАМЕР МНОГОСЛОВНОСТИ ИНСТРУМЕНТОВ КООРДИНАЦИИ — роль {ROLE}, {len(records)} "
+    print(f"ЗАМЕР МНОГОСЛОВНОСТИ ИНСТРУМЕНТОВ КООРДИНАЦИИ — роль {role}, {len(records)} "
           f"вызовов ({LO}-{HI} симв/токен, диапазон — оценка, не точное число)")
     print("=" * 104)
     print(f"{'где':5} {'инструмент':14} {'вызов':52} {'симв':>7} {'строк':>6} "
@@ -250,10 +270,11 @@ def print_table(records: list[dict]) -> None:
     print(f"ВСЕГО: {total_chars} симв ≈ {total_lo}-{total_hi} токенов за {len(records)} вызовов")
 
 
-def print_list() -> None:
-    print(f"ФИКСИРОВАННЫЙ НАБОР ВЫЗОВОВ, роль {ROLE} — {len(CALLS)} штук (шаблон, id/пути "
+def print_list(role: str) -> None:
+    calls = build_calls(role)
+    print(f"ФИКСИРОВАННЫЙ НАБОР ВЫЗОВОВ, роль {role} — {len(calls)} штук (шаблон, id/пути "
           f"подставляются во время прогона):\n")
-    for i, call in enumerate(CALLS, 1):
+    for i, call in enumerate(calls, 1):
         print(f"{i:>2}. [{call['where']:5}] {call['tool']} {' '.join(call['args'])}")
         print(f"      {call['label']}")
 
@@ -328,7 +349,11 @@ def cmd_compare(before_path: str, after_path: str) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="Замер многословности инструментов координации: символы/строки/"
-                     "оценка токенов по фиксированному набору вызовов (роль PROTO).")
+                     "оценка токенов по фиксированному набору вызовов (от имени одной "
+                     "роли, названной флагом --role).")
+    ap.add_argument("--role", default=None,
+                    help="от чьего имени идут вызовы; без флага — переменная среды "
+                         "MEZO_ROLE; не названа нигде — отказ (для --compare роль не нужна)")
     ap.add_argument("--out", help="куда сохранить снимок JSON")
     ap.add_argument("--compare", nargs=2, metavar=("ДО.JSON", "ПОСЛЕ.JSON"),
                     help="сравнить два снимка по (инструмент, аргументы, порядковый номер)")
@@ -337,10 +362,19 @@ def main() -> int:
 
     if a.compare:
         return cmd_compare(*a.compare)
+    role = pick_role(a.role)
+    if role is None:
+        print("⛔ ЗАМЕР НЕ СОСТОЯЛСЯ: не названа роль, от имени которой идут вызовы.\n"
+              "   Задай её флагом --role <РОЛЬ> или переменной среды MEZO_ROLE. Роль не\n"
+              "   подставляется сама: замер от чужого имени читал бы не ту память и не тот\n"
+              "   долг ленты. Ни один вызов не запускался.\n"
+              "   Пример вызова:\n"
+              f"      python {Path(__file__).resolve().as_posix()} --role <РОЛЬ> --out <файл.json>")
+        return 2
     if a.list:
-        print_list()
+        print_list(role)
         return 0
-    return run_all(a.out)
+    return run_all(a.out, role)
 
 
 if __name__ == "__main__":

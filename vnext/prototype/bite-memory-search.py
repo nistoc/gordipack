@@ -571,8 +571,11 @@ def case_4(db: Path, coord_missing_reason: str | None) -> bool | None:
         return None
     out_dir = mezo_stand.new("bite-memory-search-measure-")
     out_path = out_dir / "measure-out.json"
+    # Роль руки передаётся ЯВНО (--actor): измеритель больше не знает её сам и без неё
+    # отказывает словами (карточка #677, этап Э3, работа Р2).
     code, out = run_tool(MEASURE_TOOL,
-                         ["--set", str(QUERY_SET), "--db", str(db), "--out", str(out_path)])
+                         ["--set", str(QUERY_SET), "--db", str(db), "--out", str(out_path),
+                          "--actor", ACTOR])
     loud = re.search(r"первым \d+ из \d+", out)
     json_ok = out_path.exists()
     summary_ok = False

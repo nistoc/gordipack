@@ -1,0 +1,82 @@
+# Перечень файлов ядра пакета (этап Э3 набора TRACK-GORDI-CORE, карточка #677).
+#
+# Откуда: копия e3/core-list.txt каталога goal-gordi-core (67 файлов; 61 рабочий скрипт scripts/*.py
+# без приёмок bite-* и 6 файлов vnext/prototype/). Список составила PROTO 2026-10-05 00:13 UTC;
+# утверждён словом владельца «В2 1» 2026-10-05 10:53 UTC (чат COORD).
+#
+# Формат: пути от корня пакета, косые прямые, по одному в строке; строки с «#» — пояснения.
+# Читает проверка guard-donor-literals.py: в этих файлах литерал донора, управляющий поведением, — находка.
+#
+# Раздел [вне ядра] — файлы, которым в перечне ядра не место, с причиной: «путь, табуляция, причина».
+# Без записи сюда любой новый .py под scripts/ (кроме bite-*.py и каталогов migrations/) — находка
+# «файл ядра не в перечне»: так новый файл переноса не живёт вне проверки молча.
+[ядро]
+scripts/atomic-install.py
+scripts/backlog.py
+scripts/backlog_view.py
+scripts/backup-db.py
+scripts/bridge-groups.py
+scripts/broadcast.py
+scripts/check-copy-asymmetry.py
+scripts/check-errors.py
+scripts/check-retired-mechanism.py
+scripts/check-rules-mirror.py
+scripts/dashboard.py
+scripts/db-q.py
+scripts/dryrun.py
+scripts/export-channels.py
+scripts/export-markdown.py
+scripts/export-rules.py
+scripts/find-phoenix.py
+scripts/gordi-issue.py
+scripts/gordi.py
+scripts/guard-all.py
+scripts/guard-command-targets.py
+scripts/guard-cursor-segments.py
+scripts/guard-scripts-drift.py
+scripts/guard-stub-expectations.py
+scripts/guard-utc.py
+scripts/guard-write-without-read.py
+scripts/init-group.py
+scripts/lease.py
+scripts/local_time.py
+scripts/machine_layer.py
+scripts/messages-fold.py
+scripts/mezo_hints.py
+scripts/mezo_paths.py
+scripts/mezo_refs.py
+scripts/mezo_sessions.py
+scripts/mezo_stand.py
+scripts/phoenix_lag.py
+scripts/read-broadcasts.py
+scripts/read-messages.py
+scripts/read-phoenix.py
+scripts/rebirth-mark.py
+scripts/refs_check.py
+scripts/remove-rows.py
+scripts/role-brief.py
+scripts/role-prompts.py
+scripts/role-rights.py
+scripts/rule_status.py
+scripts/rules-from-pack.py
+scripts/save-phoenix.py
+scripts/schema_journal.py
+scripts/schema_step_order.py
+scripts/set-registry.py
+scripts/set-rule.py
+scripts/share-rules.py
+scripts/stats.py
+scripts/sync_backoff.py
+scripts/track.py
+scripts/unsaved.py
+scripts/update-tools.py
+scripts/urgency.py
+scripts/write-message.py
+vnext/prototype/init-group-vnext.py
+vnext/prototype/guard-printed-forms.py
+vnext/prototype/measure-memory-search.py
+vnext/prototype/measure-tool-brevity.py
+vnext/prototype/measure-rhythm.py
+vnext/prototype/bite-rules-from-pack.py
+[вне ядра]
+# здесь пока пусто: все рабочие скрипты scripts/ входят в ядро

@@ -205,7 +205,8 @@ def main() -> int:
     fresh_path = root / "fresh1" / ".mezosync"
     init_group_py = PACK_ROOT / "scripts" / "init-group.py"
     r1 = subprocess.run(
-        [sys.executable, str(init_group_py), "--name", "bitefresh1", "--path", str(fresh_path)],
+        [sys.executable, str(init_group_py), "--name", "bitefresh1", "--path", str(fresh_path),
+         "--roles", "coord"],   # роли называет вызов: умолчания у сборки нет (карточка #677, Э3, Р2)
         cwd=str(PACK_ROOT), capture_output=True, text=True, timeout=180,
         env=mezo_stand.stand_env(fresh_path.parent))
     annex_file_1 = fresh_path / "rules-annex" / f"{SMALL_REAL_KEY}.md"
