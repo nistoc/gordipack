@@ -32,6 +32,19 @@
   ⑩ sync-to-template.py (его копия во временном мини-пакете, где корни указывают во временные
      каталоги): с --apply при находке — код 1 и строка «commit не делать»; без находки — код 0;
      в режиме замера код выхода от находок не меняется.
+  ⑪ перехватчик git pre-commit (карточка #678, этап Э4, шаг Ш1, пункт д): commit файла ядра с литералом
+     донора — отказ (код не 0, нового commit нет, файл остался в индексе; в тексте названы файл, роль,
+     команда просмотра и файл исключений);
+  ⑫ встречный: commit чистого файла ядра и commit файла вне перечня ядра с литералом — проходят;
+  ⑬ граница «рабочее дерево, а не индекс»: (i) в индексе чисто, литерал лежит на диске в файле вне commit —
+     отказ; (ii) литерал в индексе, на диске убран — перехватчик ПРОПУСКАЕТ (известная щель, она названа в
+     комментарии перехватчика), а проверка уже сделанного commit (--commit HEAD) литерал находит;
+  ⑭ сбой самой проверки — тоже отказ, не пропуск: нет файла проверки; проверка вернула код 2 (нет перечня
+     файлов ядра). «Не проверено» не бывает «чисто».
+  Случаи ⑪–⑭ гоняют НАСТОЯЩИЙ файл `.githooks/pre-commit` пакета и настоящие guard-donor-literals.py и
+  donor_scan.py: их копии лежат в подставном git-репозитории во временном каталоге, а команда
+  `git config core.hooksPath .githooks` выполняется ТОЛЬКО там. Настоящий репозиторий не читается и не
+  правится. Нет git или нет файла перехватчика — «НЕ ПРОВЕРЕН», не «прошла».
 
 НАРОЧНЫЕ ПОЛОМКИ применяются К ТЕКСТУ проверки В ПАМЯТИ (compile + exec); на диск ничего не пишется.
 Ожидание каждой записано ЗАРАНЕЕ (таблица BREAKS ниже): поломка роняет свой случай и ничего больше.
@@ -47,7 +60,17 @@
   exit2-as-0              «код 2 подменён на 0»                  → ⑧
   reconcile-skips-b       «сверка (б) пропускает расхождение»    → ⑨
   sync-no-guard           «sync-to-template не зовёт проверку»   → ⑩
-Исход каждого случая — один из трёх: прошёл · провалился · НЕ ПРОВЕРЕН (⑨ без каталога замеров).
+Поломки перехватчика правят ТЕКСТ его копии в подставном репозитории (настоящий файл не трогается);
+ожидание — НАБОР провалившихся случаев ⑪–⑭ — записано заранее (HookBreak.expect), все четыре гоняются
+под каждой поломкой, провалиться обязаны ровно записанные:
+  hook-off                перехватчик выключен — выход сразу      → ⑪ ⑬ ⑭
+  guard-not-called        перехватчик не зовёт проверку           → ⑪ ⑬ ⑭
+  hooks-path-unset        команда core.hooksPath не выполнена     → ⑪ ⑬ ⑭
+  hook-silent             отказ без списка находок                → ⑪
+  fail-open-no-guard      нет файла проверки — commit пропущен    → ⑭
+  fail-open-guard-error   проверка не удалась — commit пропущен   → ⑭
+Исход каждого случая — один из трёх: прошёл · провалился · НЕ ПРОВЕРЕН (⑨ без каталога замеров; ⑪–⑭ без git
+или без файла перехватчика).
 """
 from __future__ import annotations
 
@@ -58,6 +81,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -71,9 +95,11 @@ GUARD_PATH = HERE / "guard-donor-literals.py"
 SCAN_PATH = HERE / "donor_scan.py"
 SYNC_PATH = HERE / "sync-to-template.py"
 NAMES_PATH = HERE / "donor-names.json"
+HOOK_PATH = PACK_ROOT / ".githooks" / "pre-commit"      # перехватчик git pre-commit самого пакета
 
 FICTIONAL = ("ZZQ", "ZZW")      # выдуманные роли подставного мини-пакета
-CASE_MARKS = {1: "①", 2: "②", 3: "③", 4: "④", 5: "⑤", 6: "⑥", 7: "⑦", 8: "⑧", 9: "⑨", 10: "⑩"}
+CASE_MARKS = {1: "①", 2: "②", 3: "③", 4: "④", 5: "⑤", 6: "⑥", 7: "⑦", 8: "⑧", 9: "⑨", 10: "⑩",
+              11: "⑪", 12: "⑫", 13: "⑬", 14: "⑭"}
 CASE_TITLES = {
     1: "литерал роли в коде — находка",
     2: "литерал в печати — находка",
@@ -85,6 +111,10 @@ CASE_TITLES = {
     8: "коды выхода 0 / 1 / 2 — словами; «не проверено» не бывает «прошла»",
     9: "настоящий пакет: сверка с замером Э2 и счётом Э3 сходится; искажённую копию ловит; без каталога — НЕ ПРОВЕРЕНО",
     10: "sync-to-template.py: находка при --apply — код 1 и «commit не делать»",
+    11: "перехватчик pre-commit: commit файла ядра с литералом донора — отказ, нового commit нет",
+    12: "встречный: commit чистого файла ядра и файла вне ядра с литералом — проходят",
+    13: "граница: перехватчик судит рабочее дерево, не индекс; сделанный commit проверяет --commit HEAD",
+    14: "сбой самой проверки (нет файла, код 2) — отказ, а не пропуск",
 }
 
 CASES = 0
@@ -155,6 +185,8 @@ class Ctx(NamedTuple):
     real_role: str            # чужая роль из настоящего файла имён — встречный литерал для ④
     goal: Path | None         # каталог замеров для ⑨
     sync_patch: Callable | None = None
+    hook_patch: Callable | None = None   # правка текста перехватчика (нарочная поломка ⑪–⑭)
+    hook_enable: bool = True             # False — в стенде не выполнена команда core.hooksPath
 
 
 def names_json(roles) -> str:
@@ -478,7 +510,179 @@ def case10(ctx: Ctx):
     return (ok1 and ok2 and ok3), "\n".join(notes)
 
 
-CASE_FUNCS = {1: case1, 2: case2, 3: case3, 4: case4, 5: case5, 6: case6, 7: case7, 8: case8, 9: case9, 10: case10}
+# ── случаи ⑪–⑭: перехватчик git pre-commit (.githooks/pre-commit) ───────────────────
+# Гоняется НАСТОЯЩИЙ файл перехватчика и настоящие guard-donor-literals.py и donor_scan.py: их копии
+# кладутся в подставной git-репозиторий во временном каталоге, а core.hooksPath ставится ТОЛЬКО там.
+# Настоящий репозиторий пакета не читается и не правится. Нет git или нет файла перехватчика —
+# случаи «НЕ ПРОВЕРЕН», а не «прошла».
+
+def git_env() -> dict:
+    """Среда для git на стенде: без переменных GIT_* вызывающего (иначе стенд писал бы в чужой репозиторий),
+    python приёмки первым в PATH (перехватчик берёт «python» из PATH — берёт тот же), вывод по-русски."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
+    env["PYTHONIOENCODING"] = "utf-8"
+    return env
+
+
+def git(root: Path, *args) -> tuple[int, str]:
+    r = subprocess.run(["git", *args], cwd=str(root), capture_output=True, env=git_env())
+    return r.returncode, r.stdout.decode("utf-8", "replace") + r.stderr.decode("utf-8", "replace")
+
+
+def head(root: Path) -> str | None:
+    code, out = git(root, "rev-parse", "HEAD")
+    return out.strip() if code == 0 else None
+
+
+def hook_unavailable() -> str | None:
+    """Почему случаи перехватчика не выполнить (None — можно)."""
+    if shutil.which("git") is None:
+        return "git не найден — перехватчик исполнить нечем: НЕ ПРОВЕРЕНО"
+    if not HOOK_PATH.is_file():
+        return f"нет файла перехватчика {HOOK_PATH}: НЕ ПРОВЕРЕНО"
+    return None
+
+
+def hook_repo(ctx: Ctx, name: str, files: dict, core, outside=None, with_guard=True, no_core_list=False) -> Path:
+    """Подставной git-репозиторий: файлы пакета, данные проверки, копия проверки и перехватчика, начальный commit.
+    ctx.hook_patch правит ТЕКСТ перехватчика; ctx.hook_enable=False — стенд без команды core.hooksPath."""
+    root = mini(ctx.tmp, name, files, core, outside=outside)
+    tools = root / "vnext" / "tools"
+    if with_guard:
+        for p in (GUARD_PATH, SCAN_PATH):
+            shutil.copyfile(p, tools / p.name)
+    if no_core_list:
+        (tools / "core-files.txt").unlink()
+    text = HOOK_PATH.read_text(encoding="utf-8").replace("\r\n", "\n")
+    if ctx.hook_patch is not None:
+        text, n = ctx.hook_patch(text)
+        if n != 1:
+            raise AssertionError(f"поломка нашла свою цель {n} раз(а) в перехватчике, ждали ровно один")
+    hook = root / ".githooks" / "pre-commit"
+    write(hook, text)
+    os.chmod(hook, 0o755)
+    for args in (("init", "-q"), ("config", "user.name", "приёмка"), ("config", "user.email", "bite@localhost.test"),
+                 ("config", "core.autocrlf", "false"), ("config", "commit.gpgsign", "false")):
+        git(root, *args)
+    if ctx.hook_enable:
+        git(root, "config", "core.hooksPath", ".githooks")
+    git(root, "add", "-A")
+    code, out = git(root, "commit", "-q", "--no-verify", "-m", "начальный")
+    if code != 0:
+        raise AssertionError(f"стенд: начальный commit не создался: {out.strip()}")
+    return root
+
+
+def trail(ok: bool, out: str) -> str:
+    """Хвост вывода git — только когда случай не прошёл: чтобы причину не приходилось гадать."""
+    return "" if ok else "\nвывод git: " + " ⏎ ".join(out.strip().splitlines())[-500:]
+
+
+def commit(root: Path, message: str) -> tuple[int, str, str | None, str | None]:
+    """git commit с перехватчиком. -> (код, вывод, HEAD до, HEAD после)."""
+    before = head(root)
+    code, out = git(root, "commit", "-m", message)
+    return code, out, before, head(root)
+
+
+def case11(ctx: Ctx):
+    why = hook_unavailable()
+    if why:
+        return None, why
+    root = hook_repo(ctx, "c11", {"scripts/a.py": "X = 1\n"}, ["scripts/a.py"])
+    write(root / "scripts" / "a.py", 'ROLE = "ZZQ"\n')
+    git(root, "add", "scripts/a.py")
+    code, out, before, after = commit(root, "ядро с литералом донора")
+    _, staged = git(root, "diff", "--cached", "--name-only")
+    words = ["commit ОТМЕНЁН", "scripts/a.py", "ZZQ", "guard-donor-literals.py", "donor-literals-allowed.tsv"]
+    missing = [w for w in words if w not in out]
+    ok = code != 0 and after == before and not missing and staged.strip() == "scripts/a.py"
+    return ok, (f"commit файла ядра с литералом: код {code} (ждём не 0); новый commit "
+                f"{'НЕ создан' if after == before else 'СОЗДАН'} (ждём не создан); в индексе остался {staged.strip()!r}; "
+                f"в тексте отказа нет слов: {missing or 'нет, всё названо'} (нужны: файл, роль, команда просмотра, файл исключений)"
+                + trail(ok, out))
+
+
+def case12(ctx: Ctx):
+    why = hook_unavailable()
+    if why:
+        return None, why
+    root = hook_repo(ctx, "c12", {"scripts/a.py": "X = 1\n", "scripts/c.py": "X = 1\n"}, ["scripts/a.py"],
+                     outside={"scripts/c.py": "стенд приёмки, не ядро"})
+    write(root / "scripts" / "a.py", "X = 2\n")
+    git(root, "add", "scripts/a.py")
+    code1, out1, before1, after1 = commit(root, "чистая правка ядра")
+    # встречный-2: литерал в файле, которого перечень ядра не считает ядром («вне ядра») — перехватчик не придирается
+    write(root / "scripts" / "c.py", 'ROLE = "ZZQ"\n')
+    git(root, "add", "scripts/c.py")
+    code2, out2, before2, after2 = commit(root, "файл вне ядра с литералом")
+    ok = (code1 == 0 and after1 != before1 and "ОТМЕНЁН" not in out1
+          and code2 == 0 and after2 != before2 and "ОТМЕНЁН" not in out2)
+    return ok, (f"чистый файл ядра: код {code1} (ждём 0), commit {'создан' if after1 != before1 else 'НЕ создан'}; "
+                f"файл вне ядра с литералом: код {code2} (ждём 0), commit {'создан' if after2 != before2 else 'НЕ создан'}"
+                + trail(ok, out1 + "\n" + out2))
+
+
+def case13(ctx: Ctx):
+    why = hook_unavailable()
+    if why:
+        return None, why
+    root = hook_repo(ctx, "c13", {"scripts/a.py": "X = 1\n", "scripts/b.py": "X = 1\n"}, ["scripts/a.py", "scripts/b.py"])
+    # (i) в индексе чисто, литерал лежит на диске в файле, которого в commit нет — перехватчик видит диск и отказывает
+    write(root / "scripts" / "a.py", "X = 2\n")
+    git(root, "add", "scripts/a.py")
+    write(root / "scripts" / "b.py", 'ROLE = "ZZQ"\n')
+    code1, out1, before1, after1 = commit(root, "в индексе чисто, литерал на диске")
+    refused = code1 != 0 and after1 == before1
+    # (ii) литерал В ИНДЕКСЕ, на диске уже убран — перехватчик пропускает (известная щель: он не читает индекс)
+    git(root, "add", "scripts/b.py")
+    write(root / "scripts" / "b.py", "X = 1\n")
+    code2, out2, before2, after2 = commit(root, "литерал в индексе, на диске чисто")
+    _, blob = git(root, "show", "HEAD:scripts/b.py")
+    passed = code2 == 0 and after2 != before2 and "ZZQ" in blob
+    # щель закрывает проверка уже сделанного commit — так сказано в комментарии перехватчика, здесь это проверяется
+    tools = root / "vnext" / "tools"
+    cmd = [sys.executable, str(tools / "guard-donor-literals.py"), "--root", str(root), "--data-dir", str(tools),
+           "--commit", "HEAD"]
+    r = subprocess.run(cmd, capture_output=True, env=git_env(), cwd=str(root))   # env: caller — проверка литералов не читает MEZO_CONTAINER, среда очищена от GIT_*
+    later = r.stdout.decode("utf-8", "replace") + r.stderr.decode("utf-8", "replace")
+    closed = r.returncode == 1 and "ZZQ" in later and "scripts/b.py" in later
+    ok = refused and passed and closed
+    return ok, (f"(i) в индексе чисто, литерал на диске вне commit: код {code1} (ждём не 0), commit "
+                f"{'не создан' if after1 == before1 else 'СОЗДАН'} (ждём не создан); "
+                f"(ii) литерал в индексе, на диске убран: код {code2} (ждём 0 — граница: перехватчик судит диск, не индекс), "
+                f"литерал в commit {'есть' if 'ZZQ' in blob else 'НЕТ'} (ждём есть); "
+                f"проверка сделанного commit (--commit HEAD): код {r.returncode} (ждём 1), литерал "
+                f"{'найден' if closed else 'НЕ найден'}" + trail(ok, out1 + "\n" + out2 + "\n" + later))
+
+
+def case14(ctx: Ctx):
+    why = hook_unavailable()
+    if why:
+        return None, why
+    # (i) нет файла проверки
+    r1 = hook_repo(ctx, "c14a", {"scripts/a.py": "X = 1\n"}, ["scripts/a.py"], with_guard=False)
+    write(r1 / "scripts" / "a.py", "X = 2\n")
+    git(r1, "add", "scripts/a.py")
+    code1, out1, before1, after1 = commit(r1, "правка без проверки")
+    ok1 = code1 != 0 and after1 == before1 and "нет файла проверки" in out1
+    # (ii) сама проверка не смогла (нет перечня файлов ядра — код 2): «не проверено» не пропускается
+    r2 = hook_repo(ctx, "c14b", {"scripts/a.py": "X = 1\n"}, ["scripts/a.py"], no_core_list=True)
+    write(r2 / "scripts" / "a.py", "X = 2\n")
+    git(r2, "add", "scripts/a.py")
+    code2, out2, before2, after2 = commit(r2, "правка при сбое проверки")
+    ok2 = code2 != 0 and after2 == before2 and "НЕ ПРОВЕРЕНО" in out2 and "НЕ УДАЛОСЬ" in out2
+    return (ok1 and ok2), (
+        f"(i) нет файла проверки: код {code1} (ждём не 0), commit {'не создан' if after1 == before1 else 'СОЗДАН'}, "
+        f"слова «нет файла проверки» {'есть' if 'нет файла проверки' in out1 else 'НЕТ'}; "
+        f"(ii) проверка вернула код 2: код {code2} (ждём не 0), commit {'не создан' if after2 == before2 else 'СОЗДАН'}, "
+        f"слова «НЕ ПРОВЕРЕНО» и «НЕ УДАЛОСЬ» {'есть' if ('НЕ ПРОВЕРЕНО' in out2 and 'НЕ УДАЛОСЬ' in out2) else 'НЕТ'}"
+        + trail(ok1 and ok2, out1 + "\n" + out2))
+
+
+CASE_FUNCS = {1: case1, 2: case2, 3: case3, 4: case4, 5: case5, 6: case6, 7: case7, 8: case8, 9: case9, 10: case10,
+              11: case11, 12: case12, 13: case13, 14: case14}
 
 
 # ── нарочные поломки: ожидание записано ЗАРАНЕЕ ──────────────────────────────────
@@ -535,21 +739,60 @@ def make_breaks(real_role: str):
     ]
 
 
-def run_case(number: int, scan, guard, goal, real_role, sync_patch=None):
+class HookBreak(NamedTuple):
+    key: str
+    title: str
+    expect: tuple         # какие случаи ⑪–⑭ обязаны провалиться — РОВНО они (записано заранее); остальные целы
+    patch: Callable | None  # patch(текст перехватчика) -> (новый текст, сколько раз нашлась цель); None — правка стенда
+    enable: bool = True   # False — в стенде не выполнена команда `git config core.hooksPath .githooks`
+
+
+def hook_breaks():
+    """Нарочные поломки перехватчика. Правится ТЕКСТ его копии в подставном репозитории; настоящий файл не трогается."""
+    return [
+        HookBreak("hook-off", "перехватчик выключен — выход сразу", (11, 13, 14),
+                  lambda s: replace_once(s, "root=$(git rev-parse --show-toplevel) || exit 1\n",
+                                         "root=$(git rev-parse --show-toplevel) || exit 1\nexit 0\n")),
+        HookBreak("guard-not-called", "перехватчик не зовёт проверку", (11, 13, 14),
+                  lambda s: replace_once(s, 'out=$("$py" "$guard" 2>&1)\n', "out=$(true 2>&1)\n")),
+        HookBreak("hooks-path-unset", "команда core.hooksPath не выполнена", (11, 13, 14), None, enable=False),
+        HookBreak("hook-silent", "отказ без списка находок", (11,),
+                  lambda s: replace_once(s, "    1)\n        printf '%s\\n' \"$out\" >&2\n", "    1)\n")),
+        HookBreak("fail-open-no-guard", "нет файла проверки — commit пропускается", (14,),
+                  lambda s: replace_once(s, 'if [ ! -f "$guard" ]; then\n', 'if [ ! -f "$guard" ]; then\n    exit 0\n')),
+        HookBreak("fail-open-guard-error", "проверка не удалась — commit пропускается", (14,),
+                  lambda s: replace_once(s, '        echo "   Посмотреть: python $guard" >&2\n        exit 1\n',
+                                         '        echo "   Посмотреть: python $guard" >&2\n        exit 0\n')),
+    ]
+
+
+def run_case(number: int, scan, guard, goal, real_role, sync_patch=None, hook_patch=None, hook_enable=True):
     """Один случай в своём временном каталоге. -> (исход, подробности); неожиданная ошибка стенда — провал с текстом."""
     tmp = Path(tempfile.mkdtemp(prefix=f"bite-donor-literals-{number}-"))
     try:
-        return CASE_FUNCS[number](Ctx(scan, guard, tmp, real_role, goal, sync_patch))
+        return CASE_FUNCS[number](Ctx(scan, guard, tmp, real_role, goal, sync_patch, hook_patch, hook_enable))
     except Exception as e:      # стенд сломался — это провал случая со словами, а не молчание
         return False, f"стенд случая упал: {type(e).__name__}: {e}"
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        remove_stand(tmp)
+
+
+def remove_stand(path: Path) -> None:
+    """Убрать каталог стенда. Файлы объектов git лежат только для чтения — на Windows защиту снимают."""
+    def unprotect(func, p, _exc):
+        try:
+            os.chmod(p, stat.S_IWRITE)
+            func(p)
+        except OSError:
+            pass
+    kw = {"onexc": unprotect} if sys.version_info >= (3, 12) else {"onerror": unprotect}
+    shutil.rmtree(path, **kw)
 
 
 def run_clean(goal, real_role) -> bool:
     scan, guard = load_pair()
     ok_all = True
-    for n in range(1, 11):
+    for n in range(1, 15):
         verdict, detail = run_case(n, scan, guard, goal, real_role)
         ok_all &= case(f"{CASE_MARKS[n]} {CASE_TITLES[n]}", verdict, detail)
     return ok_all
@@ -595,6 +838,36 @@ def run_breaks(keys, goal, real_role) -> bool:
     return ok_all
 
 
+def run_hook_breaks(keys) -> bool:
+    """Каждая поломка перехватчика: гоняются все случаи ⑪–⑭, провалиться обязаны РОВНО записанные заранее."""
+    ok_all = True
+    table = {b.key: b for b in hook_breaks()}
+    marks = lambda ns: " ".join(CASE_MARKS[n] for n in sorted(ns)) or "ни одного"      # noqa: E731
+    for key in keys:
+        b = table[key]
+        title = f"поломка перехватчика «{b.title}» роняет ровно {marks(b.expect)}"
+        if b.patch is not None and HOOK_PATH.is_file():
+            _, found = b.patch(HOOK_PATH.read_text(encoding="utf-8").replace("\r\n", "\n"))
+            if found != 1:
+                ok_all &= case(title, False, f"поломка не легла: цель найдена {found} раз(а), ждали один — "
+                                             f"перехватчик изменился, поломку надо пересмотреть")
+                continue
+        failed, unchecked, notes = set(), set(), []
+        for n in range(11, 15):
+            verdict, detail = run_case(n, None, None, None, "", hook_patch=b.patch, hook_enable=b.enable)
+            if verdict is None:
+                unchecked.add(n)
+            elif verdict is False:
+                failed.add(n)
+            notes.append(f"{CASE_MARKS[n]} {'НЕ ПРОВЕРЕН' if verdict is None else ('провалился' if verdict is False else 'прошёл')}")
+        if unchecked:
+            ok_all &= case(title, None, "не выполнены случаи " + marks(unchecked) + " — поломку не судить")
+            continue
+        exact = failed == set(b.expect)
+        ok_all &= case(title, exact, f"провалились: {marks(failed)} (ждали ровно {marks(b.expect)}); " + " · ".join(notes))
+    return ok_all
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="Приёмка проверки guard-donor-literals.py: случаи на подставном мини-пакете и нарочные поломки.",
@@ -605,7 +878,8 @@ def main() -> int:
     ap.add_argument("--break", dest="brk", metavar="ИМЯ",
                     help="одна нарочная поломка или all — все; без чистого прогона. Имена: " +
                          ", ".join(["code-unchecked", "print-unchecked", "comment-counted", "names-in-code", "exception-by-line",
-                                    "no-role-literal-group", "file-list-unchecked", "exit2-as-0", "reconcile-skips-b", "sync-no-guard"]))
+                                    "no-role-literal-group", "file-list-unchecked", "exit2-as-0", "reconcile-skips-b", "sync-no-guard"]
+                                   + [b.key for b in hook_breaks()]))
     args = ap.parse_args()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
@@ -616,23 +890,30 @@ def main() -> int:
     real_role = json.loads(NAMES_PATH.read_text(encoding="utf-8-sig"))["lists"]["roles"][0]
     goal = Path(args.goal_dir) if args.goal_dir else None
     names = [b.key for b in make_breaks(real_role)]
-    if args.brk and args.brk != "all" and args.brk not in names:
-        print(f"⛔ нет поломки «{args.brk}». Есть: {', '.join(names)}, all")
+    hook_names = [b.key for b in hook_breaks()]
+    if args.brk and args.brk != "all" and args.brk not in names + hook_names:
+        print(f"⛔ нет поломки «{args.brk}». Есть: {', '.join(names + hook_names)}, all")
         return 2
 
     ok_all = True
-    if args.brk:
-        ok_all &= run_breaks(names if args.brk == "all" else [args.brk], goal, real_role)
+    if args.brk == "all":
+        ok_all &= run_breaks(names, goal, real_role)
+        ok_all &= run_hook_breaks(hook_names)
+    elif args.brk in hook_names:
+        ok_all &= run_hook_breaks([args.brk])
+    elif args.brk:
+        ok_all &= run_breaks([args.brk], goal, real_role)
     else:
         ok_all &= run_clean(goal, real_role)
         if not args.cases:
             ok_all &= run_breaks(names, goal, real_role)
+            ok_all &= run_hook_breaks(hook_names)
     print()
     if not ok_all:
         print(f"🔴 НЕ ПРИНЯТО — проверено {CASES}, прошло {PASSED}, не проверено {UNCHECKED}")
         return 1
     if UNCHECKED:
-        print(f"⚪ ПРИНЯТО НЕ ПОЛНОСТЬЮ — проверено {CASES}, прошло {PASSED}, НЕ ПРОВЕРЕНО {UNCHECKED} (нужен --goal-dir и git с нужным commit)")
+        print(f"⚪ ПРИНЯТО НЕ ПОЛНОСТЬЮ — проверено {CASES}, прошло {PASSED}, НЕ ПРОВЕРЕНО {UNCHECKED} (⑨ — нужен --goal-dir и git с нужным commit; ⑪–⑭ — нужен git и файл перехватчика)")
         return 2
     print(f"✅ ПРИНЯТО — проверено {CASES}, прошло {PASSED}")
     return 0
