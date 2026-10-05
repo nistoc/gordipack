@@ -30,7 +30,15 @@ r"""bite-update-tools-rev.py — приёмка карточки #604 ②③: up
   ③-2 подпись несёт ОБЕ даты: появления и следующей смены («пакет сменил её»)
   ③ встречный: содержимого нет в истории пакета вовсе — сказано так, а не выдумана дата
   ③-3 после --apply без --overwrite-unknown — правда «останутся «❓»», не ложь «скажет
-    определённо»; встречный — следующий план ДЕЙСТВИТЕЛЬНО показывает те же «❓»
+    определённо»; встречный — следующий план ДЕЙСТВИТЕЛЬНО показывает тот же «❓» у файла,
+    которого нет в истории пакета (файл, найденный в истории, с карточки #677 берётся — ⑪)
+  ⑪ КАРТОЧКА #677 (Э3, находка контура AIA 05.10): файл без отпечатка, чей текст — версия
+    пакета из его истории, своей правки не несёт ⇒ ⑪а план ставит его в «≠ … обновится» с
+    подписью версии и «своей правки нет», а не в «❓»; ⑪б --apply БЕЗ --overwrite-unknown
+    берёт его и пишет отпечаток; ⑪в встречный: текст, которого в истории нет, остаётся «❓»
+    и не тронут; ⑪г встречный: истории у источника нет — старая версия НЕ берётся (доказать
+    нечем); ⑫ КОНТРОЛЬ нарочной поломкой — разбор «найден в истории» снят: красит РОВНО ⑪а и
+    ⑪б своей причиной (файл снова «❓» и не взят), ⑪в не трогает
   ③-1а источник-выгрузка без .git вовсе → «истории у источника нет», а не «нет в истории»
   ③-1б источник с `.git`-ФАЙЛОМ (как у git worktree) → история находится, а не теряется
   ③-1в источник — подкаталог ДРУГОГО git-репозитория (возврат OPSSRE №2) → «каталог внутри
@@ -388,7 +396,7 @@ drop_fingerprints(db2, "backlog.py", "write-message.py")
 rc2, out2 = run(upd2, "--source", str(PACKAGE))
 appearance_sig = f"версия пакета от {OLD_DATE} (коммит {OLD_REV[:12]})"
 changed_sig = f"пакет сменил её {CHANGED_DATE} (коммит {CHANGED_REV[:12]})"
-case("③ у «❓» печатается дата и коммит ПОЯВЛЕНИЯ версии, а не последнего совпадения",
+case("③ у файла без отпечатка печатается дата и коммит ПОЯВЛЕНИЯ версии, а не последнего совпадения",
      rc2 == 0 and appearance_sig in out2
      and "backlog.py" in out2.split(appearance_sig)[0].splitlines()[-1],
      f"код {rc2} · ищем «{appearance_sig}» рядом с backlog.py")
@@ -434,9 +442,14 @@ case("③-3 вместо обещания — правда: «останутся
      rc2b == 0 and "останутся «❓»" in out2b and "--overwrite-unknown" in out2b,
      f"код {rc2b}")
 rc2c, out2c = run(upd2, "--source", str(PACKAGE))          # план ЕЩЁ РАЗ — без --apply
-case("③-3 встречный: следующий план ДЕЙСТВИТЕЛЬНО показывает те же «❓» — обещание было ложным не только на словах",
-     rc2c == 0 and "backlog.py" in out2c and "❓" in out2c
-     and appearance_sig in out2c,
+# 🪤 КАРТОЧКА #677: прежде здесь ждали «❓» у backlog.py — но его текст есть в истории пакета, и
+# с этой карточки --apply его БЕРЁТ (случай ⑪). «❓» на следующих прогонах остаётся только у
+# текста, которого в истории нет, — его здесь и ищем.
+NOT_IN_HISTORY = "в истории пакета такого содержимого нет"
+case("③-3 встречный: следующий план ДЕЙСТВИТЕЛЬНО показывает тот же «❓» у файла вне истории пакета — "
+     "обещание было ложным не только на словах",
+     rc2c == 0 and NOT_IN_HISTORY in out2c
+     and "❓ write-message.py" in out2c.split(NOT_IN_HISTORY)[0].splitlines()[-1],
      f"код {rc2c}")
 
 # ═══ ③-1а (возврат OPSSRE): источник — ВЫГРУЗКА БЕЗ ИСТОРИИ. Обязана сказать «истории нет»,
@@ -506,6 +519,90 @@ case("③-1г источник — репозиторий без единого 
      and "в истории пакета такого содержимого нет" not in out2d
      and "версия пакета от" not in out2d,
      f"код {rc2d}")
+
+# ═══ ⑪ КАРТОЧКА #677 (Э3, находка контура AIA 05.10 21:30 UTC): файл без отпечатка, чей текст —
+# версия пакета из его истории, своей правки не несёт. Прежде инструмент сам печатал «версия пакета
+# от …» и всё равно требовал --overwrite-unknown — потребитель стоял на шаге обновления.
+def unknown_pair_contour(root: pathlib.Path, tool: pathlib.Path) -> pathlib.Path:
+    """Контур с двумя файлами без отпечатка: backlog.py — СТАРАЯ версия пакета (есть в истории),
+    write-message.py — текст, которого в истории пакета нет (ghost_marker)."""
+    db_dir = make_contour(root, tool)
+    (db_dir / "scripts" / "backlog.py").write_bytes(OLD_CONTENT)
+    (db_dir / "scripts" / "write-message.py").write_text(ghost_marker, encoding="utf-8")
+    drop_fingerprints(db_dir / "mezosync.db", "backlog.py", "write-message.py")
+    return db_dir
+
+
+def line_of(out: str, name: str) -> str:
+    """Строка плана, где стоит имя файла (первая), или пустая строка."""
+    return next((ln for ln in out.splitlines() if f" {name} " in ln), "")
+
+
+def installed_fingerprint(db_dir: pathlib.Path, name: str):
+    return json.loads(meta_of(db_dir / "mezosync.db").get("template_files_sha") or "{}").get(name)
+
+
+t11 = stand / "t11"
+db11_dir = unknown_pair_contour(t11, TARGET)
+upd11 = db11_dir / "scripts" / "update-tools.py"
+rc11, out11 = run(upd11, "--source", str(PACKAGE))
+line11 = line_of(out11, "backlog.py")
+case("⑪а файл без отпечатка, чей текст — версия пакета: план ставит его в «≠ … обновится» с подписью "
+     "версии и «своей правки нет», а не в «❓»",
+     rc11 == 0 and line11.lstrip().startswith("≠") and "обновится" in line11
+     and appearance_sig in line11 and "своей правки нет" in line11,
+     f"код {rc11} · строка: {line11.strip()[:200] or '(нет строки с backlog.py)'}")
+
+rc11b, out11b = run(upd11, "--source", str(PACKAGE), "--apply")
+took_head = norm((db11_dir / "scripts" / "backlog.py").read_bytes()) == norm(HEAD_CONTENT)
+fp11 = installed_fingerprint(db11_dir, "backlog.py")
+case("⑪б --apply БЕЗ --overwrite-unknown берёт его и пишет ему отпечаток",
+     rc11b == 0 and took_head and bool(fp11),
+     f"код {rc11b} · текст = версии пакета HEAD: {took_head} · отпечаток записан: {bool(fp11)}")
+
+ghost_kept = (db11_dir / "scripts" / "write-message.py").read_text(encoding="utf-8") == ghost_marker
+case("⑪в встречный: текст, которого в истории пакета нет, остаётся «❓», не тронут и без отпечатка",
+     rc11b == 0 and ghost_kept and installed_fingerprint(db11_dir, "write-message.py") is None
+     and "❓ write-message.py" in line_of(out11, "write-message.py"),
+     f"текст на месте: {ghost_kept}")
+
+t11g = stand / "t11g"
+db11g_dir = make_contour(t11g, TARGET)
+upd11g = db11g_dir / "scripts" / "update-tools.py"
+dump_src11 = stand / "dump-source-11"
+make_dump_source(dump_src11, "scripts/backlog.py", HEAD_CONTENT)
+(db11g_dir / "scripts" / "backlog.py").write_bytes(OLD_CONTENT)
+drop_fingerprints(db11g_dir / "mezosync.db", "backlog.py")
+rc11g, out11g = run(upd11g, "--source", str(dump_src11), "--apply")
+old_kept = norm((db11g_dir / "scripts" / "backlog.py").read_bytes()) == norm(OLD_CONTENT)
+case("⑪г встречный: истории у источника нет — старая версия НЕ берётся (доказать «своей правки нет» нечем)",
+     rc11g == 0 and old_kept and "истории у источника нет" in out11g,
+     f"код {rc11g} · прежний текст на месте: {old_kept}")
+
+# ═══ ⑫ КОНТРОЛЬ нарочной поломкой: снят разбор «текст найден в истории пакета» — такие файлы
+# снова «❓». Красить ОБЯЗАНА ⑪а и ⑪б — своей причиной (backlog.py в «❓» и не взят); ⑪в — нет.
+broken7_dir = stand / "broken7"
+broken7_tool = mezo_stand.copy_tool(TARGET, broken7_dir)
+broken7_src = broken7_tool.read_text(encoding="utf-8")
+anchor7 = '        old_pack = [rel for rel in unknown if (history.get(rel) or {}).get("found")]\n'
+if broken7_src.count(anchor7) != 1:
+    sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: строка разбора «найден в истории пакета» не найдена в испытуемом "
+             "ровно один раз — поломка ⑫ бьёт мимо")
+broken7_tool.write_text(broken7_src.replace(anchor7, "        old_pack = []\n"), encoding="utf-8")
+t12 = stand / "t12"
+db12_dir = unknown_pair_contour(t12, broken7_tool)
+upd12 = db12_dir / "scripts" / "update-tools.py"
+rc12, out12 = run(upd12, "--source", str(PACKAGE))
+rc12b, out12b = run(upd12, "--source", str(PACKAGE), "--apply")
+line12 = line_of(out12, "backlog.py")
+still_old = norm((db12_dir / "scripts" / "backlog.py").read_bytes()) == norm(OLD_CONTENT)
+case("⑫ поломка (снят разбор «найден в истории») КРАСИТ ⑪а и ⑪б своей причиной: файл снова «❓» и не взят",
+     rc12 == 0 and rc12b == 0 and line12.lstrip().startswith("❓") and still_old,
+     f"строка: {line12.strip()[:160]} · старый текст остался: {still_old}")
+case("⑫ та же поломка НЕ трогает ⑪в: текст вне истории по-прежнему «❓» и не тронут",
+     (db12_dir / "scripts" / "write-message.py").read_text(encoding="utf-8") == ghost_marker
+     and "❓ write-message.py" in line_of(out12, "write-message.py"),
+     "")
 
 # ═══ ⑥ КОНТРОЛЬ нарочной поломкой: --rev молча игнорируется (rev=a.rev → rev=None)
 # 🩸 БЕЗ ЭТОГО СЛУЧАЯ приёмка могла бы зеленеть по СЛУЧАЙНОЙ причине (например, если бы
