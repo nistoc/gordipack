@@ -6,7 +6,7 @@
 """
 import sqlite3, sys, tempfile, pathlib, os
 
-sys.path.insert(0, r"<КОНТУР>\.mezosync\scripts")
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # соседи — рядом с самим скриптом
 import backlog_view as bv  # noqa: E402
 
 import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале

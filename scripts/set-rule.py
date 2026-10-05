@@ -457,9 +457,12 @@ def main():
         # ⇒ Час правки и редакция остаются нетронутыми НАМЕРЕННО.
         поля = {r[1] for r in conn.execute("PRAGMA table_info(rules)")}
         if "skill_delivery" not in поля:
+            # путь шага — от расположения ЭТОГО скрипта (как у шага статуса выше), а не заглушкой:
+            # печатаемую команду роль копирует как есть, и «<…>» в ней — перенаправление ввода
+            mig = (Path(__file__).resolve().parent / "migrations"
+                   / "20260904-rule-skill-delivery.py").as_posix()
             sys.exit("⛔ В этой базе нет поля решения о доставке. Накати шаг:\n"
-                     "   python <КОНТУР>/.mezosync/scripts/migrations/"
-                     "20260904-rule-skill-delivery.py")
+                     f"   python {mig}")
         было = conn.execute("SELECT skill_delivery FROM rules WHERE rule_key=?",
                             (args.key,)).fetchone()
         if было is None:

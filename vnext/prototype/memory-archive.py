@@ -423,7 +423,8 @@ def show(conn, role, section):
     print("👉 Унести: --move <номера через пробел>. Номера — из ЭТОГО вывода;")
     print("   он пересчитывается после каждого переноса, поэтому уноси за один вызов.")
     print("⚖️ Приметы — подсказка, не приговор. Что горячее, а что нет, говорит правило:")
-    print("   python <КОНТУР>/.mezosync/scripts/set-rule.py "
+    # каталог инструментов вычисляется (корень контейнера ищет mezo_paths), а не пишется заглушкой
+    print(f"   python {mezo_paths.live_scripts(__file__).as_posix()}/set-rule.py "
           "--key memory-hot-and-archive --show")
 
 

@@ -84,8 +84,9 @@ def main() -> int:
     print(f"\n🔴 ИТОГО расхождений {len(битые) + len(без_истории)}."
           f" Это предмет РАЗБОРА, не отката: выясни, кто и зачем правил мимо,"
           # путь абсолютный: инструмент памяти живёт в .mezosync/scripts, а этот —
-          # в vnext-tools; голое имя увело бы зовущего в свой каталог (класс CORE, #4893)
-          f" прежде чем возвращать (python <КОНТУР>/.mezosync/scripts/save-phoenix.py"
+          # в vnext-tools; голое имя увело бы зовущего в свой каталог (класс CORE, #4893).
+          # Каталог ВЫЧИСЛЯЕТСЯ (корень контейнера ищет mezo_paths), а не пишется заглушкой.
+          f" прежде чем возвращать (python {mezo_paths.live_scripts(__file__).as_posix()}/save-phoenix.py"
           f" --role <роль> --section <раздел> --history / --restore <id>)")
     return 1
 
