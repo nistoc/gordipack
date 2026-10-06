@@ -720,7 +720,7 @@ def cmd_accept_merge(db_path: pathlib.Path, tools: pathlib.Path, rel_arg: str,
 
 HELP_SECOND_DIR = """ВТОРОЙ КАТАЛОГ УСТАНОВКИ (необязательно; карточка #678).
   Файл путей контура (.mezosync/local/paths.json) может нести ключ prototype_install_dir — каталог,
-  куда поставлены файлы vnext/prototype пакета (у контура Atlas это <контейнер>/vnext-tools;
+  куда поставлены файлы vnext/prototype пакета (например, <контейнер>/vnext-tools;
   относительный путь считается от контейнера).
   · Ключа нет — поведение прежнее, потребителей это не касается.
   · Ключ есть — файл vnext/prototype/*.py, который УЖЕ лежит в этом каталоге, сравнивается и
