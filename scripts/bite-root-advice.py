@@ -71,8 +71,12 @@ def run(cwd, args, env=None):
 
 def py(cwd, code):
     """Одна строка Python в каталоге cwd, где лежит испытуемый mezo_paths.py."""
-    p = subprocess.run([sys.executable, "-c", code], cwd=str(cwd), capture_output=True, text=True,
-                       encoding="utf-8", errors="replace", env=clean_env(), timeout=60)
+    # Среда — вызывающего без переменных контура (clean_env) НАРОЧНО: случай судит поиск корня
+    # вверх от каталога стенда без подсказки среды. Закрепить её за стендом (MEZO_CONTAINER) значило
+    # бы подсказать ответ. Испытуемый mezo_paths.py лежит в стенде и только вычисляет пути.
+    p = subprocess.run(  # env: caller — переменные контура сняты нарочно: судится поиск корня без них
+        [sys.executable, "-c", code], cwd=str(cwd), capture_output=True, text=True,
+        encoding="utf-8", errors="replace", env=clean_env(), timeout=60)
     return (p.stdout or "") + (p.stderr or ""), p.returncode
 
 

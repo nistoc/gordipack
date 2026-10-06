@@ -26,6 +26,15 @@ init-group.py (как у bite-fresh-circuit.py); нулевой день — п�
   ⑨ НАРОЧНАЯ ПОЛОМКА (копия guard-all.py): проверке реестра не передана база ⇒ красит РОВНО ⑦
   ⑩ встречный к месту: реестр рядом с проверкой (как у живого контура) — строк про реестр нет,
     на такой копии не держатся РОВНО ⑤ и ⑦
+  ⑪ свежий контур: строка проверки чтения ленты — «ℹ️ активных ролей нет … свойство нового контура»
+  ⑫ свежий контур: строка про замороженные md — «ℹ️ … свойство нового контура»
+  ⑬ в ленте одна записка трёхчасовой давности (активных ролей нет): «⚠️ активных ролей НЕТ», как было
+  ⑭ то же: «⚠️ замороженные md: … НОЛЬ», как было
+  ⑮ НАРОЧНАЯ ПОЛОМКА (копия guard-write-without-read.py): нулевой день не различается ⇒ красит РОВНО ⑪
+  ⑯ НАРОЧНАЯ ПОЛОМКА (копия guard-all.py): у строки замороженных md нулевой день не различается ⇒
+    красит РОВНО ⑫
+  Испытуемые здесь ДВА файла контура: guard-all.py и guard-write-without-read.py — оба кладутся копией
+  среди инструментов свежего контура (проверку чтения ленты общий прогон ищет рядом с собой).
 Общий прогон ищет проверки РЯДОМ С СОБОЙ (guard-all.py, tool()), а проверка реестра ищет реестр рядом
 с собой. Поэтому ④–⑦ судят КОПИЮ испытуемого guard-all.py среди инструментов свежего контура — там
 же, где копии поломок, — а не файл на его месте: живой guard-all находит живую проверку с реестром
@@ -52,6 +61,7 @@ import mezo_stand  # копия живой базы — ТОЛЬКО через 
 import mezo_target
 
 GUARD = mezo_target.script("guard-all.py")
+READ_GUARD = mezo_target.script("guard-write-without-read.py")  # строка чтения ленты (случаи ⑪ ⑬ ⑮)
 LIVE_DB = mezo_paths.live_db()
 
 CASES: list[tuple[str, bool, str]] = []
@@ -143,14 +153,15 @@ def breaks_dir(stand: Path, name: str) -> Path:
     return d
 
 
-def copy_tools(fresh_root: Path, name: str, guard_text: str) -> Path:
-    """Копия ВСЕХ инструментов свежего контура (они самодостаточны), guard-all.py в ней — данным
-    текстом. → путь к копии guard-all.py."""
+def copy_tools(fresh_root: Path, name: str, guard_text: str, read_text: str) -> Path:
+    """Копия ВСЕХ инструментов свежего контура (они самодостаточны); guard-all.py и
+    guard-write-without-read.py в ней — данными текстами испытуемых. → путь к копии guard-all.py."""
     bdir = breaks_dir(fresh_root, name)
     shutil.copytree(fresh_root / ".mezosync" / "scripts", bdir / "scripts", dirs_exist_ok=True,
                     ignore=shutil.ignore_patterns("__pycache__"))
     guard = bdir / "scripts" / "guard-all.py"
     guard.write_text(guard_text, encoding="utf-8")
+    (bdir / "scripts" / "guard-write-without-read.py").write_text(read_text, encoding="utf-8")
     return guard
 
 
@@ -166,9 +177,19 @@ def marked_lines(out: str, phrase: str) -> list[str]:
     return [l.strip() for l in out.splitlines() if phrase in l]
 
 
+ALL_MARKS = ("④", "⑤", "⑥", "⑦", "⑪", "⑫", "⑬", "⑭")
+FEED_PHRASE = "активных ролей"
+# не «замороженные md»: это имя стоит и в строке «✅ прошли N: … · замороженные md · …»
+FROZEN_PHRASE = "замороженные md: каталог найден"
+
+
+def one_line(lines: list[str], sign: str, words: str) -> bool:
+    return len(lines) == 1 and lines[0].startswith(sign) and words in lines[0]
+
+
 def zero_day_verdicts(guard: Path, container: Path, fresh_db: Path, used_db: Path):
     """Общий прогон на двух базах ОДНОГО контура: без записок в ленте и с одной запиской. →
-    ({метка: (✅/🔴, подробность)}, вывод). База контейнера — пустая лентой (fresh_db), --db на
+    {метка: (✅/🔴, подробность)}. База контейнера — пустая лентой (fresh_db), --db на
     used_db называет ДРУГУЮ: проверка реестра обязана судить ту, что названа, а не ту, что рядом."""
     out_n = run_guard_in(guard, fresh_db, container)
     out_o = run_guard_in(guard, used_db, container)
@@ -176,30 +197,46 @@ def zero_day_verdicts(guard: Path, container: Path, fresh_db: Path, used_db: Pat
     mem_n, mem_o = marked_lines(out_n, "память: объём"), marked_lines(out_o, "память: объём")
     debt_n = marked_lines(out_n, DEBT_PHRASE) + marked_lines(out_n, "судить строго")
     debt_o = marked_lines(out_o, DEBT_PHRASE) + marked_lines(out_o, "судить строго")
+    feed_n, feed_o = marked_lines(out_n, FEED_PHRASE), marked_lines(out_o, FEED_PHRASE)
+    frozen_n, frozen_o = marked_lines(out_n, FROZEN_PHRASE), marked_lines(out_o, FROZEN_PHRASE)
+
+    def note(lines, nothing):
+        return " | ".join(l[:110] for l in lines) if lines else nothing
+
     return {
-        "④": (len(mem_n) == 1 and mem_n[0].startswith("ℹ️") and "свойство нового контура" in mem_n[0],
-              mem_n[0][:150] if mem_n else "строки про объём нет"),
+        "④": (one_line(mem_n, "ℹ️", "свойство нового контура"), note(mem_n, "строки про объём нет")),
         "⑤": (len(debt_n) == 2 and all(l.startswith("ℹ️") for l in debt_n)
               and "свойство нового контура" in debt_n[0],
               " | ".join(l[:70] for l in debt_n) if debt_n else "строк про реестр нет"),
-        "⑥": (len(mem_o) == 1 and mem_o[0].startswith("⚠️") and "БАЗЫ СРАВНЕНИЯ НЕТ" in mem_o[0],
-              mem_o[0][:150] if mem_o else "строки про объём нет"),
+        "⑥": (one_line(mem_o, "⚠️", "БАЗЫ СРАВНЕНИЯ НЕТ"), note(mem_o, "строки про объём нет")),
         "⑦": (len(debt_o) == 2 and all(l.startswith("⚠️") for l in debt_o),
               " | ".join(l[:70] for l in debt_o) if debt_o else "строк про реестр нет"),
+        "⑪": (one_line(feed_n, "ℹ️", "свойство нового контура"), note(feed_n, "строки про чтение ленты нет")),
+        "⑫": (one_line(frozen_n, "ℹ️", "свойство нового контура"), note(frozen_n, "строки про замороженные md нет")),
+        "⑬": (one_line(feed_o, "⚠️", "активных ролей НЕТ"), note(feed_o, "строки про чтение ленты нет")),
+        "⑭": (one_line(frozen_o, "⚠️", "НОЛЬ"), note(frozen_o, "строки про замороженные md нет")),
     }
 
 
-# Нарочные поломки КОПИИ guard-all.py: якорь (должен встречаться ровно раз) → замена, и множество
-# случаев, которые поломка обязана провалить — ровно их, не больше и не меньше.
+# Нарочные поломки КОПИИ испытуемого: в каком файле · якорь (должен встречаться в нём ровно раз) →
+# замена, и множество случаев, которые поломка обязана провалить — ровно их, не больше и не меньше.
 ZERO_DAY_BREAKS = (
-    ("⑧", "zero-day-memory",
+    ("⑧", "zero-day-memory", "guard-all.py",
      '        zero_day = bool(getattr(mezo_paths, "is_zero_day", lambda _db: False)(conn))',
      '        zero_day = False  # ПОЛОМКА (⑧): у строки объёма нулевой день не различается',
      {"④"}, "нулевой день у строки объёма не различается"),
-    ("⑨", "zero-day-wiring",
+    ("⑨", "zero-day-wiring", "guard-all.py",
      '"--db", str(DB), script_path=tool("check-acceptance-env.py"))',
      'script_path=tool("check-acceptance-env.py"))  # ПОЛОМКА (⑨): проверке реестра база не передана',
      {"⑦"}, "проверке реестра не передана база"),
+    ("⑮", "zero-day-feed-reading", "guard-write-without-read.py",
+     '    zero_day = bool(getattr(mezo_paths, "is_zero_day", lambda _db: False)(conn))',
+     '    zero_day = False  # ПОЛОМКА (⑮): у строки чтения ленты нулевой день не различается',
+     {"⑪"}, "у строки чтения ленты нулевой день не различается"),
+    ("⑯", "zero-day-frozen-md", "guard-all.py",
+     '        if bool(getattr(mezo_paths, "is_zero_day", lambda _db: False)(conn)):',
+     '        if False:  # ПОЛОМКА (⑯): у строки замороженных md нулевой день не различается',
+     {"⑫"}, "у строки замороженных md нулевой день не различается"),
 )
 CASE_TITLES = {
     "④": "④ свежий контур: строка объёма памяти — «ℹ️ … свойство нового контура», а не «⚠️»",
@@ -207,49 +244,61 @@ CASE_TITLES = {
     "⑥": "⑥ в ленте одна записка, базы сравнения нет — «⚠️ … БАЗЫ СРАВНЕНИЯ НЕТ», как было",
     "⑦": "⑦ в ленте одна записка, реестра нет — «⚠️ реестра известного долга рядом нет», как было "
          "(база названа --db, а у контейнера своя — с пустой лентой)",
+    "⑪": "⑪ свежий контур: строка чтения ленты — «ℹ️ активных ролей нет … свойство нового контура»",
+    "⑫": "⑫ свежий контур: строка про замороженные md — «ℹ️ … свойство нового контура», а не «⚠️»",
+    "⑬": "⑬ в ленте одна записка трёхчасовой давности — «⚠️ активных ролей НЕТ», как было",
+    "⑭": "⑭ в ленте одна записка — «⚠️ замороженные md: … НОЛЬ», как было",
 }
 
 
 def run_zero_day_cases() -> None:
-    """Случаи ④–⑨: нулевой день контура (заявка 29 пакета). Контур собирается из пакета."""
+    """Случаи ④–⑯: нулевой день контура (заявка 29 пакета). Контур собирается из пакета."""
     pack = find_pack()
     if pack is None:
         raise SystemExit("⛔ НЕ ЗАПУСТИЛАСЬ: пакета с scripts/init-group.py не нашлось (ни по mezo_paths."
-                         "template_root(), ни рядом) — свежий контур собрать не из чего, случаи ④–⑨ не "
+                         "template_root(), ни рядом) — свежий контур собрать не из чего, случаи ④–⑯ не "
                          "состоялись. Это не «зелёное».")
     fresh_root, fresh_db, build_note = build_fresh_circuit(pack)
     if fresh_db is None:
         raise SystemExit(f"⛔ НЕ ЗАПУСТИЛАСЬ: сборщик init-group.py не собрал контур: {build_note}")
     used_db = mezo_stand.snapshot_db(fresh_db, fresh_root / ".mezosync" / "mezosync-used.db")
     con = sqlite3.connect(str(used_db))
-    con.execute("INSERT INTO messages (writer_role, body_md) VALUES ('COORD', "
-                "'проба приёмки: в ленте уже есть записка — день не нулевой')")
+    # Записка трёхчасовой давности: день уже не нулевой, а роль-автор вне окна активности проверки
+    # чтения ленты (90 мин) — так «активных ролей нет» наступает и на НЕнулевом дне (случай ⑬).
+    con.execute("INSERT INTO messages (writer_role, body_md, timestamp) VALUES ('COORD', "
+                "'проба приёмки: в ленте уже есть записка — день не нулевой', datetime('now', '-3 hours'))")
     con.commit()
     con.close()
 
-    # Испытуемый guard-all — КОПИЕЙ среди инструментов свежего контура (почему — в шапке, случай ⑩).
-    guard_src = GUARD.read_text(encoding="utf-8")
-    real_guard = copy_tools(fresh_root, "zero-day-real", guard_src)
+    # Испытуемые — КОПИЕЙ среди инструментов свежего контура (почему — в шапке, случай ⑩).
+    sources = {"guard-all.py": GUARD.read_text(encoding="utf-8"),
+               "guard-write-without-read.py": READ_GUARD.read_text(encoding="utf-8")}
+    real_guard = copy_tools(fresh_root, "zero-day-real", sources["guard-all.py"],
+                            sources["guard-write-without-read.py"])
     real = zero_day_verdicts(real_guard, fresh_root, fresh_db, used_db)
-    for mark in ("④", "⑤", "⑥", "⑦"):
+    for mark in ALL_MARKS:
         case(CASE_TITLES[mark], real[mark][0], f"копия {real_guard}: {real[mark][1]}")
 
-    for mark, name, anchor, replacement, must_fail, what in ZERO_DAY_BREAKS:
-        if guard_src.count(anchor) != 1:
-            raise SystemExit(f"ПРИЁМКА НЕ СОСТОЯЛАСЬ: якорь поломки «{name}» найден "
-                             f"{guard_src.count(anchor)} раз (ждали 1) — испытуемое изменилось")
-        # копия с одной подменённой строкой в guard-all.py
-        broken = copy_tools(fresh_root, name, guard_src.replace(anchor, replacement))
+    for mark, name, fname, anchor, replacement, must_fail, what in ZERO_DAY_BREAKS:
+        if sources[fname].count(anchor) != 1:
+            raise SystemExit(f"ПРИЁМКА НЕ СОСТОЯЛАСЬ: якорь поломки «{name}» найден в {fname} "
+                             f"{sources[fname].count(anchor)} раз (ждали 1) — испытуемое изменилось")
+        # копия с одной подменённой строкой в одном из двух испытуемых
+        texts = dict(sources)
+        texts[fname] = texts[fname].replace(anchor, replacement)
+        broken = copy_tools(fresh_root, name, texts["guard-all.py"], texts["guard-write-without-read.py"])
         got = zero_day_verdicts(broken, fresh_root, fresh_db, used_db)
         failed = {m for m, (ok, _note) in got.items() if not ok}
-        case(f"{mark} поломка «{what}»: красит РОВНО {' '.join(sorted(must_fail))}, остальные из ④–⑦ зелёные",
+        case(f"{mark} поломка «{what}» ({fname}): красит РОВНО {' '.join(sorted(must_fail))}, "
+             f"остальные из {' '.join(ALL_MARKS)} зелёные",
              failed == must_fail,
              f"копия {broken}: провалились {sorted(failed) or 'никто'} (ждали {sorted(must_fail)}); "
-             + "; ".join(f"{m} {'✅' if got[m][0] else '🔴'}" for m in ("④", "⑤", "⑥", "⑦"))
+             + "; ".join(f"{m} {'✅' if got[m][0] else '🔴'}" for m in ALL_MARKS)
              + f" · строка на копии для {sorted(must_fail)[0]}: {got[sorted(must_fail)[0]][1][:90]}")
 
     # ⑩ встречный к месту: реестр рядом с проверкой — ветки «реестра рядом нет» нет, ⑤⑦ не держатся
-    near_guard = copy_tools(fresh_root, "zero-day-near-debt", guard_src)
+    near_guard = copy_tools(fresh_root, "zero-day-near-debt", sources["guard-all.py"],
+                            sources["guard-write-without-read.py"])
     (near_guard.parent / "acceptance-env-debt.txt").write_text("", encoding="utf-8")
     near = zero_day_verdicts(near_guard, fresh_root, fresh_db, used_db)
     near_failed = {m for m, (ok, _note) in near.items() if not ok}
@@ -310,8 +359,10 @@ def main(zero_day: bool = True) -> int:
 
 
 MUTANTS = {
-    "M1-рубежа-нет-молчит": lambda s: s.replace(
-        'print("⚠️ память: объём — РУБЕЖА НЕТ (meta.memory_volume_baseline): дельту "\n'
+    # Текст образца — тот, что guard-all.py печатает сейчас. Прежний образец искал «РУБЕЖА НЕТ», которого
+    # там давно нет: поломка не вставала, и самопроверка всегда считала её выжившей (найдено 06.10).
+    "M1-базы-сравнения-нет-молчит": lambda s: s.replace(
+        'print("⚠️ память: объём — БАЗЫ СРАВНЕНИЯ НЕТ (meta.memory_volume_baseline): рост "\n'
         '                  "мерить не от чего. Это не ноль и не зелёный.")',
         "pass"),
     "M2-строка-объёма-исчезла": lambda s: s.replace(
