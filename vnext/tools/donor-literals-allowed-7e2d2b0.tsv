@@ -1,0 +1,75 @@
+# Перечень исключений проверки guard-donor-literals.py ДЛЯ ВЕРСИИ ЗАМЕРА Э2 — commit 7e2d2b0 пакета.
+# (этап Э3 набора TRACK-GORDI-CORE, карточка #677; приёмка bite-donor-literals.py, случай ⑨)
+#
+# Зачем отдельный файл. Исключение держится за ТЕКСТ строки, поэтому перечень годится только той версии кода,
+# для которой написан. Основной перечень (donor-literals-allowed.tsv) написан для кода после переноса волны Б
+# и версию замера Э2 судит с ошибкой: 62 находки вместо 52 счёта Э3. Перечня, стоявшего в самой версии замера,
+# нет: он появился позже (7d55cb9), а до правки 05.10 в git не сохранялся. Этот файл — его замена, она же
+# сверяется приёмкой: находки проверки с этим перечнем обязаны совпасть со счётом count-core.py (сверка (б)).
+#
+# Как собран (06.10, этап Э3, хвост приёмки COORD):
+#   · из основного перечня взяты записи, у которых на commit 7e2d2b0 есть строка кода (остальные — для кода
+#     волны Б, на версии замера их строк нет — не взяты);
+#   · возвращены 9 записей, снятых при правке 05.10 (их строки волна Б переписала): backlog.py ×2,
+#     export-channels.py ×2, guard-stub-expectations.py, guard-printed-forms.py, measure-tool-brevity.py ×3.
+#     Класс у всех printed: строки кода — по e3/core-classes.tsv, печатаемый текст без явного класса — printed.
+#     Причины к ним подобраны по соседним записям основного перечня.
+#
+# Читается ключом: guard-donor-literals.py --reconcile-with <goal-gordi-core> --reconcile-allowed <этот файл>.
+# Файл НЕ правится: он описывает одну версию кода. Колонки и ключ — как у основного перечня:
+# file · name · kind · class · text · reason; ключ — (file, name, kind, text), не номер строки.
+file	name	kind	class	text	reason
+scripts/backlog.py	COORD	shown	printed	f"и о нём стоит сказать @COORD.", file=sys.stderr)	печатаемый текст «кому сообщить»: вне счёта, вариант «в» не выбран (e3-forks.md, слово владельца В1 б 2026-10-05 10:53 UTC)
+scripts/backlog.py	COORD	shown	printed	f"--number {m.group(1)} --note \"починено: <коммит>\" (рукой COORD)")	печатаемый текст «кому сообщить»: вне счёта, вариант «в» не выбран (e3-forks.md, слово владельца В1 б 2026-10-05 10:53 UTC)
+scripts/backlog.py	TAXO	shown	printed	help="КТО ПРИНИМАЕТ работу: имя роли (TAXO) ЛИБО правило словами "	печатаемый текст, не подсказка-команда: вне счёта по слову владельца В1 б (2026-10-05 10:53 UTC)
+scripts/check-errors.py	COORD	shown	printed	help="Пометить сообщения как resolved (COORD подтвердил фикс)")	печатаемый текст, не подсказка-команда: вне счёта по слову владельца В1 б (2026-10-05 10:53 UTC)
+scripts/check-retired-mechanism.py	PROTO	code	provenance	"перекрыто_когда": "слово владельца 2026-09-25 11:02:36 UTC, чат PROTO",	строка происхождения: «слово владельца … чат PROTO»
+scripts/dashboard.py	atlas	code	printed	<title>Мезосинк — состояние контура Atlas</title>	заголовок HTML «контур Atlas» — только печать
+scripts/dashboard.py	atlas	code	printed	<h1>Состояние контура Atlas</h1>	заголовок HTML «контур Atlas» — только печать
+scripts/export-channels.py	COORD	shown	printed	print(f"Дальше: COORD коммитит generated/ в atlas.archs; "	печатаемый текст «кому сообщить»: вне счёта, вариант «в» не выбран (e3-forks.md, слово владельца В1 б 2026-10-05 10:53 UTC)
+scripts/export-channels.py	atlas.archs	shown	printed	print(f"Дальше: COORD коммитит generated/ в atlas.archs; "	печатаемый текст, не подсказка-команда: вне счёта по слову владельца В1 б (2026-10-05 10:53 UTC)
+scripts/export-rules.py	atlas	code	printed	HEADER = """# Sync RULES — протокол мезосинка Atlas (8 ролей)	шапка производного файла «мезосинка Atlas (8 ролей)»
+scripts/export-rules.py	COORD	code	printed	> 🔒`owner` — правило владельца: COORD НЕ правит его без **живого слова владельца в текущем чате**	шапка производного файла: COORD в пояснении
+scripts/gordi-issue.py	PROTO	shown	printed	print("   цикл: issue → карточка PROTO с тегом «gordi-issue #N» → починка → "	печатаемый текст, не подсказка-команда: вне счёта по слову владельца В1 б (2026-10-05 10:53 UTC)
+scripts/guard-all.py	PROTO	shown	printed	+ "\n   — состояние врёт о прошлом, ПЛАН ПРИКАЗЫВАЕТ В БУДУЩЕЕ (@PROTO #3051):"	печатаемый текст, не подсказка-команда: вне счёта по слову владельца В1 б (2026-10-05 10:53 UTC)
+scripts/guard-scripts-drift.py	PROTO	shown	printed	report_pair(VNEXT_RUNTIME, VNEXT_TEMPLATE, "vnext-tools", "образец", "@PROTO")	печатаемый текст «кому сообщить»: вне счёта, вариант «в» не выбран (e3-forks.md, слово владельца В1 б 2026-10-05 10:53 UTC)
+scripts/guard-scripts-drift.py	PROTO	shown	printed	"(замер @PROTO: каталоги совпали файл в файл, а прогоны дали разное). "	печатаемый текст, не подсказка-команда: вне счёта по слову владельца В1 б (2026-10-05 10:53 UTC)
+scripts/guard-stub-expectations.py	atlas.studio	shown	printed	print("⏭️ SPA недоступна (нет atlas.studio) — проверка пропущена, НЕ зелёная")	печатаемый текст, не подсказка-команда: вне счёта по слову владельца В1 б (2026-10-05 10:53 UTC)
+scripts/init-group.py	atlas	shown	printed	parser.add_argument("--name", required=True, help="Имя группы (например: atlas, webapp)")	печатаемый текст, не подсказка-команда: вне счёта по слову владельца В1 б (2026-10-05 10:53 UTC)
+scripts/mezo_paths.py	COORD	shown	printed	"     📏 Замер @COORD 2026-09-05 (записка #4898): 176 инструментов из 243\n"	печатаемый текст, не подсказка-команда: вне счёта по слову владельца В1 б (2026-10-05 10:53 UTC)
+scripts/read-messages.py	PROTO	shown	printed	f"   Отметка сдвинута, но след прохождения не сохранён — скажи @PROTO.",	печатаемый текст «кому сообщить»: вне счёта, вариант «в» не выбран (e3-forks.md, слово владельца В1 б 2026-10-05 10:53 UTC)
+scripts/read-messages.py	COORD	shown	printed	f"читай по дате. Сообщи COORD.\n")	печатаемый текст «кому сообщить»: вне счёта, вариант «в» не выбран (e3-forks.md, слово владельца В1 б 2026-10-05 10:53 UTC)
+scripts/read-phoenix.py	COORD	shown	printed	print(f"\n⛔ {TITLES[s]}\n   СЕКЦИИ НЕТ В БД. Это факт, а не пустяк: сообщи COORD.")	печатаемый текст «кому сообщить»: вне счёта, вариант «в» не выбран (e3-forks.md, слово владельца В1 б 2026-10-05 10:53 UTC)
+scripts/read-phoenix.py	COORD	shown	printed	print(f"⚠️ ОТСУТСТВУЮТ СЕКЦИИ: {', '.join(miss)} — сообщи COORD, не додумывай их содержание.")	печатаемый текст «кому сообщить»: вне счёта, вариант «в» не выбран (e3-forks.md, слово владельца В1 б 2026-10-05 10:53 UTC)
+scripts/role-prompts.py	COORD	code	printed	"неотличимо от исправной работы (замер @COORD, карточка #463)")	текст отказа со ссылкой на замер @COORD — только печать
+scripts/save-phoenix.py	COORD	shown	printed	parser.add_argument("--role", required=True, help="Роль (COORD, CORE, ...)")	печатаемый текст, не подсказка-команда: вне счёта по слову владельца В1 б (2026-10-05 10:53 UTC)
+scripts/save-phoenix.py	CORE	shown	printed	parser.add_argument("--role", required=True, help="Роль (COORD, CORE, ...)")	печатаемый текст, не подсказка-команда: вне счёта по слову владельца В1 б (2026-10-05 10:53 UTC)
+scripts/schema_journal.py	PROTO	code	provenance	"Замер @PROTO 2026-08-09: откат оставлял таблицу и стирал запись о ней. "	«Замер @PROTO 2026-08-09» — история решения
+scripts/set-rule.py	COORD	code	printed	("source_ref",    "--source-ref",    "ГДЕ это сказано («#3385» · «чат COORD 2026-08-08 10:29 UTC»)"),	пример в справке флага --source-ref
+scripts/set-rule.py	COORD	shown	printed	+ ("совпадают" if agree else "⛔ РАЗОШЛИСЬ — сообщи COORD"))	печатаемый текст «кому сообщить»: вне счёта, вариант «в» не выбран (e3-forks.md, слово владельца В1 б 2026-10-05 10:53 UTC)
+scripts/set-rule.py	COORD	shown	printed	ap.add_argument("--source-ref", dest="source_ref", help="где сказано: «#3385» или «чат COORD ... UTC»")	печатаемый текст, не подсказка-команда: вне счёта по слову владельца В1 б (2026-10-05 10:53 UTC)
+scripts/set-rule.py	coord	code	schema	ap.add_argument("--locked-by", choices=["owner", "coord"])	словарь схемы, а не имя роли донора: значение поля rules.locked_by ('owner' | 'coord', DEFAULT 'coord' во всех версиях схемы пакета v1–v6); решение PROTO 2026-10-05, этап Э3 — владелец вправе переиграть
+scripts/set-rule.py	coord	code	schema	locked_by = args.locked_by or (old[1] if old else "coord")	словарь схемы, а не имя роли донора: значение поля rules.locked_by ('owner' | 'coord', DEFAULT 'coord' во всех версиях схемы пакета v1–v6); решение PROTO 2026-10-05, этап Э3 — владелец вправе переиграть
+scripts/track.py	COORD	shown	printed	"роли-хозяина за одну переходную сверку; свод — COORD владельцу")	печатаемый текст «кому сообщить»: вне счёта, вариант «в» не выбран (e3-forks.md, слово владельца В1 б 2026-10-05 10:53 UTC)
+scripts/write-message.py	COORD	shown	printed	parser.add_argument("--role", required=True, help="Роль писателя (COORD, CORE, ...)")	печатаемый текст, не подсказка-команда: вне счёта по слову владельца В1 б (2026-10-05 10:53 UTC)
+scripts/write-message.py	CORE	shown	printed	parser.add_argument("--role", required=True, help="Роль писателя (COORD, CORE, ...)")	печатаемый текст, не подсказка-команда: вне счёта по слову владельца В1 б (2026-10-05 10:53 UTC)
+scripts/write-message.py	ING	shown	printed	parser.add_argument("--file", help="Файл с текстом ноты (дифф ING #2036, применён 16.07 18:38 UTC). "	печатаемый текст, не подсказка-команда: вне счёта по слову владельца В1 б (2026-10-05 10:53 UTC)
+scripts/write-message.py	COORD	shown	printed	"броадкасты COORD #2023 и ING #2111. Файл минует shell-обработку целиком.")	печатаемый текст, не подсказка-команда: вне счёта по слову владельца В1 б (2026-10-05 10:53 UTC)
+scripts/write-message.py	ING	shown	printed	"броадкасты COORD #2023 и ING #2111. Файл минует shell-обработку целиком.")	печатаемый текст, не подсказка-команда: вне счёта по слову владельца В1 б (2026-10-05 10:53 UTC)
+scripts/write-message.py	CORE	shown	printed	help="эта нота ОТМЕНЯЕТ то, что сказано в --reply-to. Класс @CORE #3087:"	печатаемый текст, не подсказка-команда: вне счёта по слову владельца В1 б (2026-10-05 10:53 UTC)
+scripts/write-message.py	COORD	shown	printed	f"    Допиши в md руками и сообщи COORD тегом DWERR (роли без доступа к тулам\n"	печатаемый текст «кому сообщить»: вне счёта, вариант «в» не выбран (e3-forks.md, слово владельца В1 б 2026-10-05 10:53 UTC)
+vnext/prototype/bite-rules-from-pack.py	COORD	code	fixture	roles=[("COORD", "alive", "координатор контура; в живом реестре")])	роль COORD в выдуманном стенде приёмки
+vnext/prototype/bite-rules-from-pack.py	atlas	code	fixture	elsewhere = root / "elsewhere-not-guts-atlas"	имя папки стенда приёмки
+vnext/prototype/bite-rules-from-pack.py	COORD	shown	printed	ok &= case("㊾в′ ВОЗВРАТ COORD: в отказе «источник не читается» — готовая команда «"	печатаемый текст, не подсказка-команда: вне счёта по слову владельца В1 б (2026-10-05 10:53 UTC)
+vnext/prototype/bite-rules-from-pack.py	coord	code	fixture	(r["rule_key"], r["body"], r.get("locked_by", "coord"), r.get("expiry_kind"),	словарь схемы locked_by ('owner' | 'coord') в строках фикстуры приёмки — данные стенда, а не имя роли донора
+vnext/prototype/bite-rules-from-pack.py	coord	code	fixture	(r["rule_set"], r["rule_key"], r["body"], r.get("locked_by", "coord"),	словарь схемы locked_by ('owner' | 'coord') в строках фикстуры приёмки — данные стенда, а не имя роли донора
+vnext/prototype/bite-rules-from-pack.py	coord	code	fixture	history_rows.append((RULE_SET, k, text_sha(o_body), o_body, "coord",	словарь схемы locked_by ('owner' | 'coord') в строках фикстуры приёмки — данные стенда, а не имя роли донора
+vnext/prototype/guard-printed-forms.py	STUD	shown	printed	print(f"   по рангу (ранжир @STUD): R1 рабочий вывод {by_rank['R1']} · "	печатаемый текст, не подсказка-команда: вне счёта по слову владельца В1 б (2026-10-05 10:53 UTC)
+vnext/prototype/guard-printed-forms.py	atlas.core	code	fixture	'\\\\atlas.core log --oneline -6")\n'),	текст пробного файла самопроверки
+vnext/prototype/guard-printed-forms.py	atlas.core	code	fixture	"clean_other_tool.py": ('def f():\n    print("смотри: git -C {CONT}/atlas.core '	текст пробного файла самопроверки
+vnext/prototype/guard-printed-forms.py	COORD	code	fixture	"--db <db> --role COORD`\n", encoding="utf-8")	текст пробного файла самопроверки
+vnext/prototype/guard-printed-forms.py	atlas	code	printed	"или имя навыка atlas-owner-reply"))	подсказка в печати: имя навыка (правится вместе с :872)
+vnext/prototype/measure-rhythm.py	STUD	shown	printed	print("       роль осталась без самопробуждения молча (случай @STUD, записка #4778 §①)")	печатаемый текст, не подсказка-команда: вне счёта по слову владельца В1 б (2026-10-05 10:53 UTC)
+vnext/prototype/measure-tool-brevity.py	PROTO	code	printed	"Проба замера объёма вывода (measure-tool-brevity.py, роль PROTO).\n"	шапка вывода замера
+vnext/prototype/measure-tool-brevity.py	PROTO	code	printed	label="backlog.py list --role PROTO (открытые, по умолчанию)",	подпись строки замера
+vnext/prototype/measure-tool-brevity.py	PROTO	shown	printed	"оценка токенов по фиксированному набору вызовов (роль PROTO).")	печатаемый текст, не подсказка-команда: вне счёта по слову владельца В1 б (2026-10-05 10:53 UTC)

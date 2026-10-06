@@ -4,7 +4,7 @@
 
     python vnext/tools/guard-donor-literals.py                 # рабочее дерево пакета
     python vnext/tools/guard-donor-literals.py --commit X      # версия X из git
-    python vnext/tools/guard-donor-literals.py --reconcile-with <каталог goal-gordi-core>
+    python vnext/tools/guard-donor-literals.py --reconcile-with <каталог goal-gordi-core> [--reconcile-allowed <перечень>]
 
 ПРЕДМЕТ. Пакет вынут из живого контура-донора и везёт его допущения: имена ролей, пути,
 репозитории, соседей, порты. Этап Э3 (карточка #677) выносит их из кода; эта проверка
@@ -46,6 +46,20 @@
 на этой версии равны строкам класса behavior у e3/count-core.py по (файл, строка, имя). Группы,
 которых замер Э2 не видел (роль целой строкой в любом регистре, прочие имена), могут найти
 строки, которых нет в счёте Э3: их называют поимённо — класс решает владелец.
+
+ПЕРЕЧЕНЬ ИСКЛЮЧЕНИЙ ДЛЯ СВЕРКИ — ТОЙ ЖЕ ВЕРСИИ, ЧТО СУДИТСЯ. Исключение держится за текст строки,
+поэтому перечень годится только версии кода, для которой написан: версию, судимую перечнем другой
+версии, проверка осудила бы с ложными расхождениями в обе стороны (до правки так и было: версия замера
+Э2 судилась перечнем нового кода — 62 находки вместо 52 счёта Э3). Порядок выбора перечня:
+  1. --reconcile-allowed <файл> — перечень, который назвал запускающий: он ручается, что файл написан
+     для этой версии (для версии замера Э2 такой лежит рядом: donor-literals-allowed-7e2d2b0.tsv);
+  2. перечень, лежащий В САМОМ судимом commit (git show <commit>:vnext/tools/donor-literals-allowed.tsv);
+  3. ни того ни другого — отказ словами, код 2 «НЕ ПРОВЕРЕНО». Пустой перечень и перечень рабочего
+     дерева НЕ подставляются: пустой сделал бы находкой любую строку вне счёта, рабочего дерева — вернул
+     бы прежнюю ошибку. Версия замера Э2 (7e2d2b0) старше перечня: в ней его нет, поэтому её сверка идёт
+     по п. 1. Из какого источника взят перечень, сверка печатает строкой «перечень исключений: …».
+Файл имён и перечень файлов ядра читаются из каталога данных рабочего дерева: это настройки проверки,
+а не суждения о строках конкретной версии.
 """
 import argparse
 import json
@@ -113,11 +127,17 @@ def load_core_files(path):
 
 
 def load_allowed(path):
-    """-> [AllowedRow]. Строки с «#» в начале — пояснения; первая строка с заголовком «file» пропускается."""
+    """-> [AllowedRow] из файла на диске."""
     try:
         raw = Path(path).read_text(encoding="utf-8-sig")
     except OSError:
         raise Incomplete("нет файла перечня исключений: %s" % path)
+    return parse_allowed(raw, path)
+
+
+def parse_allowed(raw, path):
+    """-> [AllowedRow]. Строки с «#» в начале — пояснения; первая строка с заголовком «file» пропускается.
+    path — только для сообщений об ошибках (файл на диске или «commit:путь»)."""
     rows = []
     for number, line in enumerate(raw.replace("\r\n", "\n").split("\n"), start=1):
         if not line.strip() or line.startswith("#"):
@@ -130,6 +150,33 @@ def load_allowed(path):
         parts = parts[:5] + ["\t".join(parts[5:])]
         rows.append(AllowedRow(parts[0], parts[1], parts[2], parts[3], parts[4], parts[5], number))
     return rows
+
+
+def allowed_of_commit(root, data_dir, commit):
+    """Перечень исключений из САМОГО судимого commit (git show <commit>:<путь перечня>).
+    Исключение держится за текст строки кода, поэтому годится только той версии, для которой написано:
+    версию, судимую перечнем другой версии, проверка осудила бы с ложными расхождениями в обе стороны
+    (лишние находки у строк, которых перечень не знает; исключения без попадания у строк, которых в версии нет).
+    Перечня в commit нет — отказ словами (Incomplete), а НЕ пустой перечень: с пустым перечнем любая строка
+    вне счёта стала бы находкой, и сверка разошлась бы по причине, которой нет."""
+    root, data_dir = Path(root), Path(data_dir)
+    try:
+        rel_dir = data_dir.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        raise Incomplete("каталог данных %s лежит вне пакета %s: перечень судимого commit по нему не найти — "
+                         "назовите файл перечня ключом --reconcile-allowed" % (data_dir, root))
+    rel = ALLOWED_FILE if rel_dir in ("", ".") else "%s/%s" % (rel_dir, ALLOWED_FILE)
+    rc, _, err = run_git(root, "rev-parse", "--verify", "--quiet", commit + "^{commit}")
+    if rc != 0:
+        raise Incomplete("в пакете %s нет commit %s%s" % (root, commit, (": " + err) if err else ""))
+    rc, out, _ = run_git(root, "show", "%s:%s" % (commit, rel))
+    if rc != 0:
+        raise Incomplete("в commit %s нет перечня исключений %s: перечень появился в пакете позже этой версии. "
+                         "Судить версию перечнем другой версии нельзя — он держится за текст строк и дал бы ложные "
+                         "расхождения в обе стороны. Назовите перечень, написанный для этой версии (по соглашению он "
+                         "лежит рядом: donor-literals-allowed-<commit>.tsv), ключом --reconcile-allowed"
+                         % (commit, rel))
+    return parse_allowed(out.decode("utf-8-sig"), "%s:%s" % (commit, rel))
 
 
 # ---------------------------------------------------------------- источники файлов
@@ -239,15 +286,17 @@ def find_unlisted(paths, core_set, outside):
     return sorted(p for p in paths if is_runtime_script(p) and p not in core_set and p not in outside)
 
 
-def check(root, data_dir, commit=None):
-    """Проверка пакета. Ничего не печатает и не пишет. Всё, чего не удалось, — в res.problems."""
+def check(root, data_dir, commit=None, allowed=None):
+    """Проверка пакета. Ничего не печатает и не пишет. Всё, чего не удалось, — в res.problems.
+    allowed — уже прочитанный перечень исключений ([AllowedRow]); без него читается файл из data_dir."""
     root, data_dir = Path(root), Path(data_dir)
     source = CommitSource(root, commit) if commit else TreeSource(root)
     res = Result(root, source.label)
     try:
         names = donor_scan.load_names(data_dir / NAMES_FILE)
         res.core, res.outside = load_core_files(data_dir / CORE_FILE)
-        allowed = load_allowed(data_dir / ALLOWED_FILE)
+        if allowed is None:
+            allowed = load_allowed(data_dir / ALLOWED_FILE)
         paths = source.list_py()
         texts = source.read_all(paths)
     except (donor_scan.NamesError, Incomplete) as e:
@@ -391,8 +440,10 @@ def run_count_core(goal):
     return rows, tuple(int(g) for g in m.groups())
 
 
-def reconcile(goal, root, data_dir, commit=None, out=print):
-    """Сверка с замером Э2 и счётом Э3. -> код выхода: 0 сходится · 1 расходится · 2 не проверено."""
+def reconcile(goal, root, data_dir, commit=None, out=print, allowed_file=None):
+    """Сверка с замером Э2 и счётом Э3. -> код выхода: 0 сходится · 1 расходится · 2 не проверено.
+    Перечень исключений для судимой версии: allowed_file, если назван; иначе — тот, что лежит в самом
+    судимом commit; ни того ни другого — отказ словами (код 2), перечень рабочего дерева не подставляется."""
     goal, root = Path(goal), Path(root)
     out("сверка с замером Э2 и счётом Э3: каталог %s" % goal)
     try:
@@ -403,7 +454,13 @@ def reconcile(goal, root, data_dir, commit=None, out=print):
             commit = str(json.loads((goal / "e2" / "metrics.json").read_text(encoding="utf-8")).get("head") or "")
             if not commit:
                 raise Incomplete("в e2/metrics.json нет версии пакета (ключ head); укажите --reconcile-commit")
-        res = check(root, data_dir, commit)
+        if allowed_file is not None:
+            allowed = load_allowed(allowed_file)
+            allowed_from = "файл %s (назван при запуске)" % allowed_file
+        else:
+            allowed = allowed_of_commit(root, data_dir, commit)
+            allowed_from = "commit %s" % commit
+        res = check(root, data_dir, commit, allowed)
         if res.problems or res.missing:
             raise Incomplete("проверка на commit %s не выполнена полностью: %s"
                              % (commit, (res.problems + ["нет файлов ядра: " + ", ".join(res.missing)])[0]))
@@ -413,6 +470,7 @@ def reconcile(goal, root, data_dir, commit=None, out=print):
         out("НЕ ПРОВЕРЕНО: %s" % e)
         return 2
     out("версия пакета: commit %s · файлов ядра в перечне пакета: %d" % (commit, len(res.core)))
+    out("перечень исключений: %s · записей %d" % (allowed_from, res.allowed_total))
     core = set(res.core)
     e2_groups = {r["group"] for r in hits_rows}
     code = 0
@@ -481,11 +539,17 @@ def main(argv=None):
                          "обычная проверка при этом не выполняется")
     ap.add_argument("--reconcile-commit", metavar="КОММИТ",
                     help="версия пакета для сверки (по умолчанию — из e2/metrics.json)")
+    ap.add_argument("--reconcile-allowed", metavar="ФАЙЛ",
+                    help="перечень исключений, написанный для версии сверки (по умолчанию — перечень из самого судимого "
+                         "commit; в нём перечня нет — отказ, не пустой перечень)")
     args = ap.parse_args(argv)
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
+    if args.reconcile_allowed and not args.reconcile_with:
+        ap.error("--reconcile-allowed имеет смысл только вместе с --reconcile-with")
     if args.reconcile_with:
-        return reconcile(args.reconcile_with, args.root, args.data_dir, args.reconcile_commit)
+        return reconcile(args.reconcile_with, args.root, args.data_dir, args.reconcile_commit,
+                         allowed_file=args.reconcile_allowed)
     res = check(args.root, args.data_dir, args.commit)
     report(res, args.strict)
     return exit_code(res, args.strict)

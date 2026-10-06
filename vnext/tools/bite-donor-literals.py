@@ -27,8 +27,9 @@
      scripts/migrations/x.py и файл из раздела [вне ядра] — нет;
   ⑧ коды выхода: 0 (чисто) · 1 (находка) · 2 (нет файла перечня, нет файла имён, нет git для --commit,
      нет commit) — словами, а не «прошла»; --strict делает исключение без попадания провалом;
-  ⑨ настоящий пакет, только чтение: --reconcile-with даёт (а) и (б) сходящимися; на искажённой копии
-     каталога замеров — расходящимися; нет каталога или commit — «НЕ ПРОВЕРЕНО» с кодом 2;
+  ⑨ настоящий пакет, только чтение: сверка версии замера Э2 ЕЁ перечнем исключений (donor-literals-allowed-<commit>.tsv
+     рядом с проверкой: в самой версии замера перечня нет, он появился позже) даёт (а) и (б) сходящимися; на искажённой
+     копии каталога замеров — расходящимися; нет каталога, commit или перечня версии — «НЕ ПРОВЕРЕНО» с кодом 2;
   ⑩ sync-to-template.py (его копия во временном мини-пакете, где корни указывают во временные
      каталоги): с --apply при находке — код 1 и строка «commit не делать»; без находки — код 0;
      в режиме замера код выхода от находок не меняется.
@@ -45,6 +46,16 @@
   donor_scan.py: их копии лежат в подставном git-репозитории во временном каталоге, а команда
   `git config core.hooksPath .githooks` выполняется ТОЛЬКО там. Настоящий репозиторий не читается и не
   правится. Нет git или нет файла перехватчика — «НЕ ПРОВЕРЕН», не «прошла».
+  ⑮ сверка судит commit перечнем исключений ИЗ ЭТОГО ЖЕ commit, а не рабочего дерева: в судимом commit перечень
+     покрывает печатную строку, в рабочем дереве перечень пуст — сверка сходится только если взят перечень commit;
+  ⑯ встречный: в судимом commit перечня нет, а в рабочем дереве он есть — отказ словами (код 2, «НЕ ПРОВЕРЕНО»,
+     названы commit и ключ --reconcile-allowed), без печати результата сверки: не пустой перечень и не перечень
+     рабочего дерева;
+  ⑰ встречный: перечень, названный ключом --reconcile-allowed, берёт верх над перечнем commit и годится commit без
+     перечня; названный, но отсутствующий — отказ словами, не пустой перечень.
+  Случаи ⑮–⑰ гоняют проверку на подставном git-репозитории во временном каталоге и подставном каталоге замеров
+  (заглушка count-core.py печатает заданный счёт); настоящий пакет и настоящий каталог замеров не читаются.
+  Нет git — «НЕ ПРОВЕРЕН».
 
 НАРОЧНЫЕ ПОЛОМКИ применяются К ТЕКСТУ проверки В ПАМЯТИ (compile + exec); на диск ничего не пишется.
 Ожидание каждой записано ЗАРАНЕЕ (таблица BREAKS ниже): поломка роняет свой случай и ничего больше.
@@ -63,14 +74,21 @@
 Поломки перехватчика правят ТЕКСТ его копии в подставном репозитории (настоящий файл не трогается);
 ожидание — НАБОР провалившихся случаев ⑪–⑭ — записано заранее (HookBreak.expect), все четыре гоняются
 под каждой поломкой, провалиться обязаны ровно записанные:
+Поломки сверки (случаи ⑮–⑰) правят ТЕКСТ проверки в памяти; ожидание — тоже НАБОР случаев, записан заранее
+(ReconBreak.expect). Под каждой гоняются ①–⑧ и ⑮–⑰, провалиться обязаны ровно записанные:
+  allowed-from-tree       перечень читается из рабочего дерева — как было до правки  → ⑮ ⑯
+  absent-list-as-empty    в commit перечня нет — берётся тихий пустой перечень      → ⑯
+  named-list-ignored      перечень, названный ключом, не читается                   → ⑰
+  named-missing-as-empty  названного перечня нет — берётся пустой                    → ⑰
+Поломки перехватчика (⑪–⑭), как и выше:
   hook-off                перехватчик выключен — выход сразу      → ⑪ ⑬ ⑭
   guard-not-called        перехватчик не зовёт проверку           → ⑪ ⑬ ⑭
   hooks-path-unset        команда core.hooksPath не выполнена     → ⑪ ⑬ ⑭
   hook-silent             отказ без списка находок                → ⑪
   fail-open-no-guard      нет файла проверки — commit пропущен    → ⑭
   fail-open-guard-error   проверка не удалась — commit пропущен   → ⑭
-Исход каждого случая — один из трёх: прошёл · провалился · НЕ ПРОВЕРЕН (⑨ без каталога замеров; ⑪–⑭ без git
-или без файла перехватчика).
+Исход каждого случая — один из трёх: прошёл · провалился · НЕ ПРОВЕРЕН (⑨ без каталога замеров или без перечня
+версии замера; ⑪–⑭ без git или без файла перехватчика; ⑮–⑰ без git).
 """
 from __future__ import annotations
 
@@ -85,7 +103,7 @@ import stat
 import subprocess
 import sys
 import tempfile
-from contextlib import redirect_stdout
+from contextlib import contextmanager, redirect_stdout
 from pathlib import Path
 from typing import Callable, NamedTuple
 
@@ -94,12 +112,13 @@ PACK_ROOT = HERE.parent.parent
 GUARD_PATH = HERE / "guard-donor-literals.py"
 SCAN_PATH = HERE / "donor_scan.py"
 SYNC_PATH = HERE / "sync-to-template.py"
+E2_ALLOWED_NAME = "donor-literals-allowed-{}.tsv"          # перечень исключений версии замера Э2: рядом с проверкой
 NAMES_PATH = HERE / "donor-names.json"
 HOOK_PATH = PACK_ROOT / ".githooks" / "pre-commit"      # перехватчик git pre-commit самого пакета
 
 FICTIONAL = ("ZZQ", "ZZW")      # выдуманные роли подставного мини-пакета
 CASE_MARKS = {1: "①", 2: "②", 3: "③", 4: "④", 5: "⑤", 6: "⑥", 7: "⑦", 8: "⑧", 9: "⑨", 10: "⑩",
-              11: "⑪", 12: "⑫", 13: "⑬", 14: "⑭"}
+              11: "⑪", 12: "⑫", 13: "⑬", 14: "⑭", 15: "⑮", 16: "⑯", 17: "⑰"}
 CASE_TITLES = {
     1: "литерал роли в коде — находка",
     2: "литерал в печати — находка",
@@ -109,12 +128,15 @@ CASE_TITLES = {
     6: "роль целой строкой в любом регистре: «zzq» — находка, «zzqrator» — нет",
     7: "файл scripts/*.py вне перечня — находка; bite-*.py, migrations/ и «вне ядра» — нет",
     8: "коды выхода 0 / 1 / 2 — словами; «не проверено» не бывает «прошла»",
-    9: "настоящий пакет: сверка с замером Э2 и счётом Э3 сходится; искажённую копию ловит; без каталога — НЕ ПРОВЕРЕНО",
+    9: "настоящий пакет: версия замера Э2 с её перечнем исключений сходится со счётом Э3; искажённую копию ловит; без каталога — НЕ ПРОВЕРЕНО",
     10: "sync-to-template.py: находка при --apply — код 1 и «commit не делать»",
     11: "перехватчик pre-commit: commit файла ядра с литералом донора — отказ, нового commit нет",
     12: "встречный: commit чистого файла ядра и файла вне ядра с литералом — проходят",
     13: "граница: перехватчик судит рабочее дерево, не индекс; сделанный commit проверяет --commit HEAD",
     14: "сбой самой проверки (нет файла, код 2) — отказ, а не пропуск",
+    15: "сверка судит commit перечнем исключений из этого же commit, а не из рабочего дерева",
+    16: "встречный: в судимом commit перечня нет — отказ словами, не пустой перечень и не перечень рабочего дерева",
+    17: "встречный: перечень, названный ключом, берёт верх над перечнем commit; названного нет — отказ словами",
 }
 
 CASES = 0
@@ -413,10 +435,21 @@ def case9(ctx: Ctx):
         return None, f"каталога замеров нет: {goal} — НЕ ПРОВЕРЕНО"
     guard = ctx.guard
     notes = []
+    # Перечень исключений ВЕРСИИ замера: в самой версии своего перечня нет (он появился позже), он лежит рядом с
+    # проверкой под именем версии. Основной перечень (нового кода) версию замера судит с ложными расхождениями.
+    allowed = None
+    try:
+        head_id = str(json.loads((goal / "e2" / "metrics.json").read_text(encoding="utf-8")).get("head") or "")
+    except (OSError, ValueError):
+        head_id = ""
+    if head_id:
+        allowed = HERE / E2_ALLOWED_NAME.format(head_id)
+        if not allowed.is_file():
+            return None, f"нет перечня исключений версии замера Э2: {allowed} — сверку не выполнить: НЕ ПРОВЕРЕНО"
 
     def reconcile(g: Path, commit=None):
         lines = []
-        code = guard.reconcile(g, PACK_ROOT, HERE, commit, out=lines.append)
+        code = guard.reconcile(g, PACK_ROOT, HERE, commit, out=lines.append, allowed_file=allowed)
         return code, "\n".join(lines)
 
     code, text = reconcile(goal)
@@ -424,11 +457,12 @@ def case9(ctx: Ctx):
         return None, "настоящая сверка вернула «не проверено»: " + text.strip().split("\n")[-1]
     first = next((l for l in text.split("\n") if l.startswith("(а)")), "")
     second = next((l for l in text.split("\n") if l.startswith("(б)")), "")
+    source = next((l for l in text.split("\n") if l.startswith("перечень исключений:")), "")
     m = re.search(r"совпало (\d+) из (\d+)", first)
     equal_a = bool(m) and m.group(1) == m.group(2) and int(m.group(2)) > 0
     hard_b = ("в счёте count-core.py есть, проверка не нашла" in text) or ("нашла проверка, в счёте count-core.py нет" in text)
-    ok_real = code == 0 and equal_a and not hard_b
-    notes.append(f"настоящая сверка: код {code} (ждём 0); {first}; {second.split(';')[0] if second else '(б) не напечатано'}; "
+    ok_real = code == 0 and equal_a and not hard_b and "(назван при запуске)" in source
+    notes.append(f"настоящая сверка: код {code} (ждём 0); {source}; {first}; {second.split(';')[0] if second else '(б) не напечатано'}; "
                  f"{'(б) сходится' if not hard_b else '(б) расходится'}")
 
     # искажённая копия 1: у одной строки кода сменена группа в замере Э2 — расхождение (а)
@@ -448,7 +482,8 @@ def case9(ctx: Ctx):
     ok_b = code2 == 1 and "нашла проверка, в счёте count-core.py нет" in text2
     notes.append(f"копия с иным классом строки в счёте Э3: код {code2} (ждём 1), расхождение (б) названо: {ok_b}")
 
-    # нет каталога замеров / нет такого commit — НЕ ПРОВЕРЕНО, код 2, не «сходятся»
+    # нет каталога замеров / нет такого commit — НЕ ПРОВЕРЕНО, код 2, не «сходятся»; причина названа ТОЙ, что есть
+    # (перечень версии замера при этом назван, поэтому «нет commit» не может прикрыться «нет перечня»)
     code3, text3 = reconcile(ctx.tmp / "нет-такого-каталога")
     code4, text4 = reconcile(goal, "no-such-commit")
     saved_path = os.environ.get("PATH", "")
@@ -458,9 +493,10 @@ def case9(ctx: Ctx):
     finally:
         os.environ["PATH"] = saved_path
     ok_n = (code3 == 2 and code4 == 2 and code5 == 2 and "НЕ ПРОВЕРЕНО" in text3 and "НЕ ПРОВЕРЕНО" in text4
-            and "НЕ ПРОВЕРЕНО" in text5 and "git не найден" in text5 and "сходятся" not in text3 + text4 + text5)
+            and "НЕ ПРОВЕРЕНО" in text5 and "нет commit" in text4 and "git не найден" in text5
+            and "сходятся" not in text3 + text4 + text5)
     notes.append(f"нет каталога: код {code3}, нет commit: код {code4}, нет git: код {code5} "
-                 f"(ждём 2, 2 и 2, слова «НЕ ПРОВЕРЕНО»; про git — «git не найден»)")
+                 f"(ждём 2, 2 и 2, слова «НЕ ПРОВЕРЕНО»; про commit — «нет commit»; про git — «git не найден»)")
     return (ok_real and ok_a and ok_b and ok_n), "\n".join(notes)
 
 
@@ -574,9 +610,9 @@ def hook_repo(ctx: Ctx, name: str, files: dict, core, outside=None, with_guard=T
     return root
 
 
-def trail(ok: bool, out: str) -> str:
-    """Хвост вывода git — только когда случай не прошёл: чтобы причину не приходилось гадать."""
-    return "" if ok else "\nвывод git: " + " ⏎ ".join(out.strip().splitlines())[-500:]
+def trail(ok: bool, out: str, what: str = "git") -> str:
+    """Хвост вывода (git или сверки) — только когда случай не прошёл: чтобы причину не приходилось гадать."""
+    return "" if ok else f"\nвывод {what}: " + " ⏎ ".join(out.strip().splitlines())[-500:]
 
 
 def commit(root: Path, message: str) -> tuple[int, str, str | None, str | None]:
@@ -681,8 +717,159 @@ def case14(ctx: Ctx):
         + trail(ok1 and ok2, out1 + "\n" + out2))
 
 
+# ── случаи ⑮–⑰: сверка судит версию перечнем исключений ТОЙ ЖЕ версии ─────────────────
+# Подставной пакет под git (два commit) и подставной каталог замеров: заглушка count-core.py печатает заданный счёт.
+# Настоящий пакет, настоящий каталог замеров и настоящий перечень исключений не читаются.
+
+PRINT_LINE = 'print("зови ZZQ")'
+PRINT_ROW = ("scripts/a.py", "ZZQ", "shown", "printed", PRINT_LINE, "подставная печать стенда")
+ALLOWED_REL = "vnext/tools/donor-literals-allowed.tsv"
+
+
+def git_missing() -> str | None:
+    """Почему случаи на подставном репозитории не выполнить (None — можно)."""
+    if shutil.which("git") is None:
+        return "git не найден — подставной репозиторий создать нечем: НЕ ПРОВЕРЕНО"
+    return None
+
+
+def allowed_tsv(rows=()) -> str:
+    return "file\tname\tkind\tclass\ttext\treason\n" + "".join("\t".join(r) + "\n" for r in rows)
+
+
+def count_rows(text: str) -> int:
+    """Записей в тексте перечня: без пояснений «#» и строки заголовка."""
+    return sum(1 for l in text.split("\n") if l.strip() and not l.startswith(("#", "file\t")))
+
+
+@contextmanager
+def without_git_env():
+    """Проверка в этом процессе зовёт git со средой процесса: переменные GIT_* вызывающего увели бы её в чужой репозиторий."""
+    saved = {k: os.environ.pop(k) for k in [k for k in os.environ if k.startswith("GIT_")]}
+    try:
+        yield
+    finally:
+        os.environ.update(saved)
+
+
+class Stand(NamedTuple):
+    root: Path
+    tools: Path
+    ids: list            # полные хэши commit по порядку: [0] — судимая версия, [1] — «позже»
+    goal: Path
+
+
+def recon_stand(ctx: Ctx, name: str, first_has_list: bool) -> Stand:
+    """Подставной пакет под git: commit [0] — судимая версия (с перечнем исключений, который покрывает печатную строку,
+    или без перечня), commit [1] — «позже»: перечень рабочего дерева пуст. Каталог замеров: версия = commit [0],
+    счёт Э3 — одна строка «управляет поведением» (строка 1), печатная строка 2 вне счёта."""
+    root = ctx.tmp / name
+    tools = root / "vnext" / "tools"
+    tools.mkdir(parents=True)
+    for args in (("init", "-q"), ("config", "user.name", "приёмка"), ("config", "user.email", "bite@localhost.test"),
+                 ("config", "core.autocrlf", "false"), ("config", "commit.gpgsign", "false")):
+        git(root, *args)
+    first = {"scripts/a.py": 'ROLE = "ZZQ"\n' + PRINT_LINE + "\n",
+             "vnext/tools/core-files.txt": "# подставной перечень\n[ядро]\nscripts/a.py\n[вне ядра]\n",
+             "vnext/tools/donor-names.json": names_json(FICTIONAL)}
+    if first_has_list:
+        first[ALLOWED_REL] = allowed_tsv([PRINT_ROW])
+    ids = []
+    for message, files in (("версия замера", first), ("позже: перечень пуст", {ALLOWED_REL: allowed_tsv()})):
+        for rel, text in files.items():
+            write(root / rel, text)
+        git(root, "add", "-A")
+        code, out = git(root, "commit", "-q", "--no-verify", "-m", message)
+        if code != 0:
+            raise AssertionError(f"стенд: commit «{message}» не создался: {out.strip()}")
+        ids.append(head(root))
+    goal = ctx.tmp / (name + "-goal")
+    hits = [("scripts/a.py", 1, "role", "ZZQ", "code", "script", 'ROLE = "ZZQ"'),
+            ("scripts/a.py", 2, "role", "ZZQ", "shown", "script", PRINT_LINE)]
+    write(goal / "e2" / "hits.tsv", "file\tline\tgroup\tname\tkind\tfile_role\texcerpt\n"
+          + "".join("\t".join(str(c) for c in r) + "\n" for r in hits))
+    write(goal / "e2" / "metrics.json", json.dumps({"head": ids[0]}))
+    count = ["СЧЁТ Э3 (цель 0): строк списка 1 · различных строк файлов 1 · файлов 1", "scripts/a.py:1 · ZZQ · довод стенда"]
+    write(goal / "e3" / "count-core.py", "print(%r)\n" % "\n".join(count))
+    return Stand(root, tools, ids, goal)
+
+
+def recon_run(ctx: Ctx, st: Stand, commit: str, allowed_file=None) -> tuple[int, str]:
+    lines = []
+    with without_git_env():
+        code = ctx.guard.reconcile(st.goal, st.root, st.tools, commit, out=lines.append, allowed_file=allowed_file)
+    return code, "\n".join(lines)
+
+
+def source_line(text: str) -> str:
+    return next((l for l in text.split("\n") if l.startswith("перечень исключений:")), "")
+
+
+def case15(ctx: Ctx):
+    why = git_missing()
+    if why:
+        return None, why
+    st = recon_stand(ctx, "c15", first_has_list=True)
+    rc_c, blob = git(st.root, "show", f"{st.ids[0]}:{ALLOWED_REL}")
+    commit_rows = count_rows(blob)
+    tree_rows = count_rows((st.root / ALLOWED_REL).read_text(encoding="utf-8"))
+    code, text = recon_run(ctx, st, st.ids[0])
+    source = source_line(text)
+    wired = rc_c == 0 and commit_rows == 1 and tree_rows == 0       # без этого случай ничего бы не различал
+    ok = (wired and code == 0 and "(а) и (б) сходятся" in text
+          and f"commit {st.ids[0]}" in source and "записей 1" in source)
+    return ok, (f"стенд: записей в перечне судимого commit {commit_rows} (ждём 1), в рабочем дереве {tree_rows} (ждём 0 — иначе случай "
+                f"не различал бы источники); сверка commit {st.ids[0][:7]}: код {code} (ждём 0), «(а) и (б) сходятся» "
+                f"{'есть' if '(а) и (б) сходятся' in text else 'НЕТ'}; источник перечня: «{source}» "
+                f"(ждём: commit <судимый>, записей 1)" + trail(ok, text, "сверки"))
+
+
+def case16(ctx: Ctx):
+    why = git_missing()
+    if why:
+        return None, why
+    st = recon_stand(ctx, "c16", first_has_list=False)
+    rc_c, _ = git(st.root, "show", f"{st.ids[0]}:{ALLOWED_REL}")
+    wired = rc_c != 0 and (st.root / ALLOWED_REL).is_file()       # в commit перечня нет, в рабочем дереве есть
+    code, text = recon_run(ctx, st, st.ids[0])
+    words = ["НЕ ПРОВЕРЕНО", f"в commit {st.ids[0]} нет перечня исключений", "--reconcile-allowed"]
+    missing = [w for w in words if w not in text]
+    printed = [l for l in text.split("\n") if l.startswith(("(а)", "(б)", "перечень исключений:"))]
+    ok = wired and code == 2 and not missing and "сходятся" not in text and not printed
+    return ok, (f"стенд: перечня в судимом commit {'нет' if rc_c != 0 else 'ЕСТЬ'} (ждём нет), в рабочем дереве "
+                f"{'есть' if (st.root / ALLOWED_REL).is_file() else 'НЕТ'} (ждём есть); сверка: код {code} (ждём 2); "
+                f"нет слов: {missing or 'нет, всё названо'} (нужны: НЕ ПРОВЕРЕНО, commit, ключ); "
+                f"результат сверки напечатан: {'ДА' if printed else 'нет'} (ждём нет)" + trail(ok, text, "сверки"))
+
+
+def case17(ctx: Ctx):
+    why = git_missing()
+    if why:
+        return None, why
+    st = recon_stand(ctx, "c17", first_has_list=False)
+    named = ctx.tmp / "перечень-версии.tsv"
+    write(named, allowed_tsv([PRINT_ROW]))
+    # (i) commit без перечня, перечень назван — сверка идёт по названному
+    code1, t1 = recon_run(ctx, st, st.ids[0], named)
+    s1 = source_line(t1)
+    ok1 = code1 == 0 and "(а) и (б) сходятся" in t1 and "(назван при запуске)" in s1 and str(named) in s1
+    # (ii) назван файл, которого нет — отказ словами
+    code2, t2 = recon_run(ctx, st, st.ids[0], ctx.tmp / "нет-такого-перечня.tsv")
+    ok2 = code2 == 2 and "НЕ ПРОВЕРЕНО" in t2 and "нет файла перечня исключений" in t2 and "сходятся" not in t2
+    # (iii) у судимого commit свой перечень (пустой): названный берёт верх; без названного — находка, сверка расходится
+    code3, t3 = recon_run(ctx, st, st.ids[1], named)
+    code4, t4 = recon_run(ctx, st, st.ids[1])
+    ok3 = code3 == 0 and code4 == 1
+    ok = ok1 and ok2 and ok3
+    return ok, (f"(i) commit без перечня, перечень назван: код {code1} (ждём 0), источник «{s1}»; "
+                f"(ii) названного файла нет: код {code2} (ждём 2), слова «НЕ ПРОВЕРЕНО» и «нет файла перечня исключений» "
+                f"{'есть' if ('НЕ ПРОВЕРЕНО' in t2 and 'нет файла перечня исключений' in t2) else 'НЕТ'}; "
+                f"(iii) у commit пустой свой перечень: с названным код {code3} (ждём 0), без названного код {code4} (ждём 1 — "
+                f"перечень имеет значение)" + trail(ok, t1 + "\n" + t2 + "\n" + t3 + "\n" + t4, "сверки"))
+
+
 CASE_FUNCS = {1: case1, 2: case2, 3: case3, 4: case4, 5: case5, 6: case6, 7: case7, 8: case8, 9: case9, 10: case10,
-              11: case11, 12: case12, 13: case13, 14: case14}
+              11: case11, 12: case12, 13: case13, 14: case14, 15: case15, 16: case16, 17: case17}
 
 
 # ── нарочные поломки: ожидание записано ЗАРАНЕЕ ──────────────────────────────────
@@ -766,6 +953,32 @@ def hook_breaks():
     ]
 
 
+class ReconBreak(NamedTuple):
+    key: str
+    title: str
+    expect: tuple         # какие случаи ⑮–⑰ обязаны провалиться — РОВНО они (записано заранее)
+    patch: Callable       # patch(текст проверки) -> (новый текст, сколько раз нашлась цель)
+
+
+def recon_breaks():
+    """Нарочные поломки сверки. Правится ТЕКСТ проверки в памяти; на диск ничего не пишется."""
+    return [
+        ReconBreak("allowed-from-tree", "перечень читается из рабочего дерева", (15, 16),
+                   lambda s: replace_once(s, "            allowed = allowed_of_commit(root, data_dir, commit)\n",
+                                          "            allowed = load_allowed(Path(data_dir) / ALLOWED_FILE)\n")),
+        ReconBreak("absent-list-as-empty", "в commit перечня нет — берётся тихий пустой перечень", (16,),
+                   lambda s: replace_once(s, '    rc, out, _ = run_git(root, "show", "%s:%s" % (commit, rel))\n    if rc != 0:\n',
+                                          '    rc, out, _ = run_git(root, "show", "%s:%s" % (commit, rel))\n    if rc != 0:\n'
+                                          '        return []\n    if rc != 0:\n')),
+        ReconBreak("named-list-ignored", "перечень, названный при запуске, не читается", (17,),
+                   lambda s: replace_once(s, "        if allowed_file is not None:\n            allowed = load_allowed(allowed_file)\n",
+                                          "        if False:\n            allowed = load_allowed(allowed_file)\n")),
+        ReconBreak("named-missing-as-empty", "названного перечня нет — берётся пустой", (17,),
+                   lambda s: replace_once(s, "            allowed = load_allowed(allowed_file)\n",
+                                          "            allowed = load_allowed(allowed_file) if Path(allowed_file).is_file() else []\n")),
+    ]
+
+
 def run_case(number: int, scan, guard, goal, real_role, sync_patch=None, hook_patch=None, hook_enable=True):
     """Один случай в своём временном каталоге. -> (исход, подробности); неожиданная ошибка стенда — провал с текстом."""
     tmp = Path(tempfile.mkdtemp(prefix=f"bite-donor-literals-{number}-"))
@@ -792,7 +1005,7 @@ def remove_stand(path: Path) -> None:
 def run_clean(goal, real_role) -> bool:
     scan, guard = load_pair()
     ok_all = True
-    for n in range(1, 15):
+    for n in range(1, 18):
         verdict, detail = run_case(n, scan, guard, goal, real_role)
         ok_all &= case(f"{CASE_MARKS[n]} {CASE_TITLES[n]}", verdict, detail)
     return ok_all
@@ -868,10 +1081,39 @@ def run_hook_breaks(keys) -> bool:
     return ok_all
 
 
+def run_recon_breaks(keys, real_role) -> bool:
+    """Каждая поломка сверки: гоняются ①–⑧ и ⑮–⑰, провалиться обязаны РОВНО записанные заранее."""
+    ok_all = True
+    table = {b.key: b for b in recon_breaks()}
+    marks = lambda ns: " ".join(CASE_MARKS[n] for n in sorted(ns)) or "ни одного"      # noqa: E731
+    for key in keys:
+        b = table[key]
+        title = f"поломка сверки «{b.title}» роняет ровно {marks(b.expect)}"
+        try:
+            scan, guard = load_pair(None, b.patch)
+        except AssertionError as e:
+            ok_all &= case(title, False, str(e))
+            continue
+        failed, unchecked = set(), set()
+        for n in (1, 2, 3, 4, 5, 6, 7, 8, 15, 16, 17):
+            verdict, _ = run_case(n, scan, guard, None, real_role)
+            if verdict is None:
+                unchecked.add(n)
+            elif verdict is False:
+                failed.add(n)
+        if unchecked & set(b.expect):
+            ok_all &= case(title, None, "не выполнены случаи " + marks(unchecked & set(b.expect)) + " — поломку не судить")
+            continue
+        exact = failed == set(b.expect)
+        ok_all &= case(title, exact, f"провалились: {marks(failed)} (ждали ровно {marks(b.expect)}); "
+                                     f"остальные из ①–⑧ и ⑮–⑰ прошли" + (f"; не проверены: {marks(unchecked)}" if unchecked else ""))
+    return ok_all
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="Приёмка проверки guard-donor-literals.py: случаи на подставном мини-пакете и нарочные поломки.",
-        epilog="Исход: 0 — принято; 1 — не принято; 2 — приёмку выполнить не удалось или случай ⑨ не проверен.")
+        epilog="Исход: 0 — принято; 1 — не принято; 2 — приёмку выполнить не удалось или случай ⑨ (⑪–⑭, ⑮–⑰) не проверен.")
     ap.add_argument("--goal-dir", metavar="КАТАЛОГ",
                     help="каталог goal-gordi-core с замером Э2 и счётом Э3 — нужен случаю ⑨; без него ⑨ «НЕ ПРОВЕРЕН»")
     ap.add_argument("--cases", action="store_true", help="только случаи, без нарочных поломок")
@@ -879,7 +1121,7 @@ def main() -> int:
                     help="одна нарочная поломка или all — все; без чистого прогона. Имена: " +
                          ", ".join(["code-unchecked", "print-unchecked", "comment-counted", "names-in-code", "exception-by-line",
                                     "no-role-literal-group", "file-list-unchecked", "exit2-as-0", "reconcile-skips-b", "sync-no-guard"]
-                                   + [b.key for b in hook_breaks()]))
+                                   + [b.key for b in recon_breaks()] + [b.key for b in hook_breaks()]))
     args = ap.parse_args()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
@@ -891,14 +1133,18 @@ def main() -> int:
     goal = Path(args.goal_dir) if args.goal_dir else None
     names = [b.key for b in make_breaks(real_role)]
     hook_names = [b.key for b in hook_breaks()]
-    if args.brk and args.brk != "all" and args.brk not in names + hook_names:
-        print(f"⛔ нет поломки «{args.brk}». Есть: {', '.join(names + hook_names)}, all")
+    recon_names = [b.key for b in recon_breaks()]
+    if args.brk and args.brk != "all" and args.brk not in names + recon_names + hook_names:
+        print(f"⛔ нет поломки «{args.brk}». Есть: {', '.join(names + recon_names + hook_names)}, all")
         return 2
 
     ok_all = True
     if args.brk == "all":
         ok_all &= run_breaks(names, goal, real_role)
+        ok_all &= run_recon_breaks(recon_names, real_role)
         ok_all &= run_hook_breaks(hook_names)
+    elif args.brk in recon_names:
+        ok_all &= run_recon_breaks([args.brk], real_role)
     elif args.brk in hook_names:
         ok_all &= run_hook_breaks([args.brk])
     elif args.brk:
@@ -907,13 +1153,14 @@ def main() -> int:
         ok_all &= run_clean(goal, real_role)
         if not args.cases:
             ok_all &= run_breaks(names, goal, real_role)
+            ok_all &= run_recon_breaks(recon_names, real_role)
             ok_all &= run_hook_breaks(hook_names)
     print()
     if not ok_all:
         print(f"🔴 НЕ ПРИНЯТО — проверено {CASES}, прошло {PASSED}, не проверено {UNCHECKED}")
         return 1
     if UNCHECKED:
-        print(f"⚪ ПРИНЯТО НЕ ПОЛНОСТЬЮ — проверено {CASES}, прошло {PASSED}, НЕ ПРОВЕРЕНО {UNCHECKED} (⑨ — нужен --goal-dir и git с нужным commit; ⑪–⑭ — нужен git и файл перехватчика)")
+        print(f"⚪ ПРИНЯТО НЕ ПОЛНОСТЬЮ — проверено {CASES}, прошло {PASSED}, НЕ ПРОВЕРЕНО {UNCHECKED} (⑨ — нужен --goal-dir, git с нужным commit и перечень версии замера рядом с проверкой; ⑪–⑭ — нужен git и файл перехватчика; ⑮–⑰ — нужен git)")
         return 2
     print(f"✅ ПРИНЯТО — проверено {CASES}, прошло {PASSED}")
     return 0
