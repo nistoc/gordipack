@@ -661,8 +661,11 @@ def run_ut(c, source: Path | None, *args) -> tuple[int, str]:
     cmd = [sys.executable, str(c.tool)]
     if source is not None:
         cmd += ["--source", str(source), "--db", str(c.db)]
+    # среда стенда — вызовом здесь же, а не полем c.env: проверка закреплённой среды
+    # (check-acceptance-env.py) прослеживает stand_env только внутри своей функции
+    env = mezo_stand.stand_env(c.root, PYTHONIOENCODING="utf-8")
     r = subprocess.run(cmd + list(args), capture_output=True, text=True, encoding="utf-8",
-                       timeout=180, env=c.env)
+                       timeout=180, env=env)
     return r.returncode, (r.stdout or "") + (r.stderr or "")
 
 
