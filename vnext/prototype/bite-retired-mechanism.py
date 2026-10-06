@@ -65,6 +65,28 @@ CASES = 0
 DIFFERENTIATING = 0
 
 
+def _rule_versions():
+    """Отметки версий записи RULE — из перечня САМОГО испытуемого, а не числом здесь.
+
+    🪤 2026-10-06: здесь стояли числа 5 и 6 рукой. Перечень сверили против v6 (у правила
+    сменился только знак замка) — и приёмка стала бы мерить вчерашний перечень.
+    Не прочли — это отказ мерить, а не «признак плох».
+    """
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("check_retired_mechanism", CHECK)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    for item in module.RETIRED:
+        if item.get("правило") == RULE:
+            verified = item["версия_сверки"]
+            return item.get("снято_в_версии", verified), verified
+    print(f"⛔ В ПЕРЕЧНЕ ИСПЫТУЕМОГО НЕТ ЗАПИСИ «{RULE}» — это отказ мерить, а не «чисто»")
+    sys.exit(2)
+
+
+RETIRED_IN, VERIFIED = _rule_versions()
+
+
 def build_db(path: str, version, key=RULE, trace: bool = True):
     """trace — есть ли у правила след в журнале решений этого контура.
 
@@ -123,7 +145,7 @@ def main() -> int:
     tmp = str(mezo_stand.new("bite-retired-"))
     ok = True
 
-    def stand(name, phx, wrt, version=5, key=RULE, trace=True):
+    def stand(name, phx, wrt, version=VERIFIED, key=RULE, trace=True):
         db = os.path.join(tmp, f"{name}.db")
         root = os.path.join(tmp, name)
         build_db(db, version, key, trace)
@@ -157,10 +179,28 @@ def main() -> int:
 
     # ⑤ ПРЕДМЕТ УМЕР: правило переписано. Источники НЕ обвиняются — иначе пошлём чинить
     #    исправное. Ровно этот случай и был живым красным 09.08.
-    out, code = stand("e", ["# шапка", ORDER], ["# код"], version=6)
+    out, code = stand("e", ["# шапка", ORDER], ["# код"], version=VERIFIED + 1)
     ok &= case("⑤ правило переписано — «ПЕРЕЧЕНЬ УСТАРЕЛ», источник НЕ назван виновным",
                code == 2 and "ПЕРЕЧЕНЬ УСТАРЕЛ" in out and "УЧАТ СНЯТОМУ" not in out,
                f"код {code} (не 1 и не 0); отказ отделён и от красного, и от зелёного",
+               differ=True)
+
+    # ⑤-бис ВСТРЕЧНЫЙ к ⑤ (2026-10-06): версия, в которой снятие СЛУЧИЛОСЬ, — не «устарел».
+    #    Перечень сверен до VERIFIED, а контур, где правило ещё в версии снятия, судится
+    #    как обычно. Без этого случая подъём отметки сверки молча ослепил бы признак
+    #    у всех контуров, где правило осталось в прежней версии.
+    out, code = stand("e2", ["# шапка", ORDER], ["# код"], version=RETIRED_IN)
+    ok &= case("⑤-бис версия снятия младше отметки сверки — судится как обычно (встречный к ⑤)",
+               code == 1 and "УЧАТ СНЯТОМУ" in out and "УСТАРЕЛ" not in out,
+               f"код {code}; v{RETIRED_IN} при сверке до v{VERIFIED} — источник назван",
+               differ=True)
+
+    # ⑤-тер ВСТРЕЧНЫЙ к ⑤-бис: правило МЛАДШЕ версии снятия — запись неприменима.
+    #    Снятие здесь ещё не случилось ⇒ источники вправе учить прежнему; сказано строкой.
+    out, code = stand("e3", ["# шапка", ORDER], ["# код"], version=RETIRED_IN - 1)
+    ok &= case("⑤-тер правило младше версии снятия — «НЕПРИМЕНИМА», источник не судится",
+               code == 0 and "НЕПРИМЕНИМА" in out and "УЧАТ СНЯТОМУ" not in out,
+               f"код {code}; v{RETIRED_IN - 1} < v{RETIRED_IN}: решение здесь не принималось",
                differ=True)
 
     # ⑥ ВСТРЕЧНЫЙ к ⑤: правило ИСЧЕЗЛО — тот же отказ, но НЕ «чисто».
@@ -184,7 +224,7 @@ def main() -> int:
     # ⑦ ИСТОЧНИК ПРОПАЛ — молчать нельзя: ненайденный файл ничем не отличим от чистого
     db = os.path.join(tmp, "g.db")
     root = os.path.join(tmp, "g")
-    build_db(db, 5)
+    build_db(db, VERIFIED)
     os.makedirs(root, exist_ok=True)
     with open(os.path.join(root, "read-phoenix.py"), "w", encoding="utf-8") as f:
         f.write("# шапка\n" + CLEAN + "\n")          # write-message.py НЕ создан

@@ -51,6 +51,25 @@ def run_on(db):
 RULE_KEY = "md-to-sqlite-phased-cutover"
 
 
+def verified_version():
+    """Отметка сверки записи RULE_KEY — из перечня check-retired-mechanism.py рядом с
+    guard-all.py, а не числом здесь (2026-10-06: число 5 стояло рукой и отстало, когда
+    перечень сверили против v6). Не прочли — отказ мерить, а не «есть красное»."""
+    import importlib.util
+    path = pathlib.Path(GUARD).parent / "check-retired-mechanism.py"
+    spec = importlib.util.spec_from_file_location("check_retired_mechanism", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    for item in module.RETIRED:
+        if item.get("правило") == RULE_KEY:
+            return item["версия_сверки"]
+    print(f"⛔ В ПЕРЕЧНЕ {path} НЕТ ЗАПИСИ «{RULE_KEY}» — это отказ мерить, а не «чисто»")
+    sys.exit(2)
+
+
+VERIFIED = verified_version()
+
+
 def seed_rule(db, version):
     """Гарантировать в КОПИИ запись правила RULE_KEY с заданной версией — своя подставная
     запись (карточка #667, Предпочтение 1), а не надежда на то, что её принёс контур сам.
@@ -85,7 +104,7 @@ tmp = mezo_stand.new("wiring-")
 # ── ① ПРАВИЛО ИСЧЕЗЛО: набор обязан доработать до конца и назвать отказ отказом
 db1 = tmp / "no-rule.db"
 mezo_stand.snapshot_db(LIVE, db1)
-seed_rule(db1, 5)                    # своя запись: правило БЫЛО версии 5 — прежде чем исчезнуть
+seed_rule(db1, VERIFIED)             # своя запись: правило БЫЛО версии сверки — прежде чем исчезнуть
 seed_audit_trace(db1, RULE_KEY)      # и его исчезновение обязано иметь след, а не выглядеть «не было вовсе»
 c = sqlite3.connect(db1)
 c.execute("DELETE FROM rules WHERE rule_key='md-to-sqlite-phased-cutover'")
@@ -108,7 +127,7 @@ check("① вердиктов много — набор не оборвался"
 #    если признак читает живую базу, он этой подмены не заметит и промолчит.
 db2 = tmp / "bumped.db"
 mezo_stand.snapshot_db(LIVE, db2)
-seed_rule(db2, 5)                    # базовая версия ДО правки — та же, что в RETIRED["версия_сверки"]
+seed_rule(db2, VERIFIED)             # базовая версия ДО правки — та же, что в RETIRED["версия_сверки"]
 c = sqlite3.connect(db2)
 c.execute("UPDATE rules SET version = version + 7 "
           "WHERE rule_key='md-to-sqlite-phased-cutover'")
