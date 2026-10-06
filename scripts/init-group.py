@@ -337,12 +337,19 @@ def main():
         for s in [*SCRIPT_DIR.glob("*.py"), *SCRIPT_DIR.glob("migrations/*.py")]:
             want |= set(re.findall(r'"([a-z0-9_.-]+\.py)"',
                                    s.read_text(encoding="utf-8", errors="replace")))
+        # 🪤 КАРТОЧКА #678 (Э4 Ш1 «б»): ИМЯ ШАГА СХЕМЫ ЗВЕНОМ НЕ СЧИТАЕТСЯ. Имя «20260907-phoenix-
+        # records-fts.py» стоит в кавычках в find-phoenix.py (путь к шагу схемы в migrations/), и
+        # одноимённый файл из vnext/prototype клался ПЛОСКО рядом со скриптами — двойник шага схемы.
+        # ⚖️ БЛИЗНЕЦ update-tools.py (closure_of_prototype_links): меняешь здесь — меняй там.
+        schema_step_names = {m.name for m in SCRIPT_DIR.glob("migrations/*.py")}
         seen = set()
         while want:
             name = want.pop()
             if name in seen:
                 continue
             seen.add(name)
+            if name in schema_step_names:
+                continue                  # имя шага схемы, а не звено
             src = proto_dir / name
             if not src.exists():
                 continue
@@ -458,6 +465,11 @@ def main():
 
     fingerprints = {f.name: _fingerprint(f.read_bytes())
               for f in sorted(tools_dir.glob("*.py"))}
+    # 🪤 КАРТОЧКА #678 (Э4 Ш1 «в»): шаги схемы — тем же ключом «migrations/<имя>», что кладёт
+    # update-tools.py --apply. Без этого у свежесобранного контура шаги схемы стояли без
+    # отпечатка, и любое их изменение в пакете обновление читало как «❓ различить нечем».
+    for f in sorted(migr_dir.glob("*.py")):
+        fingerprints[f"migrations/{f.name}"] = _fingerprint(f.read_bytes())
     # ⚠️ СВОЁ СОЕДИНЕНИЕ, А НЕ `conn`: к этому шагу прежнее соединение уже закрыто выше по
     # ходу сборки. Первая редакция звала закрытое и роняла сборку ЦЕЛИКОМ — а приёмка
     # объявляла контур собранным, потому что смотрела на существование файла базы, а не

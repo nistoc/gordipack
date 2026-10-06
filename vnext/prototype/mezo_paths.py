@@ -34,6 +34,16 @@ mezo_paths.py — ПРОТОТИП механизма R15a: инструмент
 файл не читается. Прежние места (строки local.paths и ключи mirror_repo / template_checkout /
 disk_layer_tool в таблице meta) как ЗНАЧЕНИЕ больше не читаются: их переносит шаг
 migrations/20261005-local-paths-file.py.
+
+ПЕРЕЧЕНЬ КЛЮЧЕЙ ФАЙЛА ПУТЕЙ (читает каждый своё место; читатель один — local_path):
+    container · template · template_checkout · mirror_repo · disk_layer_tool · annex_dir ·
+    coordination_dir · generated_dir · prompts_dir · spa_src
+        — что каждый значит и кто его читает, названо в шапке шага
+          migrations/20261005-local-paths-file.py (этот шаг и вписывает их в файл путей контура);
+    prototype_install_dir   НЕОБЯЗАТЕЛЬНЫЙ (карточка #678): второй каталог установки — туда update-tools.py
+        ставит файлы vnext/prototype пакета, которые УЖЕ там лежат (у контура Atlas это
+        <контейнер>/vnext-tools). Нет ключа — update-tools.py ведёт себя как прежде. Ключ не
+        вписывается шагом переноса: его объявляет сам контур, у которого такой каталог есть.
 """
 from pathlib import Path
 from typing import NamedTuple

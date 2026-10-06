@@ -129,6 +129,67 @@ def digest(data: bytes) -> str:
     return hashlib.sha256(data.replace(b"\r\n", b"\n").rstrip()).hexdigest()[:12]
 
 
+# ═══ ВТОРОЙ КАТАЛОГ УСТАНОВКИ (карточка #678, этап Э4, шаг Ш1, пункт «г»; решение COORD Т3) ═══
+# Раньше обновление ставило файлы только в каталог рабочих скриптов контура. У контура Atlas
+# есть ещё один каталог — vnext-tools: копия файлов vnext/prototype пакета (около 250 файлов), и
+# обновления он не получал вовсе: файлы там старели молча.
+# ⚖️ Каталог НЕОБЯЗАТЕЛЕН и объявляется ключом файла путей контура (.mezosync/local/paths.json),
+# а не впечатан в код: у других контуров такого каталога нет, и их поведение не меняется ни на байт.
+PROTOTYPE_DIR_KEY = "prototype_install_dir"
+# 🪤 КЛЮЧ ОТПЕЧАТКА ВТОРОГО КАТАЛОГА НЕ ДОЛЖЕН СОВПАДАТЬ С КЛЮЧОМ ПЕРВОГО. Одни и те же имена
+# бывают в обоих каталогах (mezo_paths.py, mezo_stand.py и другие лежат и в scripts/, и в
+# vnext/prototype/), а ключ первого каталога — просто «имя.py» или «migrations/имя.py». Файл
+# второго каталога поэтому получает ключ «prototype-dir::/имя.py»: двоеточие в имени каталога на
+# Windows невозможно, а у настоящих каталогов контура его не бывает нигде, — значит пересечения
+# с ключами первого каталога нет по построению. Этой же приставкой файл второго каталога
+# помечается и внутри разбора ниже (поле rel у src_index), чтобы одно и то же имя из двух
+# каталогов не слилось в одну запись.
+SECOND_DIR_PSEUDO = "prototype-dir::"
+
+
+def second_rel(name: str) -> pathlib.Path:
+    """Запись файла второго каталога: «приставка/имя». Это НЕ путь на диске, а ярлык —
+    путь на диске всегда берётся через dest_of() в main()."""
+    return pathlib.Path(SECOND_DIR_PSEUDO) / name
+
+
+def is_second_rel(rel) -> bool:
+    return pathlib.Path(rel).parts[:1] == (SECOND_DIR_PSEUDO,)
+
+
+def fingerprint_key(rel) -> str:
+    """Ключ отпечатка установки (meta.template_files_sha) — ЕДИНСТВЕННОЕ место, где он строится
+    для разбора и записи: путь относительно scripts/ в прямых косых («migrations/x.py»); у файла
+    второго каталога — с приставкой SECOND_DIR_PSEUDO."""
+    return pathlib.Path(rel).as_posix()
+
+
+def second_install_dir(db: pathlib.Path) -> tuple[pathlib.Path | None, str | None]:
+    """Второй каталог установки по ключу PROTOTYPE_DIR_KEY файла путей ЭТОЙ базы.
+
+    Возвращает (каталог, None) — ключ есть и каталог на диске есть;
+    (None, None) — ключа нет (или файла путей нет): всё как раньше, говорить не о чем;
+    (None, слова) — ключ есть, но с ним беда (каталога нет, файл не читается): слова ДЛЯ ЧЕЛОВЕКА,
+    их печатает вызывающий, — иначе файлы второго каталога старели бы молча, а печать читалась
+    бы как «обновлено».
+    Файл путей ищется рядом с базой (mezo_dir), а не от расположения инструмента: обновление
+    идёт за базой, отпечатки которой пишет, — так же, как ключи annex_dir и mirror_repo."""
+    lookup = getattr(mezo_paths, "local_path", None)
+    if lookup is None:        # mezo_paths старше файла путей: ключа у такого контура быть не может
+        return None, None
+    res = lookup(PROTOTYPE_DIR_KEY, mezo_dir=pathlib.Path(db).resolve().parent)
+    if res.outcome == mezo_paths.LOCAL_DECLARED:
+        if res.path is not None and res.path.is_dir():
+            return res.path, None
+        return None, (f"в файле путей объявлен второй каталог установки ({PROTOTYPE_DIR_KEY}="
+                      f"{res.path}), но такого каталога нет — файлы vnext/prototype в нём НЕ "
+                      f"обслуживаются")
+    if res.outcome == mezo_paths.LOCAL_UNREADABLE:
+        return None, (f"файл путей не читается — есть ли у контура второй каталог установки, "
+                      f"узнать нечем, он НЕ обслуживается ({res.words})")
+    return None, None
+
+
 # 🪤 КАРТОЧКА #637 (находка COORD, записка #5275): guard-all.py пакета зовёт новое звено
 # (check-acceptance-env.py) из vnext/prototype, а обновлятор клал в «вне обновления» ЛЮБОЕ
 # звено источника, которого у контура ещё нет, — даже то самое, которое зовут свежие scripts/.
@@ -143,7 +204,14 @@ def closure_of_prototype_links(scripts_dir: pathlib.Path, proto_dir: pathlib.Pat
     `scripts_dir`/*.py и `scripts_dir`/migrations/*.py — ровно то же правило замыкания, что
     кладёт звенья свежему контуру (init-group.py, шаг 7б): сперва котировки `"имя.py"` в телах
     скриптов, затем — по телам самих звеньев вглубь, котировки `"имя.py"` И строчные `import x`.
-    Звено, которого нет в `proto_dir`, закрывает свою ветку (сборке нечем его продолжить)."""
+    Звено, которого нет в `proto_dir`, закрывает свою ветку (сборке нечем его продолжить).
+
+    🪤 КАРТОЧКА #678 (Э4 Ш1 «б»): ИМЯ ШАГА СХЕМЫ ЗВЕНОМ НЕ СЧИТАЕТСЯ. Имя шага («20260907-phoenix-
+    records-fts.py») стоит в кавычках в find-phoenix.py — это путь к шагу схемы в migrations/ — и
+    прежний разбор принимал его за звено. А одноимённый файл из vnext/prototype существует, и его
+    клали ПЛОСКО в каталог скриптов: рядом с настоящим шагом схемы появлялся его двойник. Теперь
+    имя, которое есть среди scripts/migrations/*.py источника, в замыкание не входит."""
+    schema_steps = {p.name for p in scripts_dir.glob("migrations/*.py")}
     want: set[str] = set()
     for s in [*scripts_dir.glob("*.py"), *scripts_dir.glob("migrations/*.py")]:
         want |= set(re.findall(r'"([a-z0-9_.-]+\.py)"',
@@ -155,6 +223,8 @@ def closure_of_prototype_links(scripts_dir: pathlib.Path, proto_dir: pathlib.Pat
         if name in seen:
             continue
         seen.add(name)
+        if name in schema_steps:
+            continue                    # имя шага схемы, а не звено (см. выше)
         src = proto_dir / name
         if not src.exists():
             continue
@@ -648,8 +718,27 @@ def cmd_accept_merge(db_path: pathlib.Path, tools: pathlib.Path, rel_arg: str,
     return 0
 
 
+HELP_SECOND_DIR = """ВТОРОЙ КАТАЛОГ УСТАНОВКИ (необязательно; карточка #678).
+  Файл путей контура (.mezosync/local/paths.json) может нести ключ prototype_install_dir — каталог,
+  куда поставлены файлы vnext/prototype пакета (у контура Atlas это <контейнер>/vnext-tools;
+  относительный путь считается от контейнера).
+  · Ключа нет — поведение прежнее, потребителей это не касается.
+  · Ключ есть — файл vnext/prototype/*.py, который УЖЕ лежит в этом каталоге, сравнивается и
+    ставится ТУДА: те же разряды «+ ≠ ✋ ❓», та же история пакета. Звено, которое уже лежит во
+    втором каталоге, в каталог рабочих скриптов не кладётся. План называет каталог каждого файла.
+  · Отпечатки установки файлов второго каталога пишутся с приставкой «prototype-dir::/» (одни и те
+    же имена бывают в обоих каталогах); --record-only снимает отпечатки и со второго каталога.
+  · Ничего не удаляется, ставятся только файлы .py. Сведение (--merge) для файлов второго
+    каталога не работает — их правку сводят руками.
+ШАГИ СХЕМЫ (scripts/migrations/*.py) получают отпечатки установки тем же ключом «migrations/<имя>»
+  и при --apply, и при --record-only; имя шага схемы звеном vnext/prototype не считается.
+"""
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser(description="забрать свежие инструменты из общего репозитория")
+    ap = argparse.ArgumentParser(description="забрать свежие инструменты из общего репозитория",
+                                 epilog=HELP_SECOND_DIR,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--source", help="путь или URL; по умолчанию — записанный при сборке контура")
     ap.add_argument("--apply", action="store_true", help="записать (без него — только план)")
     # 🪤 КОНТУР-АВТОР ШАБЛОНА НЕ МОЖЕТ ЗАБИРАТЬ ИЗ НЕГО ФАЙЛЫ: его живые инструменты — ИСТОЧНИК
@@ -690,6 +779,9 @@ def main() -> int:
     got = {k: v for k, v in conn.execute("SELECT key, value FROM meta")}
     conn.close()
 
+    # Второй каталог установки (карточка #678 «г»): None — ключа нет, и всё идёт как раньше.
+    second_dir, second_note = second_install_dir(db)
+
     if a.accept_merge:
         # ⚖️ БЕЗ источника и БЕЗ сети: всё нужное (черновик, отпечаток версии пакета,
         # с которой сводили) уже лежит рядом с черновиком — так --accept-merge не зависит
@@ -714,12 +806,26 @@ def main() -> int:
             # отличить его правку от свежести источника. Отпечаток снимается с ТОГО, ЧТО ЛЕЖИТ
             # СЕЙЧАС: он говорит «вот с чем сравнивать дальше», а не «это пришло из источника».
             tools_now = pathlib.Path(mezo_paths.live_scripts())
-            names = {f.name for f in (src_dir / "scripts").glob("*.py")}
+            # 🪤 КАРТОЧКА #678 «в»: отпечатки снимаются ТЕМ ЖЕ набором ключей, что кладёт --apply:
+            # весь scripts/ источника, шаги схемы тоже — ключ «migrations/<имя>». Раньше брался
+            # только верхний уровень, и у контура, записанного этим режимом, шаги схемы были без
+            # отпечатка: любое их изменение в пакете читалось как «❓ различить нечем».
+            src_scripts = src_dir / "scripts"
+            names = {f.relative_to(src_scripts).as_posix() for f in src_scripts.rglob("*.py")}
             linked_dir = src_dir / "vnext" / "prototype"
-            if linked_dir.is_dir():
-                names |= {f.name for f in linked_dir.glob("*.py")}
-            fingerprints = {f.name: digest(f.read_bytes())
-                      for f in sorted(tools_now.glob("*.py")) if f.name in names}
+            linked_names = {f.name for f in linked_dir.glob("*.py")} if linked_dir.is_dir() else set()
+            names |= linked_names
+            fingerprints = {f.relative_to(tools_now).as_posix(): digest(f.read_bytes())
+                      for f in sorted(tools_now.rglob("*.py"))
+                      if f.relative_to(tools_now).as_posix() in names}
+            second_taken = 0
+            if second_dir is not None:
+                # Второй каталог (карточка #678 «г»): файлы vnext/prototype, что уже лежат там, —
+                # с приставкой в ключе, чтобы не затереть ключ одноимённого файла первого каталога.
+                for f in sorted(second_dir.glob("*.py")):
+                    if f.name in linked_names:
+                        fingerprints[fingerprint_key(second_rel(f.name))] = digest(f.read_bytes())
+                        second_taken += 1
             conn = sqlite3.connect(str(db))
             for k, v in (("template_source", source), ("template_commit", rev),
                          ("template_files_sha", json.dumps(fingerprints, ensure_ascii=False)),
@@ -731,7 +837,11 @@ def main() -> int:
             conn.commit()
             conn.close()
             print(f"✅ Записано происхождение: {source} · версия {rev} · "
-                  f"отпечатков установки {len(fingerprints)}")
+                  f"отпечатков установки {len(fingerprints)}"
+                  + (f" (из них у файлов второго каталога: {second_taken})"
+                     if second_dir is not None else ""))
+            if second_note:
+                print(f"⚠️ {second_note}")
             print("   Файлы НЕ тронуты: это режим записи, а не обновления.")
         finally:
             if temporary:
@@ -739,11 +849,34 @@ def main() -> int:
         return 0
 
     tools = pathlib.Path(mezo_paths.live_scripts())
+    if second_dir is not None and second_dir.resolve() == tools.resolve():
+        # ключ указывает на сам каталог рабочих скриптов: один файл попал бы в разбор дважды
+        second_note = (f"ключ {PROTOTYPE_DIR_KEY} указывает на каталог рабочих скриптов ({tools}) — "
+                       f"второго каталога нет, ключ не используется")
+        second_dir = None
     src_dir, rev, temporary = fetch(source, rev=a.rev)
     try:
         src_tools = src_dir / "scripts"
         if not src_tools.is_dir():
             sys.exit(f"⛔ в источнике нет каталога scripts: {src_dir}")
+
+        def dest_of(rel: pathlib.Path) -> pathlib.Path:
+            """Где файл лежит (или ляжет) у контура: у файла второго каталога — там, у остальных —
+            среди рабочих скриптов. Единственное место, где запись разбора превращается в путь."""
+            return second_dir / rel.name if is_second_rel(rel) else tools / rel
+
+        def show_name(rel: pathlib.Path) -> str:
+            """Имя файла в плане: у файла второго каталога — без служебной приставки.
+            ⚠️ Имя НЕ `shown`: ниже в main() есть обычная переменная `shown` (строка коммитов у «✋») —
+            одноимённая функция ею затиралась, и вывод плана падал на файле с «✋» и историей пакета."""
+            return rel.name if is_second_rel(rel) else str(rel)
+
+        def where(rel: pathlib.Path) -> str:
+            """Куда идёт файл — печатается только когда объявлен второй каталог: без ключа план
+            ровно прежний, потребителей он не касается."""
+            if second_dir is None:
+                return ""
+            return "  → второй каталог" if is_second_rel(rel) else "  → скрипты"
 
         # 🪤 ИСТОЧНИК — ДВА КАТАЛОГА, А НЕ ОДИН. Обновлятор обходил только scripts/, а семь
         # звеньев, которые зовёт общий прогон, лежат в источнике в vnext/prototype/ и при
@@ -756,6 +889,7 @@ def main() -> int:
             rel = f.relative_to(src_tools)
             src_index[rel] = f
             git_rel_of[rel] = "scripts/" + rel.as_posix()
+        schema_step_names = {p.name for p in src_tools.glob("migrations/*.py")}
         linked_dir = src_dir / "vnext" / "prototype"
         out_of_scope = []
         if linked_dir.is_dir():
@@ -767,15 +901,26 @@ def main() -> int:
             closure = closure_of_prototype_links(src_tools, linked_dir)
             for f in sorted(linked_dir.glob("*.py")):
                 rel = pathlib.Path(f.name)
+                # 🪤 КАРТОЧКА #678 «г»: файл vnext/prototype, который УЖЕ лежит во втором каталоге,
+                # сравнивается и ставится ТУДА — под своей записью (с приставкой), независимо от
+                # того, что стоит среди рабочих скриптов под тем же именем. Нет ключа — ветка не
+                # срабатывает вовсе, и разбор ниже тот же, что был.
+                in_second = second_dir is not None and (second_dir / f.name).is_file()
+                if in_second:
+                    src_index[second_rel(f.name)] = f
+                    git_rel_of[second_rel(f.name)] = "vnext/prototype/" + f.name
                 if rel in src_index:
                     continue
                 if (tools / rel).exists():
                     src_index[rel] = f          # звено уже стои́т у нас — обновляем его
                     git_rel_of[rel] = "vnext/prototype/" + f.name
                 elif f.name in closure:
-                    src_index[rel] = f          # звено из замыкания источника — появится (+)
-                    git_rel_of[rel] = "vnext/prototype/" + f.name
-                else:
+                    if not in_second:           # уже лежит во втором каталоге — в скрипты не кладём
+                        src_index[rel] = f      # звено из замыкания источника — появится (+)
+                        git_rel_of[rel] = "vnext/prototype/" + f.name
+                elif f.name in schema_step_names:
+                    pass                        # это имя шага схемы, а не звено (карточка #678 «б»)
+                elif not in_second:
                     out_of_scope.append(rel)    # звена у нас нет, и звено его не зовёт вовсе
 
         fingerprints = json.loads(got.get("template_files_sha") or "{}")
@@ -788,18 +933,23 @@ def main() -> int:
         previous_commit = got.get("template_commit", "неизвестна")
         print(f"источник ... {source}" + (f"  (--rev {a.rev})" if a.rev else ""))
         print(f"версия ..... было {previous_commit} · стало {rev}")
+        if second_dir is not None:
+            print(f"каталоги ... скрипты — {tools}")
+            print(f"             второй (файлы vnext/prototype, которые УЖЕ лежат там) — {second_dir}")
+        if second_note:
+            print(f"⚠️ {second_note}")
         print()
 
         fresh, own_edits, new_files, unknown = [], [], [], []
         for rel, f in sorted(src_index.items()):
-            mine = tools / rel
+            mine = dest_of(rel)
             if not mine.exists():
                 new_files.append(rel)
                 continue
             mine_bytes = mine.read_bytes()
             if same_text(mine_bytes, f.read_bytes()):
                 continue
-            installed_fp = fingerprints.get(str(rel).replace(chr(92), "/"))
+            installed_fp = fingerprints.get(fingerprint_key(rel))
             if installed_fp is None:
                 unknown.append(rel)
             elif digest(mine_bytes) != installed_fp:
@@ -844,7 +994,7 @@ def main() -> int:
                 for rel in unknown:
                     git_rel = git_rel_of.get(rel)
                     history[rel] = (find_version_span(history_repo, git_rel,
-                                                       (tools / rel).read_bytes(),
+                                                       dest_of(rel).read_bytes(),
                                                        anchor_rev=bound)
                                     if git_rel else {"found": False})
             else:
@@ -869,7 +1019,7 @@ def main() -> int:
         # значит «правлен у себя», искать нечего им самим).
         base_status: dict = {}
         for rel in own_edits:
-            fp = fingerprints.get(str(rel).replace(chr(92), "/"))
+            fp = fingerprints.get(fingerprint_key(rel))
             git_rel = git_rel_of.get(rel)
             if history_repo is None:
                 base_status[rel] = f"опору найти нечем: истории пакета нет — {history_unavailable}"
@@ -893,17 +1043,18 @@ def main() -> int:
                                     f"{found['commit']}) не менял")
 
         for rel in new_files:
-            print(f"   + {str(rel):40} нет у нас — появится")
+            print(f"   + {show_name(rel):40} нет у нас — появится{where(rel)}")
         for rel in fresh:
-            print(f"   ≠ {str(rel):40} отличается — обновится")
+            print(f"   ≠ {show_name(rel):40} отличается — обновится{where(rel)}")
         for rel in old_pack:
             span = history[rel]
             tail = (f"; пакет сменил её {span['changed_date']} (коммит {span['changed_commit']})"
                     if span.get("changed_commit") else "")
-            print(f"   ≠ {str(rel):40} отличается — обновится: отпечатка установки нет, текст — "
-                  f"версия пакета от {span['date']} (коммит {span['commit']}){tail} — своей правки нет")
+            print(f"   ≠ {show_name(rel):40} отличается — обновится: отпечатка установки нет, текст — "
+                  f"версия пакета от {span['date']} (коммит {span['commit']}){tail} — своей правки нет"
+                  f"{where(rel)}")
         for rel in own_edits:
-            print(f"   ✋ {str(rel):40} ПРАВЛЕН У ТЕБЯ — НЕ трогаем")
+            print(f"   ✋ {show_name(rel):40} ПРАВЛЕН У ТЕБЯ — НЕ трогаем{where(rel)}")
             print(f"      {base_status.get(rel, 'опору найти нечем: не проверено')}")
         for rel in unknown:
             if history_unavailable is not None:
@@ -917,7 +1068,7 @@ def main() -> int:
                             else "; пакет держит её и сейчас")
                 else:
                     tail = " — в истории пакета такого содержимого нет"
-            print(f"   ❓ {str(rel):40} отличается, но отпечатка установки нет{tail}")
+            print(f"   ❓ {show_name(rel):40} отличается, но отпечатка установки нет{tail}{where(rel)}")
         if not (fresh or new_files or own_edits or unknown or old_pack):
             print("   инструменты совпадают с источником — забирать нечего")
         print()
@@ -929,6 +1080,9 @@ def main() -> int:
             print("   Или сведи автоматически непересекающиеся места: --merge <файл> положит "
                   "черновик РЯДОМ (живой файл не тронут); без пересечений — сразу "
                   "--accept-merge <файл> --apply.")
+            if any(is_second_rel(r) for r in own_edits):
+                print("   Для файлов второго каталога сведение (--merge) не работает — свою правку "
+                      "в них сводят руками.")
         if old_pack:
             print(f"≠ Без отпечатка установки, но текст — версия пакета из его истории: "
                   f"{len(old_pack)} — своей правки в них нет, обновятся и получат отпечаток.")
@@ -964,8 +1118,8 @@ def main() -> int:
 
         taking = fresh + new_files + old_pack + (unknown if a.overwrite_unknown else [])
         for rel in taking:
-            (tools / rel).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src_index[rel], tools / rel)
+            dest_of(rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src_index[rel], dest_of(rel))
         # 🪤 ОТПЕЧАТОК ОБНОВЛЯЕТСЯ ТОЛЬКО У ТОГО, ЧТО МЫ ПОЛОЖИЛИ САМИ. Первая редакция
         # переписывала отпечатки ВСЕХ файлов подряд — в том числе тех, что роль правила
         # у себя и которые мы честно не тронули. Их правка становилась «тем, что мы
@@ -975,9 +1129,9 @@ def main() -> int:
         # тут же появлялись заново.
         updated_fingerprints = dict(fingerprints)
         for rel in taking:
-            mine = tools / rel
+            mine = dest_of(rel)
             if mine.exists():
-                updated_fingerprints[str(rel).replace(chr(92), "/")] = digest(mine.read_bytes())
+                updated_fingerprints[fingerprint_key(rel)] = digest(mine.read_bytes())
         meta_updates = [("template_commit", rev),
                         ("template_files_sha", json.dumps(updated_fingerprints, ensure_ascii=False))]
         if write_source:
@@ -989,12 +1143,15 @@ def main() -> int:
         conn.commit()
         conn.close()
         print(f"{NEWLINE}✅ Забрано файлов: {len(taking)} · записана версия {rev} · "
-              f"отпечатков установки записано {len(updated_fingerprints)}")
+              f"отпечатков установки записано {len(updated_fingerprints)}"
+              + (f" · из забранных — во второй каталог: {sum(1 for r in taking if is_second_rel(r))}"
+                 if second_dir is not None else ""))
         print("источник в meta: " + (f"записан {source}" if write_source
                                      else f"оставлен {recorded_source}"))
         if own_edits:
             print(f"✋ НЕ тронуто твоих правок: {len(own_edits)} — "
-                  + " · ".join(str(x) for x in own_edits))
+                  + " · ".join(show_name(x) + ("  (второй каталог)" if is_second_rel(x) else "")
+                               for x in own_edits))
         if unknown and not a.overwrite_unknown:
             # 🪤 ВОЗВРАТ OPSSRE (карточка #604 ③-3): здесь стояло ложное обещание — «теперь
             # отпечатки есть, и следующий прогон скажет про них определённо». Неправда:
