@@ -51,6 +51,11 @@
   п) НАРОЧНАЯ ПОЛОМКА (в копии проверки): нулевой день не различается — (н) на такой копии
      краснеет, а (о) остаётся зелёным ⇒ красит РОВНО (н). Копия с поломкой кладётся в каталог
      из переменной MEZO_BREAKS_DIR (если задана), иначе — в стенд, который убирается при успехе.
+  р) встречный к месту: та же копия, но с реестром РЯДОМ (как у живого контура) — строки
+     «реестра рядом нет» нет вовсе. Проверка ищет реестр рядом с СОБОЙ, поэтому (н)(о) судят
+     КОПИЮ без реестра рядом, а не файл рядом с приёмкой: в живом контуре реестр лежит рядом
+     с проверкой, и ветка нулевого дня там не наступает (замер 2026-10-06 12:48 UTC в Atlas:
+     (н)(о) провалились на исправной проверке — судили место, а не нулевой день).
 
 Остальная часть — своя песочница: копия check-acceptance-env.py + синтетический стенд. Живой контур
 не трогает — все файлы синтетические, живая база не открывается вовсе (контур нулевого дня — свой,
@@ -537,13 +542,36 @@ def main() -> int:
                 "'проба приёмки: в ленте уже есть записка — день не нулевой')")
     con.commit()
     con.close()
+    # Проверка без --debt-list ищет реестр РЯДОМ С СОБОЙ. У живого контура он там лежит, и ветка
+    # «реестра рядом нет» не наступает — поэтому судим копию того же текста в каталоге без реестра,
+    # как общий прогон зовёт проверку свежего контура (так же лежит и копия поломки (п)).
+    real_copy_dir = fresh_root / "check-copy"
+    real_copy_dir.mkdir()
+    real_copy = real_copy_dir / "check-acceptance-env.py"
+    real_copy.write_text(real_source, encoding="utf-8")
+    (real_copy_dir / "mezo_paths.py").write_text(
+        Path(mezo_paths.__file__).read_text(encoding="utf-8"), encoding="utf-8")
     real_fresh_ok, real_fresh_note, real_used_ok, real_used_note = zero_day_verdicts(
-        REAL_CHECK, fresh_root, fresh_db, used_db)
+        real_copy, fresh_root, fresh_db, used_db)
     ok &= case("(н) свежий контур из пакета, реестра нет, в ленте нет записок — «ℹ️ … свойство нового "
                "контура» и ни одного «⚠️»",
-               real_fresh_ok, real_fresh_note, differ=True)
+               real_fresh_ok, f"копия {real_copy}: {real_fresh_note}", differ=True)
     ok &= case("(о) ТОТ ЖЕ контур, но в ленте одна записка — «⚠️», как было, и ни одного «ℹ️»",
                real_used_ok, real_used_note, differ=True)
+
+    # ── (р) встречный к месту: реестр рядом с копией — ветки «реестра рядом нет» нет вовсе ────
+    near_dir = fresh_root / "check-copy-with-debt"
+    near_dir.mkdir()
+    near_check = near_dir / "check-acceptance-env.py"
+    near_check.write_text(real_source, encoding="utf-8")
+    (near_dir / "mezo_paths.py").write_text(
+        Path(mezo_paths.__file__).read_text(encoding="utf-8"), encoding="utf-8")
+    (near_dir / "acceptance-env-debt.txt").write_text("", encoding="utf-8")
+    near_fresh_ok, near_fresh_note, _, _ = zero_day_verdicts(near_check, fresh_root, fresh_db, used_db)
+    ok &= case("(р) встречный к месту: реестр рядом с копией (как у живого контура) — строки "
+               "«реестра рядом нет» нет, (н) на ней не держится",
+               (not near_fresh_ok) and "строка про реестр: —" in near_fresh_note,
+               f"копия {near_check}: {near_fresh_note}")
 
     # ── (п) НАРОЧНАЯ ПОЛОМКА: в копии проверки нулевой день не различается ───────────────────
     anchor_zero_day = "        zero_day = bool(getattr(mezo_paths, \"is_zero_day\", lambda _db: False)(db_path))"

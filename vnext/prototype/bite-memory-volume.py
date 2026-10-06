@@ -24,7 +24,14 @@ init-group.py (как у bite-fresh-circuit.py); нулевой день — п�
     натравлен прогон)
   ⑧ НАРОЧНАЯ ПОЛОМКА (копия guard-all.py): у строки объёма нулевой день не различается ⇒ красит РОВНО ④
   ⑨ НАРОЧНАЯ ПОЛОМКА (копия guard-all.py): проверке реестра не передана база ⇒ красит РОВНО ⑦
-Копии с поломками кладутся в каталог из переменной MEZO_BREAKS_DIR (если задана), иначе — в стенд,
+  ⑩ встречный к месту: реестр рядом с проверкой (как у живого контура) — строк про реестр нет,
+    на такой копии не держатся РОВНО ⑤ и ⑦
+Общий прогон ищет проверки РЯДОМ С СОБОЙ (guard-all.py, tool()), а проверка реестра ищет реестр рядом
+с собой. Поэтому ④–⑦ судят КОПИЮ испытуемого guard-all.py среди инструментов свежего контура — там
+же, где копии поломок, — а не файл на его месте: живой guard-all находит живую проверку с реестром
+рядом, и ветка «реестра рядом нет» там не наступает (замер 2026-10-06 12:54 UTC в Atlas: ⑤⑦ провалились
+на исправном guard-all — судили место, а не нулевой день).
+Копии кладутся в каталог из переменной MEZO_BREAKS_DIR (если задана), иначе — в стенд,
 который убирается при успехе.
 """
 from __future__ import annotations
@@ -136,6 +143,17 @@ def breaks_dir(stand: Path, name: str) -> Path:
     return d
 
 
+def copy_tools(fresh_root: Path, name: str, guard_text: str) -> Path:
+    """Копия ВСЕХ инструментов свежего контура (они самодостаточны), guard-all.py в ней — данным
+    текстом. → путь к копии guard-all.py."""
+    bdir = breaks_dir(fresh_root, name)
+    shutil.copytree(fresh_root / ".mezosync" / "scripts", bdir / "scripts", dirs_exist_ok=True,
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    guard = bdir / "scripts" / "guard-all.py"
+    guard.write_text(guard_text, encoding="utf-8")
+    return guard
+
+
 def run_guard_in(guard: Path, db: Path, container: Path) -> str:
     """Общий прогон НА КОНТУРЕ СТЕНДА: среда закреплена за стендом, база названа --db."""
     r = subprocess.run([sys.executable, str(guard), "--db", str(db)],
@@ -209,21 +227,19 @@ def run_zero_day_cases() -> None:
     con.commit()
     con.close()
 
-    real = zero_day_verdicts(GUARD, fresh_root, fresh_db, used_db)
-    for mark in ("④", "⑤", "⑥", "⑦"):
-        case(CASE_TITLES[mark], real[mark][0], real[mark][1])
-
+    # Испытуемый guard-all — КОПИЕЙ среди инструментов свежего контура (почему — в шапке, случай ⑩).
     guard_src = GUARD.read_text(encoding="utf-8")
+    real_guard = copy_tools(fresh_root, "zero-day-real", guard_src)
+    real = zero_day_verdicts(real_guard, fresh_root, fresh_db, used_db)
+    for mark in ("④", "⑤", "⑥", "⑦"):
+        case(CASE_TITLES[mark], real[mark][0], f"копия {real_guard}: {real[mark][1]}")
+
     for mark, name, anchor, replacement, must_fail, what in ZERO_DAY_BREAKS:
         if guard_src.count(anchor) != 1:
             raise SystemExit(f"ПРИЁМКА НЕ СОСТОЯЛАСЬ: якорь поломки «{name}» найден "
                              f"{guard_src.count(anchor)} раз (ждали 1) — испытуемое изменилось")
-        # копия ВСЕХ инструментов этого контура (они самодостаточны) с одной подменённой строкой в guard-all.py
-        bdir = breaks_dir(fresh_root, name)
-        shutil.copytree(fresh_root / ".mezosync" / "scripts", bdir / "scripts", dirs_exist_ok=True,
-                        ignore=shutil.ignore_patterns("__pycache__"))
-        broken = bdir / "scripts" / "guard-all.py"
-        broken.write_text(guard_src.replace(anchor, replacement), encoding="utf-8")
+        # копия с одной подменённой строкой в guard-all.py
+        broken = copy_tools(fresh_root, name, guard_src.replace(anchor, replacement))
         got = zero_day_verdicts(broken, fresh_root, fresh_db, used_db)
         failed = {m for m, (ok, _note) in got.items() if not ok}
         case(f"{mark} поломка «{what}»: красит РОВНО {' '.join(sorted(must_fail))}, остальные из ④–⑦ зелёные",
@@ -231,6 +247,17 @@ def run_zero_day_cases() -> None:
              f"копия {broken}: провалились {sorted(failed) or 'никто'} (ждали {sorted(must_fail)}); "
              + "; ".join(f"{m} {'✅' if got[m][0] else '🔴'}" for m in ("④", "⑤", "⑥", "⑦"))
              + f" · строка на копии для {sorted(must_fail)[0]}: {got[sorted(must_fail)[0]][1][:90]}")
+
+    # ⑩ встречный к месту: реестр рядом с проверкой — ветки «реестра рядом нет» нет, ⑤⑦ не держатся
+    near_guard = copy_tools(fresh_root, "zero-day-near-debt", guard_src)
+    (near_guard.parent / "acceptance-env-debt.txt").write_text("", encoding="utf-8")
+    near = zero_day_verdicts(near_guard, fresh_root, fresh_db, used_db)
+    near_failed = {m for m, (ok, _note) in near.items() if not ok}
+    case("⑩ встречный к месту: реестр рядом с проверкой (как у живого контура) — строк про реестр нет, "
+         "не держатся РОВНО ⑤ и ⑦",
+         near_failed == {"⑤", "⑦"},
+         f"копия {near_guard}: провалились {sorted(near_failed) or 'никто'} (ждали ['⑤', '⑦']) · "
+         f"⑤: {near['⑤'][1][:70]}")
 
 
 def main(zero_day: bool = True) -> int:
