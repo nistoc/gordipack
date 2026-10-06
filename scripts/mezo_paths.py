@@ -56,6 +56,47 @@ import sys
 DB_NAME = "mezosync.db"
 
 
+# ═══ ПУСТОЙ ФАЙЛ БАЗЫ — НЕ БАЗА (починка (б), этап Э4 карточки #678, 2026-10-06) ═════════════════
+# Признак «файл mezosync.db есть» не отличал базу от пустышки нулевой длины. Пустышку оставляет
+# sqlite3.connect по несуществующему пути: так 20.08 в корне основного клона пакета появился
+# mezosync.db в 0 байт, и поиск корня принимал корень клона за корень мезосинка, а template_root —
+# за живой контур вместо пакета. Замер 2026-10-06: четыре приёмки пакета в основном клоне
+# провалились не по своей причине (две приёмки памяти, bite-actor-role-hint, bite-memory-volume ①–③).
+# ⚖️ Почему «не пуст», а не «есть таблицы»: признак проверяется на каждом шаге подъёма, а открыть
+# базу ради него дорого и опасно — открытие несуществующего пути само рождает пустышку. Пустой
+# файл — база без единой страницы, контура в нём нет по построению. Живой контур пустым не бывает:
+# в режиме WAL заголовок пишется в момент включения режима (замер 2026-10-06 13:13 UTC: 0 → 4096
+# байт сразу после PRAGMA journal_mode=WAL, ещё до первой таблицы).
+# ⛔ Граница: абсолютный --db на пустой файл resolve_db по-прежнему принимает — путь назван
+# вызывающим явно, это не поиск. Других читателей признака вне этого файла починка не трогает.
+def _is_db_file(path) -> bool:
+    """Файл базы, а не пустышка: существует, это файл, и он не пуст. Беда чтения — «не база»."""
+    try:
+        path = Path(path)
+        return path.is_file() and path.stat().st_size > 0
+    except OSError:
+        return False
+
+
+def _empty_db_note(walk_from, exact=()) -> str:
+    """Строки отказа о пустых файлах mezosync.db, которые поиск пропустил: вверх от walk_from
+    и в каталогах exact (сам каталог и его .mezosync). Нет таких — пустая строка.
+    Беда чтения — молчание: подсказка не вправе уронить отказ, которому помогает."""
+    seen = []
+    try:
+        start = Path(walk_from).resolve()
+        dirs = [*(start, *start.parents), *(Path(d) for d in exact if d is not None)]
+        for d in dirs:
+            for f in (d / DB_NAME, d / ".mezosync" / DB_NAME):
+                if f not in seen and f.is_file() and f.stat().st_size == 0:
+                    seen.append(f)
+    except OSError:
+        pass
+    return "".join(f"     ⚠️ пустой файл {f.as_posix()} (0 байт) — это не база, пропущен: такой "
+                   "оставляет подключение к несуществующему пути, данных в нём нет.\n"
+                   for f in seen[:3])
+
+
 # ═══ НУЖЕН ЛИ ВЫЗЫВАЮЩЕМУ ВТОРОЙ ЗАМОК — ЭТО ВЫЧИСЛЯЕТСЯ, А НЕ УГАДЫВАЕТСЯ ═══
 # Врезано 2026-09-06 по приёмке @COORD карточки #575 (её разбор — событие карточки,
 # 2026-09-06 04:48 UTC). Прежде здесь и в тексте приёмки стояло основание «в точке отказа
@@ -217,7 +258,7 @@ def mezo_root(script_file) -> Path:
     """
     p = Path(script_file).resolve().parent
     for cand in (p, *p.parents):
-        if (cand / DB_NAME).exists():
+        if _is_db_file(cand / DB_NAME):
             return cand
     # ⛔ ГРОМКО, А НЕ ТИХО — сведено 2026-08-20 06:10 UTC по заявке @PROTO (записка #3697 ②).
     # Прежде здесь стоял возврат «ожидаемого места» (parent.parent). Он выглядел безобидной
@@ -262,12 +303,14 @@ def mezo_root(script_file) -> Path:
         # Обе раскладки, как и в отсечке template_root: база может лежать в подкаталоге
         # .mezosync контейнера или прямо в названном каталоге.
         for cand in (src / ".mezosync", src):
-            if (cand / DB_NAME).exists():
+            if _is_db_file(cand / DB_NAME):
                 return cand
     paths_file = _paths_file_for_advice(loc, script_file)
     sys.exit(
         f"ERR: корень мезосинка НЕ НАЙДЕН: файла {DB_NAME} нет ни в одном предке.\n"
         f"     Искал вверх от: {Path(script_file).resolve().parent}\n"
+        + _empty_db_note(Path(script_file).resolve().parent,
+                         exact=(Path(env) if env else None, loc_dir))
         + (f"     MEZO_CONTAINER={env} — задана, но {DB_NAME} по ней не найден.\n"
            if env else "")
         + (f"     файл путей: container={loc_dir} — задан, но {DB_NAME} по нему не найден.\n"
@@ -397,7 +440,7 @@ def _legacy_hint(key: str, candidates: list):
     db = None
     try:
         for c in candidates:
-            if (c.parent.parent / DB_NAME).is_file():
+            if _is_db_file(c.parent.parent / DB_NAME):
                 db = c.parent.parent / DB_NAME
                 break
         if key in _LEGACY_FILE_KEYS:
@@ -508,11 +551,11 @@ def container_root(script_file=None) -> Path:
         return Path(env)
     start = Path(script_file or __file__).resolve().parent
     for cand in (start, *start.parents):
-        if (cand / ".mezosync" / DB_NAME).exists():
+        if _is_db_file(cand / ".mezosync" / DB_NAME):
             return cand
     loc = local_path("container", script_file)
     loc_dir = loc.path if loc.outcome == LOCAL_DECLARED else None
-    if loc_dir and (loc_dir / ".mezosync" / DB_NAME).exists():
+    if loc_dir and _is_db_file(loc_dir / ".mezosync" / DB_NAME):
         return loc_dir
     # ⚡ ССЫЛКА НА ПЕРВЫЙ ЗАМОК (карточка #575, находка @COORD): сюда чаще всего приходят
     # ПО СОВЕТУ соседнего отказа — он предлагает «--db абсолютным», и этот выход снимает
@@ -524,6 +567,7 @@ def container_root(script_file=None) -> Path:
              "вверх по дереву).\n     Задай MEZO_CONTAINER=<путь> либо создай файл путей "
              f"{paths_file} с ключом container.\n"
              f"     Искал от: {start}\n"
+             + _empty_db_note(start, exact=(loc_dir,))
              + (f"     файл путей: container={loc_dir} — задан, но {DB_NAME} по нему не найден.\n"
                 if loc_dir else "")
              + (f"     {loc.words}\n" if loc.outcome == LOCAL_UNREADABLE else "")
@@ -594,7 +638,8 @@ def template_root(script_file=None) -> Path:
         # когда кандидат — сам каталог .mezosync) или в его подкаталоге (…/.atlas).
         # Первая редакция отсечки проверяла только вторую форму и промахнулась ровно
         # на здешней раскладке — поймано прогоном сразу после правки, а не рассуждением.
-        if (cand / ".mezosync" / DB_NAME).exists() or (cand / DB_NAME).exists():
+        # Пустой файл базы признаком контура не считается (_is_db_file, починка (б), 06.10).
+        if _is_db_file(cand / ".mezosync" / DB_NAME) or _is_db_file(cand / DB_NAME):
             continue
         if (cand / "scripts" / "init-group.py").exists():
             return cand

@@ -165,7 +165,7 @@ BREAKS = {
         "строка container= прежнего local.paths принимается за значение"),
     # ── поиск корня ───────────────────────────────────────────────────────────────────────────────
     "container-file-ignored": ("mezo_paths.py", [(
-        '    if loc_dir and (loc_dir / ".mezosync" / DB_NAME).exists():' + "\n"
+        '    if loc_dir and _is_db_file(loc_dir / ".mezosync" / DB_NAME):' + "\n"
         "        return loc_dir",
         "    if False:" + "\n"
         "        return loc_dir")], {"M1"},
@@ -187,17 +187,17 @@ BREAKS = {
     "env-first-in-mezo-root": ("mezo_paths.py", [(
         "    p = Path(script_file).resolve().parent" + "\n"
         "    for cand in (p, *p.parents):" + "\n"
-        "        if (cand / DB_NAME).exists():" + "\n"
+        "        if _is_db_file(cand / DB_NAME):" + "\n"
         "            return cand" + "\n"
         "    # ⛔ ГРОМКО",
         '    _e = os.environ.get("MEZO_CONTAINER")' + "\n"
         "    if _e:" + "\n"
         '        for _c in (Path(_e) / ".mezosync", Path(_e)):' + "\n"
-        "            if (_c / DB_NAME).exists():" + "\n"
+        "            if _is_db_file(_c / DB_NAME):" + "\n"
         "                return _c" + "\n"
         "    p = Path(script_file).resolve().parent" + "\n"
         "    for cand in (p, *p.parents):" + "\n"
-        "        if (cand / DB_NAME).exists():" + "\n"
+        "        if _is_db_file(cand / DB_NAME):" + "\n"
         "            return cand" + "\n"
         "    # ⛔ ГРОМКО")], {"M4"},
         "mezo_root слушает среду раньше признака: стенд уходит в базу, названную средой"),
@@ -214,12 +214,12 @@ BREAKS = {
         "        return Path(env)" + "\n"
         "    start = Path(script_file or __file__).resolve().parent" + "\n"
         "    for cand in (start, *start.parents):" + "\n"
-        '        if (cand / ".mezosync" / DB_NAME).exists():',
+        '        if _is_db_file(cand / ".mezosync" / DB_NAME):',
         "    if False:" + "\n"
         "        return Path(env)" + "\n"
         "    start = Path(script_file or __file__).resolve().parent" + "\n"
         "    for cand in (start, *start.parents):" + "\n"
-        '        if (cand / ".mezosync" / DB_NAME).exists():')], {"M7"},
+        '        if _is_db_file(cand / ".mezosync" / DB_NAME):')], {"M7"},
         "container_root не слушает MEZO_CONTAINER первым"),
     # ── приложения правил ─────────────────────────────────────────────────────────────────────────
     "annex-file-ignored": ("mezo_paths.py", [(
