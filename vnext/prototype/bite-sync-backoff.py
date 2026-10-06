@@ -100,7 +100,11 @@ def bridge_stand():
     db = str(ours / ".mezosync" / "mezosync.db")
     neigh = tmp / "neigh"
     (neigh / ".mezosync").mkdir(parents=True)
-    sqlite3.connect(str(neigh / ".mezosync" / "mezosync.db")).close()
+    # база-признак — настоящий файл (заголовок SQLite), не пустышка 0 байт: пустую поиск корня
+    # с 06.10 пропускает (починка (б), карточка #678)
+    marker = sqlite3.connect(str(neigh / ".mezosync" / "mezosync.db"))
+    marker.execute("PRAGMA user_version = 1")
+    marker.close()
     con = sqlite3.connect(db)
     con.execute("CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, "
                 "writer_role TEXT, body_md TEXT)")

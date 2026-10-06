@@ -54,7 +54,11 @@ def build(tmp: pathlib.Path, with_ask: bool, with_answer: bool, with_box: bool):
 
     theirs = tmp / "neigh"
     (theirs / ".mezosync").mkdir(parents=True)
-    sqlite3.connect(theirs / ".mezosync" / "mezosync.db").close()
+    # база-признак — настоящий файл (заголовок SQLite), не пустышка 0 байт: пустую поиск корня
+    # с 06.10 пропускает (починка (б), карточка #678)
+    marker = sqlite3.connect(theirs / ".mezosync" / "mezosync.db")
+    marker.execute("PRAGMA user_version = 1")
+    marker.close()
     if with_box:
         box = theirs / "neigh.archs" / ".mezosync" / "bridges" / "neigh-atlas"
         box.mkdir(parents=True)

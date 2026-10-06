@@ -537,6 +537,18 @@ def case(mark, name, cond, detail="", differ=True):
             FAILED.append(mark)
 
 
+def marker_db(path: Path) -> None:
+    """База-признак стенда: НАСТОЯЩИЙ файл SQLite (заголовок 4096 байт), а не пустышка 0 байт.
+
+    С 06.10 (починка (б), карточка #678) пустой mezosync.db признаком контура не служит: голое
+    sqlite3.connect(...).close() оставляет ровно такую пустышку, и поиск корня проходит мимо неё.
+    Так приёмка провалила M1 M2, а M4 прошёл бы и на своей поломке: пустая «чужая» база
+    пропускалась, и поиск возвращался к своей. Запись user_version пишет заголовок файла."""
+    con = sqlite3.connect(str(path))
+    con.execute("PRAGMA user_version = 1")
+    con.close()
+
+
 def same(a, b) -> bool:
     """Два пути — один и тот же (короткие имена Windows и регистр не мешают)."""
     try:
@@ -583,10 +595,10 @@ class Run:
 
     def build_base(self):
         """Общие копии: mezo_paths, backup-db, rules-from-pack (с соседями) и шаг переноса."""
-        # Общие копии лежат В контейнере (у него своя пустая база-признак): иначе поломка порядка
-        # поиска корня краснила бы заодно всё, что запускается из этих копий, — не одну свою причину.
+        # Общие копии лежат В контейнере (у него своя база-признак, настоящий файл — marker_db): иначе
+        # поломка порядка поиска корня краснила бы заодно всё, что запускается из этих копий, — не одну свою причину.
         self.scripts.mkdir(parents=True, exist_ok=True)
-        sqlite3.connect(str(self.scripts.parent / "mezosync.db")).close()
+        marker_db(self.scripts.parent / "mezosync.db")
         for name in ("mezo_paths.py", "backup-db.py", "rules-from-pack.py"):
             mezo_stand.copy_tool(self.src[name], self.scripts)
         steps = self.scripts / "migrations"
@@ -755,7 +767,7 @@ def group_root(run: Run):
     # живой-подобный контейнер с базой: туда указывает файл путей / среда
     real = run.box / "real"
     (real / ".mezosync").mkdir(parents=True)
-    sqlite3.connect(str(real / ".mezosync" / "mezosync.db")).close()
+    marker_db(real / ".mezosync" / "mezosync.db")
     # M1 container_root, копия ВНЕ контейнера: файл путей рядом (третий источник) работает
     c, x = run.outside_dir("m1", paths={"container": str(real)})
     rc, out = run.probe(c, f"print(m.container_root({str(x)!r}))")
@@ -780,7 +792,7 @@ def group_root(run: Run):
     c, _ = run.case_dir("m4")
     other = run.box / "other-circuit"
     (other / ".mezosync").mkdir(parents=True, exist_ok=True)
-    sqlite3.connect(str(other / ".mezosync" / "mezosync.db")).close()
+    marker_db(other / ".mezosync" / "mezosync.db")
     rc, out = run.probe(c, f"print(m.mezo_root({str(c / '.mezosync' / 'scripts' / 'x.py')!r}))",
                         drop_container=False, MEZO_CONTAINER=str(other))
     got = out.strip().splitlines()[-1] if out.strip() else ""

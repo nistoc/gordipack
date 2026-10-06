@@ -81,7 +81,11 @@ def контур(tmp: pathlib.Path, с_контейнером=True) -> tuple:
     контейнер = tmp / "контур"
     if с_контейнером:
         (контейнер / ".mezosync").mkdir(parents=True)
-        sqlite3.connect(контейнер / ".mezosync" / "mezosync.db").close()
+        # база-признак — настоящий файл (заголовок SQLite), не пустышка 0 байт: пустую поиск корня
+        # с 06.10 пропускает (починка (б), карточка #678)
+        marker = sqlite3.connect(контейнер / ".mezosync" / "mezosync.db")
+        marker.execute("PRAGMA user_version = 1")
+        marker.close()
     репо = контейнер / "общий.archs"
     репо.mkdir(parents=True)
     git(репо, "init", "-q")

@@ -62,7 +62,11 @@ def стенд(tmp: pathlib.Path, сосед_есть=True) -> tuple:
                 "target_db_path TEXT, description TEXT)")
     сосед = tmp / "neigh"
     (сосед / ".mezosync").mkdir(parents=True)
-    sqlite3.connect(str(сосед / ".mezosync" / "mezosync.db")).close()
+    # база-признак — настоящий файл (заголовок SQLite), не пустышка 0 байт: пустую поиск корня
+    # с 06.10 пропускает (починка (б), карточка #678)
+    marker = sqlite3.connect(str(сосед / ".mezosync" / "mezosync.db"))
+    marker.execute("PRAGMA user_version = 1")
+    marker.close()
     путь = str(сосед / ".mezosync" / "mezosync.db") if сосед_есть else str(
         tmp / "нет-такого" / ".mezosync" / "mezosync.db")
     con.execute("INSERT INTO cross_links VALUES ('atlas','neigh',?,'проба')", (путь,))

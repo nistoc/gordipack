@@ -83,10 +83,13 @@ def case(title, ok, detail=""):
 
 
 def empty_db(path: pathlib.Path) -> None:
-    """Настоящая, но ПУСТАЯ sqlite-база — только признак существования файла для
-    container_root()/mezo_root(); схему сознательно не несёт (см. докстринг модуля)."""
+    """Настоящая sqlite-база БЕЗ СХЕМЫ — только признак контура для container_root()/mezo_root();
+    схему сознательно не несёт (см. докстринг модуля). Заголовок файла пишется (user_version):
+    пустышку 0 байт поиск корня с 06.10 пропускает (починка (б), карточка #678)."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    sqlite3.connect(str(path)).close()
+    marker = sqlite3.connect(str(path))
+    marker.execute("PRAGMA user_version = 1")
+    marker.close()
 
 
 def build_stand(label: str, layout: str) -> pathlib.Path:

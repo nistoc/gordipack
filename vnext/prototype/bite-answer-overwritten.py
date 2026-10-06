@@ -68,7 +68,11 @@ def make_stand(tmp: pathlib.Path, with_repo=True) -> tuple:
 
     neigh_root = tmp / "neigh"
     (neigh_root / ".mezosync").mkdir(parents=True)
-    sqlite3.connect(neigh_root / ".mezosync" / "mezosync.db").close()
+    # база-признак — настоящий файл (заголовок SQLite), не пустышка 0 байт: пустую поиск корня
+    # с 06.10 пропускает (починка (б), карточка #678)
+    marker = sqlite3.connect(neigh_root / ".mezosync" / "mezosync.db")
+    marker.execute("PRAGMA user_version = 1")
+    marker.close()
     their_box = neigh_root / "neigh.archs" / ".mezosync" / "bridges" / "neigh-atlas"
     their_box.mkdir(parents=True)
 

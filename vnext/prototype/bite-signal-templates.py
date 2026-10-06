@@ -688,7 +688,11 @@ def main() -> int:
             return 2
         container = sandbox / "чужой-контейнер"
         (container / ".mezosync").mkdir(parents=True, exist_ok=True)
-        (container / ".mezosync" / "mezosync.db").write_bytes(b"")
+        # база-признак — настоящий файл (заголовок SQLite), не пустышка 0 байт: пустую поиск корня
+        # с 06.10 пропускает (починка (б), карточка #678)
+        marker = sqlite3.connect(str(container / ".mezosync" / "mezosync.db"))
+        marker.execute("PRAGMA user_version = 1")
+        marker.close()
         (container / "repo" / ".mezosync" / "bridges" /
          f"{our_group}-{new_neighbor}").mkdir(parents=True, exist_ok=True)
         code14, output14 = call_tool(tool, db, "--role", "PROTO", "--to", new_neighbor.upper(),
