@@ -39,6 +39,14 @@ MEZO_CONTAINER указывает на другой (живой) контур, �
 (общий прогон её пробрасывает), код 0; строго — `--no-debt-list`. Реестр, указанный ЯВНО
 через `--debt-list`, но отсутствующий — отказ, код 2: там опечатка, а не новый контур.
 
+НУЛЕВОЙ ДЕНЬ (заявка 29 пакета). Отсутствие реестра у контура, который только что собран из пакета
+и в котором ещё никто не писал, — свойство нового контура, а не потеря: такие строки идут с «ℹ️»
+(«свойство нового контура»), а не с «⚠️». Различитель — общий признак mezo_paths.is_zero_day: во
+всей ленте базы нет ни одной записки (тот же, что у карточки #606). `--db` называет базу, по
+ленте которой это судится; без него берётся база контейнера. Базы нет, ленты нет или она не
+читается — день НЕ нулевой, и строка остаётся «⚠️», как была. Первая же записка в ленту возвращает
+«⚠️»: контур, где уже пишут, обязан завести реестр.
+
 ЗАКОННЫЙ СЛУЧАЙ (инструмент контур не читает, среда ему безразлична, --db уже
 абсолютный и достаточный и т.п.) — комментарий-разрешение НА ТОЙ ЖЕ СТРОКЕ, ГДЕ ВЫЗОВ:
     subprocess.run([sys.executable, str(TOOL), ...])   # env: caller — <причина словами>
@@ -66,9 +74,10 @@ mezo_*), через «+», как раньше. Цена упрощения ③:
 тоже не прослеживается: цепочка идёт по присваиваниям и в тело вызываемой функции
 не заходит (граница названа по записке COORD #5272; в живых приёмках такой формы нет).
 
-    python check-acceptance-env.py [--json] [--debt-list ПУТЬ] [--no-debt-list]
+    python check-acceptance-env.py [--json] [--debt-list ПУТЬ] [--no-debt-list] [--db ПУТЬ]
 exit 0 — новых находок нет (либо всё разрешено/учтено долгом, либо реестра рядом нет —
-тогда строка «⚠️» с числом); exit 1 — есть; exit 2 — явно указанного реестра нет.
+тогда строка «⚠️» с числом, а на нулевом дне контура — «ℹ️»); exit 1 — есть; exit 2 —
+явно указанного реестра нет.
 """
 import argparse
 import ast
@@ -440,24 +449,33 @@ def format_key(key: tuple) -> str:
     return " :: ".join(key)
 
 
-def report_without_debt(as_json: bool, debt_path: Path, findings: list, excused: list) -> int:
+def report_without_debt(as_json: bool, debt_path: Path, findings: list, excused: list,
+                        zero_day: bool = False) -> int:
     """Реестра по умолчанию рядом нет (так выглядит контур, собранный из пакета GORDI) —
-    находки печатаются предупреждением с числом, код 0. Почему не провал — в шапке файла."""
+    находки печатаются предупреждением с числом, код 0. Почему не провал — в шапке файла.
+
+    zero_day — нулевой день контура (заявка 29 пакета): в ленте нет ни одной записки, и отсутствие
+    реестра — свойство нового контура, а не потеря. Тогда строки идут с «ℹ️», а не с «⚠️»
+    (общий прогон пробрасывает оба знака, но «⚠️» читается как «чини»)."""
     files = len({p for p, _n in findings})
     if as_json:
         print(json.dumps({
             "ok": True,
             "findings": [{"file": p, "line": n} for p, n in findings],
             "excused": [{"file": p, "line": n, "reason": r} for p, n, r in excused],
-            "debt": {"path": str(debt_path), "missing": True},
+            "debt": {"path": str(debt_path), "missing": True, "zero_day": zero_day},
         }, ensure_ascii=False, indent=2))
         return 0
+    sign = "ℹ️" if zero_day else "⚠️"
     if findings:
-        print(f"⚠️ реестра известного долга рядом нет ({debt_path.name}) — известное от нового "
-              f"не отличить: вызовов без env= закреплённого стенда {len(findings)} в {files} файлах, "
+        why = (" — свойство нового контура (в ленте нет ни одной записки), известное от нового "
+               "ещё не отличить" if zero_day else " — известное от нового не отличить")
+        print(f"{sign} реестра известного долга рядом нет ({debt_path.name}){why}: "
+              f"вызовов без env= закреплённого стенда {len(findings)} в {files} файлах, "
               f"провалом не считаю")
-        print(f"⚠️ судить строго: python {Path(__file__).resolve()} --no-debt-list")
-    print(f"итог без реестра долга: находок {len(findings)} — предупреждение, не провал"
+        print(f"{sign} судить строго: python {Path(__file__).resolve()} --no-debt-list")
+    print(f"итог без реестра долга: находок {len(findings)} — "
+          f"{'свойство нового контура' if zero_day else 'предупреждение'}, не провал"
           f" · прощено комментарием: {len(excused)}")
     return 0
 
@@ -471,6 +489,9 @@ def main() -> int:
                          "указанного файла нет — отказ, код 2)")
     ap.add_argument("--no-debt-list", action="store_true",
                     help="судить БЕЗ реестра — любая непрощённая находка есть провал (как до карточки #613 ②)")
+    ap.add_argument("--db", default=None,
+                    help="база контура, по ленте которой судится нулевой день (по умолчанию — база "
+                         "контейнера); читается только запросом SELECT, нужна лишь когда реестра рядом нет")
     args = ap.parse_args()
 
     container = mezo_paths.container_root(__file__)
@@ -507,7 +528,11 @@ def main() -> int:
         if args.debt_list:
             print(f"⛔ реестр долга не найден: {debt_path} — укажи верный путь или суди без реестра: --no-debt-list")
             return 2
-        return report_without_debt(args.json, debt_path, all_findings, all_excused)
+        # Нулевой день — по ленте базы (общий признак mezo_paths.is_zero_day). getattr: у модуля
+        # старее этой правки признака нет — тогда прежнее «⚠️», а не падение. Не прочиталось — тоже «⚠️».
+        db_path = Path(args.db) if args.db else container / ".mezosync" / mezo_paths.DB_NAME
+        zero_day = bool(getattr(mezo_paths, "is_zero_day", lambda _db: False)(db_path))
+        return report_without_debt(args.json, debt_path, all_findings, all_excused, zero_day)
     debt = load_debt(debt_path)
     known_calls, known_files, legitimate_calls, new_items, shrunk = reconcile(all_keyed, debt)
     ok = not new_items

@@ -43,10 +43,22 @@
   — (к) пропадает, (л) остаётся; «голое имя-аргумент не прослеживается» — (л) пропадает,
   (к) остаётся; «обёртка run(…) прослеживается как subprocess» — (м) становится находкой.
 
-Своя песочница: копия check-acceptance-env.py + синтетический стенд. Живой контур
-не трогает — все файлы синтетические, живая база не открывается вовсе.
+Нулевой день контура (заявка 29 пакета): реестра рядом нет у свежесобранного контура — это свойство
+нового контура, «ℹ️», а не «⚠️». Контур для этих случаев СОБИРАЕТСЯ из пакета сборщиком init-group.py
+(так же, как у bite-fresh-circuit.py), а не рисуется рукой: признак читается из ленты настоящей базы.
+  н) свежий контур (в ленте нет записок), реестра нет ... «ℹ️ … свойство нового контура», ни одного «⚠️»  РАЗЛИЧАЮЩИЙ
+  о) ТОТ ЖЕ контур, но в ленте одна записка ................ «⚠️», как было, ни одного «ℹ️»                  РАЗЛИЧАЮЩИЙ
+  п) НАРОЧНАЯ ПОЛОМКА (в копии проверки): нулевой день не различается — (н) на такой копии
+     краснеет, а (о) остаётся зелёным ⇒ красит РОВНО (н). Копия с поломкой кладётся в каталог
+     из переменной MEZO_BREAKS_DIR (если задана), иначе — в стенд, который убирается при успехе.
+
+Остальная часть — своя песочница: копия check-acceptance-env.py + синтетический стенд. Живой контур
+не трогает — все файлы синтетические, живая база не открывается вовсе (контур нулевого дня — свой,
+во временном каталоге).
 """
 import json
+import os
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -285,6 +297,74 @@ def shrunk_rows(data, fname):
             if Path(row["file"]).name == fname]
 
 
+# ── нулевой день контура (заявка 29 пакета): свежий контур собирается из пакета ───────────
+def find_pack():
+    """Корень пакета — теми же местами, что у bite-fresh-circuit.py; не нашёлся — None."""
+    candidates = []
+    try:
+        candidates.append(mezo_paths.template_root())
+    except SystemExit:
+        pass
+    here = Path(__file__).resolve().parent
+    candidates += [here.parent.parent / "gordipack", here.parent / "gordipack"]
+    return next((p for p in candidates if (p / "scripts" / "init-group.py").exists()), None)
+
+
+def build_fresh_circuit(pack: Path):
+    """Свежий контур — тем же сборщиком init-group.py, что у bite-fresh-circuit.py.
+
+    → (корень контура, база или None, вывод сборщика). В каталог его скриптов кладётся ещё один
+    синтетический вызов без env= (случай ① этой приёмки), чтобы находка была при ЛЮБОМ составе пакета:
+    без находок проверка не печатает строку про реестр вовсе, и случай судил бы пустоту."""
+    root = mezo_stand.new("bite-acceptance-env-fresh-")
+    mez = root / ".mezosync"
+    r = subprocess.run([sys.executable, str(pack / "scripts" / "init-group.py"), "--name", "bite",
+                        "--path", str(mez), "--roles", "coord"],
+                       capture_output=True, text=True, encoding="utf-8", timeout=300,
+                       env=mezo_stand.stand_env(root))
+    db = mez / "mezosync.db"
+    if r.returncode == 0 and db.exists() and (mez / "scripts").is_dir():
+        (mez / "scripts" / "fake-container-tool.py").write_text(FAKE_CONTAINER_TOOL, encoding="utf-8")
+        (mez / "scripts" / "bite-case1-no-env.py").write_text(BITE_CASE1_NO_ENV, encoding="utf-8")
+        return root, db, ""
+    return root, None, ((r.stdout or "") + (r.stderr or ""))[-600:]
+
+
+def breaks_dir(stand: Path, name: str) -> Path:
+    """Куда класть копию инструмента с нарочной поломкой: <MEZO_BREAKS_DIR>/<имя>, а без переменной —
+    внутрь стенда (он убирается при успехе). Так копию поломки можно предъявить глазами."""
+    base = os.environ.get("MEZO_BREAKS_DIR")
+    d = (Path(base) / name) if base else (stand / "breaks" / name)
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def zero_day_verdicts(check: Path, container: Path, fresh_db: Path, used_db: Path):
+    """Звать проверку НА ДВУХ базах одного контура — без записок в ленте и с одной запиской —
+    и вернуть суждения (н) и (о) с подробностью. Звать её прямым вызовом, как зовёт общий прогон
+    (без --no-debt-list и без --debt-list): ветка «реестра рядом нет» — именно она."""
+    def run(db: Path):
+        r = subprocess.run([sys.executable, str(check), "--db", str(db)],
+                           capture_output=True, text=True, encoding="utf-8",
+                           env=mezo_stand.stand_env(container, PYTHONIOENCODING="utf-8"))
+        out = (r.stdout or "") + (r.stderr or "")
+        lines = out.splitlines()
+        marked = [l for l in lines if "реестра известного долга рядом нет" in l]
+        return r.returncode, lines, marked
+
+    rc_n, lines_n, marked_n = run(fresh_db)
+    rc_o, lines_o, marked_o = run(used_db)
+    fresh_ok = (rc_n == 0 and len(marked_n) == 1 and marked_n[0].startswith("ℹ️")
+                and "свойство нового контура" in marked_n[0]
+                and not any(l.startswith("⚠️") for l in lines_n))
+    used_ok = (rc_o == 0 and len(marked_o) == 1 and marked_o[0].startswith("⚠️")
+               and not any(l.startswith("ℹ️") for l in lines_o))
+    return (fresh_ok, f"rc={rc_n} · строка про реестр: {marked_n[0][:90] if marked_n else '—'}"
+                      f" · «⚠️»: {sum(l.startswith('⚠️') for l in lines_n)}",
+            used_ok, f"rc={rc_o} · строка про реестр: {marked_o[0][:90] if marked_o else '—'}"
+                     f" · «ℹ️»: {sum(l.startswith('ℹ️') for l in lines_o)}")
+
+
 def main() -> int:
     if not REAL_CHECK.exists():
         raise SystemExit(f"⛔ НЕ ЗАПУСТИЛАСЬ: {REAL_CHECK} не найден — приёмке нечего испытывать.")
@@ -441,6 +521,48 @@ def main() -> int:
     ok &= case("(ж) поломка «ветки реестра нет»: (д) снова провал — новый контур упал бы",
                rc7 == 1,
                f"rc={rc7} на копии без ветки — должно быть 1", differ=True)
+
+    # ── (н)(о)(п) НУЛЕВОЙ ДЕНЬ: свежий контур из пакета — «ℹ️ свойство нового контура», не «⚠️» ──
+    pack = find_pack()
+    if pack is None:
+        raise SystemExit("⛔ НЕ ЗАПУСТИЛАСЬ: пакета с scripts/init-group.py не нашлось (ни по mezo_paths."
+                         "template_root(), ни рядом) — свежий контур собрать не из чего, случаи (н)(о)(п) "
+                         "не состоялись. Это не «зелёное».")
+    fresh_root, fresh_db, build_note = build_fresh_circuit(pack)
+    if fresh_db is None:
+        raise SystemExit(f"⛔ НЕ ЗАПУСТИЛАСЬ: сборщик init-group.py не собрал контур: {build_note}")
+    used_db = mezo_stand.snapshot_db(fresh_db, fresh_root / ".mezosync" / "mezosync-used.db")
+    con = sqlite3.connect(str(used_db))
+    con.execute("INSERT INTO messages (writer_role, body_md) VALUES ('COORD', "
+                "'проба приёмки: в ленте уже есть записка — день не нулевой')")
+    con.commit()
+    con.close()
+    real_fresh_ok, real_fresh_note, real_used_ok, real_used_note = zero_day_verdicts(
+        REAL_CHECK, fresh_root, fresh_db, used_db)
+    ok &= case("(н) свежий контур из пакета, реестра нет, в ленте нет записок — «ℹ️ … свойство нового "
+               "контура» и ни одного «⚠️»",
+               real_fresh_ok, real_fresh_note, differ=True)
+    ok &= case("(о) ТОТ ЖЕ контур, но в ленте одна записка — «⚠️», как было, и ни одного «ℹ️»",
+               real_used_ok, real_used_note, differ=True)
+
+    # ── (п) НАРОЧНАЯ ПОЛОМКА: в копии проверки нулевой день не различается ───────────────────
+    anchor_zero_day = "        zero_day = bool(getattr(mezo_paths, \"is_zero_day\", lambda _db: False)(db_path))"
+    if real_source.count(anchor_zero_day) != 1:
+        raise SystemExit(f"ПРИЁМКА НЕ СОСТОЯЛАСЬ: якорь различителя нулевого дня найден "
+                         f"{real_source.count(anchor_zero_day)} раз")
+    broken_dir = breaks_dir(fresh_root, "zero-day-check")
+    broken_check = broken_dir / "check-acceptance-env.py"
+    broken_check.write_text(real_source.replace(
+        anchor_zero_day, "        zero_day = False  # ПОЛОМКА (п): нулевой день не различается"),
+        encoding="utf-8")
+    (broken_dir / "mezo_paths.py").write_text(
+        Path(mezo_paths.__file__).read_text(encoding="utf-8"), encoding="utf-8")
+    brk_fresh_ok, brk_fresh_note, brk_used_ok, brk_used_note = zero_day_verdicts(
+        broken_check, fresh_root, fresh_db, used_db)
+    ok &= case("(п) поломка «нулевой день не различается»: красит РОВНО (н), а (о) остаётся зелёным",
+               (not brk_fresh_ok) and brk_used_ok,
+               f"копия {broken_check}: (н) {'✅' if brk_fresh_ok else '🔴'} — {brk_fresh_note}; "
+               f"(о) {'✅' if brk_used_ok else '🔴'} — {brk_used_note}", differ=True)
 
     print()
     print(f"{'✅ ПРИЁМКА ПРИНЯТА' if ok else '🔴 НЕ ПРИНЯТА'} — случаев {CASES}, различающих {DIFFER}")
