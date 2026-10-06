@@ -1179,6 +1179,77 @@ def cmd_queue(conn, a):
           f'--since "{db_now}"')
 
 
+# ═══ Э3, заявка пакета 26, п. в: show берёт ТОЛЬКО номер карточки ═══════════════════════
+# Прежде «show --role РОЛЬ» (роль вместо номера), «show abc» и «show» без номера получали
+# голый отказ разбора аргументов: «invalid int value» / «arguments are required» — по-английски
+# и без слова о том, что делать. Роль тянется к show из list (там --role нужен), и путают именно
+# эту пару. Теперь отказ — ДО разбора и словами: что ожидалось, что получено, как сделать то,
+# что, вероятно, хотели. Верный вызов (show <число>) и справка (show --help) сюда не попадают:
+# разбор аргументов для них прежний.
+def _is_int_token(tok):
+    """Принимает то же, что разбор аргументов с type=int, — чтобы верный вызов не получил отказа."""
+    try:
+        int(tok)
+    except ValueError:
+        return False
+    return True
+
+
+def _quote_if_spaced(value):
+    """Значение с пробелом в подсказке берётся в кавычки, чтобы её можно было скопировать."""
+    return f'"{value}"' if any(ch.isspace() for ch in value) else value
+
+
+def show_form_refusal(tail):
+    """Строки отказа для подкоманды show — или None, если форма верна (или просят справку).
+
+    tail — всё, что стоит в командной строке ПОСЛЕ слова show."""
+    if "-h" in tail or "--help" in tail:
+        return None
+    role = None          # None — флага --role не было; "" — он был без значения
+    positional = []
+    i = 0
+    while i < len(tail):
+        tok = tail[i]
+        if tok == "--role":
+            role = ""
+            if i + 1 < len(tail) and not tail[i + 1].startswith("-"):
+                i += 1
+                role = tail[i]
+        elif tok.startswith("--role="):
+            role = tok.split("=", 1)[1]
+        elif tok.startswith("-") and not _is_int_token(tok):
+            pass         # прочие флаги — дело разбора аргументов: его отказ остаётся прежним
+        else:
+            positional.append(tok)
+        i += 1
+    number = positional[0] if positional and _is_int_token(positional[0]) else None
+    if role is None and number is not None:
+        return None      # show <число> — верный вызов
+    if role is not None:
+        head = "⛔ у подкоманды «show» нет роли: она показывает одну карточку по её НОМЕРУ."
+        got = (f"--role {role} — это имя роли, а не номер" if role
+               else "--role без значения — это флаг роли, а не номер")
+        if number is not None:
+            got += f"; номер {number} верный, лишнее только --role"
+        maybe_role = role
+    elif not positional:
+        head = "⛔ у подкоманды «show» не указан номер карточки."
+        got = "ничего"
+        maybe_role = ""
+    else:
+        head = "⛔ у подкоманды «show» номер карточки должен быть числом."
+        got = f"«{positional[0]}» — не число" if positional[0] else "пустая строка — не число"
+        maybe_role = positional[0]       # похоже на имя роли — подсказка пойдёт с ним
+    return [head,
+            "   Ожидалось: номер карточки — число (его показывает list).",
+            f"   Получено: {got}.",
+            "   Скорее всего, нужно одно из двух:",
+            f"     номера и заголовки карточек роли — backlog.py list --role "
+            f"{_quote_if_spaced(maybe_role) if maybe_role else '<РОЛЬ>'}",
+            f"     одна карточка целиком           — backlog.py show {number or '<номер>'}"]
+
+
 READ_CMDS = {"show", "list", "queue"}
 # ═══ Карточка #391: читающее/пишущее — СПИСКОМ подкоманд, не эвристикой ══════════════
 # Под чужим объявлением о правке (lease.py) читающие подкоманды получают ПРЕДУПРЕЖДЕНИЕ
@@ -1419,6 +1490,14 @@ def main():
         print("   Повтори вызов, заменив --role на --actor (карточка #409).",
               file=sys.stderr)
         sys.exit(2)
+
+    # ═══ Э3, заявка пакета 26, п. в: у show — номер, а не роль. Отказ словами (show_form_refusal);
+    # код выхода 2 — как у отказа выше и у разбора аргументов.
+    if _subcommand == "show":
+        _show_refusal = show_form_refusal(sys.argv[sys.argv.index("show") + 1:])
+        if _show_refusal:
+            print("\n".join(_show_refusal), file=sys.stderr)
+            sys.exit(2)
 
     a = p.parse_args()
     # R15a: от расположения скрипта, не от CWD · #391: характер вызова назван списком выше

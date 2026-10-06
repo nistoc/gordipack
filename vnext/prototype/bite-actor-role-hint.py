@@ -11,7 +11,13 @@ arguments». Прежние верные вызовы обоих инструм�
 номеров карточек контура-донора; флаг одного смысла с разными именами у разных подкоманд
 принимает оба имени, и второе даёт тот же результат, что прежнее.
 
-ПРОГНОЗЫ, НАЗВАННЫЕ ДО ПРОГОНОВ (судов 14, падений жду 0):
+Предмет 3 (набор TRACK-GORDI-CORE, этап Э3, заявка пакета №26, п. в) — подкоманда
+`backlog.py show` при роли вместо номера, при номере-не-числе и без номера отказывает СЛОВАМИ
+(что ожидалось, что получено, как сделать то, что, вероятно, хотели), а не голым отказом
+разбора аргументов «invalid int value». Верный вызов (show <номер>), справка show и другие
+подкоманды не тронуты.
+
+ПРОГНОЗЫ, НАЗВАННЫЕ ДО ПРОГОНОВ (судов 29, падений жду 0):
   ①  backlog claim --role ..... ОТКАЗ, подсказка несёт «--actor» и «карточка #409»
   ②  lease take --actor ....... ОТКАЗ, подсказка несёт «--role» и «карточка #409»
   ③  встречный: backlog claim --actor на стенде — работает (rc 0)
@@ -33,6 +39,23 @@ arguments». Прежние верные вызовы обоих инструм�
   Р3  в справку edit возвращён «(карточка #452)» → падает РОВНО ⑦ (⑥ держится: справка есть)
   Р4  у criterion убрано имя --done-when → падает РОВНО ⑧, и называет именно его
   Р4б у criterion убрано имя --done-when-file → падает РОВНО ⑧, и называет именно его
+  ⑨  show --role X ............ ОТКАЗ словами: «нет роли», «Получено: --role X», подсказка list --role X
+  ⑩  show <номер> --role X .... ОТКАЗ словами: роль лишняя, номер назван верным, подсказка show <номер>
+  ⑪  show abc ................. ОТКАЗ словами: «не число», подсказка list --role abc
+  ⑫  show (без номера) ........ ОТКАЗ словами: «не указан номер», подсказка list --role <РОЛЬ>
+      во всех четырёх: код не ноль и нет слов голого отказа разбора аргументов
+      («invalid int value», «usage:», «error:», «arguments are required»)
+  ⑬  встречный: show <настоящий номер> на стенде работает (код 0, карточка напечатана)
+  ⑭  встречный: show --help печатает справку, а не отказ
+  ⑮  встречный: list --role X (там --role законен) работает как прежде
+  Р5  снят перехват (прежний разбор без слов) → падают РОВНО ⑨⑩⑪⑫; встречные ⑬⑭⑮ держатся
+  Р5а в подсказке отказа ⑨ потеряна роль → РОВНО ⑨
+  Р5б в отказе ⑩ нет слов «номер верный» → РОВНО ⑩
+  Р5в в подсказке отказа ⑪ потеряно слово пользователя → РОВНО ⑪
+  Р5г вызов без номера пропущен к голому отказу → РОВНО ⑫
+  Р5д верный номер больше не пропускается → РОВНО ⑬ (встречный)
+  Р5е справка show больше не пропускается → РОВНО ⑭ (встречный)
+  Р5ж перехват распространён на все подкоманды → РОВНО ⑮ (встречный)
   Каждая нарочная поломка делается на КОПИИ backlog.py в каталоге стенда; живой файл не
   трогается. «Ровно» значит: из трёх проверок ⑥⑦⑧ на сломанной копии падает одна, та, что названа.
 
@@ -60,7 +83,8 @@ LEASE = mezo_target.script("lease.py")
 print(f"⚖️ испытуется: {mezo_target.label()}")
 
 TABLES = ("backlog", "backlog_events", "tracks", "roles", "role_rights",
-           "role_skill", "rules", "role_status", "tool_leases", "audit_log")
+           "role_skill", "rules", "role_status", "tool_leases", "audit_log",
+           "backlog_tests")   # backlog_tests читает show (тесты карточки): без неё show на стенде падает
 
 # Девять подкоманд backlog.py (порядок как в справке).
 SUBCOMMANDS = ("add", "criterion", "list", "show", "status", "claim", "comment", "edit", "queue")
@@ -212,6 +236,73 @@ def check_synonyms(tool, db: pathlib.Path, folder: pathlib.Path,
     return not bad, "; ".join(notes), bad
 
 
+# Слова голого отказа разбора аргументов — так show отказывал прежде. В отказе СЛОВАМИ их быть не должно.
+RAW_REFUSAL_WORDS = ("invalid int value", "usage:", "error:", "arguments are required")
+
+# Случаи ⑨–⑮: подкоманда show и встречные к ней (заголовок печатается в строке случая).
+SHOW_CASES = (
+    ("⑨", "show --role X: отказ словами — «нет роли», что получено, подсказка list --role X"),
+    ("⑩", "show <номер> --role X: отказ словами — роль лишняя, номер назван верным"),
+    ("⑪", "show abc: отказ словами — «не число», подсказка list --role abc"),
+    ("⑫", "show без номера: отказ словами — «не указан номер», подсказка list --role <РОЛЬ>"),
+    ("⑬", "встречный: show <настоящий номер> работает — код 0, карточка напечатана"),
+    ("⑭", "встречный: show --help печатает справку, а не отказ"),
+    ("⑮", "встречный: list --role X работает как прежде (там --role законен)"),
+)
+
+
+def check_show_forms(tool, db: pathlib.Path, bid: int, extra_env=None) -> dict:
+    """⑨–⑮: подкоманда show отказывает словами; верный вызов, справка и list не тронуты.
+
+    Возвращает {метка: (прошёл ли случай, подробность)}. Зовётся и для настоящего backlog.py,
+    и для его копий с нарочной поломкой — поэтому инструмент и среда приходят параметрами."""
+    env = dict(BASE_ENV)
+    if extra_env:
+        env.update(extra_env)
+
+    def run(*args):
+        return call_tool(tool, "--db", str(db), *args, extra_env=env)
+
+    res: dict = {}
+
+    def refusal(mark, args, must):
+        """Отказ словами: код не ноль, голых слов разбора аргументов нет, нужные слова есть."""
+        rc, out = run(*args)
+        problems = []
+        if rc == 0:
+            problems.append("код возврата 0 — отказа нет")
+        for raw in RAW_REFUSAL_WORDS:
+            if raw in out:
+                problems.append(f"в печати голый отказ разбора аргументов: «{raw}»")
+        for word in must:
+            if word not in out:
+                problems.append(f"нет слов «{word}»")
+        detail = (f"код {rc}, все нужные слова на месте, голых слов разбора нет" if not problems
+                  else "; ".join(problems) + f" | печать: {out[:260]!r}")
+        res[mark] = (not problems, detail)
+
+    refusal("⑨", ("show", "--role", "STUB1"),
+            ["нет роли", "Ожидалось: номер карточки — число", "Получено: --role STUB1",
+             "list --role STUB1", "show <номер>"])
+    refusal("⑩", ("show", str(bid), "--role", "STUB1"),
+            ["нет роли", f"номер {bid} верный", f"show {bid}"])
+    refusal("⑪", ("show", "abc"),
+            ["должен быть числом", "Получено: «abc» — не число", "list --role abc", "show <номер>"])
+    refusal("⑫", ("show",),
+            ["не указан номер", "Получено: ничего", "list --role <РОЛЬ>", "show <номер>"])
+
+    rc, out = run("show", str(bid))
+    res["⑬"] = (rc == 0 and f"# backlog #{bid}" in out and "проба" in out and "⛔" not in out,
+                f"код {rc}, печать: {out[:160]!r}")
+    rc, out = run("show", "--help")
+    res["⑭"] = (rc == 0 and "Принимает только номер карточки" in out and "⛔" not in out,
+                f"код {rc}, печать: {out[:160]!r}")
+    rc, out = run("list", "--role", "STUB1", "--status", "all")
+    res["⑮"] = (rc == 0 and "проба" in out and "нет роли" not in out,
+                f"код {rc}, печать: {out[:160]!r}")
+    return res
+
+
 def main() -> int:
     d = mezo_stand.new("actor-role-")
     db = d / "stand.db"
@@ -281,6 +372,11 @@ def main() -> int:
     case("⑧ второе имя флага одного смысла принимается и даёт тот же результат, что прежнее",
         ok8, det8)
 
+    # ── ⑨–⑮ show: отказ словами и встречные случаи (заявка пакета №26, п. в) ────
+    show_res = check_show_forms(BACKLOG, db, bid1)
+    for mark, title in SHOW_CASES:
+        case(f"{mark} {title}", show_res[mark][0], show_res[mark][1])
+
     # ── нарочные поломки на КОПИЯХ backlog.py: падает РОВНО названная проверка ──
     def broken_copy(tag: str, anchor: str, replacement: str) -> pathlib.Path:
         folder = d / tag
@@ -342,13 +438,56 @@ def main() -> int:
         failed_names(res) == ["⑧"] and res[2][2] == ["--done-when-file"],
         f"упали {failed_names(res)}; ⑧: {res[2][2]}")
 
+    # ── нарочные поломки show на КОПИЯХ backlog.py: падает РОВНО названное из ⑨–⑮ ──
+    def broken_copy_pairs(tag: str, pairs) -> pathlib.Path:
+        """Копия backlog.py с несколькими испорченными местами (каждое — одна строка-якорь)."""
+        folder = d / tag
+        folder.mkdir()
+        path = BACKLOG
+        for anchor, replacement in pairs:
+            path = weaken(path, folder, anchor, replacement)
+        return path
+
+    def failed_show(copy_path: pathlib.Path) -> tuple[list, dict]:
+        env = {"PYTHONPATH": str(BACKLOG.parent),
+               "MEZO_CONTAINER": str(mezo_paths.container_root(__file__))}
+        got = check_show_forms(copy_path, db, bid1, extra_env=env)
+        return [mark for mark, _ in SHOW_CASES if not got[mark][0]], got
+
+    show_breaks = (
+        ("Р5", "снят перехват (прежний разбор): падают РОВНО четыре отказа ⑨⑩⑪⑫, встречные держатся",
+         [("if _show_refusal:", "if False:")], ["⑨", "⑩", "⑪", "⑫"]),
+        ("Р5а", "в подсказке отказа ⑨ потеряна роль: падает РОВНО ⑨",
+         [("maybe_role = role", 'maybe_role = ""')], ["⑨"]),
+        ("Р5б", "в отказе ⑩ убраны слова «номер верный»: падает РОВНО ⑩",
+         [('got += f"; номер {number} верный, лишнее только --role"', 'got += ""')], ["⑩"]),
+        ("Р5в", "в подсказке отказа ⑪ потеряно слово пользователя: падает РОВНО ⑪",
+         [("maybe_role = positional[0]", 'maybe_role = ""')], ["⑪"]),
+        ("Р5г", "вызов без номера пропущен к голому отказу: падает РОВНО ⑫",
+         [("if role is None and number is not None:",
+           "if role is None and (number is not None or not positional):")], ["⑫"]),
+        ("Р5д", "верный номер больше не пропускается: падает РОВНО встречный ⑬",
+         [("if role is None and number is not None:", "if False:")], ["⑬"]),
+        ("Р5е", "справка show больше не пропускается: падает РОВНО встречный ⑭",
+         [('if "-h" in tail or "--help" in tail:', "if False:")], ["⑭"]),
+        ("Р5ж", "перехват распространён на все подкоманды: падает РОВНО встречный ⑮",
+         [('if _subcommand == "show":', "if _subcommand:"),
+          ('sys.argv.index("show")', "sys.argv.index(_subcommand)")], ["⑮"]),
+    )
+    for n, (tag, title, pairs, expected) in enumerate(show_breaks):
+        failed, got = failed_show(broken_copy_pairs(f"break-show-{n}", pairs))
+        case(f"{tag} {title}", failed == expected,
+             f"упали {failed}, ждали {expected}; "
+             + "; ".join(f"{m}: {got[m][1][:200]}" for m in failed if m not in expected))
+
     print("-" * 76)
     if failures:
         print(f"🔴 ПРИЁМКА: {cases - len(failures)} из {cases}, провалено: "
               + " · ".join(failures))
         return 1
     print(f"✅ ПРИЁМКА: {cases} из {cases} — чужое имя получает подсказку, верные вызовы "
-          f"не тронуты, справка backlog.py полна, вторые имена флагов работают, поломки ловятся")
+          f"не тронуты, справка backlog.py полна, вторые имена флагов работают, show отказывает "
+          f"словами, поломки ловятся")
     return 0
 
 
