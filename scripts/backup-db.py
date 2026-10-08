@@ -142,6 +142,46 @@ LEGAL_SHRINK = {
     "read_batches": "батчи чтения гаснут после подтверждения (read-messages.py)",
 }
 
+# 🩸 КАРТОЧКА #683 (находка контура onto на приёмке Э3, 05.10: «phoenix_records −15 —
+# удалять из неё никто не должен», код 1, стоп на шаге 0). Пересборка записей памяти при
+# КАЖДОМ сохранении раздела (save-phoenix.py → memory-records.py, карточка #525) штатно
+# удаляет записи, чьих тел в разделе больше нет; журнала у этих удалений нет. Механизм
+# родился ПОСЛЕ замера 26.08 и в перечень выше не попал.
+# ⚖️ В LEGAL_SHRINK таблицу НЕ вносим: тогда и удаление руками прошло бы молча. Различитель —
+# по самим строкам: какие записи пропали (номер, роль, раздел — из ПРЕЖНЕЙ выгрузки) и
+# сохранён ли КАЖДЫЙ такой раздел (phoenix.saved_at) не раньше часа прежней выгрузки.
+# Граница, названа сразу: пересборка рукой (memory-records.py без сохранения раздела)
+# журнала не пишет — её убыль останется тревогой.
+RECORDS_TABLE = "phoenix_records"
+# Первая строка записи в выгрузке: INSERT INTO "phoenix_records" VALUES(18,'PROTO','identity',…
+# Номер, роль и раздел — первые три столбца (порядок сверяется с таблицей перед разбором).
+_RECORD_HEAD_RE = re.compile(
+    r"^INSERT INTO \"?phoenix_records\"? VALUES\((\d+),'([^']*)','([^']*)',")
+RECORDS_SHOWN = 6   # сколько разделов назвать поимённо в строке объяснения или тревоги
+
+# Переезды строк из таблицы в таблицу ПОД ТЕМИ ЖЕ НОМЕРАМИ (карточка #683, замер по коду
+# пакета 08.10: поиск DELETE FROM / DROP TABLE / REPLACE по инструментам, не приёмкам).
+# Убыль первой законна, только если КАЖДЫЙ пропавший номер (из прежней выгрузки) есть сейчас
+# в таблице-цели. Счёт «цель выросла не меньше» тут не годится: лента растёт новыми записками
+# каждый день и прикрыла бы любую потерю архива меньше суточного прироста.
+#   messages → messages_archive .......... свёртка ленты (messages-fold.py) — ветка messages ниже
+#   messages_archive → messages .......... обратный ход свёртки (messages-fold.py)
+#   phoenix_history_archive → phoenix_history .. возврат версий памяти (memory-history-fold.py)
+#   role_rebirths → role_rebirths_foreign .. шаг схемы 20260915-foreign-rebirth-marks уносит
+#                                          отметки чужих ролей (находка AIA ④-7, карточка #685)
+# Тревога у остальных найденных мест верна: hint_seen худеет только от mezo_hints.забыть(),
+# который зовут лишь приёмки на своих стендах; message_addressee — разовый шаг
+# migrate-addressee-vnext.py (август); DROP TABLE в шагах схемы — пересборка таблицы с тем же
+# числом строк; INSERT OR REPLACE числа строк не меняет.
+MOVES = {
+    "messages_archive": (("messages",), "обратный ход свёртки ленты (messages-fold.py)"),
+    "phoenix_history_archive": (("phoenix_history",),
+                                "возврат версий памяти из архива (memory-history-fold.py)"),
+    "role_rebirths": (("role_rebirths_foreign",),
+                      "перенос отметок чужих ролей (шаг схемы 20260915-foreign-rebirth-marks)"),
+}
+MESSAGES_MOVE_TARGETS = ("messages_archive", "messages_history")
+
 # Служебные таблицы FTS5 у виртуальной таблицы <имя>: <имя>_data/_idx/_content/
 # _docsize/_config. Список — источник СУФФИКСОВ, а не готовых имён: настоящий список
 # имён строится ТОЛЬКО из реально существующих виртуальных таблиц (find_shadow_tables),
@@ -255,6 +295,127 @@ def named_removals(conn, table: str, since):
     return total, notes
 
 
+def previous_record_keys(out: Path, conn):
+    """→ {номер записи: (роль, раздел)} из ПРЕЖНЕЙ выгрузки, или None — разобрать нельзя.
+
+    Карточка #683. Читается только первая строка каждой записи (номер, роль и раздел стоят
+    в ней первыми); тело записи не нужно. None — если выгрузки нет, она не читается или
+    у таблицы в текущей базе первые три столбца не (id, role, section): тогда порядок
+    в строке выгрузки неизвестен, и лучше тревога, чем угаданное объяснение."""
+    try:
+        cols = [r[1] for r in conn.execute(f'PRAGMA table_info("{RECORDS_TABLE}")')]
+    except sqlite3.Error:
+        return None
+    if cols[:3] != ["id", "role", "section"] or not out.exists():
+        return None
+    keys = {}
+    try:
+        with out.open(encoding="utf-8") as f:
+            for line in f:
+                m = _RECORD_HEAD_RE.match(line)
+                if m:
+                    keys[int(m.group(1))] = (m.group(2), m.group(3))
+    except (OSError, UnicodeDecodeError):
+        return None
+    return keys
+
+
+def previous_ids(out: Path, conn, table: str):
+    """→ множество номеров строк таблицы из ПРЕЖНЕЙ выгрузки, или None — разобрать нельзя.
+
+    Карточка #683. Номер — первый столбец строки INSERT; если в текущей базе первый столбец
+    таблицы не id, порядок неизвестен — None, и убыль остаётся тревогой."""
+    try:
+        cols = [r[1] for r in conn.execute(f'PRAGMA table_info("{table}")')]
+    except sqlite3.Error:
+        return None
+    if cols[:1] != ["id"] or not out.exists():
+        return None
+    head = re.compile(r'^INSERT INTO "?' + re.escape(table) + r'"? VALUES\((\d+),')
+    ids = set()
+    try:
+        with out.open(encoding="utf-8") as f:
+            for line in f:
+                m = head.match(line)
+                if m:
+                    ids.add(int(m.group(1)))
+    except (OSError, UnicodeDecodeError):
+        return None
+    return ids
+
+
+def moved_under_same_ids(conn, gone_ids: set, targets) -> set:
+    """→ те из пропавших номеров, что есть сейчас хотя бы в одной таблице-цели."""
+    found = set()
+    for target in targets:
+        try:
+            present = {r[0] for r in conn.execute(f'SELECT id FROM "{target}"')}
+        except sqlite3.Error:
+            continue
+        found |= gone_ids & present
+    return found
+
+
+def move_verdict(conn, table: str, prev_ids, was: int, now: int, targets, mechanism: str):
+    """→ (объяснение, None) или (None, тревога): убыль table — переезд под теми же номерами?"""
+    shrink = was - now
+    if prev_ids is None or len(prev_ids) != was:
+        return None, (f"{table} −{shrink} — записи прежней выгрузки разобрать не удалось,"
+                      " переносом НЕ объяснено")
+    current = {r[0] for r in conn.execute(f'SELECT id FROM "{table}"')}
+    gone = prev_ids - current
+    moved = moved_under_same_ids(conn, gone, targets)
+    if moved == gone:
+        return (f"{table} −{shrink} → {' / '.join(targets)} под теми же номерами ({len(gone)})"
+                f" — {mechanism}"), None
+    return None, (f"{table} −{shrink}, а в {' / '.join(targets)} нашлось лишь {len(moved)}"
+                  f" из {len(gone)} пропавших номеров — переносом НЕ объяснено")
+
+
+def records_shrink_verdict(conn, previous_keys, was: int, now: int, since):
+    """→ (объяснение, None) или (None, тревога) для убыли phoenix_records (карточка #683).
+
+    Законна, только если КАЖДАЯ пропавшая запись принадлежит разделу, сохранённому
+    (phoenix.saved_at) не раньше часа прежней выгрузки: такую запись удалила пересборка
+    при сохранении. Иначе — тревога с поимённым перечнем разделов, которых сохранение
+    не объясняет."""
+    shrink = was - now
+    if previous_keys is None or since is None:
+        why = ("час прежней выгрузки неизвестен" if since is None
+               else "записи прежней выгрузки разобрать не удалось")
+        return None, (f"{RECORDS_TABLE} −{shrink} строк — {why}, пересборкой при сохранении"
+                      " памяти не объяснено")
+    if len(previous_keys) != was:
+        return None, (f"{RECORDS_TABLE} −{shrink} строк — в прежней выгрузке записей"
+                      f" {len(previous_keys)}, а в её шапке {was}: разбор не сходится,"
+                      " пересборкой при сохранении памяти не объяснено")
+    current = {r[0] for r in conn.execute(f'SELECT id FROM "{RECORDS_TABLE}"')}
+    gone = {}
+    for rid, key in previous_keys.items():
+        if rid not in current:
+            gone[key] = gone.get(key, 0) + 1
+    try:
+        saved = {(r, s): at for r, s, at in conn.execute("SELECT role, section, saved_at FROM phoenix")}
+    except sqlite3.Error:
+        saved = {}
+    named = sorted((k for k in gone if saved.get(k) is not None and saved[k] >= since))
+    unnamed = sorted(k for k in gone if k not in named)
+
+    def listing(keys):
+        shown = " · ".join(f"{r}/{s} −{gone[(r, s)]}" for r, s in keys[:RECORDS_SHOWN])
+        rest = len(keys) - RECORDS_SHOWN
+        return shown + (f" · и ещё разделов {rest}" if rest > 0 else "")
+
+    if unnamed:
+        return None, (f"{RECORDS_TABLE} −{shrink} строк — записи пропали у разделов, не"
+                      f" сохранённых после прежней выгрузки: {listing(unnamed)}; пересборкой"
+                      " при сохранении памяти НЕ объяснено")
+    removed = sum(gone.values())
+    return (f"{RECORDS_TABLE} −{shrink} — пересборка записей при сохранении памяти"
+            f" (save-phoenix.py): ушло записей {removed}, новых {removed - shrink}; разделы"
+            f" сохранены после прежней выгрузки — {listing(named)}"), None
+
+
 SEARCH_HEADER_NOTE = ("таблицы поиска в прежней шапке — теперь сверяются выдачей,"
                       " не числом строк")
 # 🩸 ВТОРОЙ СЛЕД ТОГО ЖЕ ПЕРЕХОДА (находка PROTO, карточка #610). Прежняя выгрузка
@@ -268,7 +429,7 @@ SEARCH_SIZE_SHRINK_NOTE = ("выгрузка меньше: таблицы пои
 
 
 def check_row_shrink(previous: dict, counts: dict, search_related_names: set = frozenset(),
-                     conn=None, since=None):
+                     conn=None, since=None, previous_keys=None, previous_ids_of=None):
     """→ (тревоги, объяснения, заметка_о_поиске): убыль строк против прежнего дампа.
 
     🩸 КАРТОЧКА #612 ②. Убыль в ОБЫЧНОЙ таблице, не объяснённая ни чисткой истории,
@@ -306,11 +467,41 @@ def check_row_shrink(previous: dict, counts: dict, search_related_names: set = f
                 explanations.append(f"{t} −{was - now} — {LEGAL_SHRINK[t]}")
             elif t == "messages":
                 growth = counts.get("messages_history", 0) - previous.get("messages_history", 0)
+                # Карточка #683: свёртка ленты (messages-fold.py) уносит записки в
+                # messages_archive под теми же номерами — счёт роста messages_history её
+                # не видит. Номера спрашиваются, только если счёт не объяснил убыль.
+                fold = (move_verdict(conn, t, previous_ids_of(t), was, now,
+                                     MESSAGES_MOVE_TARGETS, "свёртка ленты (messages-fold.py)")
+                        if growth < was - now and conn is not None and previous_ids_of
+                        else (None, None))
                 if growth >= was - now:
                     explanations.append(f"messages −{was - now} → messages_history +{growth} — переезд")
+                elif fold[0]:
+                    explanations.append(fold[0])
                 else:
                     alerts.append(f"messages −{was - now}, а messages_history выросла лишь"
                                   f" на {growth} — переездом НЕ объяснено")
+            elif t in MOVES:
+                # Карточка #683: переезд строк под теми же номерами (находка AIA ④-7 и обход
+                # мест удаления по коду пакета). Без выгрузки и базы судить нечем — тревога.
+                targets, mechanism = MOVES[t]
+                if conn is None or previous_ids_of is None:
+                    alerts.append(f"{t} −{was - now} — номера строк сверить нечем,"
+                                  " переносом НЕ объяснено")
+                else:
+                    explanation, alert = move_verdict(conn, t, previous_ids_of(t), was, now,
+                                                      targets, mechanism)
+                    if explanation:
+                        explanations.append(explanation)
+                    else:
+                        alerts.append(alert)
+            elif t == RECORDS_TABLE and conn is not None:
+                # Карточка #683: убыль записей памяти судится по самим пропавшим записям.
+                explanation, alert = records_shrink_verdict(conn, previous_keys, was, now, since)
+                if explanation:
+                    explanations.append(explanation)
+                else:
+                    alerts.append(alert)
             else:
                 # 🪤 КАРТОЧКА #612, ЛОВУШКА ②. Финальная строка тревоги ниже — тот же
                 # литерал, что и ДО карточки #612 («удалять из неё никто не должен»,
@@ -722,8 +913,22 @@ def main():
     previous = previous_counts(out)
     since = previous_snapshot_at(out)   # карточка #612 ②: граница окна для audit_log
     search_related_names = set(virtual_sql) | shadow_names
+    # Карточка #683: записи прежней выгрузки разбираются, только если их таблица убыла —
+    # иначе живой прогон читал бы всю выгрузку зря.
+    previous_keys = (previous_record_keys(out, conn)
+                     if previous and RECORDS_TABLE in previous and RECORDS_TABLE in counts
+                     and counts[RECORDS_TABLE] < previous[RECORDS_TABLE] else None)
+    # Карточка #683: номера строк прежней выгрузки — по требованию и один раз на таблицу.
+    ids_cache = {}
+
+    def previous_ids_of(table):
+        if table not in ids_cache:
+            ids_cache[table] = previous_ids(out, conn, table)
+        return ids_cache[table]
+
     alerts, explanations, search_note = (
-        check_row_shrink(previous, counts, search_related_names, conn=conn, since=since)
+        check_row_shrink(previous, counts, search_related_names, conn=conn, since=since,
+                         previous_keys=previous_keys, previous_ids_of=previous_ids_of)
         if previous else ([], [], None))
     if alerts:
         print("  🔴 СТРОКИ ПРОПАЛИ БЕЗ ЗАКОННОЙ ПРИЧИНЫ — проверь, не потеряна ли часть БД,"
