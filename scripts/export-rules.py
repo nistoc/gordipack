@@ -86,7 +86,7 @@ HEADER = """# Sync RULES — протокол мезосинка Atlas (8 рол
 > Любая правка здесь будет затёрта следующим экспортом. **Источник правды — таблицы
 > `rules` и `invariants` в БД.** При любом расхождении файла и БД — **верь БД**.
 >
-> Править правило: `python {s}/set-rule.py --key <ключ> --locked-by owner|coord --body-file <f> --apply`
+> Править правило: `python {s}/set-rule.py --key <ключ> --locked-by owner|coord --actor <РОЛЬ> --body-file <f> --apply`
 > Прочитать одно: `--key <ключ> --show` · список: `--list` · инварианты: `python {s}/set-registry.py list invariant`
 > (АБСОЛЮТНЫЙ путь; `--db` не нужен — R15a, норма 26.07.)
 >

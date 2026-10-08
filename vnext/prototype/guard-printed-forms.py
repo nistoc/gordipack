@@ -632,7 +632,7 @@ def observe(scripts, role=None, timeout=25):
     плейсхолдер сам, он выносил вердикт о собственном допущении.
 
     ⚠️ ГРАНИЦА БЕЗОПАСНОСТИ: запускаем ТОЛЬКО `--help` (argparse печатает и выходит) и
-    read-only `read-phoenix --role`. Скрипт без argparse НЕ запускаем вовсе — у него `--help`
+    `read-phoenix --role X --full` (с --full он базы не пишет — карточка #685). Скрипт без argparse НЕ запускаем вовсе — у него `--help`
     может уйти в основное действие, а гард не имеет права мутировать живое.
     Роль не названа (None) → read-phoenix не запускается вовсе: читать память НЕ ЧЬЮ нельзя.
     Возвращает (находки, сколько прогнано, сколько пропущено).
@@ -645,8 +645,12 @@ def observe(scripts, role=None, timeout=25):
         cmds.append((p.name + " --help", [sys.executable, str(p), "--help"]))
     rp = scripts / "read-phoenix.py"
     if rp.exists() and role:              # шапка воскресшего — печатается только так
-        cmds.append((f"read-phoenix.py --role {role}",
-                     [sys.executable, str(rp), "--role", role]))
+        # Карточка #685 (находка AIA ④-2): без --full read-phoenix записывал в базу отметку
+        # «роль видела подсказку» (hint_seen) — наблюдение «съедало» первый показ подсказки
+        # у роли, чью память читало. С --full подсказка печатается целиком и базы не трогает;
+        # заодно наблюдается весь её текст, а не строка-ссылка, если роль его уже видела.
+        cmds.append((f"read-phoenix.py --role {role} --full",
+                     [sys.executable, str(rp), "--role", role, "--full"]))
     hits = []
     for label, argv in cmds:
         try:
@@ -692,7 +696,7 @@ def run(scripts, artifacts, quiet=False, do_run=True, role=None, role_note=""):
               + (f" ({role_note})" if role_note else "")
               + ". Назови роль флагом --role или переменной среды MEZO_ROLE.")
     if do_run and not quiet:
-        what = (f"--help + read-phoenix --role {role}" if role
+        what = (f"--help + read-phoenix --role {role} --full" if role
                 else "--help; read-phoenix не запускался: роль не названа")
         print(f"── НАБЛЮДЕНИЕ: прогнано {obs_n} команд ({what}"
               + (f"; роль взята: {role_note}" if role and role_note else "") + ")"

@@ -427,6 +427,11 @@ def _paths_file_candidates(script_file, mezo_dir) -> list:
         p = cand / ".mezosync" / LOCAL_PATHS_PARTS[0] / LOCAL_PATHS_PARTS[1]
         if p not in found:
             found.append(p)
+        # Карточка #685 (находка AIA ④-6): выше СВОЕГО контейнера не поднимаемся. Первый предок
+        # с каталогом .mezosync и есть контейнер инструмента; нет в нём файла путей — значит, файла
+        # нет, а не «взять у каталога этажом выше» (C:/guts/.mezosync, C:/.mezosync — чужой контур).
+        if (cand / ".mezosync").is_dir():
+            break
     return found
 
 

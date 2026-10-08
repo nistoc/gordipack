@@ -7,7 +7,8 @@
 Нет файла или ключа — инструмент отказывает или пропускает работу СЛОВАМИ, а не берёт литерал.
 
 ЧТО ПРОВЕРЯЕТСЯ — по местам, где поведение сменилось (каждое место — свои случаи и своя поломка):
-  чтение файла (mezo_paths.local_path)   R1–R8  четыре разных исхода · прежние источники не читаются
+  чтение файла (mezo_paths.local_path)   R1–R9  четыре разных исхода · прежние источники не читаются
+                                                  · выше своего контейнера поиск не поднимается (R9)
                                                   как значение · подсказка с готовой командой переноса
   поиск корня (mezo_root/container_root) M1–M7  файл путей — третий источник · MEZO_CONTAINER без базы —
                                                   громкий отказ · стенд со своей базой не уходит в чужую
@@ -163,6 +164,12 @@ BREAKS = {
          "    return None" + "\n\n\n"
          "def local_path(key: str, script_file=None, mezo_dir=None) -> LocalPath:")], {"R8"},
         "строка container= прежнего local.paths принимается за значение"),
+    "paths-climb-above-container": ("mezo_paths.py", [(
+        '        if (cand / ".mezosync").is_dir():' + "\n"
+        "            break",
+        '        if (cand / ".mezosync").is_dir():' + "\n"
+        "            pass")], {"R9"},
+        "поиск файла путей поднимается выше своего контейнера и берёт файл контура этажом выше"),
     # ── поиск корня ───────────────────────────────────────────────────────────────────────────────
     "container-file-ignored": ("mezo_paths.py", [(
         '    if loc_dir and _is_db_file(loc_dir / ".mezosync" / DB_NAME):' + "\n"
@@ -759,6 +766,17 @@ def group_reader(run: Run):
     rc, r = run.local(c, "container", scripts=own)
     case("R8", "прежний local.paths (container=) значением НЕ служит: ключ не объявлен, пути нет",
          r["outcome"] not in (DECLARED, None) and r.get("path") is None,
+         f"код {rc} · {r}")
+    # R9 (карточка #685, находка AIA ④-6) контейнер ВНУТРИ другого контейнера, у внутреннего файла
+    # путей нет, у внешнего — есть и объявляет ключ. Инструмент внутреннего (не в .mezosync — как
+    # vnext-tools) обязан ответить «файла путей нет», а не взять чужой файл этажом выше.
+    outer, _ = run.case_dir("r9", paths={"mirror_repo": "foreign"}, dirs=["foreign"])
+    inner = outer / "inner"
+    (inner / ".mezosync").mkdir(parents=True)
+    marker_db(inner / ".mezosync" / "mezosync.db")
+    rc, r = run.local(inner, "mirror_repo", script_rel="vnext-tools/probe.py")
+    case("R9", "файла путей у своего контейнера нет: «файла нет», файл контейнера этажом выше не берётся",
+         r["outcome"] == NO_FILE and r.get("path") is None,
          f"код {rc} · {r}")
 
 

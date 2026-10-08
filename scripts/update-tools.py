@@ -941,6 +941,11 @@ def main() -> int:
         print()
 
         fresh, own_edits, new_files, unknown = [], [], [], []
+        # Карточка #685 (находка AIA ④-8): файл совпадает с пакетом, а отпечаток установки у него
+        # старый или его нет. Сегодня это не видно, но когда пакет сменит файл, текст разойдётся
+        # и с пакетом, и с отпечатком — и файл ложно встанет в «✋ правлен у тебя». Текст равен
+        # версии пакета — значит своей правки в нём нет, и --apply переписывает ему отпечаток.
+        stale_fp = []
         for rel, f in sorted(src_index.items()):
             mine = dest_of(rel)
             if not mine.exists():
@@ -948,6 +953,8 @@ def main() -> int:
                 continue
             mine_bytes = mine.read_bytes()
             if same_text(mine_bytes, f.read_bytes()):
+                if fingerprints.get(fingerprint_key(rel)) != digest(mine_bytes):
+                    stale_fp.append(rel)
                 continue
             installed_fp = fingerprints.get(fingerprint_key(rel))
             if installed_fp is None:
@@ -1071,6 +1078,9 @@ def main() -> int:
             print(f"   ❓ {show_name(rel):40} отличается, но отпечатка установки нет{tail}{where(rel)}")
         if not (fresh or new_files or own_edits or unknown or old_pack):
             print("   инструменты совпадают с источником — забирать нечего")
+        if stale_fp:
+            print(f"   ≈ совпадают с пакетом, но отпечаток установки старый или его нет: {len(stale_fp)}"
+                  f" — --apply перепишет отпечаток, сами файлы не меняются")
         print()
         print("⚖️ Сличалось СОДЕРЖИМОЕ, а не байты: окончания строк приведены, иначе "
               "переехавший файл выглядит переписанным целиком.")
@@ -1132,6 +1142,11 @@ def main() -> int:
             mine = dest_of(rel)
             if mine.exists():
                 updated_fingerprints[fingerprint_key(rel)] = digest(mine.read_bytes())
+        # Карточка #685 (④-8): совпадающим с пакетом — отпечаток их нынешнего текста. Предупреждение
+        # выше («только у того, что положили сами») про файлы со своей правкой; здесь правки нет —
+        # текст равен версии пакета, сличён тем же same_text.
+        for rel in stale_fp:
+            updated_fingerprints[fingerprint_key(rel)] = digest(dest_of(rel).read_bytes())
         meta_updates = [("template_commit", rev),
                         ("template_files_sha", json.dumps(updated_fingerprints, ensure_ascii=False))]
         if write_source:
@@ -1148,6 +1163,8 @@ def main() -> int:
                  if second_dir is not None else ""))
         print("источник в meta: " + (f"записан {source}" if write_source
                                      else f"оставлен {recorded_source}"))
+        if stale_fp:
+            print(f"≈ отпечаток переписан у совпадающих с пакетом: {len(stale_fp)}")
         if own_edits:
             print(f"✋ НЕ тронуто твоих правок: {len(own_edits)} — "
                   + " · ".join(show_name(x) + ("  (второй каталог)" if is_second_rel(x) else "")
