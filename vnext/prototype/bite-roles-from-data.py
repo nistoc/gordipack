@@ -224,6 +224,9 @@ EVIDENCE: dict[str, int] = {}
 
 # ── заготовки инструментов контура на стенде ──────────────────────────────────
 # Пишут в журнал рядом, с какой ролью их позвали; сами ничего не читают из базы.
+# 🪤 Флаги заготовки повторяют форму вызова ИСПЫТУЕМОГО: с c4221fa (карточка #685, находка AIA ④-2)
+# guard-printed-forms.py зовёт read-phoenix.py с --full. Заготовка без этого флага выходила кодом 2
+# ошибкой разбора, в журнал ничего не писала — и случаи ②③④ проваливались на исправном инструменте.
 READ_STUB = '''# -*- coding: utf-8 -*-
 import argparse
 import pathlib
@@ -231,6 +234,7 @@ import pathlib
 ap = argparse.ArgumentParser()
 ap.add_argument("--role")
 ap.add_argument("--db")
+ap.add_argument("--full", action="store_true")
 a = ap.parse_args()
 with pathlib.Path(__file__).with_name("read-phoenix.calls.log").open("a", encoding="utf-8") as fh:
     fh.write("--role " + str(a.role))
