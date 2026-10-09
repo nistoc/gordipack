@@ -9,6 +9,7 @@
     python <контур>/.mezosync/scripts/update-tools.py --source <...> --record-source  # ЗАПОМНИТЬ этот источник
     python <контур>/.mezosync/scripts/update-tools.py --merge <файл>                  # свести опору/вашу правку/пакет
     python <контур>/.mezosync/scripts/update-tools.py --accept-merge <файл> --apply   # принять черновик сведения
+    python <контур>/.mezosync/scripts/update-tools.py --release <файл> --apply        # отдать правленый файл пакету
 
 ЗАЧЕМ. Вопрос владельца 2026-08-19 09:22 UTC: «откуда tapas берёт инструментарий? он ведь
 не скачал себе независимый репозиторий, чтобы не зависеть от твоих апгрейдов и чтобы мог
@@ -49,6 +50,16 @@
     «✋ правлен у тебя» только НАЗЫВАЛ беду («перенеси свою правку сам»), а решить её было
     нечем — правка пакета, случившаяся ПОСЛЕ отпечатка установки, до контура не доходила
     никогда.
+  · МЕСТНОЕ — В <каталог базы>/local/, И ОБНОВЛЕНИЕ ТУДА НЕ ПИШЕТ (карточка #679, этап Э5).
+    Свои проверки общего прогона, их скрипты, настройки и файл путей контур держит там, а не
+    правкой файлов пакета: правленый файл пакета каждое обновление встаёт на «✋» и требует
+    сведения. План и --apply печатают строку о каталоге местного.
+  · --release <файл> ОТДАЁТ ПРАВЛЕНЫЙ ФАЙЛ ПАКЕТУ (карточка #679, этап Э5) — для «✋» и «❓»,
+    чья правка перенесена в local/ или взята пакетом. Текст контура уходит копией в
+    <каталог базы>/released/<час UTC>/, на место встаёт версия пакета и её отпечаток. Это не
+    сведение (тексты не смешиваются) и не --overwrite-unknown (касается только названных файлов,
+    и прежний текст сохранён). Перенесла ли роль правку — инструмент проверить не может и
+    говорит это вслух.
   · ⛔ без --apply не пишется ничего.
 """
 from __future__ import annotations
@@ -63,6 +74,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
@@ -188,6 +200,41 @@ def second_install_dir(db: pathlib.Path) -> tuple[pathlib.Path | None, str | Non
         return None, (f"файл путей не читается — есть ли у контура второй каталог установки, "
                       f"узнать нечем, он НЕ обслуживается ({res.words})")
     return None, None
+
+
+# ═══ КАТАЛОГ МЕСТНОГО И --release (карточка #679, этап Э5) ═══════════════════════════════════
+# Каталог местного (<каталог базы>/local) обновление НЕ пишет — ни --apply, ни --release.
+# Копии отданных пакету файлов поэтому лежат РЯДОМ, в <каталог базы>/released/: положи их в
+# local/, и утверждение «обновление в local/ не пишет» стало бы неправдой ради удобства.
+RELEASED_DIR_NAME = "released"
+
+
+def local_dir_of(db: pathlib.Path) -> pathlib.Path:
+    """Каталог местного этой базы — через mezo_paths.local_dir; у модуля старее Э5 функции нет,
+    тогда тот же путь считается здесь (каталог идёт за базой)."""
+    fn = getattr(mezo_paths, "local_dir", None)
+    return fn(db) if fn else pathlib.Path(db).resolve().parent / "local"
+
+
+def local_summary(local: pathlib.Path) -> str:
+    """Одна строка о каталоге местного — для плана и для --apply."""
+    if not local.is_dir():
+        return (f"🏠 местное ... каталога нет ({local.as_posix()}) — свои проверки и настройки "
+                f"кладут туда, обновление его не трогает")
+    files = [p for p in local.rglob("*") if p.is_file()]
+    top = sorted(p.name + ("/" if p.is_dir() else "") for p in local.iterdir())
+    shown = " · ".join(top[:6]) + (f" · …ещё {len(top) - 6}" if len(top) > 6 else "")
+    return (f"🏠 местное ... {local.as_posix()}: файлов {len(files)} ({shown or 'пусто'}) — "
+            f"обновление сюда не пишет")
+
+
+def inside(path: pathlib.Path, root: pathlib.Path) -> bool:
+    """Лежит ли path внутри root (или совпадает с ним) — по разрешённым путям."""
+    try:
+        pathlib.Path(path).resolve().relative_to(pathlib.Path(root).resolve())
+        return True
+    except ValueError:
+        return False
 
 
 # 🪤 КАРТОЧКА #637 (находка COORD, записка #5275): guard-all.py пакета зовёт новое звено
@@ -766,6 +813,11 @@ def main() -> int:
                     help="принять черновик --merge (нужен --apply): положить в контур и "
                          "перенести опору на версию пакета, с которой сводили; отказ, пока "
                          "в черновике остаются отметки пересечения")
+    ap.add_argument("--release", metavar="ФАЙЛ", action="append", default=[],
+                    help="отдать пакету файл «✋» или «❓», чья правка перенесена в каталог "
+                         "местного (.mezosync/local/) или взята пакетом (карточка #679): прежний "
+                         "текст — копией в <каталог базы>/released/<час UTC>/, на место — версия "
+                         "пакета и её отпечаток. Флаг можно повторять; без --apply — только план")
     ap.add_argument("--db", default=None)
     a = ap.parse_args()
 
@@ -773,6 +825,9 @@ def main() -> int:
     if modes > 1:
         sys.exit("⛔ --record-only / --merge / --accept-merge — разные режимы; за один "
                  "вызов можно попросить только один")
+    if a.release and modes:
+        sys.exit("⛔ --release работает в обычном обновлении (план или --apply), а не вместе с "
+                 "--record-only / --merge / --accept-merge")
 
     db = a.db or mezo_paths.live_db()
     conn = sqlite3.connect(str(db))
@@ -853,6 +908,12 @@ def main() -> int:
         # ключ указывает на сам каталог рабочих скриптов: один файл попал бы в разбор дважды
         second_note = (f"ключ {PROTOTYPE_DIR_KEY} указывает на каталог рабочих скриптов ({tools}) — "
                        f"второго каталога нет, ключ не используется")
+        second_dir = None
+    local = local_dir_of(db)
+    if second_dir is not None and inside(second_dir, local):
+        # Карточка #679: в каталог местного обновление не пишет НИКОГДА — и через второй каталог тоже
+        second_note = (f"ключ {PROTOTYPE_DIR_KEY} указывает внутрь каталога местного ({local}) — "
+                       f"туда обновление не пишет, второй каталог не обслуживается")
         second_dir = None
     src_dir, rev, temporary = fetch(source, rev=a.rev)
     try:
@@ -938,6 +999,7 @@ def main() -> int:
             print(f"             второй (файлы vnext/prototype, которые УЖЕ лежат там) — {second_dir}")
         if second_note:
             print(f"⚠️ {second_note}")
+        print(local_summary(local))
         print()
 
         fresh, own_edits, new_files, unknown = [], [], [], []
@@ -1049,6 +1111,31 @@ def main() -> int:
                 base_status[rel] = (f"пакет после опоры (от {found['date']}, коммит "
                                     f"{found['commit']}) не менял")
 
+        # ═══ --release (карточка #679, Э5): названные «✋» и «❓» отдаются пакету. Имя — как в
+        # плане (guard-all.py · migrations/<имя>.py · имя файла второго каталога). Файл без своей
+        # правки не отдаётся — говорится, что он обновится и так или уже равен пакету.
+        released, release_notes = [], []
+        for name in a.release:
+            want = name.replace("\\", "/").strip()
+            matches = [r for r in src_index if pathlib.PurePath(show_name(r)).as_posix() == want]
+            if not matches:
+                sys.exit(f"⛔ --release {name}: среди инструментов пакета такого файла нет — "
+                         f"отдавать пакету нечего. Файл, которого нет в пакете, обновление не "
+                         f"трогает и так; имя пишется как в плане (guard-all.py, "
+                         f"migrations/<имя>.py)")
+            for r in matches:
+                if r in own_edits or r in unknown:
+                    if r not in released:
+                        released.append(r)
+                elif r in fresh or r in old_pack or r in new_files:
+                    release_notes.append(f"{show_name(r)} — своей правки в нём нет, обновится "
+                                         f"и без --release")
+                else:
+                    release_notes.append(f"{show_name(r)} — уже равен пакету, отдавать нечего")
+        own_edits = [r for r in own_edits if r not in released]
+        unknown = [r for r in unknown if r not in released]
+        keep_hint = (pathlib.Path(db).resolve().parent / RELEASED_DIR_NAME).as_posix()
+
         for rel in new_files:
             print(f"   + {show_name(rel):40} нет у нас — появится{where(rel)}")
         for rel in fresh:
@@ -1063,6 +1150,11 @@ def main() -> int:
         for rel in own_edits:
             print(f"   ✋ {show_name(rel):40} ПРАВЛЕН У ТЕБЯ — НЕ трогаем{where(rel)}")
             print(f"      {base_status.get(rel, 'опору найти нечем: не проверено')}")
+        for rel in released:
+            print(f"   ⇄ {show_name(rel):40} по --release отдаётся пакету: прежний текст — копией в "
+                  f"{keep_hint}/<час UTC>/, на место — версия пакета{where(rel)}")
+        for note in release_notes:
+            print(f"   ℹ️ --release {note}")
         for rel in unknown:
             if history_unavailable is not None:
                 tail = f" — истории у источника нет — дату назвать нечем ({history_unavailable})"
@@ -1076,7 +1168,7 @@ def main() -> int:
                 else:
                     tail = " — в истории пакета такого содержимого нет"
             print(f"   ❓ {show_name(rel):40} отличается, но отпечатка установки нет{tail}{where(rel)}")
-        if not (fresh or new_files or own_edits or unknown or old_pack):
+        if not (fresh or new_files or own_edits or unknown or old_pack or released):
             print("   инструменты совпадают с источником — забирать нечего")
         if stale_fp:
             print(f"   ≈ совпадают с пакетом, но отпечаток установки старый или его нет: {len(stale_fp)}"
@@ -1090,9 +1182,17 @@ def main() -> int:
             print("   Или сведи автоматически непересекающиеся места: --merge <файл> положит "
                   "черновик РЯДОМ (живой файл не тронут); без пересечений — сразу "
                   "--accept-merge <файл> --apply.")
+            print(f"   Правка уже перенесена в каталог местного ({local.as_posix()}) или взята "
+                  f"пакетом — --release <файл> --apply: прежний текст уйдёт копией в "
+                  f"{keep_hint}/, на место встанет версия пакета.")
             if any(is_second_rel(r) for r in own_edits):
                 print("   Для файлов второго каталога сведение (--merge) не работает — свою правку "
                       "в них сводят руками.")
+        if released:
+            print(f"⇄ Отдаётся пакету по --release: {len(released)} — правка из этих файлов должна "
+                  f"жить в каталоге местного ({local.as_posix()}) или уже быть в пакете: перенесена "
+                  f"ли она, инструмент проверить не может. Прежний текст не пропадёт — копия в "
+                  f"{keep_hint}/<час UTC>/.")
         if old_pack:
             print(f"≠ Без отпечатка установки, но текст — версия пакета из его истории: "
                   f"{len(old_pack)} — своей правки в них нет, обновятся и получат отпечаток.")
@@ -1101,7 +1201,8 @@ def main() -> int:
                   f"раньше, чем их стали писать.{NEWLINE}   Различить «правил ты» и «правил "
                   f"источник» НЕЧЕМ. Молча они не обновятся — нужен --overwrite-unknown, "
                   f"и тогда{NEWLINE}   свои правки в этих файлах будут потеряны. Это цена, "
-                  f"названная ДО действия.")
+                  f"названная ДО действия. По одному и с копией прежнего текста — "
+                  f"--release <файл>.")
         if out_of_scope:
             print(f"ℹ️ Вне обновления: {len(out_of_scope)} звеньев источника, которых у тебя нет "
                   f"({', '.join(str(x) for x in out_of_scope[:4])}"
@@ -1126,7 +1227,21 @@ def main() -> int:
             print_pack_rules_summary(db, tools, src_dir)
             return 0
 
-        taking = fresh + new_files + old_pack + (unknown if a.overwrite_unknown else [])
+        # ⚖️ --release: прежний текст копируется и СВЕРЯЕТСЯ ДО того, как встанет хоть один файл
+        # пакета. Копия не совпала — выход, контур не тронут (кроме уже сделанных копий).
+        keep_dir = None
+        if released:
+            keep_dir = (pathlib.Path(db).resolve().parent / RELEASED_DIR_NAME
+                        / time.strftime("%Y%m%d-%H%M%SZ", time.gmtime()))
+            for rel in released:
+                was = dest_of(rel)
+                kept = keep_dir / "second-dir" / rel.name if is_second_rel(rel) else keep_dir / rel
+                kept.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(was, kept)
+                if kept.read_bytes() != was.read_bytes():
+                    sys.exit(f"⛔ --release: копия {kept} не совпала с {was} — файлы пакета НЕ "
+                             f"поставлены, контур не тронут")
+        taking = fresh + new_files + old_pack + released + (unknown if a.overwrite_unknown else [])
         for rel in taking:
             dest_of(rel).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src_index[rel], dest_of(rel))
@@ -1165,6 +1280,10 @@ def main() -> int:
                                      else f"оставлен {recorded_source}"))
         if stale_fp:
             print(f"≈ отпечаток переписан у совпадающих с пакетом: {len(stale_fp)}")
+        if released:
+            print(f"⇄ отдано пакету по --release: {len(released)} — "
+                  + " · ".join(show_name(x) for x in released))
+            print(f"   прежний текст сохранён: {keep_dir.as_posix()}")
         if own_edits:
             print(f"✋ НЕ тронуто твоих правок: {len(own_edits)} — "
                   + " · ".join(show_name(x) + ("  (второй каталог)" if is_second_rel(x) else "")

@@ -47,6 +47,8 @@ CREATE VIRTUAL TABLE из sqlite_master и команда перестройки
     и положить <зеркало>/local-paths.json как <контейнер>/.mezosync/local/paths.json —
     без этого файла восстановленный контур не знает, где его зеркало, образец и каталоги
     раскладки (карточка #677, Э3-Р5: файл путей едет в копию вместе с базой).
+    Свои проверки и настройки контура (карточка #679, Э5): положить <зеркало>/local-copy/ как
+    <контейнер>/.mezosync/local/ — в нём весь каталог местного, файл путей тоже.
 
 КУДА ПИШЕТ. Папка зеркала — ключ mirror_repo файла путей контура (.mezosync/local/paths.json;
 относительный путь считается от контейнера). Ключ не объявлен либо каталога по нему нет —
@@ -123,6 +125,57 @@ def paths_file_line(db_path: Path, out: Path, apply: bool) -> str:
     note = " (файл не читается как JSON — скопирован как есть)" \
         if res.outcome == mezo_paths.LOCAL_UNREADABLE else ""
     return f"файл путей скопирован: {dst.as_posix()}{note}"
+
+
+# ═══ КАТАЛОГ МЕСТНОГО ЦЕЛИКОМ (карточка #679, этап Э5) ═══════════════════════════════════════
+# 🪤 С Э5 в <каталог базы>/local/ живут не только пути, но и свои проверки общего прогона, их
+# скрипты и местные настройки — то, что прежде было правкой файлов пакета и хранилось вместе
+# с ними. Копия брала из local/ только файл путей ⇒ перенос местного в local/ ухудшил бы его
+# сохранность: при восстановлении из копии свои проверки пропали бы МОЛЧА.
+# ⇒ Каталог едет в копию целиком, под именем local-copy/ рядом с выгрузкой; файл, исчезнувший
+# из local/, исчезает и из копии (иначе восстановление воскресило бы снятую проверку).
+# Копия файла путей local-paths.json остаётся как была — по ней написано восстановление.
+# Кэш байт-кода (__pycache__) не копируется: это след запуска местных скриптов, а не местное;
+# в git-репозитории зеркала он был бы шумом при каждом прогоне.
+# ⚖️ Выгрузку положили ВНУТРЬ local/ (--out) — копия не делается: она легла бы в сам local/ и при
+# следующем прогоне копировала бы саму себя, вкладываясь глубже с каждым разом.
+LOCAL_COPY_NAME = "local-copy"
+LOCAL_COPY_SKIP = frozenset({"__pycache__"})
+
+
+def local_dir_line(db_path: Path, out: Path, apply: bool) -> str:
+    """Копия каталога местного рядом с выгрузкой (при записи) либо строка, почему её нет."""
+    local = getattr(mezo_paths, "local_dir", lambda d: Path(d).resolve().parent / "local")(db_path)
+    dst = out.parent / LOCAL_COPY_NAME
+    if not local.is_dir():
+        return f"каталога местного нет ({local.as_posix()}) — в копию не попал"
+    try:
+        dst.resolve().relative_to(local.resolve())
+        return (f"⚠️ каталог местного в копию НЕ попал: копия легла бы внутрь него самого "
+                f"({dst.as_posix()}) — выгрузку класть вне {local.as_posix()}")
+    except ValueError:
+        pass
+    files = sorted(p for p in local.rglob("*")
+                   if p.is_file() and not LOCAL_COPY_SKIP.intersection(p.relative_to(local).parts))
+    if not apply:
+        return (f"каталог местного {local.as_posix()} (файлов {len(files)}) попадёт в копию "
+                f"как {dst.as_posix()}/")
+    kept = set()
+    for f in files:
+        rel = f.relative_to(local)
+        target = dst / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        data = f.read_bytes()
+        if not target.is_file() or target.read_bytes() != data:
+            tmp = target.with_name(target.name + ".tmp")
+            tmp.write_bytes(data)
+            os.replace(tmp, target)
+        kept.add(rel.as_posix())
+    gone = [p for p in dst.rglob("*") if p.is_file() and p.relative_to(dst).as_posix() not in kept]
+    for p in gone:
+        p.unlink()
+    return (f"каталог местного скопирован: {dst.as_posix()}/ — файлов {len(files)}"
+            + (f", из копии убрано исчезнувших из local/: {len(gone)}" if gone else ""))
 
 # ⚰️ Здесь стояла посылка «данные append-only ⇒ дамп уменьшаться не должен». Она умерла
 # 24.08 с защитой сохранённой памяти: чистка истории версий ШТАТНО УДАЛЯЕТ строки
@@ -980,6 +1033,7 @@ def main():
     # не копируется (копия без базы ничего не восстанавливает).
     if ok:
         print(f"  📄 {paths_file_line(Path(args.db), out, args.apply)}")
+        print(f"  📁 {local_dir_line(Path(args.db), out, args.apply)}")
 
     if args.apply and ok:
         print(f"\n✅ Дамп записан: {out.name}")

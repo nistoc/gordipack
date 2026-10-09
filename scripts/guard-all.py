@@ -405,6 +405,99 @@ def sub_guard(name, script, skip, *extra, script_path=None):
               f"python {target}")
 
 
+# ═══ МЕСТНЫЕ ПРОВЕРКИ КОНТУРА (карточка #679, этап Э5) ═══════════════════════════════════════
+# 🪤 ЗАЧЕМ. Контур, которому нужна своя проверка в общем прогоне, вписывал её прямо в этот файл
+# (у AIA — «два включённых раздела», их сведение 81a556d). Файл переставал быть равен пакету,
+# каждое обновление вставало на «✋ ПРАВЛЕН У ТЕБЯ» и шло через --merge — ручное сведение.
+# ⇒ Своя проверка теперь объявляется перечнем в <каталог базы>/local/checks.json, а этот файл
+# остаётся равным пакету. Обновление в local/ не пишет.
+# Форма перечня:
+#     {"checks": [{"name": "чтение свода", "script": "checks/guard-rules-read.py",
+#                  "args": ["--db", "{db}"]}]}
+#   script — путь к скрипту; относительный считается от local/ (скрипты кладут в local/checks/);
+#   args   — необязателен; «{db}» заменяется путём базы, по которой идёт прогон (так местная
+#            проверка идёт за --db, как и проверки пакета).
+# Каждая проверка идёт через sub_guard: тот же код выхода и тот же разбор вывода, что у
+# проверок пакета; --skip принимает имя и с приставкой «местная · », и без неё.
+# ⚖️ Перечень не читается или запись в нём негодна — ПРОВАЛ словами, а не тишина: молча
+# пропавшая местная проверка неотличима от прошедшей. Неизвестное поле записи — тоже провал:
+# опечатка «arg» вместо «args» иначе выбросила бы аргументы молча.
+LOCAL_CHECK_KEYS = ("name", "script", "args")
+LOCAL_CHECK_PREFIX = "местная · "
+
+
+def local_checks(db) -> tuple:
+    """Перечень местных проверок → (записи, беда, путь перечня, есть ли файл).
+
+    записи — [(имя, путь скрипта, аргументы)]; беда — строка для человека или None.
+    Файла нет — ([], None, путь, False): у контура местных проверок нет, это норма.
+    """
+    local = getattr(mezo_paths, "local_dir", lambda d: Path(d).resolve().parent / "local")(db)
+    path = local / getattr(mezo_paths, "LOCAL_CHECKS_FILE", "checks.json")
+    if not path.exists():
+        return [], None, path, False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as e:
+        return [], (f"перечень не читается: {path.as_posix()} — "
+                    f"{e.__class__.__name__}: {e}"), path, True
+    if not isinstance(data, dict) or not isinstance(data.get("checks"), list):
+        return [], (f"перечень не читается: {path.as_posix()} — нужен объект "
+                    f"{{\"checks\": [...]}}"), path, True
+    rows, names = [], set()
+    for i, item in enumerate(data["checks"], 1):
+        where = f"перечень {path.as_posix()}, запись {i}"
+        if not isinstance(item, dict):
+            return [], f"{where}: не объект", path, True
+        extra = sorted(set(item) - set(LOCAL_CHECK_KEYS))
+        if extra:
+            return [], (f"{where}: неизвестные поля {', '.join(extra)} "
+                        f"(бывают: {', '.join(LOCAL_CHECK_KEYS)})"), path, True
+        name, script, args = item.get("name"), item.get("script"), item.get("args", [])
+        if not isinstance(name, str) or not name.strip():
+            return [], f"{where}: нет имени (name)", path, True
+        if not isinstance(script, str) or not script.strip():
+            return [], f"{where} («{name}»): нет пути скрипта (script)", path, True
+        if not isinstance(args, list) or not all(isinstance(a, str) for a in args):
+            return [], f"{where} («{name}»): args — не список строк", path, True
+        name = name.strip()
+        if name in names:
+            return [], f"{where}: имя «{name}» уже есть в перечне выше", path, True
+        names.add(name)
+        target = Path(script.strip())
+        if not target.is_absolute():
+            target = local / target
+        rows.append((name, target, [a.replace("{db}", str(db)) for a in args]))
+    return rows, None, path, True
+
+
+def run_local_checks(skip) -> None:
+    """Прогон местных проверок из перечня local/checks.json (см. разбор выше)."""
+    rows, trouble, path, exists = local_checks(DB)
+    if trouble:
+        check(LOCAL_CHECK_PREFIX + "перечень", False, trouble)
+        return
+    if not rows:
+        if FULL:
+            print("ℹ️ местных проверок нет: " + (f"перечень {path.as_posix()} пуст" if exists
+                                                   else f"файла {path.as_posix()} нет"))
+        return
+    print(f"ℹ️ местных проверок: {len(rows)} — перечень {path.as_posix()}")
+    for name, target, args in rows:
+        full_name = LOCAL_CHECK_PREFIX + name
+        if name in skip or full_name in skip:
+            print(f"⏭️ {full_name} — пропущен по --skip")
+            continue
+        # ⚖️ Пропажу скрипта судим ЗДЕСЬ, а не в sub_guard: там «не найден» разбирается по
+        # отпечаткам установки пакета («пропало» / «не приехало с обновлением»), а местный
+        # скрипт обновление не возит вовсе — для него это просто провал с адресом.
+        if not target.is_file():
+            check(full_name, False, f"скрипт местной проверки не найден: {target.as_posix()} "
+                                    f"(перечень {path.as_posix()})")
+            continue
+        sub_guard(full_name, None, set(), *args, script_path=str(target))
+
+
 def main():
     global DB, FULL
     ap = argparse.ArgumentParser()
@@ -1724,6 +1817,9 @@ def main():
               + "\n   — состояние врёт о прошлом, ПЛАН ПРИКАЗЫВАЕТ В БУДУЩЕЕ (@PROTO #3051):"
                 " преемник исполняет план первым и не подвергает сомнению."
                 " Сохранение ОДНОЙ секции это НЕ гасит — считается каждая")
+
+    # ── МЕСТНЫЕ ПРОВЕРКИ КОНТУРА — последними, после всех проверок пакета (карточка #679, Э5).
+    run_local_checks(skip)
 
     conn.close()
     # ⚡ КРАТКИЙ ИТОГ (карточка #593): имена, накопленные check() вместо построчной печати,
