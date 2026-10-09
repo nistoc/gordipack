@@ -30,9 +30,11 @@
   ⑨ настоящий пакет, только чтение: сверка версии замера Э2 ЕЁ перечнем исключений (donor-literals-allowed-<commit>.tsv
      рядом с проверкой: в самой версии замера перечня нет, он появился позже) даёт (а) и (б) сходящимися; на искажённой
      копии каталога замеров — расходящимися; нет каталога, commit или перечня версии — «НЕ ПРОВЕРЕНО» с кодом 2;
-  ⑩ sync-to-template.py (его копия во временном мини-пакете, где корни указывают во временные
-     каталоги): с --apply при находке — код 1 и строка «commit не делать»; без находки — код 0;
-     в режиме замера код выхода от находок не меняется.
+  ⑩ sync-to-template.py СНЯТ (Э4, карточка #678, шаг Ш3): его копия во временном мини-пакете на вызов
+     с --apply и без ключей отвечает отказом — код 2, слова «СНЯТ» и «Ничего не перенесено», каталог
+     scripts/ мини-пакета не появился. Проверку литералов донора, которую он звал при переносе, с Ш1
+     зовёт перехватчик git pre-commit (случаи ⑪–⑭). ⚰️ Прежний ⑩ (до Ш3): «с --apply при находке —
+     код 1 и „commit не делать“»; перенос снят вместе с ним.
   ⑪ перехватчик git pre-commit (карточка #678, этап Э4, шаг Ш1, пункт д): commit файла ядра с литералом
      донора — отказ (код не 0, нового commit нет, файл остался в индексе; в тексте названы файл, роль,
      команда просмотра и файл исключений);
@@ -70,7 +72,7 @@
   file-list-unchecked     «перечень файлов не сверяется»         → ⑦
   exit2-as-0              «код 2 подменён на 0»                  → ⑧
   reconcile-skips-b       «сверка (б) пропускает расхождение»    → ⑨
-  sync-no-guard           «sync-to-template не зовёт проверку»   → ⑩
+  sync-refusal-code-0     «отказ sync-to-template с кодом 0»     → ⑩  (до Ш3 — sync-no-guard)
 Поломки перехватчика правят ТЕКСТ его копии в подставном репозитории (настоящий файл не трогается);
 ожидание — НАБОР провалившихся случаев ⑪–⑭ — записано заранее (HookBreak.expect), все четыре гоняются
 под каждой поломкой, провалиться обязаны ровно записанные:
@@ -129,7 +131,7 @@ CASE_TITLES = {
     7: "файл scripts/*.py вне перечня — находка; bite-*.py, migrations/ и «вне ядра» — нет",
     8: "коды выхода 0 / 1 / 2 — словами; «не проверено» не бывает «прошла»",
     9: "настоящий пакет: версия замера Э2 с её перечнем исключений сходится со счётом Э3; искажённую копию ловит; без каталога — НЕ ПРОВЕРЕНО",
-    10: "sync-to-template.py: находка при --apply — код 1 и «commit не делать»",
+    10: "sync-to-template.py снят: отказ словами с кодом 2, ничего не перенесено",
     11: "перехватчик pre-commit: commit файла ядра с литералом донора — отказ, нового commit нет",
     12: "встречный: commit чистого файла ядра и файла вне ядра с литералом — проходят",
     13: "граница: перехватчик судит рабочее дерево, не индекс; сделанный commit проверяет --commit HEAD",
@@ -511,12 +513,8 @@ def case10(ctx: Ctx):
         if n != 1:
             raise AssertionError(f"поломка нашла свою цель {n} раз(а) в sync-to-template.py, ждали ровно один")
     write(tools / "sync-to-template.py", sync_src)
-    for p in (GUARD_PATH, SCAN_PATH):
-        shutil.copyfile(p, tools / p.name)
-    write(tools / "core-files.txt", "[ядро]\nscripts/write-message.py\n")
-    write(tools / "donor-names.json", names_json(FICTIONAL))
-    write(tools / "donor-literals-allowed.tsv", "file\tname\tkind\tclass\ttext\treason\n")
-    # корни переноса выводятся из mezo_paths: подставной модуль указывает во временные каталоги
+    # ⚖️ Стенд прежнего ⑩ (живой файл с литералом ZZQ, подставной mezo_paths) оставлен намеренно: отказ
+    # обязан не тронуть его даже тогда, когда переносить есть что — пустой стенд доказал бы меньше.
     write(pack / "vnext" / "prototype" / "mezo_paths.py",
           "from pathlib import Path\n"
           f"_C = Path({str(live)!r})\n"
@@ -532,18 +530,12 @@ def case10(ctx: Ctx):
     notes = []
     write(live_file, 'ROLE = "ZZQ"\nprint("ZZQ")\n')
     c1, t1 = go("--apply")
-    moved = (pack / "scripts" / "write-message.py").is_file()
-    ok1 = c1 == 1 and "commit не делать" in t1 and "находка: scripts/write-message.py" in t1 and moved
-    notes.append(f"--apply, в файле литерал: код {c1} (ждём 1), «commit не делать» есть: {'commit не делать' in t1}, перенос сделан: {moved}")
     c2, t2 = go()
-    ok2 = c2 == 0 and "находка: scripts/write-message.py" in t2 and "commit не делать" not in t2
-    notes.append(f"замер при уже сведённой паре: код {c2} (ждём 0 — код замера от находок не меняется), находки напечатаны: "
-                 f"{'находка: scripts/write-message.py' in t2}")
-    write(live_file, "ROLE = 1\n")
-    c3, t3 = go("--apply")
-    ok3 = c3 == 0 and "commit не делать" not in t3 and "проверка прошла" in t3
-    notes.append(f"--apply, литерала нет: код {c3} (ждём 0), «commit не делать» нет: {'commit не делать' not in t3}")
-    return (ok1 and ok2 and ok3), "\n".join(notes)
+    moved = (pack / "scripts").exists()
+    worded = "СНЯТ" in t1 and "Ничего не перенесено" in t1 and "update-tools.py" in t1
+    notes.append(f"--apply: код {c1} (ждём 2) · без ключей: код {c2} (ждём 2) · отказ словами: {worded} · "
+                 f"каталог scripts/ мини-пакета появился: {moved} (ждём нет)")
+    return (c1 == 2 and c2 == 2 and worded and not moved), "\n".join(notes)
 
 
 # ── случаи ⑪–⑭: перехватчик git pre-commit (.githooks/pre-commit) ───────────────────
@@ -926,8 +918,8 @@ def make_breaks(real_role: str):
         Break("reconcile-skips-b", "сверка (б) пропускает расхождение", 9, "guard",
               lambda s: replace_once(s, "    only_cc = sorted(cc_rows - guard_rows)\n    only_guard = sorted(guard_rows - cc_rows)\n",
                                      "    only_cc = []\n    only_guard = []\n")),
-        Break("sync-no-guard", "sync-to-template не зовёт проверку", 10, "sync",
-              lambda s: replace_once(s, "    code = donor_literals_check()\n", "    code = 0\n")),
+        Break("sync-refusal-code-0", "отказ sync-to-template с кодом 0", 10, "sync",
+              lambda s: replace_once(s, "REFUSAL_CODE = 2", "REFUSAL_CODE = 0")),
     ]
 
 
