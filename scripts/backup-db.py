@@ -139,7 +139,14 @@ def paths_file_line(db_path: Path, out: Path, apply: bool) -> str:
 # в git-репозитории зеркала он был бы шумом при каждом прогоне.
 # ⚖️ Выгрузку положили ВНУТРЬ local/ (--out) — копия не делается: она легла бы в сам local/ и при
 # следующем прогоне копировала бы саму себя, вкладываясь глубже с каждым разом.
+# ⚖️ Убирается из копии ТОЛЬКО то, что положил туда прошлый прогон: перечень положенного лежит
+# рядом, в local-copy.list (вне самой копии — восстановление переносит каталог как есть). Чужой
+# файл в local-copy/ не трогается и называется числом (находка приёмки чужой рукой Н4).
+# ⚖️ local/ есть, но пуст, а прошлая копия не пуста — копия НЕ трогается: пустой каталог чаще сбой
+# (пересоздан, очищен по ошибке), чем снятие всего своего разом, и последняя хорошая копия иначе
+# стёрлась бы с кодом 0 (Н5). Снять копию в этом случае — рукой.
 LOCAL_COPY_NAME = "local-copy"
+LOCAL_COPY_LIST = "local-copy.list"
 LOCAL_COPY_SKIP = frozenset({"__pycache__"})
 
 
@@ -157,6 +164,13 @@ def local_dir_line(db_path: Path, out: Path, apply: bool) -> str:
         pass
     files = sorted(p for p in local.rglob("*")
                    if p.is_file() and not LOCAL_COPY_SKIP.intersection(p.relative_to(local).parts))
+    listing = out.parent / LOCAL_COPY_LIST
+    prev = (set(listing.read_text(encoding="utf-8").splitlines()) - {""}
+            if listing.is_file() else set())
+    if not files and prev:
+        return (f"⚠️ каталог местного {local.as_posix()} пуст, а в прошлой копии файлов {len(prev)} — "
+                f"копию НЕ трогаю: пустой каталог чаще сбой, чем снятие всего своего; снять копию "
+                f"{dst.as_posix()}/ — рукой")
     if not apply:
         return (f"каталог местного {local.as_posix()} (файлов {len(files)}) попадёт в копию "
                 f"как {dst.as_posix()}/")
@@ -171,11 +185,18 @@ def local_dir_line(db_path: Path, out: Path, apply: bool) -> str:
             tmp.write_bytes(data)
             os.replace(tmp, target)
         kept.add(rel.as_posix())
-    gone = [p for p in dst.rglob("*") if p.is_file() and p.relative_to(dst).as_posix() not in kept]
+    gone = [dst / r for r in sorted(prev - kept) if (dst / r).is_file()]
     for p in gone:
         p.unlink()
+    foreign = sorted(p.relative_to(dst).as_posix() for p in dst.rglob("*")
+                     if p.is_file() and p.relative_to(dst).as_posix() not in kept)
+    tmp = listing.with_name(listing.name + ".tmp")
+    tmp.write_text("".join(r + "\n" for r in sorted(kept)), encoding="utf-8")
+    os.replace(tmp, listing)
     return (f"каталог местного скопирован: {dst.as_posix()}/ — файлов {len(files)}"
-            + (f", из копии убрано исчезнувших из local/: {len(gone)}" if gone else ""))
+            + (f", из копии убрано исчезнувших из local/: {len(gone)}" if gone else "")
+            + (f"; в копии лежат файлы не из local/: {len(foreign)} ({', '.join(foreign[:3])}"
+               f"{', …' if len(foreign) > 3 else ''}) — не тронуты" if foreign else ""))
 
 # ⚰️ Здесь стояла посылка «данные append-only ⇒ дамп уменьшаться не должен». Она умерла
 # 24.08 с защитой сохранённой памяти: чистка истории версий ШТАТНО УДАЛЯЕТ строки

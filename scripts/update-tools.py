@@ -56,7 +56,7 @@
     сведения. План и --apply печатают строку о каталоге местного.
   · --release <файл> ОТДАЁТ ПРАВЛЕНЫЙ ФАЙЛ ПАКЕТУ (карточка #679, этап Э5) — для «✋» и «❓»,
     чья правка перенесена в local/ или взята пакетом. Текст контура уходит копией в
-    <каталог базы>/released/<час UTC>/, на место встаёт версия пакета и её отпечаток. Это не
+    <каталог базы>/released/<дата-время UTC>/, на место встаёт версия пакета и её отпечаток. Это не
     сведение (тексты не смешиваются) и не --overwrite-unknown (касается только названных файлов,
     и прежний текст сохранён). Перенесла ли роль правку — инструмент проверить не может и
     говорит это вслух.
@@ -207,6 +207,8 @@ def second_install_dir(db: pathlib.Path) -> tuple[pathlib.Path | None, str | Non
 # Копии отданных пакету файлов поэтому лежат РЯДОМ, в <каталог базы>/released/: положи их в
 # local/, и утверждение «обновление в local/ не пишет» стало бы неправдой ради удобства.
 RELEASED_DIR_NAME = "released"
+RELEASE_FIRST_PREFIX = "scripts/"             # --release scripts/<имя> — только рабочие скрипты
+RELEASE_SECOND_PREFIX = "vnext/prototype/"    # --release vnext/prototype/<имя> — только второй каталог
 
 
 def local_dir_of(db: pathlib.Path) -> pathlib.Path:
@@ -816,8 +818,10 @@ def main() -> int:
     ap.add_argument("--release", metavar="ФАЙЛ", action="append", default=[],
                     help="отдать пакету файл «✋» или «❓», чья правка перенесена в каталог "
                          "местного (.mezosync/local/) или взята пакетом (карточка #679): прежний "
-                         "текст — копией в <каталог базы>/released/<час UTC>/, на место — версия "
-                         "пакета и её отпечаток. Флаг можно повторять; без --apply — только план")
+                         "текст — копией в <каталог базы>/released/<дата-время UTC>/, на место — версия "
+                         "пакета и её отпечаток. Флаг можно повторять; без --apply — только план. "
+                         "Имя, лежащее и в рабочих скриптах, и во втором каталоге, называют с "
+                         "каталогом: scripts/<имя> или vnext/prototype/<имя>")
     ap.add_argument("--db", default=None)
     a = ap.parse_args()
 
@@ -1114,15 +1118,32 @@ def main() -> int:
         # ═══ --release (карточка #679, Э5): названные «✋» и «❓» отдаются пакету. Имя — как в
         # плане (guard-all.py · migrations/<имя>.py · имя файла второго каталога). Файл без своей
         # правки не отдаётся — говорится, что он обновится и так или уже равен пакету.
+        # Имя с каталогом выбирает ОДИН из двух: scripts/<имя> — рабочие скрипты, vnext/prototype/<имя>
+        # — второй каталог установки. Голое имя, лежащее в обоих, — отказ: отдать оба разом значило
+        # бы заменить и тот, чья правка ещё не перенесена (находка приёмки чужой рукой Н3).
         released, release_notes = [], []
         for name in a.release:
             want = name.replace("\\", "/").strip()
-            matches = [r for r in src_index if pathlib.PurePath(show_name(r)).as_posix() == want]
+            if want.startswith(RELEASE_FIRST_PREFIX):
+                bare = want[len(RELEASE_FIRST_PREFIX):]
+                matches = [r for r in src_index
+                           if not is_second_rel(r) and pathlib.PurePath(r).as_posix() == bare]
+            elif want.startswith(RELEASE_SECOND_PREFIX):
+                bare = want[len(RELEASE_SECOND_PREFIX):]
+                matches = [r for r in src_index if is_second_rel(r) and r.name == bare]
+            else:
+                bare = want
+                matches = [r for r in src_index if pathlib.PurePath(show_name(r)).as_posix() == want]
             if not matches:
                 sys.exit(f"⛔ --release {name}: среди инструментов пакета такого файла нет — "
                          f"отдавать пакету нечего. Файл, которого нет в пакете, обновление не "
                          f"трогает и так; имя пишется как в плане (guard-all.py, "
                          f"migrations/<имя>.py)")
+            if len(matches) > 1:
+                sys.exit(f"⛔ --release {name}: файл с таким именем есть и среди рабочих скриптов, и "
+                         f"во втором каталоге установки — назови, какой отдать: --release "
+                         f"{RELEASE_FIRST_PREFIX}{bare} или --release {RELEASE_SECOND_PREFIX}{bare}. "
+                         f"Ничего не тронуто")
             for r in matches:
                 if r in own_edits or r in unknown:
                     if r not in released:
@@ -1152,7 +1173,7 @@ def main() -> int:
             print(f"      {base_status.get(rel, 'опору найти нечем: не проверено')}")
         for rel in released:
             print(f"   ⇄ {show_name(rel):40} по --release отдаётся пакету: прежний текст — копией в "
-                  f"{keep_hint}/<час UTC>/, на место — версия пакета{where(rel)}")
+                  f"{keep_hint}/<дата-время UTC>/, на место — версия пакета{where(rel)}")
         for note in release_notes:
             print(f"   ℹ️ --release {note}")
         for rel in unknown:
@@ -1192,7 +1213,7 @@ def main() -> int:
             print(f"⇄ Отдаётся пакету по --release: {len(released)} — правка из этих файлов должна "
                   f"жить в каталоге местного ({local.as_posix()}) или уже быть в пакете: перенесена "
                   f"ли она, инструмент проверить не может. Прежний текст не пропадёт — копия в "
-                  f"{keep_hint}/<час UTC>/.")
+                  f"{keep_hint}/<дата-время UTC>/.")
         if old_pack:
             print(f"≠ Без отпечатка установки, но текст — версия пакета из его истории: "
                   f"{len(old_pack)} — своей правки в них нет, обновятся и получат отпечаток.")
