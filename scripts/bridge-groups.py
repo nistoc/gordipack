@@ -6,10 +6,20 @@ bridge-groups.py — Устанавливает связь (cross_link) межд
         --source-db "<КОНТУР>\.mezosync\mezosync.db" \
         --target-db "<контейнер соседа>\.mezosync\mezosync.db" \
         --description "Atlas ↔ RCC DWH bridge"
+
+Сосед, чью базу открывать нельзя (правило no-scan-external-contours), — имя группы рукой:
+    python <КОНТУР>/.mezosync/scripts/bridge-groups.py \
+        --source-db "<КОНТУР>/.mezosync/mezosync.db" \
+        --target-db "<контейнер соседа>/.mezosync/mezosync.db" --target-group <имя> \
+        --description "<откуда известно имя и путь: письмо соседа, час UTC>"
+    Базу соседа инструмент тогда не открывает; нужен только существующий каталог его контейнера —
+    по нему обход писем ищет папки моста (sync_backoff.py). --bidirectional с ним не сочетается:
+    это запись в чужую базу.
 """
 
 import argparse
 import sqlite3
+import sys
 from pathlib import Path
 
 
@@ -27,6 +37,8 @@ def main():
     parser.add_argument("--description", default="", help="Описание связи")
     parser.add_argument("--bidirectional", action="store_true",
                         help="Создать связь в обе стороны")
+    parser.add_argument("--target-group", default="",
+                        help="имя группы соседа рукой — его базу тогда не открываем (карточка #684)")
     args = parser.parse_args()
 
     source_path = Path(args.source_db).resolve()
@@ -34,13 +46,24 @@ def main():
 
     if not source_path.exists():
         print(f"❌ Не найдена source БД: {source_path}")
-        return
-    if not target_path.exists():
-        print(f"❌ Не найдена target БД: {target_path}")
-        return
+        return 2
+    # Карточка #684: соседа onto нельзя было завести вовсе — инструмент читал имя группы из ЕГО базы,
+    # а открывать чужую базу запрещает правило no-scan-external-contours. Имя рукой — без чтения.
+    if args.target_group:
+        if args.bidirectional:
+            print("❌ --bidirectional с --target-group не сочетается: это запись в базу соседа")
+            return 2
+        if not target_path.parent.parent.is_dir():
+            print(f"❌ Нет каталога контейнера соседа: {target_path.parent.parent}")
+            return 2
+        target_name = args.target_group
+    else:
+        if not target_path.exists():
+            print(f"❌ Не найдена target БД: {target_path}")
+            return 2
+        target_name = get_group_name(str(target_path))
 
     source_name = get_group_name(str(source_path))
-    target_name = get_group_name(str(target_path))
 
     # Добавляем ссылку в source → target
     conn = sqlite3.connect(str(source_path))
@@ -63,7 +86,9 @@ def main():
         print(f"✅ {target_name} → {source_name} (в {target_path})")
 
     print(f"\n🔗 Связь установлена: {source_name} ↔ {target_name}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    # Карточка #684: отказ «❌» прежде выходил кодом 0 — вызывающий скрипт принимал его за связь
+    sys.exit(main())

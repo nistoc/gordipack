@@ -125,14 +125,44 @@ def _foreign_bridge_head(conn, db_path) -> tuple:
     return mark, "прочитано"
 
 
-def _foreign_bridge_places(conn, db_path) -> tuple:
+# ═══ 08.10 (карточка #684): ВТОРОЕ УСТРОЙСТВО ПАПКИ МОСТА. У контура onto папки моста лежат
+# в корне контура — <контейнер>/bridges/<папка>, а не <контейнер>/<репо>/.mezosync/bridges/<папка>.
+# Обход знал только первое устройство: три письма onto к PROTO 05.10 пролежали непрочитанными
+# ≈2,5 ч под строкой «нового нет». Первое устройство — прежнее, его папки разбираются как раньше.
+BRIDGE_LAYOUTS = ("*/.mezosync/bridges/*", "bridges/*")
+
+
+def _neighbour_rows(conn) -> list:
+    """Соседи из cross_links → [(имя группы, путь базы)]; нет таблицы — пусто.
+    🪤 Порядок — по rowid, не по id: у таблицы прежней схемы столбца id нет, и «ORDER BY id»
+    уходил в ветку «нет таблицы» — обход молча терял всех соседей (поймали приёмки
+    bite-sync-backoff ⑯–㉑ и bite-sync-bridge-silence ②⑦⑨ первым же прогоном). Поэтому пусто —
+    ТОЛЬКО при отсутствии таблицы; любая другая ошибка запроса поднимается и печатается."""
+    try:
+        return [(g or "", p) for g, p in
+                conn.execute("SELECT target_group, target_db_path FROM cross_links ORDER BY rowid")]
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc):
+            return []
+        raise
+
+
+def neighbours_looked(conn) -> list:
+    """Имена соседей, у которых обход смотрит письма (карточка #684, критерий ②): строка о мосте
+    называет их, чтобы сосед ВНЕ обхода был виден читателю по своему отсутствию."""
+    return [g for g, _ in _neighbour_rows(conn) if g]
+
+
+def _foreign_bridge_places(conn, db_path, with_owner: bool = False) -> tuple:
     """Папки, где лежат ЧУЖИЕ письма моста → (список папок, число неудачных обходов).
 
     Выделено 26.09 (карточка #663) из _foreign_bridge_head без изменения поведения:
     те же папки нужны списку писем по именам, а второй обход со своим набором правил
     разошёлся бы с первым молча.
+    with_owner=True (карточка #684) → третьим значением {папка: имя соседа} для папок второго
+    устройства: их имя («atlas-onto») соседа не называет — он берётся из cross_links.
     """
-    places, failures = [], 0
+    places, failures, owners = [], 0, {}
     our_group = ""
     try:
         _r = conn.execute("SELECT value FROM meta WHERE key = 'group_name'").fetchone()
@@ -146,11 +176,7 @@ def _foreign_bridge_places(conn, db_path) -> tuple:
                 places.append(d)
     except OSError:
         failures += 1
-    try:
-        neighbours = conn.execute("SELECT target_db_path FROM cross_links").fetchall()
-    except sqlite3.OperationalError:
-        neighbours = []
-    for (dbp,) in neighbours:
+    for group, dbp in _neighbour_rows(conn):
         container = Path(dbp).parent.parent
         # 🪤 ПУСТОЙ ОБХОД НЕСУЩЕСТВУЮЩЕГО ПУТИ НЕ БРОСАЕТ ОШИБКУ — он молча даёт ноль
         # находок, и «путь соседа протух» выглядит как «у соседа ничего нет». Сосед
@@ -159,11 +185,16 @@ def _foreign_bridge_places(conn, db_path) -> tuple:
         if not container.is_dir():
             failures += 1
             continue
-        try:
-            places += [d for d in container.glob("*/.mezosync/bridges/*") if d.is_dir()]
-        except OSError:
-            failures += 1
-    return places, failures
+        for layout in BRIDGE_LAYOUTS:
+            try:
+                found = [d for d in container.glob(layout) if d.is_dir()]
+            except OSError:
+                failures += 1
+                continue
+            places += found
+            if layout != BRIDGE_LAYOUTS[0] and group:
+                owners.update({d: group for d in found})
+    return (places, failures, owners) if with_owner else (places, failures)
 
 
 # ═══ 26.09 (карточка #663, слово владельца 10:05 UTC, чат PROTO): ПИСЬМА ПО ИМЕНАМ.
@@ -223,7 +254,7 @@ def _letter_addressees(path: Path, roles: set) -> list:
 def _bridge_letters(conn, db_path, role: str, since: float) -> list:
     """Чужие письма моста новее отметки `since` → список словарей
     {when, neighbour, to, to_me, file, dir}; сначала адресованные читающей роли."""
-    places, _ = _foreign_bridge_places(conn, db_path)
+    places, _, owners = _foreign_bridge_places(conn, db_path, with_owner=True)
     roles = _known_roles(conn)
     try:
         _r = conn.execute("SELECT value FROM meta WHERE key = 'group_name'").fetchone()
@@ -239,6 +270,14 @@ def _bridge_letters(conn, db_path, role: str, since: float) -> list:
         #    роли того контура, и «для COORD» пометило бы «тебе» нашего COORD ложно.
         other_contour = (parts[1] if len(parts) == 2 and our_group
                          and parts[1] != our_group else "")
+        if d in owners:
+            # Второе устройство (карточка #684): папка onto «atlas-onto» — обмен с нами, хотя
+            # наше имя в ней ПЕРВОЕ. Сосед — из cross_links; другому контуру папка адресована,
+            # только если нашего имени в её названии нет вовсе.
+            neighbour = owners[d]
+            other_contour = ""
+            if len(parts) == 2 and our_group and our_group not in parts:
+                other_contour = parts[1] if parts[0] == neighbour else parts[0]
         try:
             files = [(f, f.stat().st_mtime) for f in d.glob("*.md")]
         except OSError:
@@ -416,6 +455,7 @@ def news(db_path, role: str) -> dict:
                   and bridge_head > (seen_bridge or 0))
     # Письма по именам собираются ДО сдвига отметки: после него они уже «виденные».
     letters = _bridge_letters(conn, db_path, role, seen_bridge or 0) if bridge_new else []
+    looked = neighbours_looked(conn)
     bridge_to_save = bridge_head if bridge_outcome == "прочитано" else None
     conn.execute("INSERT INTO sync_backoff (role, sleep_sec, quiet_streak, last_seen_id, "
                  "last_bridge_mtime, updated_at) VALUES (?,?,0,?,?, datetime('now')) "
@@ -426,7 +466,7 @@ def news(db_path, role: str) -> dict:
     conn.commit()
     conn.close()
     return {"first": first, "new_count": new_count, "bridge": bridge_outcome,
-            "bridge_new": bool(bridge_new), "letters": letters}
+            "bridge_new": bool(bridge_new), "letters": letters, "looked": looked}
 
 
 def news_line(db_path, role: str) -> str:
@@ -446,8 +486,13 @@ def news_line(db_path, role: str) -> str:
         bridge_word = {"прочитано": "есть новое" if r["bridge_new"] else "нового нет",
                        "смотреть некуда": "мостов нет",
                        "не смог": "НЕ ПРОЧИТАН — проверь пути соседей в cross_links"}[r["bridge"]]
+    # Карточка #684, критерий ②: «нового нет» без перечня соседей не отличить от «смотреть
+    # было некуда» — сосед, которого нет в cross_links, виден здесь только своим отсутствием.
+    looked = r.get("looked") or []
+    looked_word = ("соседи в обходе: " + ", ".join(looked) if looked
+                   else "соседей в cross_links нет — обход видит только общие папки своего контура")
     out = [f"📬 с прошлого чтения: чужих записок {r['new_count']} · "
-           f"письма соседей в мосте: {bridge_word}"]
+           f"письма соседей в мосте: {bridge_word} ({looked_word})"]
     # По строке на письмо: адресованные тебе — первыми, их предел строк не срезает.
     shown = [x for x in letters if x["to_me"]]
     shown += [x for x in letters if not x["to_me"]][:max(0, LETTER_LINES_MAX - len(shown))]

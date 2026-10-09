@@ -1453,9 +1453,15 @@ def main():
                         and o not in by_topic and _answer_cites(group, o, ask_name)]
         return by_topic + by_reference
 
+    # 🪤 ВТОРОЕ УСТРОЙСТВО ПАПКИ МОСТА (карточка #684). У контура onto папки моста лежат в корне
+    # контура — <контейнер>/bridges/<папка>, а не <контейнер>/<репо>/.mezosync/bridges/<папка>:
+    # сосед, записанный в cross_links, получал здесь «исходящей папки не нашлось», хотя письма
+    # лежали на месте. Перечень устройств — тот же, что у обхода писем при чтении ленты: два
+    # перечня в двух инструментах разошлись бы молча.
+    from sync_backoff import BRIDGE_LAYOUTS
     for group, dbp in links:
         container = Path(dbp).parent.parent          # <контур>/.mezosync/mezosync.db
-        boxes = sorted(container.glob("*/.mezosync/bridges/*"))
+        boxes = sorted(b for layout in BRIDGE_LAYOUTS for b in container.glob(layout))
         if not boxes:
             # 🪤 «У СОСЕДА НЕТ ПАПКИ» НЕ ЗНАЧИТ «ОН НЕ СПРАШИВАЛ». Обмен с одним из соседей
             # старше этого договора: обе стороны писали в ОДНУ папку, и она лежит в НАШЕМ

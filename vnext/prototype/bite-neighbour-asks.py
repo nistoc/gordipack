@@ -8,6 +8,11 @@
 чужую исходящую, молчит ли она, когда ответ уже положен, и говорит ли вслух, когда сосед
 записан, а смотреть некуда.
 
+⑭ (карточка #684): у соседа второе устройство папки моста — <контейнер>/bridges/<папка>, как
+у контура onto. Вопрос в ней виден, «исходящей папки не нашлось» не печатается. Нарочная поломка
+в том же прогоне: в копии sync_backoff.py стенда перечень устройств урезан до первого — ⑭ обязан
+провалиться (проверка берёт перечень оттуда же, откуда обход писем при чтении ленты).
+
     python <КОНТУР>/vnext-tools/bite-neighbour-asks.py
 """
 from __future__ import annotations
@@ -35,8 +40,10 @@ def case(title, ok, detail, differ=False):
     return ok
 
 
-def build(tmp: pathlib.Path, with_ask: bool, with_answer: bool, with_box: bool):
-    """Собирает две стороны: наш контур и соседа. Возвращает путь к нашему guard-all."""
+def build(tmp: pathlib.Path, with_ask: bool, with_answer: bool, with_box: bool,
+          root_layout: bool = False):
+    """Собирает две стороны: наш контур и соседа. Возвращает путь к нашему guard-all.
+    root_layout — папка моста соседа во втором устройстве: <сосед>/bridges/atlas-neigh (карточка #684)."""
     # Каталог группы ищется ПОДЪЁМОМ ПО ПРИЗНАКУ, а не угадыванием глубины:
     # у копии в публичном образце «два уровня вверх» указывают в пустоту,
     # и приёмка падала ещё до первого случая (замер 2026-08-19 16:34 UTC).
@@ -60,7 +67,8 @@ def build(tmp: pathlib.Path, with_ask: bool, with_answer: bool, with_box: bool):
     marker.execute("PRAGMA user_version = 1")
     marker.close()
     if with_box:
-        box = theirs / "neigh.archs" / ".mezosync" / "bridges" / "neigh-atlas"
+        box = (theirs / "bridges" / "atlas-neigh" if root_layout
+               else theirs / "neigh.archs" / ".mezosync" / "bridges" / "neigh-atlas")
         box.mkdir(parents=True)
         if with_ask:
             (box / "ask.atlas.thing.md").write_text("вопрос", encoding="utf-8")
@@ -271,6 +279,35 @@ def main() -> int:
                    "исходящей папки не нашлось" in out,
                    "молчание здесь неотличимо от «вопросов нет», а это разные вещи: "
                    "во втором случае мы просто не туда смотрим", differ=True)
+
+        # ⑭ ВТОРОЕ УСТРОЙСТВО ПАПКИ МОСТА (карточка #684): у контура onto папки моста лежат
+        # в корне контура. Проверка знала одно устройство и говорила «исходящей папки не
+        # нашлось» о соседе, чьи письма лежали на месте.
+        guard14 = build(tmp / "m", with_ask=True, with_answer=False, with_box=True, root_layout=True)
+        out14 = bridge_part(run(guard14))
+        seen14 = case("⑭ вопрос в папке ВТОРОГО устройства (<сосед>/bridges/atlas-neigh) виден",
+                      "ask.atlas.thing.md" in out14 and "исходящей папки не нашлось" not in out14,
+                      f"строка: {(out14.splitlines() or ['(пусто)'])[0][:110]}", differ=True)
+        ok &= seen14
+        # нарочная поломка в том же стенде: перечень устройств урезан до первого. Гоняется только
+        # на исправной проверке — у не прошедшей ⑭ мерить чувствительность нечего.
+        sb = guard14.parent / "sync_backoff.py"
+        text = sb.read_text(encoding="utf-8")
+        anchor = 'BRIDGE_LAYOUTS = ("*/.mezosync/bridges/*", "bridges/*")'
+        if not seen14:
+            print("⚪ поломка ⑭ не гонялась: проверка сама не прошла ⑭")
+        elif text.count(anchor) != 1:
+            print(f"⛔ НЕ ЗАПУСТИЛАСЬ: поломку ⑭ некуда вложить — образец найден {text.count(anchor)} раз "
+                  f"в {sb.name}")
+            return 2
+        else:
+            sb.write_text(text.replace(anchor, 'BRIDGE_LAYOUTS = ("*/.mezosync/bridges/*",)'),
+                          encoding="utf-8")
+            out14b = bridge_part(run(guard14))
+            ok &= case("⑭-поломка: перечень устройств без второго — ⑭ проваливается",
+                       "ask.atlas.thing.md" not in out14b and "исходящей папки не нашлось" in out14b,
+                       "проверка берёт перечень из sync_backoff.py: урезанный перечень обязан вернуть "
+                       "прежнюю слепоту, иначе ⑭ проходил бы по другой причине", differ=True)
     finally:
         mezo_stand.release(tmp)  # уборка отложена до исхода прогона
 
