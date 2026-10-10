@@ -148,9 +148,17 @@ def _force_writable(func, path, _exc):
     func(path)
 
 
+def _is_link(path: str) -> bool:
+    """Ссылка или соединение каталогов (junction): для os.path.islink соединение — не ссылка."""
+    return os.path.islink(path) or (hasattr(os.path, "isjunction") and os.path.isjunction(path))
+
+
 def size_of(p: Path) -> int:
     total = 0
-    for root, _dirs, files in os.walk(p, onerror=lambda _e: None):
+    for root, dirs, files in os.walk(p, onerror=lambda _e: None):
+        # за соединение не ходим: файлы за ним лежат вне стенда, rmtree их не удаляет,
+        # а os.walk на Windows соединение проходит — размер вырос бы на чужое
+        dirs[:] = [x for x in dirs if not _is_link(os.path.join(root, x))]
         for name in files:
             try:
                 total += os.path.getsize(os.path.join(root, name))

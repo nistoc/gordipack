@@ -6,11 +6,12 @@ bite-stand-cleanup.py — приёмка помощника mezo_stand.py и у�
 каталог на диске или нет. Есть НАРОЧНЫЕ ПОЛОМКИ — если их не поймали, приёмка слепа
 и её «пройдено» ничего не доказывает.
 
-Случаи (12)–(18) — правка утилиты по карточке #657 (10.10.2026): начало f-строки,
+Случаи (12)–(20) — правка утилиты по карточке #657 (10.10.2026): начало f-строки,
 комментарии не читаются, начала, названные руками (--prefix), общий корень gordi
 не трогается, короткое начало не берётся, порог в часах различает 2 ч и 72 ч,
-«освобождено» считает только удалённое. У каждого — своя нарочная поломка в копии
-утилиты, и случай обязан на ней провалиться. (17) и (18) — по замечаниям приёмки OPSSRE.
+«освобождено» считает только удалённое, соединение каталогов наружу не проходится
+ни удалением, ни подсчётом размера. У каждого — своя нарочная поломка в копии
+утилиты, и случай обязан на ней провалиться. (17)–(19) — по замечаниям приёмки OPSSRE.
 """
 import os
 import re
@@ -107,6 +108,15 @@ def old_dirs(root, *names, age=LONG_AGO):
         (d / "copy.db").write_bytes(b"x" * 1024)
         os.utime(d, (when, when))
     return root
+
+
+def link_dir(target, link):
+    """Соединение каталогов: на Windows — junction (такие делает bite-stand-keep-last.py), иначе ссылка."""
+    if os.name == "nt":
+        import _winapi
+        _winapi.CreateJunction(str(Path(target).resolve()), str(Path(link).resolve()))
+    else:
+        os.symlink(target, link, target_is_directory=True)
 
 
 def main():
@@ -276,7 +286,7 @@ def main():
 
 
 def new_cases():
-    """(12)–(18): правка карточки #657. Каждый случай гоняется на целой утилите и на копии
+    """(12)–(20): правка карточки #657. Каждый случай гоняется на целой утилите и на копии
     с СВОЕЙ нарочной поломкой; на поломке он обязан провалиться, иначе случай ничего не доказывает.
 
     ⚠️ Все начала имён в строках-примерах этого файла — с корнем «jprobe-». Уборщик читает
@@ -421,6 +431,59 @@ def new_cases():
             line = next((s.strip() for s in out.splitlines() if "освобождено" in s), "строки нет")
             case("(18) «освобождено» — только по удалённым целиком: каталог с открытым файлом 30 МБ "
                  "не удалён и в сумму не вошёл; поломка «считать всё отобранное» проваливает случай",
+                 ok and not bad,
+                 f"на целой: {line} · на поломке "
+                 f"{'провалился, как должен' if not bad else 'ПРОШЁЛ — приёмка слепа'}")
+
+        # Соединение каталогов внутри старого стенда, указывающее НАРУЖУ. Такие соединения
+        # в живой временной папке есть — их нарочно делает bite-stand-keep-last.py.
+        def stand_with_link(name, outside_bytes):
+            sb = old_dirs(work / name, "jprobe-link-aaa")
+            outside = work / f"{name}-outside"
+            outside.mkdir()
+            keep = outside / "keep.bin"
+            keep.write_bytes(b"x" * outside_bytes)
+            link_dir(outside, sb / "jprobe-link-aaa" / "link")
+            when = time.time() - LONG_AGO   # соединение обновило дату стенда — вернуть
+            os.utime(sb / "jprobe-link-aaa", (when, when))
+            return sb, keep
+
+        # (19) удаление стенда не трогает файлы снаружи: ошибка здесь стирает файлы ВНЕ
+        #      временной папки (поломка OPSSRE О2, замечание З5).
+        def c19(script):
+            sb, keep = stand_with_link(f"sb19-{abs(hash(str(script))) % 10**6}", 1024)
+            janitor(sb, tools, "--prefix", "jprobe-link-", "--apply", script=script)
+            stand_gone = not (sb / "jprobe-link-aaa").exists()
+            return stand_gone and keep.exists(), (stand_gone, keep.exists())
+        ok, (stand_gone, kept) = c19(JANITOR)
+        bad, _ = c19(broken_copy(work, "            shutil.rmtree(d, onerror=_force_writable)\n",
+                                 "            for r, _ds, fs in os.walk(d, followlinks=True):\n"
+                                 "                for f in fs:\n"
+                                 "                    os.remove(os.path.join(r, f))\n"
+                                 "            shutil.rmtree(d, onerror=_force_writable)\n"))
+        case("(19) старый стенд с соединением каталогов наружу удалён, файл снаружи цел; "
+             "поломка «удаление проходит по соединению» проваливает случай",
+             ok and not bad,
+             f"стенд удалён: {stand_gone} · файл снаружи цел: {kept} · на поломке "
+             f"{'провалился, как должен' if not bad else 'ПРОШЁЛ — приёмка слепа'}")
+
+        # (20) размер стенда не считает файлы за соединением: rmtree их не удаляет, а os.walk
+        #      на Windows соединение проходит (для os.path.islink оно не ссылка). Без отсечения
+        #      стенд в 1 КБ с соединением на 30 МБ снаружи показывался бы как 30 МБ.
+        if os.name != "nt":
+            print("⚪ (20) не проверено: здесь os.walk ссылку и так не проходит — "
+                  "поломке нечего ломать")
+        else:
+            def c20(script):
+                sb, _ = stand_with_link(f"sb20-{abs(hash(str(script))) % 10**6}", 30 * 1024 * 1024)
+                out, _ = janitor(sb, tools, "--prefix", "jprobe-link-", script=script)
+                return "освободит 0.00 ГБ" in out, out
+            ok, out = c20(JANITOR)
+            bad, _ = c20(broken_copy(
+                work, "        dirs[:] = [x for x in dirs if not _is_link(os.path.join(root, x))]\n", ""))
+            line = next((s.strip() for s in out.splitlines() if "освободит" in s), "строки нет")
+            case("(20) размер стенда без файлов за соединением каталогов: стенд 1 КБ, снаружи 30 МБ — "
+                 "показ «освободит 0.00 ГБ»; поломка «подсчёт проходит соединение» проваливает случай",
                  ok and not bad,
                  f"на целой: {line} · на поломке "
                  f"{'провалился, как должен' if not bad else 'ПРОШЁЛ — приёмка слепа'}")
