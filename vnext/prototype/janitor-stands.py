@@ -242,8 +242,8 @@ def main() -> int:
         print("НОЛЬ — временных каталогов проверок не найдено вовсе. Убирать нечего.")
         return 0
 
-    total_bytes = sum(size_of(d) for d, _ in aged)
-    gb = total_bytes / 1024 ** 3
+    sizes = {d: size_of(d) for d, _ in aged}
+    gb = sum(sizes.values()) / 1024 ** 3
     print(f"найдено всего: {len(found)} · под порог подпадает: "
           + (f"{len(aged)} ({gb:.2f} ГБ)" if aged else "НОЛЬ"))
 
@@ -266,15 +266,17 @@ def main() -> int:
         return 0
 
     removed = failed = 0
+    freed = 0  # только удалённые целиком: у неудалённого часть файлов могла остаться
     for d, _ in aged:
         try:
             shutil.rmtree(d, onerror=_force_writable)
             removed += 1
+            freed += sizes[d]
         except OSError as e:
             failed += 1
             print(f"⚠️ не удалось убрать {d}: {e}")
     print(f"\n🧹 УДАЛЕНО: {removed if removed else 'НОЛЬ'} каталогов · "
-          f"освобождено {gb:.2f} ГБ"
+          f"освобождено {freed / 1024 ** 3:.2f} ГБ"
           + (f" · НЕ УДАЛОСЬ: {failed}" if failed else ""))
     return 1 if failed else 0
 

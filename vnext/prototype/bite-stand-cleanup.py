@@ -6,10 +6,11 @@ bite-stand-cleanup.py — приёмка помощника mezo_stand.py и у�
 каталог на диске или нет. Есть НАРОЧНЫЕ ПОЛОМКИ — если их не поймали, приёмка слепа
 и её «пройдено» ничего не доказывает.
 
-Случаи (12)–(16) — правка утилиты по карточке #657 (10.10.2026): начало f-строки,
+Случаи (12)–(18) — правка утилиты по карточке #657 (10.10.2026): начало f-строки,
 комментарии не читаются, начала, названные руками (--prefix), общий корень gordi
-не трогается, короткое начало не берётся. У каждого — своя нарочная поломка в копии
-утилиты, и случай обязан на ней провалиться.
+не трогается, короткое начало не берётся, порог в часах различает 2 ч и 72 ч,
+«освобождено» считает только удалённое. У каждого — своя нарочная поломка в копии
+утилиты, и случай обязан на ней провалиться. (17) и (18) — по замечаниям приёмки OPSSRE.
 """
 import os
 import re
@@ -95,10 +96,11 @@ def broken_copy(holder, needle, replacement):
     return path
 
 
-def old_dirs(root, *names):
-    """Подставная временная папка: каталоги с копией внутри и датой трёхсуточной давности."""
+def old_dirs(root, *names, age=LONG_AGO):
+    """Подставная временная папка: каталоги с копией внутри и датой давностью age секунд
+    (по умолчанию трое суток)."""
     root.mkdir(parents=True, exist_ok=True)
-    when = time.time() - LONG_AGO
+    when = time.time() - age
     for n in names:
         d = root / n
         d.mkdir()
@@ -173,13 +175,13 @@ def main():
     sandbox = Path(tempfile.mkdtemp(prefix="probe-temp-"))
     tools = Path(tempfile.mkdtemp(prefix="probe-tools-"))
     (tools / "fake-check.py").write_text(
-        'import tempfile\nd = tempfile.mkdtemp(prefix="oldstand-")\n', encoding="utf-8")
-    old = sandbox / "oldstand-aaaaaa"
+        'import tempfile\nd = tempfile.mkdtemp(prefix="jprobe-oldstand-")\n', encoding="utf-8")
+    old = sandbox / "jprobe-oldstand-aaaaaa"
     old.mkdir()
     (old / "copy.db").write_bytes(b"x" * 4096)
     long_ago = time.time() - LONG_AGO
     os.utime(old, (long_ago, long_ago))
-    young = sandbox / "oldstand-bbbbbb"
+    young = sandbox / "jprobe-oldstand-bbbbbb"
     young.mkdir()
 
     # (6) показ НЕ удаляет
@@ -237,11 +239,11 @@ def main():
         # сосед по СВОЕМУ каталогу (как остальные ~270 bite-*.py рядом с janitor-stands.py
         # в живом vnext-tools) — чтобы «из своего» тоже было НЕ ноль, а не только «из всех»
         (own_synth / "bite-fake-check.py").write_text(
-            'import tempfile\nd = tempfile.mkdtemp(prefix="svoi-check-")\n', encoding="utf-8")
+            'import tempfile\nd = tempfile.mkdtemp(prefix="jprobe-svoi-check-")\n', encoding="utf-8")
         neighbor_synth = synth / ".mezosync" / "scripts"
         neighbor_synth.mkdir(parents=True)
         (neighbor_synth / "fake-check.py").write_text(
-            'import tempfile\nd = tempfile.mkdtemp(prefix="synth-check-")\n', encoding="utf-8")
+            'import tempfile\nd = tempfile.mkdtemp(prefix="jprobe-synth-check-")\n', encoding="utf-8")
 
         SYNTH = load(own_synth / "janitor-stands.py", "janitor_synth")
         from_own, _ = SYNTH.prefixes_from_sources(SYNTH.TOOLS_DIR)
@@ -274,22 +276,27 @@ def main():
 
 
 def new_cases():
-    """(12)–(16): правка карточки #657. Каждый случай гоняется на целой утилите и на копии
-    с СВОЕЙ нарочной поломкой; на поломке он обязан провалиться, иначе случай ничего не доказывает."""
+    """(12)–(18): правка карточки #657. Каждый случай гоняется на целой утилите и на копии
+    с СВОЕЙ нарочной поломкой; на поломке он обязан провалиться, иначе случай ничего не доказывает.
+
+    ⚠️ Все начала имён в строках-примерах этого файла — с корнем «jprobe-». Уборщик читает
+    и этот файл как исходник проверки (строка-пример для него неотличима от вызова), и пример
+    вида «plain-» стал бы началом, подходящим к чужим каталогам живой временной папки
+    (замечание OPSSRE З2, карточка #657, 10.10). Под «jprobe-» живых каталогов нет."""
     work = Path(tempfile.mkdtemp(prefix="janitor-657-"))
     try:
         # исходники подставных проверок
         tools = work / "tools"
         tools.mkdir()
-        (tools / "fstr-check.py").write_text(
-            'import tempfile\nn = 1\nd = tempfile.mkdtemp(prefix=f"fstr-{n}-")\n', encoding="utf-8")
+        (tools / "jprobe-fstr-check.py").write_text(
+            'import tempfile\nn = 1\nd = tempfile.mkdtemp(prefix=f"jprobe-fstr-{n}-")\n', encoding="utf-8")
         (tools / "comment-check.py").write_text(
             "import tempfile\n"
-            '# d = tempfile.mkdtemp(prefix="commented-")\n'
-            'x = 1  # import mezo_stand; mezo_stand.new("trailing-")\n'
-            'd = tempfile.mkdtemp(prefix="hash#inside-")\n', encoding="utf-8")
-        (tools / "plain-check.py").write_text(
-            'import tempfile\nd = tempfile.mkdtemp(prefix="plain-")\n', encoding="utf-8")
+            '# d = tempfile.mkdtemp(prefix="jprobe-commented-")\n'
+            'x = 1  # import mezo_stand; mezo_stand.new("jprobe-trailing-")\n'
+            'd = tempfile.mkdtemp(prefix="jprobe-hash#inside-")\n', encoding="utf-8")
+        (tools / "jprobe-plain-check.py").write_text(
+            'import tempfile\nd = tempfile.mkdtemp(prefix="jprobe-plain-")\n', encoding="utf-8")
 
         def prefixes_of(script):
             mod = load(script, f"janitor_{abs(hash(str(script))) % 10**6}")
@@ -299,30 +306,30 @@ def new_cases():
         # (12) начало f-строки читается до первой подстановки
         def c12(script):
             found = prefixes_of(script)
-            return "fstr-" in found and "plain-" in found, found
+            return "jprobe-fstr-" in found and "jprobe-plain-" in found, found
         ok, found = c12(JANITOR)
         bad, _ = c12(broken_copy(work, "    r'(?:[fF][\"\\']([^\"\\'{]+)|[\"\\']([^\"\\']+)[\"\\'])')",
                                  "    r'(?:[fF][\"\\']([^\"\\'{]+)(?!)|[\"\\']([^\"\\']+)[\"\\'])')"))
-        case("(12) начало f-строки читается: prefix=f\"fstr-{n}-\" даёт «fstr-»; "
+        case("(12) начало f-строки читается: prefix=f\"jprobe-fstr-{n}-\" даёт «jprobe-fstr-»; "
              "поломка «f-строка не читается» проваливает случай",
              ok and not bad,
-             f"на целой: fstr- {'есть' if 'fstr-' in found else 'НЕТ'} · plain- "
-             f"{'есть' if 'plain-' in found else 'НЕТ'} · на поломке случай "
+             f"на целой: jprobe-fstr- {'есть' if 'jprobe-fstr-' in found else 'НЕТ'} · jprobe-plain- "
+             f"{'есть' if 'jprobe-plain-' in found else 'НЕТ'} · на поломке случай "
              f"{'провалился, как должен' if not bad else 'ПРОШЁЛ — приёмка слепа'}")
 
         # (13) комментарии не читаются, а «#» внутри строки — не комментарий
         def c13(script):
             found = prefixes_of(script)
-            return ("commented-" not in found and "trailing-" not in found
-                    and "hash#inside-" in found), found
+            return ("jprobe-commented-" not in found and "jprobe-trailing-" not in found
+                    and "jprobe-hash#inside-" in found), found
         ok, found = c13(JANITOR)
         bad, _ = c13(broken_copy(work, "    return \"\".join(lines)\n", "    return text\n"))
         case("(13) комментарий не даёт начала имени (целая строка и хвост строки), "
              "«#» внутри строки — не комментарий; поломка «комментарии читаются» проваливает случай",
              ok and not bad,
-             f"на целой: commented- {'взято — ОШИБКА' if 'commented-' in found else 'не взято'} · "
-             f"trailing- {'взято — ОШИБКА' if 'trailing-' in found else 'не взято'} · "
-             f"hash#inside- {'взято' if 'hash#inside-' in found else 'НЕ взято — ОШИБКА'} · "
+             f"на целой: jprobe-commented- {'взято — ОШИБКА' if 'jprobe-commented-' in found else 'не взято'} · "
+             f"jprobe-trailing- {'взято — ОШИБКА' if 'jprobe-trailing-' in found else 'не взято'} · "
+             f"jprobe-hash#inside- {'взято' if 'jprobe-hash#inside-' in found else 'НЕ взято — ОШИБКА'} · "
              f"на поломке {'провалился, как должен' if not bad else 'ПРОШЁЛ — приёмка слепа'}")
 
         # (14) начало, названное руками (--prefix), берётся; без него каталог не трогается
@@ -369,6 +376,54 @@ def new_cases():
              ok and not bad,
              f"abc-foreign цел: {kept} · на поломке "
              f"{'провалился, как должен' if not bad else 'ПРОШЁЛ — приёмка слепа'}")
+
+        # (17) «молодой, но не новый»: каталог 2 ч при пороге 24 ч остаётся, 72 ч — уходит.
+        #      Случай (7) судил пару «72 ч против только что созданного», и ошибка единиц
+        #      порога между ними не видна: порог в минутах удалил бы всё старше 24 МИНУТ,
+        #      в том числе стенды идущих сегодня прогонов (поломка OPSSRE О1, замечание З1).
+        def c17(script):
+            sb = old_dirs(work / f"sb17-{abs(hash(str(script))) % 10**6}", "jprobe-age-old")
+            old_dirs(sb, "jprobe-age-2h", age=2 * 3600)
+            janitor(sb, tools, "--prefix", "jprobe-age-", "--apply", script=script)
+            young_kept = (sb / "jprobe-age-2h").exists()
+            old_gone = not (sb / "jprobe-age-old").exists()
+            return young_kept and old_gone, (young_kept, old_gone)
+        ok, (young_kept, old_gone) = c17(JANITOR)
+        bad, _ = c17(broken_copy(work, "    limit = a.older_than_hours * 3600\n",
+                                 "    limit = a.older_than_hours * 60\n"))
+        case("(17) каталог 2 ч при пороге 24 ч цел, 72 ч — удалён; поломка «порог в минутах» "
+             "проваливает случай",
+             ok and not bad,
+             f"2 ч цел: {young_kept} · 72 ч удалён: {old_gone} · на поломке "
+             f"{'провалился, как должен' if not bad else 'ПРОШЁЛ — приёмка слепа'}")
+
+        # (18) «освобождено» считает только удалённое целиком (замечание OPSSRE З3).
+        #      Неудалённый каталог даёт открытый файл: Windows не удаляет открытое.
+        if os.name != "nt":
+            print("⚪ (18) не проверено: на этой системе открытый файл удалению не мешает — "
+                  "неудачу удаления здесь не поставить")
+        else:
+            def c18(script):
+                sb = old_dirs(work / f"sb18-{abs(hash(str(script))) % 10**6}",
+                              "jprobe-busy-aaa", "jprobe-free-bbb")
+                big = sb / "jprobe-busy-aaa" / "held.bin"
+                big.write_bytes(b"x" * (30 * 1024 * 1024))   # 30 МБ — видно в сотых долях ГБ
+                when = time.time() - LONG_AGO
+                os.utime(sb / "jprobe-busy-aaa", (when, when))
+                with open(big, "rb"):
+                    out, _ = janitor(sb, tools, "--prefix", "jprobe-busy-", "--prefix", "jprobe-free-",
+                                     "--apply", script=script)
+                busy_left = (sb / "jprobe-busy-aaa").exists()
+                return (busy_left and "НЕ УДАЛОСЬ: 1" in out and "освобождено 0.00 ГБ" in out), out
+            ok, out = c18(JANITOR)
+            bad, _ = c18(broken_copy(work, 'f"освобождено {freed / 1024 ** 3:.2f} ГБ"',
+                                     'f"освобождено {gb:.2f} ГБ"'))
+            line = next((s.strip() for s in out.splitlines() if "освобождено" in s), "строки нет")
+            case("(18) «освобождено» — только по удалённым целиком: каталог с открытым файлом 30 МБ "
+                 "не удалён и в сумму не вошёл; поломка «считать всё отобранное» проваливает случай",
+                 ok and not bad,
+                 f"на целой: {line} · на поломке "
+                 f"{'провалился, как должен' if not bad else 'ПРОШЁЛ — приёмка слепа'}")
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
