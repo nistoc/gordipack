@@ -37,6 +37,17 @@
 ни красных, ни зелёных, ни слова о пропуске. Роль с пятью строками прав выглядела
 как роль без таблицы. Ищем таблицы под ВСЕМИ вхождениями, а число ролей с таблицей
 печатаем — чтобы пропажу было видно числом, а не по отсутствию строк.
+
+━━ ПРАВКА КОНТУРА AIA 7c4eba1 — В ПАКЕТЕ С ЭТАПА Э5 (карточка #679, 2026-10-10) ━━
+Их редакция и diff — в их исходящей папке моста (handover-0914, письмо 14.09). Взято по смыслу,
+а не дословно: их правка писалась на прежней редакции этого файла, до перевода имён.
+    · по каждой роли — строка: откуда взят раздел, сколько рядов и сколько судилось;
+      роль без «§ПРАВА» — «НЕ ПРОВЕРЕНА», а не молчание;
+    · заголовок и упоминание в прозе различаются; таблица под упоминанием названа отдельно;
+    · у нуля два слова: «раздел пуст» и «права прозой с указателями на реестр»
+      (указатели сверяются с реестром, негодный — провал).
+Два отступления от их текста, оба по замеру на копии базы Atlas 2026-10-10 10:54 UTC, — в
+докстроке parse_starts() и в main() у сверки указателей.
 """
 from __future__ import annotations
 
@@ -94,6 +105,14 @@ REGISTRY_REF = re.compile(
 # ✅ честная пометка «в реестре этого нет, вот след»
 NOT_IN_REGISTRY_MARK = re.compile(r"НЕ\s+В\s+РЕЕСТРЕ", re.I)
 
+# ✅ указатель на реестр в ПРОЗЕ или кодовом блоке — «[реестр #14/#15/#18]» (правка AIA 7c4eba1,
+#    роль LLMG их контура: права записаны блоком, таблицы нет). Построчный суд такую форму
+#    не видит, но сами указатели сверить с реестром можно — и это ДРУГОЕ слово, чем «раздел
+#    пуст». «записка #N» сюда не попадает (запис[ьи] с границей слова).
+PROSE_POINTER = re.compile(
+    r"(?:реестр\w*|запис[ьи]\b|прав[оа]\b)\s*(?:прав\w*)?[\s*_«»\"\[]*#\s*\d+(?:\s*/\s*#?\s*\d+)*",
+    re.I)
+
 
 def rights_table_rows(body: str):
     """(номер строки, текст) — строки таблиц ПОД заголовком §ПРАВА и до следующего заголовка.
@@ -120,6 +139,44 @@ def rights_table_rows(body: str):
     separators = {n for n, s in result if set(s) <= set("|- :")}
     headers = {n - 1 for n in separators}
     return sorted((n, s) for n, s in result if n not in headers)
+
+
+def parse_starts(body: str):
+    """По каждому вхождению «§ПРАВА»: (строка, заголовок?, рядов таблицы под ним, указатели в прозе).
+
+    🩹 ПРАВКА AIA 7c4eba1 (08.09, их записки #4873–#4876; перенесена в пакет карточкой #679,
+    этап Э5): «судилось 0» — ОДИН ноль на ТРИ разных случая (раздел пуст · права прозой или
+    блоком с указателями · всё отсеяно), а «вхождение» — одно на два (заголовок · упоминание
+    в прозе, под которым таблицы быть не должно). Сбор строк НЕ сужаем — сужение до
+    заголовков ослепило бы роль с разделом-прозой молча, и отчёт показал бы не провал, а
+    тишину. Различаем СЛОВАМИ на печати.
+
+    ⚖️ ОТСТУПЛЕНИЕ ОТ ТЕКСТА AIA (замер на копии базы Atlas 2026-10-10 10:54 UTC): у AIA
+    заголовком считалась только строка, начатая «#». У RCC заголовок в рамке «═══ §ПРАВА … ═══»
+    — законная форма, её знает и NEXT_HEADER; их правка назвала бы его прозой и напечатала
+    ложное «таблица под упоминанием в прозе». Заголовок — те же формы, что конец раздела.
+    """
+    lines = (body or "").splitlines()
+    result, taken = [], set()
+    starts = [i for i, l in enumerate(lines) if RIGHTS_HEADER.search(l)]
+    for start in starts:
+        is_heading = bool(NEXT_HEADER.match(lines[start]))
+        rows, pointers = 0, []
+        for i in range(start + 1, len(lines)):
+            if NEXT_HEADER.match(lines[i]):
+                break
+            if i in taken:
+                continue
+            taken.add(i)
+            s = lines[i].strip()
+            if s.startswith("|"):
+                if not set(s) <= set("|- :"):
+                    rows += 1
+            else:
+                for m in PROSE_POINTER.finditer(s):
+                    pointers += [int(x) for x in re.findall(r"\d+", m.group(0))]
+        result.append((start + 1, is_heading, rows, pointers))
+    return result
 
 
 def permission_cell(s: str) -> str:
@@ -205,6 +262,19 @@ def verdict(s: str, role: str, registry: dict, rules: set = frozenset()):
     return True, f"запись #{n} ({owner})"
 
 
+def pointer_word(n: int, role: str, registry: dict) -> tuple[bool, str]:
+    """(годен?, слово) — указатель «реестр #N» из прозы против самого реестра (правка AIA 7c4eba1)."""
+    entry = registry.get(n)
+    if entry is None:
+        return False, f"#{n} — такой записи в реестре НЕТ"
+    owner, revoked_at = entry
+    if revoked_at:
+        return False, f"#{n} — ОТОЗВАНА ({revoked_at})"
+    if owner not in (role, "ALL"):
+        return False, f"#{n} — принадлежит {owner}, а не {role}"
+    return True, f"#{n} ✅"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", default=None)
@@ -233,8 +303,11 @@ def main() -> int:
         # было бы принять в любом случае — сверять действительно не с чем, и это честный
         # свежий контур, а не пропажа. Если хоть одна строка права в памяти ЕСТЬ, а реестр
         # пуст — это по-прежнему пропажа записи, прежний отказ остаётся дословно.
+        # Указатель на реестр в прозе — тоже объявленное право (правка AIA 7c4eba1): при пустом
+        # реестре он заведомо негоден, и молчать «прав не объявлено» о нём нельзя.
         no_rights_rows_anywhere = not any(
-            rights_table_rows(body) for _, _, body in memory)
+            rights_table_rows(body) or any(p for *_, p in parse_starts(body))
+            for _, _, body in memory)
         if no_rights_rows_anywhere:
             print("⚪ прав не объявлено ни в памяти, ни в реестре — сверять нечего")
             return 0
@@ -243,25 +316,86 @@ def main() -> int:
 
     red_rows, green_rows, roles_with_table = [], [], set()
     found, dropped = 0, {}
+    # 🩹 ПРАВКА AIA 7c4eba1 (их записки #4867/#4869/#4870): «ноль провалов» двусмысленно —
+    # проверка могла просто НЕ НАЙТИ раздел (заголовок без §, проза вместо таблицы) и
+    # промолчать. Поэтому по КАЖДОЙ роли печатается, с каких строк взят раздел и сколько
+    # рядов судилось; роль без единого вхождения «§ПРАВА» — «НЕ ПРОВЕРЕНА», а не «чисто».
+    by_role = {}
     for role, section, body in memory:
         if a.role and role != a.role:
             continue
+        starts = parse_starts(body)
         lines = rights_table_rows(body)
         if lines:
             roles_with_table.add(role)
+        judged = 0
         for n, s in lines:
             found += 1
             judge, why = is_judged(s)
             if not judge:
                 dropped[why] = dropped.get(why, 0) + 1
                 continue
+            judged += 1
             ok, word = verdict(s, role, registry, rules)
             (green_rows if ok else red_rows).append((role, section, n, s, word))
+        st = by_role.setdefault(role, {"starts": [], "rows": 0, "judged": 0, "pointers": []})
+        st["starts"] += [(section, n, h, r) for n, h, r, _ in starts]
+        st["rows"] += len(lines)
+        st["judged"] += judged
+        st["pointers"] += [(section, n, k) for n, _, _, ptrs in starts for k in sorted(set(ptrs))]
+
+    # ⚖️ ВТОРОЕ ОТСТУПЛЕНИЕ ОТ ТЕКСТА AIA (тот же замер Atlas 10.10): у AIA указатели в прозе
+    # сверяются у ВСЕХ ролей. У роли С таблицей прав проза рядом — пояснение, а не форма права:
+    # у CORE, OPSSRE и TAXO под заголовком §ПРАВА стоит история отозванной записи #12 («общая
+    # запись #12 ОТОЗВАНА 2026-09-25…») — правка AIA дала бы три провала, и все три ложных.
+    # Сверяем указатели ТОЛЬКО у роли без единого ряда таблицы — ровно случай, ради которого
+    # правка заведена (у AIA роль LLMG: права блоком «[реестр #14/#15/#18]»).
+    red_pointers = []
+    for role, st in by_role.items():
+        st["pointer_words"] = []
+        if st["rows"]:
+            continue
+        for section, n, k in st["pointers"]:
+            ok, word = pointer_word(k, role, registry)
+            st["pointer_words"].append((ok, word))
+            if not ok:
+                red_pointers.append((role, section, n, word))
 
     considered = len(red_rows) + len(green_rows)
     print(f"ролей с таблицей прав: {len(roles_with_table)} · записей реестра: {len(registry)} · "
           f"строк в таблицах НАЙДЕНО: {found} · рассмотрено: {considered} · "
           f"без записи реестра: {len(red_rows)}")
+    for role in sorted(by_role):
+        st = by_role[role]
+        if not st["starts"]:
+            print(f"   ⚠️ {role}: раздел «§ПРАВА» НЕ НАЙДЕН — роль НЕ ПРОВЕРЕНА (это не «чисто»)")
+            continue
+        heads = [f"{sec}:{n}" for sec, n, h, _ in st["starts"] if h]
+        prose = [f"{sec}:{n}" for sec, n, h, _ in st["starts"] if not h]
+        under_prose = [f"{sec}:{n}" for sec, n, h, r in st["starts"] if not h and r]
+        parts = [("заголовок " + ", ".join(heads)) if heads else "заголовка НЕТ (раздел — проза)"]
+        if prose:
+            parts.append(f"упоминаний в прозе {len(prose)} ({', '.join(prose)})")
+        parts.append(f"рядов {st['rows']} · судилось {st['judged']}")
+        print(f"   {role}: " + " · ".join(parts))
+        if under_prose:
+            print(f"      ⚠️ таблица ПОД упоминанием в прозе {', '.join(under_prose)} — строки судятся, "
+                  f"но разделом прав это место не является; проверь, чьи они")
+        # 🔑 у нуля два слова (правка AIA, их записка #4874): «раздел пуст» и «форма не табличная» —
+        #    разные вещи
+        if st["rows"] == 0:
+            if st["pointer_words"]:
+                words = ", ".join(w for _, w in st["pointer_words"])
+                bad = any(not ok for ok, _ in st["pointer_words"])
+                print(f"      ℹ️ таблицы нет — права прозой или блоком с указателями на реестр: {words}. "
+                      f"Форма не табличная, построчно не судится; указатели сверены с реестром"
+                      + (" — ⛔ есть негодные, см. 🔴 ниже" if bad else ""))
+            else:
+                print("      ⚠️ раздел найден, но ПУСТ: ни таблицы, ни указателя на реестр — "
+                      "роль НЕ ПРОВЕРЕНА (это не «чисто»)")
+        elif st["judged"] == 0:
+            print("      ℹ️ все ряды отсеяны (см. отсев ниже): судить было нечего — "
+                  "это не «чисто», а «ни одна строка не про право»")
     # 🩸 ОТСЕВ ПЕЧАТАЕТСЯ С ПРИЧИНОЙ, А НЕ ОДНИМ ЧИСЛОМ — по замеру @STUD (записка #4818):
     # «отсеяно 88» при 31 рассмотренной читается как «проверка не смотрит почти ни на что»,
     # а незаконным был отсев ЧЕТЫРЁХ строк. Голое число обвиняет весь контур; разряды
@@ -274,19 +408,23 @@ def main() -> int:
     for role, section, n, s, word in red_rows:
         print(f"🔴 [{role} · {section} · строка {n}] {word}")
         print(f"      {s[:180]}")
+    for role, section, n, word in red_pointers:
+        print(f"🔴 [{role} · {section} · раздел со строки {n}] указатель в прозе: {word}")
     if a.verbose:
         for role, section, n, s, word in green_rows:
             print(f"✅ [{role} · {section} · строка {n}] {word}")
-    if not red_rows:
-        print("✅ строк права без записи реестра нет")
+    reds = len(red_rows) + len(red_pointers)
+    if not reds:
+        print("✅ строк права без записи реестра нет; негодных указателей в прозе нет")
     else:
         print("ℹ️ Это ПРОВЕРКА, а не запрет: сохранение памяти проходит как обычно. "
               "Закрыть строку — ДВА пути, оба законны: завести право в реестр "
               "(role-rights.py add, по слову владельца) и вписать «запись #N» ЛИБО, если "
               "права в реестре нет и не будет, пометить строку «⛔ НЕ В РЕЕСТРЕ — след: …».")
         print("⚖️ ЧЕГО ПРОВЕРКА НЕ ВИДИТ: верна ли САМА ссылка по существу (что запись #N "
-              "про это же право), и права, записанные прозой вне таблицы §ПРАВА.")
-    return 1 if red_rows else 0
+              "про это же право); права, записанные прозой БЕЗ указателя на реестр; указатели "
+              "в прозе у роли С таблицей прав — там проза считается пояснением и не судится.")
+    return 1 if reds else 0
 
 
 if __name__ == "__main__":
