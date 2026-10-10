@@ -100,7 +100,7 @@ def bridge_part(out: str) -> str:
 
 
 def run(guard) -> str:
-    r = subprocess.run([sys.executable, str(guard), "--full", "--skip", "drift,память,ленты"],
+    r = subprocess.run([sys.executable, str(guard), "--full", "--skip", "drift,память,чтение ленты"],
                        capture_output=True, text=True, encoding="utf-8", timeout=300,
                        env=mezo_stand.stand_env(guard.parents[2]))  # стенд — контур, где лежит его guard-all
     return (r.stdout or "") + (r.stderr or "")

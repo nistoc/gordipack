@@ -178,6 +178,9 @@ def load_module(path: Path, name: str):
 
 GUARD_FUNCS = ("check", "sub_guard", "local_checks", "run_local_checks")
 GUARD_CONSTS = ("LOCAL_CHECK_KEYS", "LOCAL_CHECK_PREFIX")
+# Сверка имени с --skip в самих check()/counted() (карточка #691): у guard-all.py старее неё этих
+# функций нет — берём, если есть; глобальные пропуска подставляются пустыми.
+GUARD_FUNCS_OPTIONAL = ("_known", "skipped")
 
 
 def guard_namespace(source_file: Path, db: Path, full: bool = False) -> dict:
@@ -188,10 +191,11 @@ def guard_namespace(source_file: Path, db: Path, full: bool = False) -> dict:
     ns = {"json": json, "Path": Path, "subprocess": subprocess, "sys": sys, "os": os,
           "mezo_paths": load_module(source_file.parent / "mezo_paths.py", "mezo_paths_under_test"),
           "DB": db, "FULL": full, "RESULTS": [], "GREENS": [], "SCRIPTS": db.parent / "scripts",
-          "installed_fingerprints": lambda: {}}
+          "installed_fingerprints": lambda: {},
+          "SKIP": set(), "KNOWN": [], "_SKIP_SAID": set()}
     found = set()
     for node in tree.body:
-        if isinstance(node, ast.FunctionDef) and node.name in GUARD_FUNCS:
+        if isinstance(node, ast.FunctionDef) and node.name in GUARD_FUNCS + GUARD_FUNCS_OPTIONAL:
             exec(ast.get_source_segment(source, node), ns)  # noqa: S102 — исходник испытуемого
             found.add(node.name)
         elif isinstance(node, ast.Assign) and any(
@@ -360,8 +364,9 @@ for f in ("ok.py", "bad.py"):
     {"name": "проба", "script": "checks/ok.py"},
     {"name": "провал", "script": "checks/bad.py"}]}, ensure_ascii=False), encoding="utf-8")
 # Каталога координации у копии нет (atlas.archs не копируется) — объявлено штатно. Без объявления
-# «замороженные md» провалена, а --skip её не снимает: guard-all зовёт её check() напрямую, мимо
-# --skip, и Г11б/Г11в не смогли бы отделить код выхода местных от проверок пакета.
+# «замороженные md» провалена; до карточки #691 --skip её не снимал (check() звался мимо --skip), и
+# Г11б/Г11в не смогли бы отделить код выхода местных от проверок пакета. Объявление оставлено: так
+# приёмка проходит и на guard-all.py старее карточки #691.
 (c_root / ".mezo-no-coordination").write_text("копия контура приёмки bite-local-dir.py\n", encoding="utf-8")
 C_GUARD = c_root / ".mezosync" / "scripts" / "guard-all.py"
 C_GUARD_TEXT = C_GUARD.read_bytes()
