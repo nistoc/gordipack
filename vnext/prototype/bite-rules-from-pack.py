@@ -395,6 +395,17 @@ def patch_removed_state_ignores_skip(src: str):
     )
     return src.replace(old, new), src.count(old)
 
+def patch_new_ignores_skip(src: str):
+    """(Я) карточка #679 (этап Э5, Ш3): build_rows() снова не смотрит skip_map у НОВОГО ключа —
+    ветка «отказались» из правки AIA (их карточка #161) снята. Должен провалиться случай ⑯б:
+    после --skip --apply ключ остаётся «new».
+    Якорь — одна строка: «elif» с этим отступом в файле единственный (ниже стоит «if»), а строка
+    комментария под ним несла имя контура-донора в коде пакета (guard-donor-literals)."""
+    old = "            elif skip_map.get(f\"{rule_set}/{key}\") == row[\"text_sha\"]:\n"
+    new = "            elif False:  # ПОЛОМКА (Я): отказ у нового ключа не читается\n"
+    return src.replace(old, new), src.count(old)
+
+
 def patch_no_ready_command(src: str):
     """(Р) карточка #614, возврат COORD (ветка «а», 2026-09-14 17:58 UTC): готовая
     команда «--source <папка с клоном пакета GORDI>» в отказе find_pack_source() при
@@ -699,6 +710,30 @@ def build_retired_removed_fixture(root: Path, text_sha):
                        "text_sha": text_sha(pack_body), "pack_commit": "removedboth",
                        "removed_at": "2026-08-18 15:50:09 UTC"}])
     return circuit_db, pack_dir, key
+
+
+def skip_new_key_states(mod, root: Path) -> tuple:
+    """Случай ⑯б и поломка (Я): --skip --apply у ключа «new» фикстуры, затем пакет меняет его
+    текст. Возвращает (код --skip, состояние после отказа, сводку после отказа, состояние после
+    смены текста пакета, число «новых» в сводке ДО отказа)."""
+    circuit_db, pack_dir, _, _ = build_state_fixture(root, mod.text_sha)
+    key = PREFIX + "new"
+    _, counts_before = rows_for_fixture(mod, circuit_db, pack_dir)
+    conn = sqlite3.connect(f"file:{circuit_db.as_posix()}?mode=rw", uri=True)
+    pconn = mod.open_pack_db(pack_dir)
+    rc = mod.skip_key(conn, pconn, mod.load_meta_map(conn, "pack_rules_skipped"), key, None,
+                      "владелец, приёмка, тест ⑯б", True)
+    conn.close(); pconn.close()
+    rows, counts = rows_for_fixture(mod, circuit_db, pack_dir)
+    state = next((r["state"] for r in rows if r["rule_key"] == key), "нет в списке")
+    pc = sqlite3.connect(str(pack_dir / "rules" / "pack-rules.db"))
+    moved = "brand new pack text v2\n"
+    pc.execute("UPDATE pack_rules SET body=?, text_sha=? WHERE rule_key=?",
+               (moved, mod.text_sha(moved), key))
+    pc.commit(); pc.close()
+    rows2, _ = rows_for_fixture(mod, circuit_db, pack_dir)
+    state_moved = next((r["state"] for r in rows2 if r["rule_key"] == key), "нет в списке")
+    return rc, state, counts, state_moved, counts_before["new"]
 
 
 def rows_for_fixture(mod, circuit_db: Path, pack_dir: Path) -> tuple:
@@ -1203,6 +1238,22 @@ def main() -> int:
               rc16 == 0 and state_after_skip == "skipped" and state_after_pack_moved != "skipped",
               f"код {rc16}; сразу после отказа: «{state_after_skip}» (ждём skipped); "
               f"после смены текста пакета: «{state_after_pack_moved}» (ждём НЕ skipped)")
+
+    # ── ⑯б --skip у НОВОГО ключа (у контура его нет): отказ читается списком ─────────────
+    # КАРТОЧКА #679 (этап Э5, Ш3) — ветка из правки AIA (их карточка #161, письмо 06.10, раздел 8,
+    # взята в пакет дословно): отказ записывался в meta и в ветке «new» НЕ читался. Инструмент
+    # печатал «✅ отказ записан», а список звал правило «новым» снова — и сводка --summary
+    # считала его в «новых». Случай ⑯ этого не видел: он отказывается от ключа, который у
+    # контура ЕСТЬ (ветка сравнения текстов), а не от нового.
+    rc16b, state16b, counts16b, state16b_moved, new_before16b = skip_new_key_states(
+        mod, root / "skip-new")
+    ok &= case("⑯б --skip у НОВОГО ключа: после --apply «skipped» и не в счёте «новых»; "
+              "пакет сменил текст — снова «new»",
+              rc16b == 0 and state16b == "skipped" and counts16b["new"] == new_before16b - 1
+              and state16b_moved == "new",
+              f"код {rc16b}; после отказа: «{state16b}» (ждём skipped); новых в сводке "
+              f"{counts16b['new']} при {new_before16b} до отказа (ждём на один меньше); после "
+              f"смены текста пакета: «{state16b_moved}» (ждём new)")
 
     # ── ⑰ --propose: три непустых раздела, без путей машины, и gordi-issue.py --dry-run ─
     circuit_db7, pack_dir7, _, _ = build_state_fixture(root / "propose", mod.text_sha)
@@ -2441,6 +2492,15 @@ def main() -> int:
               stateBothT.get(both_key_t) == "retired-here",
               f"состояние под поломкой: «{stateBothT.get(both_key_t, 'нет в списке')}» (под "
               f"верным кодом — «нет в списке»)")
+
+    # ── ПОЛОМКА (Я), карточка #679 (Э5, Ш3): ветка «отказались» у нового ключа снята ──────
+    mod_sh = load_rfp(patch=patch_new_ignores_skip, name="rfp_bite_new_ignores_skip")
+    _, state_sh, counts_sh, _, new_before_sh = skip_new_key_states(mod_sh, root / "skip-new-break-sh")
+    ok &= case("⑯б ПОЛОМКА (Я) «отказ у нового ключа не читается» красит ровно ⑯б: после "
+              "--apply ключ остаётся «new» и в счёте «новых»",
+              state_sh == "new" and counts_sh["new"] == new_before_sh,
+              f"состояние под поломкой: «{state_sh}», новых {counts_sh['new']} при "
+              f"{new_before_sh} до отказа (под верным кодом — «skipped» и на один меньше)")
 
     # ── ㉟ контроль: живая база контура не изменилась ────────────────────────────────
     after_live = fake_key_count_live()
