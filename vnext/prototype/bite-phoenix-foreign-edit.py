@@ -46,11 +46,23 @@
      ПОСЛЕ — запись проходит молча. --read делает плохой порядок ненужным, а не невозможным;
      случай записывает границу замером: если он провалится, средство стало сильнее — обнови его
 
+КАРТОЧКА #707 — два замечания CORE к карточке #705, роли BITE707F · BITE707G · BITE707H:
+  ⑯  тело с окончаниями «\r\n» (так в базу попадало только через --body): --read --out пишет файл
+     байт в байт (не «\r\r\n»); круг «--file без правки» даёт то же тело с «\n», пустых строк не прибавилось
+  ⑯а --read называет число знаков «\r» в теле; у тела без них такой строки нет
+  ⑰  --body с «\r\n» записывается с «\n» — так же, как --file
+  ⑱  тело правили мимо инструмента (новейшая версия прежняя), рука пишет с номером новейшей версии,
+     взятым из --history, — ОТКАЗ «мимо инструмента», правка мимо цела
+
 НАРОЧНЫЕ ПОЛОМКИ (в копии инструмента, во временном каталоге). Поломка, валящая всё подряд,
 не доказывала бы, что случаи смотрят на предмет, поэтому у каждой — точный набор провалов:
   --break off     вызов проверки карточки #701 заменён пустым ответом ⇒ ①, ①а, ⑤б, ⑪
   --break expect  проверка новых версий карточки #705 выключена ⇒ ⑦, ⑦а, ⑬ (⑬ держится на том же отказе)
   --break read    --read берёт номер не новейшей версии ⇒ ⑫, ⑬, ⑮
+  --break crlf    файл --out пишется с переводом окончаний ⇒ ⑯
+  --break crnote  строка --read о знаках «\r» выключена ⇒ ⑯а
+  --break bodynl  --body не приводит окончания ⇒ ⑰
+  --break aside   сверка тела с новейшей версией выключена ⇒ ⑱
 
 Запуск:
   python <пакет>/vnext/prototype/bite-phoenix-foreign-edit.py                  — обычный прогон
@@ -79,6 +91,10 @@ ROLE_B = "BITE701B"
 ROLE_C = "BITE705C"
 ROLE_D = "BITE705D"
 ROLE_E = "BITE705E"
+ROLE_F = "BITE707F"
+ROLE_G = "BITE707G"
+ROLE_H = "BITE707H"
+CR_NOTE = "знаков «\\r»"
 SECTION = "state"
 WARN = "ЧУЖАЯ ПРАВКА УХОДИТ"
 REFUSE = "⛔ ОТКАЗ"
@@ -94,6 +110,18 @@ BREAKS = {
     "read": ('"LEFT JOIN phoenix_history h ON h.id = (SELECT max(id) FROM phoenix_history "',
              '"LEFT JOIN phoenix_history h ON h.id = (SELECT min(id) FROM phoenix_history "',
              {"⑫", "⑬", "⑮"}),
+    "crlf": ('        Path(out).write_text(body, encoding="utf-8", newline="")',
+             '        Path(out).write_text(body, encoding="utf-8")',
+             {"⑯"}),
+    "crnote": ('    if "\\r" in body:  # карточка #707',
+               '    if False:  # карточка #707',
+               {"⑯а"}),
+    "bodynl": ('        body = body.replace("\\r\\n", "\\n").replace("\\r", "\\n")',
+               '        pass',
+               {"⑰"}),
+    "aside": ("    if not newer and current is not None and current != versions[i][3]:",
+              "    if False:",
+              {"⑱"}),
 }
 READ_HEAD = re.compile(r"^версия id=(\d+) · .*--expect-version (\d+)")
 
@@ -465,6 +493,96 @@ def run_cases_read(st, r):
     return r
 
 
+def sql(st, query, params):
+    """Правка копии базы мимо инструмента — так, как правят тело вне save-phoenix.py."""
+    con = sqlite3.connect(st.db)
+    con.execute(query, params)
+    con.commit()
+    con.close()
+
+
+def save_file(st, role, f, actor=None, expect=None):
+    cmd = [sys.executable, str(st.tool), "--db", str(st.db), "--role", role, "--section", SECTION,
+           "--file", str(f), "--allow-shrink"]
+    if actor:
+        cmd += ["--actor", actor]
+    if expect is not None:
+        cmd += ["--expect-version", str(expect)]
+    q = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=st.env)
+    return q.returncode, (q.stdout or "") + (q.stderr or "")
+
+
+def run_cases_707(st, r):
+    """Карточка #707: окончания строк «\\r\\n» и правка мимо инструмента."""
+    f_base = ["# Раздел BITE707F — тело с окончаниями строк Windows",
+              "строка роли F номер один, окончание Windows",
+              "строка роли F номер два, окончание Windows"]
+    for role, lines in ((ROLE_F, f_base), (ROLE_H, [l.replace("F", "H") for l in f_base])):
+        code, out = st.save(role, lines)
+        if code != 0:
+            print(f"⛔ ОПЫТ НЕ ПОСТАВЛЕН: подготовительное сохранение упало (код {code})")
+            print(out)
+            sys.exit(2)
+
+    # ⑯ тело с «\r\n» — так в базе лежало бы тело, пришедшее через --body до карточки #707
+    crlf = text(f_base).replace("\n", "\r\n")
+    sql(st, "UPDATE phoenix SET body=? WHERE role=? AND section=?", (crlf, ROLE_F, SECTION))
+    sql(st, "UPDATE phoenix_history SET body=? WHERE id=?", (crlf, st.latest(ROLE_F)))
+    f16 = st.workdir / "read16.md"
+    code, out, so = st.read(ROLE_F, out=f16)
+    p = []
+    raw = f16.read_bytes() if f16.exists() else b""
+    if raw != crlf.encode("utf-8"):
+        p.append("файл --out не равен телу байт в байт"
+                 + (" — окончания «\\r\\r\\n»" if b"\r\r\n" in raw else ""))
+    code2, out2 = save_file(st, ROLE_F, f16, expect=read_id(so))
+    if code2 != 0:
+        p.append(f"запись файла без правки: код {code2}")
+    if st.body(ROLE_F) != text(f_base):
+        p.append("после круга тело не равно тому же тексту с «\\n»"
+                 + (" — прибавились пустые строки" if "\n\n" in (st.body(ROLE_F) or "") else ""))
+    verdict(r, "⑯ ", "тело с «\\r\\n»: --out байт в байт, круг без правки — тот же текст с «\\n»", p, out + out2)
+
+    # ⑯а --read называет знаки «\r»; у тела без них — молчит
+    p = []
+    if f"в теле {crlf.count(chr(13))} {CR_NOTE}" not in out:
+        p.append(f"нет строки «в теле {crlf.count(chr(13))} {CR_NOTE}»")
+    _, out_e, _ = st.read(ROLE_E)
+    if CR_NOTE in out_e:
+        p.append("строка о «\\r» у тела без них")
+    verdict(r, "⑯а", "--read называет знаки «\\r» в теле; у тела без них — молчит", p, out)
+
+    # ⑰ --body с «\r\n» записывается с «\n»
+    g_lines = ["# Раздел BITE707G — тело через --body",
+               "строка роли G номер один, пришла через --body",
+               "строка роли G номер два, пришла через --body"]
+    q = subprocess.run([sys.executable, str(st.tool), "--db", str(st.db), "--role", ROLE_G, "--section",
+                        SECTION, "--body", text(g_lines).replace("\n", "\r\n"), "--allow-shrink"],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", env=st.env)
+    out17 = (q.stdout or "") + (q.stderr or "")
+    p = []
+    if q.returncode != 0:
+        p.append(f"код {q.returncode}")
+    if st.body(ROLE_G) != text(g_lines):
+        p.append("в базе не тот же текст с «\\n»" + (" — знаки «\\r» остались" if "\r" in (st.body(ROLE_G) or "") else ""))
+    verdict(r, "⑰ ", "--body с «\\r\\n» записывается с «\\n», как --file", p, out17)
+
+    # ⑱ правка мимо инструмента, рука с номером новейшей версии из --history — отказ
+    h_text = st.body(ROLE_H)
+    vid = st.latest(ROLE_H)
+    aside = h_text + "строка, вписанная мимо инструмента прямо в базу\n"
+    sql(st, "UPDATE phoenix SET body=? WHERE role=? AND section=?", (aside, ROLE_H, SECTION))
+    f18 = st.workdir / "h18.md"
+    f18.write_text(h_text + "правка COORD с номером из --history\n", encoding="utf-8")
+    code, out = save_file(st, ROLE_H, f18, actor="COORD", expect=vid)
+    p = expect_refusal(code, out, ["мимо инструмента", "--read"])
+    if "прямо в базу" not in (st.body(ROLE_H) or ""):
+        p.append("правка мимо инструмента затёрта")
+    verdict(r, "⑱ ", "тело правили мимо инструмента, номер новейшей версии из --history — отказ, правка цела",
+            p, out)
+    return r
+
+
 def main():
     ap = argparse.ArgumentParser(description="Приёмка карточки #701: чужая правка памяти при сохранении")
     ap.add_argument("--tool", help="путь к save-phoenix.py (по умолчанию — испытуемая копия)")
@@ -472,7 +590,7 @@ def main():
     ap.add_argument("--break", dest="breakage", choices=sorted(BREAKS),
                     help="нарочная поломка: off — вызов проверки карточки #701 выключен; "
                          "expect — проверка новых версий карточки #705 выключена; "
-                         "read — --read берёт номер не новейшей версии")
+                         "read — --read берёт номер не новейшей версии; crlf · crnote · bodynl · aside — средства карточки #707")
     a = ap.parse_args()
 
     tool = Path(a.tool) if a.tool else mezo_target.script("save-phoenix.py")
@@ -515,11 +633,11 @@ def main():
         env = dict(env, PYTHONPATH=str(tool.parent) + os.pathsep + env.get("PYTHONPATH", ""))
 
     print("═" * 92)
-    print(f"ПРИЁМКА карточки #701 и карточки #705 · инструмент: {tool} · база: {db.name} ({db_kind})"
+    print(f"ПРИЁМКА карточек #701 · #705 · #707 · инструмент: {tool} · база: {db.name} ({db_kind})"
           + (f" · НАРОЧНАЯ ПОЛОМКА «{a.breakage}»" if a.breakage else ""))
     print("═" * 92)
     st = Stand(runner, db, workdir, env)
-    results = run_cases_read(st, run_cases_705(st, run_cases(st)))
+    results = run_cases_707(st, run_cases_read(st, run_cases_705(st, run_cases(st))))
     shutil.rmtree(workdir, ignore_errors=True)
 
     passed = sum(ok for _, ok in results)

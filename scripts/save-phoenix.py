@@ -568,8 +568,13 @@ def foreign_edit_report(conn, role, section, actor, cur_body, body, dry=False):
 # --expect-version <id>. Версии новее есть — ОТКАЗ.
 # ⚖️ ОТКАЗ, А НЕ ПРЕДУПРЕЖДЕНИЕ, как у карточки #701: рука правит нарочно и в спокойную
 #    минуту, повтор ей ничего не стоит; у роли отказ пришёлся бы на закрытие чата.
-def expected_version_refusal(conn, role, section, expected):
-    """Строки отказа — или None, если раздел после названной версии не менялся."""
+def expected_version_refusal(conn, role, section, expected, current=None):
+    """Строки отказа — или None, если раздел после названной версии не менялся.
+
+    current — тело раздела сейчас. 🎯 Карточка #707 (замечание CORE к карточке #705): номер,
+    взятый из --history, равен новейшему, а тело правили мимо инструмента — версии об этом
+    не знают, и запись с этим номером молча затёрла бы правку. --read такого номера не даёт;
+    защищён был только путь через --read."""
     versions = section_versions(conn, role, section)
     ids = [v[0] for v in versions]
     if expected not in ids:
@@ -578,6 +583,13 @@ def expected_version_refusal(conn, role, section, expected):
                 f"   👉 python <scripts>/save-phoenix.py --role {role} --section {section} --read --out <файл>"]
     i = ids.index(expected)
     newer = versions[i + 1:]
+    if not newer and current is not None and current != versions[i][3]:
+        return [f"⛔ ОТКАЗ: тело раздела {role}/{section} не совпадает с версией id={expected}, которую "
+                f"ты назвала, — текст правили мимо инструмента. Тело НЕ записано.",
+                "   Версии этой правки не знают: номер из --history её не видит, а запись с ним затёрла бы её молча.",
+                f"   👉 Возьми текущее тело: save-phoenix.py --role {role} --section {section} --read --out <файл> "
+                f"— правь этот файл и пиши без --expect-version (номера, равного телу, нет); "
+                f"расхождение разбери: --history."]
     if not newer:
         return None
     seen = set(content_lines(versions[i][3]))
@@ -634,8 +646,11 @@ def read_with_version(conn, role, section, out, has_history):
         head = (f"версия id={vid} · сохранил {vactor} · {vtime} UTC — для правки: "
                 f"--expect-version {vid} (правь тело из этого же вызова)")
     print(head)
+    if "\r" in body:  # карточка #707
+        print(f"⚠️ в теле {body.count(chr(13))} знаков «\\r» (окончания строк Windows) — после круга "
+              f"--read --out → --file они станут «\\n»: --file читается с приведением окончаний")
     if out:
-        Path(out).write_text(body, encoding="utf-8")
+        Path(out).write_text(body, encoding="utf-8", newline="")
         print(f"   тело ({len(body)} знаков) записано в {out} — правь этот файл, затем:")
         if usable:
             print(f"   👉 python <scripts>/save-phoenix.py --role {role} --section {section} "
@@ -771,6 +786,10 @@ def main():
 
     body = (None if (args.confirm or args.history or args.restore or args.read)
             else (args.body if args.body else Path(args.file).read_text(encoding="utf-8")))
+    # 🎯 КАРТОЧКА #707: --body приводит окончания строк так же, как чтение --file (перевод «\r\n» и «\r»
+    # в «\n»). Иначе «\r» входит в тело только этим путём, и круг --read --out → --file молча меняет тело.
+    if body is not None and args.body:
+        body = body.replace("\r\n", "\n").replace("\r", "\n")
 
     try:  # mode=rw: connect НЕ создаёт пустую БД-фантом при опечатке пути (П1 16.07)
         conn = dryrun.connect(f"file:{args.db}?mode=rw", args.dry_run,
@@ -853,7 +872,7 @@ def main():
             conn.close()
             sys.exit("⛔ ОТКАЗ: --expect-version сверять не с чем — таблицы phoenix_history в этой "
                      "базе нет. Тело НЕ записано.\n   Прогони migrations/20260823-phoenix-history.py")
-        refusal = expected_version_refusal(conn, role, args.section, args.expect_version)
+        refusal = expected_version_refusal(conn, role, args.section, args.expect_version, prev_body)
         if refusal:
             conn.close()
             sys.exit("\n".join(refusal))
