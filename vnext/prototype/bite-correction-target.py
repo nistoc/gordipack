@@ -62,6 +62,17 @@ bite-correction-target.py — приёмка карточки #520: гашени
 ①②③ честно пропускаются; ④⑤⑥ — свои, самодостаточные (готовые строки/контроль) — мерятся
 как прежде на любом контуре. Частичная пропажа (материал живого контура подвинулся, но не
 весь) по-прежнему красит по имени — это не пустота пакета, а повод присмотреться.
+
+═══ ИСТОЧНИК ПОПРАВОК (карточка #693) ═══
+Поправки берутся из вида `messages_all` (лента + архив) — тем же источником, что гашение
+в guard-phoenix-time.py. 10.10 старые записки ушли в архив (карточка #538), и приёмка, читавшая
+одну таблицу `messages`, на живом Atlas нашла 4 повода из 19 и объяснила пропуск «пустой лентой
+свежей выгрузки» — словами о чужом контуре. Случай ⑦ сверяет источники напрямую: каждое
+гашение механизма (guard-phoenix-time.corrected_ids) обязано быть видно приёмке. Нарочная
+поломка `--break source` возвращает старый источник — ⑦ обязан провалиться на любом контуре,
+где у механизма есть хоть одно гашение из архива (на живом Atlas с 10.10 — все).
+Слова пропуска теперь различают два случая: свежий контур (самая поздняя запись раньше первого
+нужного номера) и контур постарше, где поправок к этим номерам нет вовсе.
 """
 import argparse
 import importlib.util
@@ -122,7 +133,15 @@ def case_skip(name, reason):
     print("⚪ " + name + "\n     пропущен: не проверено: " + reason)
 
 
-def reasons_from_feed(con):
+def feed_source(con, break_kind=None):
+    """Источник поправок: вид ленты с архивом, как у гашения; без вида — таблица.
+    Поломка «source» возвращает таблицу и на базе С видом (карточка #693)."""
+    has_view = con.execute("SELECT 1 FROM sqlite_master WHERE type='view' "
+                           "AND name='messages_all'").fetchone() is not None
+    return "messages_all" if has_view and break_kind != "source" else "messages"
+
+
+def reasons_from_feed(con, source="messages_all"):
     """{жертва: (поправка, строка)} — ПЕРВАЯ строка-повод, ровно как её видит гашение."""
     spec = importlib.util.spec_from_file_location(
         "gpt", str(Path(__file__).resolve().parent / "guard-phoenix-time.py"))
@@ -130,7 +149,7 @@ def reasons_from_feed(con):
     spec.loader.exec_module(gpt)
     out = {}
     for mid, tags, body in con.execute(
-            "SELECT id, COALESCE(tags,''), COALESCE(body_md,'') FROM messages ORDER BY id"):
+            "SELECT id, COALESCE(tags,''), COALESCE(body_md,'') FROM " + source + " ORDER BY id"):
         tagged = "correction" in tags
         for line in (body or "").splitlines():
             refs = gpt.REFS.findall(line)
@@ -167,7 +186,7 @@ def classify_role(line, n, break_kind):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--break", dest="break_kind", choices=["target", "svyazka", "tire"],
+    ap.add_argument("--break", dest="break_kind", choices=["target", "svyazka", "tire", "source"],
                     help="нарочная поломка: приёмка ОБЯЗАНА покраснеть")
     break_kind = ap.parse_args().break_kind
     if break_kind:
@@ -175,7 +194,12 @@ def main():
 
     live_before = (LIVE_DB.stat().st_size, LIVE_DB.stat().st_mtime_ns)
     con = sqlite3.connect("file:" + str(LIVE_DB) + "?mode=ro", uri=True)
-    reasons, gpt = reasons_from_feed(con)
+    source = feed_source(con, break_kind)
+    reasons, gpt = reasons_from_feed(con, source)
+    newest = con.execute("SELECT COALESCE(MAX(id), 0) FROM " + source).fetchone()[0]
+    print("⚖️ поправки берутся из «" + source + "»"
+          + (" — НАРОЧНО мимо архива (поломка source)" if break_kind == "source" else "")
+          + " · самая поздняя запись #" + str(newest) + "\n")
 
     # 🩹 ДОГОН (карточка #667): ①②③ стоят на СНИМКЕ живой ленты «до правки» — на пустой
     # ленте свежей выгрузки пакета НИ ОДИН из 19 номеров не найдётся вовсе, и это не
@@ -186,12 +210,18 @@ def main():
     missing_numbers = [n for n in all_numbers if n not in reasons]
     material_gone = len(missing_numbers) == len(all_numbers)
     if material_gone:
-        reason = (f"снимок живой ленты «до правки #520» (замер @TAXO 04-05.09) в этом "
-                  f"контуре отсутствует целиком — ни один из {len(all_numbers)} номеров "
-                  f"({', '.join('#' + str(n) for n in all_numbers)}) не найден в messages "
-                  f"(пустая лента свежей выгрузки пакета, не поломка гашения). Этот "
-                  f"материал нельзя изготовить заново — такова самая его суть (см. шапку "
-                  f"файла): фикстура судила бы выдуманную историю, а не настоящую")
+        if newest < all_numbers[0]:
+            why_gone = (f"контур свежий: самая поздняя запись #{newest} раньше первого нужного "
+                        f"номера #{all_numbers[0]} — этой истории в нём ещё не было")
+        else:
+            why_gone = (f"контур старше (самая поздняя запись #{newest}), но поправок к этим "
+                        f"номерам в нём нет — история другого контура, "
+                        f"не поломка гашения")
+        reason = (f"снимок ленты Atlas «до правки #520» (замер @TAXO 04-05.09) в этом "
+                  f"контуре отсутствует целиком — ни к одному из {len(all_numbers)} номеров "
+                  f"({', '.join('#' + str(n) for n in all_numbers)}) нет поправки в «{source}»: "
+                  f"{why_gone}. Этот материал нельзя изготовить заново — такова самая его "
+                  f"суть (см. шапку файла): фикстура судила бы выдуманную историю, а не настоящую")
 
     # ── ① четыре ложных носителя
     print("=" * 96)
@@ -276,6 +306,22 @@ def main():
          inherits_from_fixable and inherits_from_reference,
          "после исправляемого: " + ("наследует" if inherits_from_fixable else "НЕ наследует")
          + " · после ссылки: " + ("наследует" if inherits_from_reference else "НЕ наследует"))
+
+    # ── ⑦ источник: приёмка видит всё, что гасит механизм (карточка #693)
+    print("=" * 96)
+    try:
+        mech = gpt.corrected_ids(con)
+    except sqlite3.OperationalError as e:
+        case_skip("⑦ ИСТОЧНИК: каждое гашение механизма видно приёмке",
+                  "механизм не смог прочесть ленту этой базы (" + str(e) + ")")
+    else:
+        unseen = sorted(set(mech) - set(reasons))
+        case("⑦ ИСТОЧНИК: каждое гашение механизма видно приёмке",
+             not unseen,
+             "гашений у механизма " + str(len(mech)) + " · из них приёмке видно "
+             + str(len(mech) - len(unseen)) + " (источник приёмки «" + source + "»)"
+             + (" · НЕ видно: " + ", ".join("#" + str(n) for n in unseen[:8])
+                + (" и ещё " + str(len(unseen) - 8) if len(unseen) > 8 else "") if unseen else ""))
 
     con.close()
     live_after = (LIVE_DB.stat().st_size, LIVE_DB.stat().st_mtime_ns)
