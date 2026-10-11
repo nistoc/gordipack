@@ -122,7 +122,8 @@ def shift_end_lines(conn, role, section, body):
         spec = importlib.util.spec_from_file_location("guard_shift_end", file)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        return module.save_lines(state_body, plan_body, section)
+        # conn и role — чтобы блок прошлой смены (роль писала после «смена закрыта») не получал «✅»
+        return module.save_lines(state_body, plan_body, section, con=conn, role=role)
     except (Exception, SystemExit) as e:      # noqa: BLE001 — причина важнее вида беды
         return [f"⚠️ проверка блока «КОНЕЦ СМЕНЫ» НЕ выполнена: {type(e).__name__}: {e}"]
 

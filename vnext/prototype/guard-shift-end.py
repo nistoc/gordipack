@@ -11,15 +11,23 @@
 ЧТО СУДИТ (только у роли, в state которой есть блок; роль без блока не судится):
   ① четыре части блока — по началу строки: последним · не доделано · жду · ошибалась
   ② в части «последним» — номер записки или карточки
-  ③ в первых пяти строках plan — «сверен с state <UTC>», и этот час не раньше часа блока
-  ④ (только при чтении базы) после часа блока у роли нет записок, кроме самой «смена закрыта»
+  ③ в первых пяти строках plan — «сверен с state <UTC>», и этот час не раньше часа блока;
+    при чтении базы — и сам plan сохранён не раньше минуты блока (написанный час — не довод)
+  ④ (только при чтении базы) между блоком и записью «смена закрыта» у роли нет записок
+  ⑤ строка, похожая на заголовок блока, но не разобранная (нет «#» в начале, дата не через дефис,
+    час не UTC) — «блок не узнан» и форма: роль, написавшая блок не по образцу, узнаёт об этом
+⚖️ Записки ПОСЛЕ «смена закрыта» — уже новая смена (роль проснулась): они не находка, а строка
+  «ℹ️ … блок прошлой смены»; сохранение state и plan тоже не ставит «✅» блоку прошлой смены.
 
 ЗОВУТ ДВА МЕСТА, одной функцией block_findings():
   save-phoenix.py при сохранении state или plan, когда в state есть блок, — строками под «OK»
   (предупреждение, не отказ: это минута закрытия чата);
-  guard-all.py — мягко (--soft): код 0, находки строками «⚠️». Живых блоков на 2026-10-11 нет —
-  мерить качество не на чем; перевод в провал — отдельным решением после замера.
-Решение и доводы — комментарий на карточке #702 до кода.
+  guard-all.py — мягко (--soft): код 0, находки строками «⚠️».
+🩸 Первая редакция утверждала «живых блоков на 2026-10-11 нет» — замер был сделан ЭТОЙ ЖЕ
+  проверкой, и её слепота спрятала живой блок CHROME (заголовок «## 🔇 КОНЕЦ СМЕНЫ …»):
+  значок между «##» и словами не проходил. Нашла CORE (записка #5738). Живых блоков на
+  2026-10-11 14:30 UTC — один; перевод в провал — отдельным решением после замера.
+Решение и доводы — комментарии на карточке #702.
 
 Запуск:
   python guard-shift-end.py                  все роли; код 1, если есть находки
@@ -35,9 +43,16 @@ import sys
 from pathlib import Path
 
 TIME = r"(\d{4}-\d\d-\d\d[ T]\d\d:\d\d(?::\d\d)?)\s*UTC"
-HEADING = re.compile(r"^(#{1,6})[ \t]*(?:\*\*)?[ \t]*КОНЕЦ СМЕНЫ\b[^\n]*?" + TIME, re.I | re.M)
+# Между знаком заголовка и словами — любые не-буквы: пробел, «**», значок (записка #5738).
+HEADING = re.compile(r"^(#{1,6})[^\w\n]*КОНЕЦ\s+СМЕНЫ\b[^\n]*?" + TIME, re.I | re.M)
+# Строка, ПОХОЖАЯ на заголовок блока: в начале только не-буквы (кроме кавычек и маркера списка
+# «-»), дальше «КОНЕЦ СМЕНЫ» и где-то в строке цифра (дата или час). Прозу без часа
+# («- КОНЕЦ СМЕНЫ — в разделе state») не трогает. Замер 2026-10-11 по всем версиям памяти всех
+# ролей: строк такого вида 3, все три — настоящие заголовки блока.
+LOOKS_LIKE = re.compile(r"^[^\w\n«\"„“'•·-]*КОНЕЦ\s+СМЕНЫ\b[^\n]*\d", re.I | re.M)
 ANY_HEADING = re.compile(r"^(#{1,6})\s+\S", re.M)
-LINE_START = r"^[ \t]*(?:[-*•·][ \t]*)?(?:\*\*)?[ \t]*"
+# Начало строки части — любые не-буквы: «-», «*», «**», «###», значок (подзаголовки — записка #5738).
+LINE_START = r"^[^\w\n]*"
 # Части узнаются по началу строки: роли разного рода («ошибалась» / «ошибался»), падеж и
 # форма глагола не важны — важно, что часть названа.
 PARTS = [
@@ -65,7 +80,10 @@ def norm(t):
 
 
 def find_block(state_body):
-    """(час блока, текст блока) — по ПОСЛЕДНЕМУ заголовку «КОНЕЦ СМЕНЫ», или None."""
+    """(час блока, текст блока, начало заголовка) — по ПОСЛЕДНЕМУ заголовку «КОНЕЦ СМЕНЫ», или None.
+
+    Блок кончается следующим заголовком того же уровня или выше; заголовок, который сам
+    называет часть («### последним»), блок не кончает."""
     if not state_body:
         return None
     found = list(HEADING.finditer(state_body))
@@ -75,10 +93,25 @@ def find_block(state_body):
     level = len(m.group(1))
     end = len(state_body)
     for h in ANY_HEADING.finditer(state_body, m.end()):
-        if len(h.group(1)) <= level:
-            end = h.start()
-            break
-    return norm(m.group(2)), state_body[m.start():end]
+        if len(h.group(1)) > level:
+            continue
+        line = state_body[h.start():].split("\n", 1)[0]
+        if any(rx.match(line) for _, rx in PARTS):
+            continue
+        end = h.start()
+        break
+    return norm(m.group(2)), state_body[m.start():end], m.start()
+
+
+def unrecognized(state_body):
+    """Строки, похожие на заголовок блока, но не разобранные, — после последнего узнанного
+    заголовка (или все, если узнанного нет). Каждая — текст строки, до 100 знаков."""
+    if not state_body:
+        return []
+    starts = {m.start() for m in HEADING.finditer(state_body)}
+    last = max(starts) if starts else -1
+    return [m.group(0).strip()[:100] for m in LOOKS_LIKE.finditer(state_body)
+            if m.start() > last and m.start() not in starts]
 
 
 def plan_mark(plan_body):
@@ -102,7 +135,7 @@ def block_findings(state_body, plan_body):
     got = find_block(state_body)
     if not got:
         return None, [], None
-    when, block = got
+    when, block, _ = got
     findings = []
     starts = []
     for name, rx in PARTS:
@@ -133,16 +166,63 @@ def block_findings(state_body, plan_body):
     return when, findings, plan_finding
 
 
-def save_lines(state_body, plan_body, section):
+def unrecognized_lines(state_body):
+    """Строки «⚠️ … блок не узнан» для save_lines() и общего прогона."""
+    return [f"строка «{line}» похожа на заголовок блока конца смены, но блок НЕ УЗНАН: заголовок — "
+            "«## КОНЕЦ СМЕНЫ YYYY-MM-DD HH:MM UTC» (знак «#» в начале строки, дата через дефис, час UTC)"
+            for line in unrecognized(state_body)]
+
+
+def shift_notes(con, role, when):
+    """Записки роли после блока: (до «смена закрыта» — [(номер, час)], первая «смена закрыта» —
+    (номер, час) или None, записок после неё — число).
+
+    ⚖️ Час блока — с точностью до минуты, поэтому считаются записки с начала СЛЕДУЮЩЕЙ минуты:
+    записка той же минуты могла уйти до сохранения блока. Записки после «смена закрыта» —
+    уже новая смена (роль проснулась), находкой они не считаются."""
+    rows = con.execute(
+        "SELECT id, timestamp, body_md FROM messages WHERE writer_role=? "
+        "AND timestamp >= datetime(?, '+60 seconds') ORDER BY timestamp, id", (role, when[:16] + ":00")).fetchall()
+    before, closed, later = [], None, 0
+    for i, ts, b in rows:
+        if closed:
+            later += 1
+        elif CLOSED.search("\n".join((b or "").splitlines()[:3])):
+            closed = (i, ts)
+        else:
+            before.append((i, ts))
+    return before, closed, later
+
+
+def past_shift_line(con, role, when):
+    """«ℹ️ … блок прошлой смены», если после записки «смена закрыта» роль уже писала; иначе None."""
+    if con is None or not role:
+        return None
+    _, closed, later = shift_notes(con, role, when)
+    if not closed or not later:
+        return None
+    return (f"ℹ️ блок «КОНЕЦ СМЕНЫ {when[:16]} UTC» — прошлой смены: после записки «смена закрыта» "
+            f"#{closed[0]} ({closed[1]} UTC) роль писала ещё {later}; проверка его как свежий не судит")
+
+
+def save_lines(state_body, plan_body, section, con=None, role=None):
     """Строки для save-phoenix.py под «OK» (карточка #702, место вызова ①). Без блока — [].
 
-    Предупреждение, не отказ: это минута закрытия чата (правило phoenix-save-on-stop)."""
+    Предупреждение, не отказ: это минута закрытия чата (правило phoenix-save-on-stop).
+    con и role (необязательны) — чтобы узнать блок прошлой смены и не ставить ему «✅»."""
+    out = [f"⚠️ {line}" for line in unrecognized_lines(state_body)]
+    need_form = bool(out)
     when, findings, plan_finding = block_findings(state_body, plan_body)
     if when is None:
-        return []
+        return out + (FORM if need_form else [])
+    past = past_shift_line(con, role, when)
+    if past:
+        return out + (FORM if need_form else []) + [past]
     head = f"блок «КОНЕЦ СМЕНЫ {when[:16]} UTC»"
-    out = [f"⚠️ {head}: {f}" for f in findings]
+    out += [f"⚠️ {head}: {f}" for f in findings]
     if any(f.startswith("нет части") for f in findings):
+        need_form = True
+    if need_form:
         out += FORM
     if plan_finding and section == "state":
         out.append(f"👉 {head} сохранён; следующим — plan со строкой «сверен с state {when[:16]} UTC» "
@@ -154,42 +234,44 @@ def save_lines(state_body, plan_body, section):
     return out
 
 
-def notes_after(con, role, when):
-    """Записки роли позже часа блока, кроме «смена закрыта»: [(номер, час)].
-
-    ⚖️ Час блока — с точностью до минуты, поэтому считаются записки с начала СЛЕДУЮЩЕЙ минуты:
-    записка той же минуты могла уйти до сохранения блока."""
-    rows = con.execute(
-        "SELECT id, timestamp, body_md FROM messages WHERE writer_role=? "
-        "AND timestamp >= datetime(?, '+60 seconds') ORDER BY id", (role, when[:16] + ":00")).fetchall()
-    return [(i, ts) for i, ts, b in rows if not CLOSED.search("\n".join(b.splitlines()[:3]))]
-
-
 def check_role(con, role, soft):
-    rows = dict(con.execute("SELECT section, body FROM phoenix WHERE role=? AND section IN ('state','plan')",
-                            (role,)).fetchall())
-    when, findings, plan_finding = block_findings(rows.get("state"), rows.get("plan"))
-    if when is None:
-        return None
-    missing_parts = any(f.startswith("нет части") for f in findings)
-    if plan_finding:
-        findings.append(plan_finding)
-    after = notes_after(con, role, when)
-    if after:
-        shown = " · ".join(f"записка #{i} ({ts} UTC)" for i, ts in after[:5])
-        more = f" и ещё {len(after) - 5}" if len(after) > 5 else ""
-        findings.append(f"после блока у роли записок: {len(after)} — {shown}{more}; блок конца смены "
-                        "должен быть последним, кроме самой записки «смена закрыта»")
+    rows = {s: (b, t) for s, b, t in con.execute(
+        "SELECT section, body, saved_at FROM phoenix WHERE role=? AND section IN ('state','plan')", (role,))}
+    state_body = rows.get("state", (None, None))[0]
+    plan_body, plan_saved = rows.get("plan", (None, None))
     mark = "⚠️ " if soft else "   "
+    bad = unrecognized_lines(state_body)
+    when, findings, plan_finding = block_findings(state_body, plan_body)
+    if when is None and not bad:
+        return None
+    findings = bad + findings
+    missing_parts = bool(bad) or any(f.startswith("нет части") for f in findings)
+    title = f"блок «КОНЕЦ СМЕНЫ {when[:16]} UTC»" if when else "блок конца смены"
+    if when:
+        if plan_finding:
+            findings.append(plan_finding)
+        elif plan_saved and plan_saved[:16] < when[:16]:
+            findings.append(f"plan сохранён {plan_saved[:16]} UTC — раньше блока {when[:16]} UTC: строка "
+                            "«сверен с state» написана, а раздел после блока не сохранялся")
+        before, closed, later = shift_notes(con, role, when)
+        if before:
+            shown = " · ".join(f"записка #{i} ({ts} UTC)" for i, ts in before[:5])
+            more = f" и ещё {len(before) - 5}" if len(before) > 5 else ""
+            findings.append(f"после блока у роли записок: {len(before)} — {shown}{more}; блок конца смены "
+                            "должен быть последним, кроме самой записки «смена закрыта»")
     if findings:
-        print(f"{mark}{role}: блок «КОНЕЦ СМЕНЫ {when[:16]} UTC» — находок {len(findings)}")
+        print(f"{mark}{role}: {title} — находок {len(findings)}")
         for f in findings:
             print(f"{mark}   · {f}")
         if missing_parts and not soft:
             print("\n".join(FORM))
     else:
-        print(f"✅ {role}: блок «КОНЕЦ СМЕНЫ {when[:16]} UTC» — четыре части на месте, plan сверен, "
-              "записок после блока нет")
+        print(f"✅ {role}: {title} — четыре части на месте, plan сверен, записок между блоком и "
+              "«смена закрыта» нет")
+    if when:
+        past = past_shift_line(con, role, when)
+        if past:
+            print(f"   {role}: {past}")
     return len(findings)
 
 
