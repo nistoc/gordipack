@@ -460,16 +460,33 @@ def service_block(text):
 #    отсеиваются все 39 версий начальной загрузки истории (actor «migration»).
 # ⚖️ Чужая рука, ни разу не писавшая этот раздел, проверки не получает: её базы нет,
 #    а судить её по всей истории владельца раздела значило бы шуметь на каждой правке.
-def foreign_edit_report(conn, role, section, actor, cur_body, body):
-    """(строки для печати, хвост для журнала) — или ([], "") если терять нечего."""
+#    Это направление закрывает карточка #705 — флаг --expect-version (ниже).
+
+# Строка разметки таблицы («|---|---|») проходит порог lines_of, но правкой не является:
+# у CORE (приёмка карточки #701) две из трёх показанных строк SEPA identity были шапкой таблицы.
+TABLE_RULE = re.compile(r"[|\-:+=\s]+")
+
+
+def content_lines(text):
+    """lines_of без строк разметки таблицы — для проверок чужой правки."""
+    return [l for l in lines_of(text) if not TABLE_RULE.fullmatch(l)]
+
+
+def section_versions(conn, role, section):
+    """Все версии раздела — история и её архив — по возрастанию номера: (id, actor, saved_at, body)."""
     tables = ["phoenix_history"]
     if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
                     "AND name='phoenix_history_archive'").fetchone():
         tables.append("phoenix_history_archive")
     union = " UNION ALL ".join(
         f"SELECT id, actor, saved_at, body FROM {t} WHERE role=? AND section=?" for t in tables)
-    versions = conn.execute(f"SELECT * FROM ({union}) ORDER BY id",
-                            (role, section) * len(tables)).fetchall()
+    return conn.execute(f"SELECT * FROM ({union}) ORDER BY id",
+                        (role, section) * len(tables)).fetchall()
+
+
+def foreign_edit_report(conn, role, section, actor, cur_body, body, dry=False):
+    """(строки для печати, хвост для журнала) — или ([], "") если терять нечего."""
+    versions = section_versions(conn, role, section)
     if not versions or cur_body is None:
         return [], ""
     own = [i for i, v in enumerate(versions) if v[1] == actor]
@@ -482,13 +499,13 @@ def foreign_edit_report(conn, role, section, actor, cur_body, body):
     later = versions[base_i + 1:]
     if not later:
         return [], ""
-    base = set(lines_of(versions[base_i][3]))
-    new = set(lines_of(body))
-    lost = [l for l in dict.fromkeys(lines_of(cur_body)) if l not in base and l not in new]
+    base = set(content_lines(versions[base_i][3]))
+    new = set(content_lines(body))
+    lost = [l for l in dict.fromkeys(content_lines(cur_body)) if l not in base and l not in new]
     if not lost:
         return [], ""
     # Каждая потерянная строка приписывается ПЕРВОЙ версии после базы, где она появилась.
-    later_lines = [(v, set(lines_of(v[3]))) for v in later]
+    later_lines = [(v, set(content_lines(v[3]))) for v in later]
     by_version = {}
     for l in lost:
         v = next((v for v, ls in later_lines if l in ls), later[-1])
@@ -501,11 +518,54 @@ def foreign_edit_report(conn, role, section, actor, cur_body, body):
             out.append(f"      − {l[:110]}")
         if len(ls) > 3:
             out.append(f"      … и ещё {len(ls) - 3}")
-    out += ["   Тело записано. Если ты перечитала раздел после этой правки и убрала строки нарочно —",
+    # Холостой прогон ничего не пишет — и строка не вправе спорить с его итогом (замечание CORE б).
+    out += [f"   {'Тело было бы записано' if dry else 'Тело записано'}. Если ты перечитала раздел "
+            "после этой правки и убрала строки нарочно —",
             "   всё верно. Если нет — впиши их в свой текст и сохрани снова (список версий: --history;",
             "   --restore <id> вернёт чужую версию ЦЕЛИКОМ, без твоего нового текста)."]
     who = ", ".join(dict.fromkeys(v[1] for v, _ in by_version.values()))
     return out, f" [чужие строки уходят: {len(lost)}, правил {who}]"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 🎯 КАРТОЧКА #705 — ВТОРОЕ НАПРАВЛЕНИЕ: РУКА, ВПЕРВЫЕ ПРАВЯЩАЯ ЧУЖОЙ РАЗДЕЛ.
+# Карточка #701 ловит роль, сохраняющую старый текст поверх правки руки. Обратное — рука
+# прочитала раздел, роль тем временем сохранила новые строки, рука записала свою правку
+# поверх — молчало: у руки нет своих версий, мерить нечем. Замер CORE и COORD 2026-10-11
+# (записка #5721 и записка #5722): все 7 правок чужих разделов за два месяца шли этим путём.
+# МЕРКА. Чтение следа не оставляет ⇒ рука сама называет версию, которую читала:
+# --expect-version <id>. Версии новее есть — ОТКАЗ.
+# ⚖️ ОТКАЗ, А НЕ ПРЕДУПРЕЖДЕНИЕ, как у карточки #701: рука правит нарочно и в спокойную
+#    минуту, повтор ей ничего не стоит; у роли отказ пришёлся бы на закрытие чата.
+def expected_version_refusal(conn, role, section, expected):
+    """Строки отказа — или None, если раздел после названной версии не менялся."""
+    versions = section_versions(conn, role, section)
+    ids = [v[0] for v in versions]
+    if expected not in ids:
+        return [f"⛔ ОТКАЗ: версии id={expected} у раздела {role}/{section} нет — тело НЕ записано.",
+                "   Номер берётся из --history этого же раздела: проверяются и роль, и раздел.",
+                f"   👉 python <scripts>/save-phoenix.py --role {role} --section {section} --history"]
+    i = ids.index(expected)
+    newer = versions[i + 1:]
+    if not newer:
+        return None
+    seen = set(content_lines(versions[i][3]))
+    out = [f"⛔ ОТКАЗ: раздел {role}/{section} менялся после версии id={expected}, которую ты "
+           f"прочитала, — тело НЕ записано.",
+           f"   Новых версий: {len(newer)}. Твоя правка легла бы поверх их строк, и они пропали бы молча."]
+    added_all = []
+    for v in newer:
+        added = [l for l in dict.fromkeys(content_lines(v[3])) if l not in seen]
+        seen |= set(added)
+        added_all += added
+        out.append(f"   версия id={v[0]} · сохранил {v[1]} · {v[2]} UTC · новых строк: {len(added)}")
+    for l in added_all[:3]:
+        out.append(f"      + {l[:110]}")
+    if len(added_all) > 3:
+        out.append(f"      … и ещё {len(added_all) - 3}")
+    out += [f"   👉 Перечитай раздел (read-phoenix.py --role {role} --section {section}), внеси свою "
+            f"правку в нынешний текст и повтори с --expect-version {newer[-1][0]}."]
+    return out
 
 
 def main():
@@ -571,6 +631,11 @@ def main():
                         help="вернуть тело версии с этим номером (см. --history). "
                              "Возврат создаёт НОВУЮ версию, а не подменяет прежние: "
                              "откат отката тоже возможен")
+    # ── КАРТОЧКА #705: рука называет версию, которую читала (см. expected_version_refusal).
+    parser.add_argument("--expect-version", type=int, default=None, metavar="ID",
+                        help="номер версии раздела, которую ты прочитала перед правкой (первая "
+                             "строка --history). Раздел с тех пор менялся — отказ, тело не "
+                             "пишется. Нужен прежде всего при правке ЧУЖОЙ памяти (--actor)")
     args = parser.parse_args()
 
     # Регистр роли НОРМАЛИЗУЕТСЯ к верхнему (как в read-messages.py/read-phoenix.py): иначе
@@ -602,6 +667,11 @@ def main():
             and not args.body and not args.file:
         print("ERR: укажите --body или --file (или --confirm / --history / --restore)",
               file=sys.stderr)
+        sys.exit(1)
+
+    if args.expect_version is not None and (args.confirm or args.history):
+        print("ERR: --expect-version сверяет прочитанное перед ЗАПИСЬЮ тела; у --confirm и "
+              "--history записи тела нет.", file=sys.stderr)
         sys.exit(1)
 
     body = (None if (args.confirm or args.history or args.restore)
@@ -677,6 +747,17 @@ def main():
         # а возвращаемое тело само лежит в истории и никуда из неё не денется.
         args.allow_shrink = True
         print(f"↩ ВОЗВРАТ версии id={args.restore} ({row[1]} знаков, записана {row[2]} UTC)")
+
+    # 🎯 КАРТОЧКА #705: до любой записи, и в холостом прогоне тоже — он показывает то же, что запись.
+    if args.expect_version is not None:
+        if not has_history:
+            conn.close()
+            sys.exit("⛔ ОТКАЗ: --expect-version сверять не с чем — таблицы phoenix_history в этой "
+                     "базе нет. Тело НЕ записано.\n   Прогони migrations/20260823-phoenix-history.py")
+        refusal = expected_version_refusal(conn, role, args.section, args.expect_version)
+        if refusal:
+            conn.close()
+            sys.exit("\n".join(refusal))
 
     if args.confirm:
         # Подтверждать НЕЧЕГО, если секции нет: «смотрел» без предмета — пустое утверждение.
@@ -787,10 +868,17 @@ def main():
     # ⚖️ Сбой самой проверки сохранения не роняет: называется строкой и только.
     try:
         foreign_lines, foreign_note = (foreign_edit_report(conn, role, args.section, actor,
-                                                           prev_body, body)
+                                                           prev_body, body, dry=args.dry_run)
                                        if has_history else ([], ""))
     except Exception as e:
         foreign_lines, foreign_note = ([f"⚠️ проверка чужой правки НЕ выполнилась: {e}"], "")
+    # Карточка #705: рука без --expect-version — направление «рука поверх строк роли» не проверено.
+    # ⚖️ Строка, а не отказ: обязательный флаг сломал бы нынешние вызовы с --actor; правка
+    #    чужой памяти редка (7 за два месяца), шумом строка не станет.
+    if actor != role and args.expect_version is None and has_history and prev_body is not None:
+        foreign_lines.append(
+            f"⚠️ НОМЕР ПРОЧИТАННОЙ ВЕРСИИ НЕ НАЗВАН: строки, которые {role} сохранила после твоего "
+            f"чтения, не проверены. В следующий раз — --expect-version <id> (первая строка --history).")
 
     # 🕐 ОДНА МЕТКА ВРЕМЕНИ НА ДЕЙСТВИЕ (возврат COORD, карточка #605, вариант «б»).
     # ЗАЧЕМ. Ниже это ОДНО действие («настоящее сохранение») пишет ВРЕМЯ в ТРИ места:

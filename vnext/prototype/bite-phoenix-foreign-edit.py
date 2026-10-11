@@ -24,13 +24,27 @@
   ⑥  чужая рука, ни разу не писавшая раздел, сама сокращает его — предупреждения нет
      (её базы нет; судить её по всей истории значило бы шуметь на каждой правке)
 
-НАРОЧНАЯ ПОЛОМКА (--break off): вызов проверки в копии инструмента заменён пустым ответом ⇒
-① и ①а и вторая половина ⑤ обязаны провалиться, встречные ②③④⑥ — пройти. Поломка, валящая
-всё подряд, не доказывала бы, что случаи смотрят на предмет.
+КАРТОЧКА #705 — второе направление: рука называет прочитанную версию (--expect-version),
+роли набора BITE705C / BITE705D:
+  ⑦  рука прочитала версию N, роль сохранила новую, рука пишет с --expect-version N — ОТКАЗ,
+     код ≠ 0, тело роли на месте; в выводе роль, час UTC, «новых строк: 2»
+  ⑦а то же холостым прогоном — тот же отказ, база не тронута
+  ⑧  встречный: названа новейшая версия — запись проходит, строки о номере нет
+  ⑨  номер версии другого раздела и несуществующий номер — отказ «версии … нет»
+  ⑩  рука без --expect-version — запись проходит и строка «НОМЕР ПРОЧИТАННОЙ ВЕРСИИ НЕ НАЗВАН»;
+     роль сама без флага — такой строки нет
+  ⑪  строки разметки таблицы («|---|---|») чужой правкой не считаются и в показ не попадают
+  (замечание CORE б: ①а — «Тело было бы записано», ① — «Тело записано»)
+
+НАРОЧНЫЕ ПОЛОМКИ (в копии инструмента, во временном каталоге). Поломка, валящая всё подряд,
+не доказывала бы, что случаи смотрят на предмет, поэтому у каждой — точный набор провалов:
+  --break off     вызов проверки карточки #701 заменён пустым ответом ⇒ ①, ①а, ⑤б, ⑪
+  --break expect  проверка новых версий карточки #705 выключена ⇒ ⑦, ⑦а
 
 Запуск:
-  python <пакет>/vnext/prototype/bite-phoenix-foreign-edit.py               — обычный прогон
-  python <пакет>/vnext/prototype/bite-phoenix-foreign-edit.py --break off   — ждём провалов ①, ①а, ⑤б
+  python <пакет>/vnext/prototype/bite-phoenix-foreign-edit.py                  — обычный прогон
+  python <пакет>/vnext/prototype/bite-phoenix-foreign-edit.py --break off      — ждём провалов ①, ①а, ⑤б, ⑪
+  python <пакет>/vnext/prototype/bite-phoenix-foreign-edit.py --break expect   — ждём провалов ⑦, ⑦а
 """
 import argparse
 import os
@@ -50,10 +64,21 @@ print(f"⚖️ испытуется: {mezo_target.label()}")
 
 ROLE_A = "BITE701A"
 ROLE_B = "BITE701B"
+ROLE_C = "BITE705C"
+ROLE_D = "BITE705D"
 SECTION = "state"
 WARN = "ЧУЖАЯ ПРАВКА УХОДИТ"
-CALL = "        foreign_lines, foreign_note = (foreign_edit_report("
-BROKEN = "        foreign_lines, foreign_note = (([], '') if True else foreign_edit_report("
+REFUSE = "⛔ ОТКАЗ"
+NO_NUMBER = "НОМЕР ПРОЧИТАННОЙ ВЕРСИИ НЕ НАЗВАН"
+# поломка → (что заменить, чем, какие случаи обязаны провалиться)
+BREAKS = {
+    "off": ("        foreign_lines, foreign_note = (foreign_edit_report(",
+            "        foreign_lines, foreign_note = (([], '') if True else foreign_edit_report(",
+            {"①", "①а", "⑤б", "⑪"}),
+    "expect": ("    if not newer:\n        return None",
+               "    if True:\n        return None",
+               {"⑦", "⑦а"}),
+}
 
 # Строки ≥ 12 знаков: короче проверка их не считает (lines_of в save-phoenix.py).
 BASE = ["# Состояние роли BITE701A на начало опыта",
@@ -73,7 +98,7 @@ class Stand:
         self.tool, self.db, self.workdir, self.env = tool, db, Path(workdir), env
         self.n = 0
 
-    def save(self, role, lines, actor=None, dry=False):
+    def save(self, role, lines, actor=None, dry=False, expect=None):
         """Сохранение раздела. Возвращает (код, весь вывод)."""
         self.n += 1
         f = self.workdir / f"body{self.n}.md"
@@ -84,6 +109,8 @@ class Stand:
             cmd += ["--actor", actor]
         if dry:
             cmd += ["--dry-run"]
+        if expect is not None:
+            cmd += ["--expect-version", str(expect)]
         p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
                            errors="replace", env=self.env)
         return p.returncode, (p.stdout or "") + (p.stderr or "")
@@ -94,6 +121,14 @@ class Stand:
                           (role, SECTION)).fetchone()
         con.close()
         return row[0] if row else None
+
+    def latest(self, role):
+        """Номер новейшей версии раздела — то, что рука видит первой строкой --history."""
+        con = sqlite3.connect(self.db)
+        row = con.execute("SELECT max(id) FROM phoenix_history WHERE role=? AND section=?",
+                          (role, SECTION)).fetchone()
+        con.close()
+        return row[0]
 
 
 def verdict(results, mark, what, problems, output=""):
@@ -154,11 +189,15 @@ def run_cases(st):
     body_after_dry = st.body(ROLE_A)
     if body_after_dry != text(read_by_a + COORD_ADD):
         p.append("холостой прогон изменил тело в базе")
+    if WARN in out and ("Тело было бы записано" not in out or "Тело записано" in out):
+        p.append("холостой прогон говорит «Тело записано», а ничего не записал (замечание CORE б)")
     verdict(r, "①а", "холостой прогон: предупреждение есть, база не тронута", p, out)
     code, out = st.save(ROLE_A, mine)
     p = expect_warn(code, out, 3, "COORD")
     if st.body(ROLE_A) != text(mine):
         p.append("в базе не текст роли — тело не записано")
+    if WARN in out and "Тело записано" not in out:
+        p.append("нет слов «Тело записано»")
     verdict(r, "① ", "чужая правка уходит — предупреждение, кто правил и час UTC; тело записано", p, out)
 
     # ② чужой правки после прошлого сохранения не было
@@ -200,12 +239,114 @@ def run_cases(st):
     return r
 
 
+def expect_refusal(code, out, words):
+    problems = []
+    if code == 0:
+        problems.append("код 0, ждали отказ")
+    if REFUSE not in out:
+        problems.append("слова «ОТКАЗ» нет")
+    if "OK phoenix/" in out:
+        problems.append("строка «OK» есть — запись прошла")
+    for w in words:
+        if w not in out:
+            problems.append(f"нет «{w}»")
+    return problems
+
+
+def run_cases_705(st, r):
+    """Карточка #705: рука называет версию, которую читала."""
+    c_base = ["# Раздел BITE705C — текст самой роли",
+              "строка роли C номер один, до чтения руки",
+              "строка роли C номер два, до чтения руки"]
+    for lines in (c_base[:2], c_base):
+        code, out = st.save(ROLE_C, lines)
+        if code != 0:
+            print(f"⛔ ОПЫТ НЕ ПОСТАВЛЕН: подготовительное сохранение упало (код {code})")
+            print(out)
+            sys.exit(2)
+    read_id = st.latest(ROLE_C)                      # рука COORD прочитала эту версию
+    role_new = c_base + ["роль C дописала после чтения руки — строка один",
+                         "роль C дописала после чтения руки — строка два"]
+    st.save(ROLE_C, role_new)                        # роль тем временем сохранилась
+    hand = c_base + ["правка COORD поверх прочитанного раздела роли C"]
+
+    # ⑦а холостой прогон — тот же отказ, база не тронута
+    code, out = st.save(ROLE_C, hand, actor="COORD", dry=True, expect=read_id)
+    p = expect_refusal(code, out, [ROLE_C, "новых строк: 2"])
+    if not re.search(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d UTC", out):
+        p.append("не назван час UTC")
+    if st.body(ROLE_C) != text(role_new):
+        p.append("тело роли в базе изменилось")
+    verdict(r, "⑦а", "холостой прогон: тот же отказ, база не тронута", p, out)
+
+    # ⑦ настоящая запись — отказ, тело роли на месте
+    code, out = st.save(ROLE_C, hand, actor="COORD", expect=read_id)
+    p = expect_refusal(code, out, [ROLE_C, "новых строк: 2", f"--expect-version {st.latest(ROLE_C)}"])
+    if not re.search(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d UTC", out):
+        p.append("не назван час UTC")
+    if st.body(ROLE_C) != text(role_new):
+        p.append("тело роли затёрто — отказ не остановил запись")
+    verdict(r, "⑦ ", "раздел менялся после прочитанной версии — отказ, роль, час, число строк; тело цело",
+            p, out)
+
+    # ⑧ встречный: рука перечитала, названа новейшая версия
+    merged = role_new + ["правка COORD поверх перечитанного раздела роли C"]
+    code, out = st.save(ROLE_C, merged, actor="COORD", expect=st.latest(ROLE_C))
+    p = expect_quiet(code, out)
+    if REFUSE in out:
+        p.append("отказ при новейшей версии")
+    if NO_NUMBER in out:
+        p.append("строка «номер не назван» при названном номере")
+    if st.body(ROLE_C) != text(merged):
+        p.append("тело не записано")
+    verdict(r, "⑧ ", "названа новейшая версия — запись проходит молча", p, out)
+
+    # ⑨ номер версии другого раздела и несуществующий номер
+    p = []
+    code, out = st.save(ROLE_C, merged + ["попытка с чужим номером"], actor="COORD",
+                        expect=st.latest(ROLE_A))
+    p += [f"чужой номер: {x}" for x in expect_refusal(code, out, ["версии id=", "нет"])]
+    code2, out2 = st.save(ROLE_C, merged + ["попытка с несуществующим номером"], actor="COORD",
+                          expect=999999999)
+    p += [f"несуществующий: {x}" for x in expect_refusal(code2, out2, ["версии id=999999999", "нет"])]
+    if st.body(ROLE_C) != text(merged):
+        p.append("тело изменилось")
+    verdict(r, "⑨ ", "номер чужого раздела и несуществующий номер — отказ", p, out + out2)
+
+    # ⑩ рука без флага — строка; роль сама без флага — строки нет
+    code, out = st.save(ROLE_C, merged + ["правка OPSSRE без номера версии"], actor="OPSSRE")
+    p = expect_quiet(code, out)
+    if NO_NUMBER not in out:
+        p.append("у руки без --expect-version строки «номер не назван» нет")
+    elif out.find(NO_NUMBER) < out.find("OK phoenix/"):
+        p.append("строка «номер не назван» не под «OK»")
+    code2, out2 = st.save(ROLE_C, merged + ["роль C сохраняет сама, флаг ей не нужен"])
+    if NO_NUMBER in out2:
+        p.append("строка «номер не назван» у самой роли")
+    verdict(r, "⑩ ", "рука без номера — строка под «OK»; сама роль — без неё", p, out + out2)
+
+    # ⑪ разметка таблицы чужой правкой не считается и в показ не попадает
+    d_base = ["# Раздел BITE705D — текст самой роли",
+              "строка роли D, которую она писала сама"]
+    st.save(ROLE_D, d_base)
+    table = ["| поле таблицы COORD | значение поля |", "|---|---|",
+             "| строка данных COORD | её значение |"]
+    st.save(ROLE_D, d_base + table, actor="COORD")
+    code, out = st.save(ROLE_D, d_base + ["роль D сохраняет текст без таблицы COORD"])
+    p = expect_warn(code, out, 2, "COORD")
+    if "|---|---|" in out:
+        p.append("строка разметки таблицы показана как чужая правка")
+    verdict(r, "⑪ ", "разметка таблицы не считается: «уходит строк: 2», «|---|» не показана", p, out)
+    return r
+
+
 def main():
     ap = argparse.ArgumentParser(description="Приёмка карточки #701: чужая правка памяти при сохранении")
     ap.add_argument("--tool", help="путь к save-phoenix.py (по умолчанию — испытуемая копия)")
     ap.add_argument("--db", help="путь к базе (по умолчанию — согласованная КОПИЯ живой)")
-    ap.add_argument("--break", dest="breakage", choices=["off"],
-                    help="нарочная поломка: off — вызов проверки в копии инструмента выключен")
+    ap.add_argument("--break", dest="breakage", choices=sorted(BREAKS),
+                    help="нарочная поломка: off — вызов проверки карточки #701 выключен; "
+                         "expect — проверка новых версий карточки #705 выключена")
     a = ap.parse_args()
 
     tool = Path(a.tool) if a.tool else mezo_target.script("save-phoenix.py")
@@ -234,22 +375,25 @@ def main():
         db_kind = "согласованная КОПИЯ живой"
 
     runner = tool
-    if a.breakage == "off":
+    if a.breakage:
         # Поломка — в копии во временном каталоге; модули инструмента берутся из его каталога.
+        anchor, broken, _ = BREAKS[a.breakage]
         src = tool.read_text(encoding="utf-8")
-        if CALL not in src:
-            print("⛔ ПОЛОМКА НЕ ВСТАЛА: строки вызова проверки в инструменте нет.\n"
+        if src.count(anchor) != 1:
+            print(f"⛔ ПОЛОМКА НЕ ВСТАЛА: место поломки «{a.breakage}» в инструменте найдено "
+                  f"{src.count(anchor)} раз, ждали ровно 1.\n"
                   "   Это отказ ОПЫТА: без поставленной поломки прошедшие случаи ничего не доказывают.")
             return 2
         runner = Path(workdir) / "save-phoenix.py"
-        runner.write_text(src.replace(CALL, BROKEN), encoding="utf-8")
+        runner.write_text(src.replace(anchor, broken), encoding="utf-8")
         env = dict(env, PYTHONPATH=str(tool.parent) + os.pathsep + env.get("PYTHONPATH", ""))
 
     print("═" * 92)
-    print(f"ПРИЁМКА карточки #701 · инструмент: {tool} · база: {db.name} ({db_kind})"
-          + (" · НАРОЧНАЯ ПОЛОМКА: проверка выключена" if a.breakage else ""))
+    print(f"ПРИЁМКА карточки #701 и карточки #705 · инструмент: {tool} · база: {db.name} ({db_kind})"
+          + (f" · НАРОЧНАЯ ПОЛОМКА «{a.breakage}»" if a.breakage else ""))
     print("═" * 92)
-    results = run_cases(Stand(runner, db, workdir, env))
+    st = Stand(runner, db, workdir, env)
+    results = run_cases_705(st, run_cases(st))
     shutil.rmtree(workdir, ignore_errors=True)
 
     passed = sum(ok for _, ok in results)
@@ -257,9 +401,10 @@ def main():
     print("─" * 92)
     print(f"прошло {passed} · провалилось {len(failed)}" + (f": {', '.join(failed)}" if failed else ""))
     if a.breakage:
-        want = {"①", "①а", "⑤б"}
+        want = BREAKS[a.breakage][2]
         if set(failed) == want:
-            print("НАРОЧНАЯ ПОЛОМКА ПОЙМАНА: провалились ровно ①, ①а, ⑤б — случаи смотрят на предмет")
+            print(f"НАРОЧНАЯ ПОЛОМКА ПОЙМАНА: провалились ровно {', '.join(sorted(want))} — "
+                  "случаи смотрят на предмет")
         else:
             print(f"⚠️ НАРОЧНАЯ ПОЛОМКА: ждали провалов ровно {sorted(want)}, вышло {failed or 'ни одного'}")
     return 1 if failed else 0
