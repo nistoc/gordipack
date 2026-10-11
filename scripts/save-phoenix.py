@@ -445,6 +445,69 @@ def service_block(text):
     return None, None
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# 🎯 КАРТОЧКА #701 — ЧУЖАЯ ПРАВКА РАЗДЕЛА, КОТОРУЮ СОХРАНЕНИЕ МОЛЧА ЗАТИРАЕТ.
+# Порядок ② (записка #5688): общие правки памяти делает одна рука. Роль, прочитавшая
+# раздел ДО чужой правки, своим сохранением затёрла бы её — и ни одна проверка не сказала бы.
+# ⚖️ ПРЕДУПРЕЖДЕНИЕ, А НЕ ОТКАЗ (замер и решение — комментарий на карточке до кода):
+#    сохранение не вправе падать в минуту закрытия чата (правило phoenix-save-on-stop);
+#    чужая версия остаётся в истории и возвращается --restore; правок ролями за два
+#    месяца 7, затёртых 0.
+# МЕРКА. Чтение памяти следа в базе не оставляет ⇒ «после чтения» мерить нечем; мерка —
+# последняя версия, сохранённая ЭТОЙ ЖЕ рукой (база). Строки, которых в базе не было, а в
+# нынешнем теле есть, внесли другие руки; если новое тело их теряет — говорим.
+# ⚖️ Первая версия раздела правкой не считается: «до неё» прочитать было нечего. Так
+#    отсеиваются все 39 версий начальной загрузки истории (actor «migration»).
+# ⚖️ Чужая рука, ни разу не писавшая этот раздел, проверки не получает: её базы нет,
+#    а судить её по всей истории владельца раздела значило бы шуметь на каждой правке.
+def foreign_edit_report(conn, role, section, actor, cur_body, body):
+    """(строки для печати, хвост для журнала) — или ([], "") если терять нечего."""
+    tables = ["phoenix_history"]
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                    "AND name='phoenix_history_archive'").fetchone():
+        tables.append("phoenix_history_archive")
+    union = " UNION ALL ".join(
+        f"SELECT id, actor, saved_at, body FROM {t} WHERE role=? AND section=?" for t in tables)
+    versions = conn.execute(f"SELECT * FROM ({union}) ORDER BY id",
+                            (role, section) * len(tables)).fetchall()
+    if not versions or cur_body is None:
+        return [], ""
+    own = [i for i, v in enumerate(versions) if v[1] == actor]
+    if own:
+        base_i = own[-1]
+    elif actor == role:
+        base_i = 0      # раздел завела другая рука — база: первая версия
+    else:
+        return [], ""
+    later = versions[base_i + 1:]
+    if not later:
+        return [], ""
+    base = set(lines_of(versions[base_i][3]))
+    new = set(lines_of(body))
+    lost = [l for l in dict.fromkeys(lines_of(cur_body)) if l not in base and l not in new]
+    if not lost:
+        return [], ""
+    # Каждая потерянная строка приписывается ПЕРВОЙ версии после базы, где она появилась.
+    later_lines = [(v, set(lines_of(v[3]))) for v in later]
+    by_version = {}
+    for l in lost:
+        v = next((v for v, ls in later_lines if l in ls), later[-1])
+        by_version.setdefault(v[0], (v, []))[1].append(l)
+    out = [f"⚠️ ЧУЖАЯ ПРАВКА УХОДИТ: после твоего прошлого сохранения раздел {role}/{section} "
+           f"правила другая рука; строк её правки нет в новом тексте: {len(lost)}."]
+    for vid, (v, ls) in by_version.items():
+        out.append(f"   версия id={vid} · правил {v[1]} · {v[2]} UTC · уходит строк: {len(ls)}")
+        for l in ls[:3]:
+            out.append(f"      − {l[:110]}")
+        if len(ls) > 3:
+            out.append(f"      … и ещё {len(ls) - 3}")
+    out += ["   Тело записано. Если ты перечитала раздел после этой правки и убрала строки нарочно —",
+            "   всё верно. Если нет — впиши их в свой текст и сохрани снова (список версий: --history;",
+            "   --restore <id> вернёт чужую версию ЦЕЛИКОМ, без твоего нового текста)."]
+    who = ", ".join(dict.fromkeys(v[1] for v, _ in by_version.values()))
+    return out, f" [чужие строки уходят: {len(lost)}, правил {who}]"
+
+
 def main():
     parser = argparse.ArgumentParser(description="Сохранить память роли (phoenix)")
     # R15a: --db не обязателен, резолвится от расположения СКРИПТА (не от CWD).
@@ -719,6 +782,16 @@ def main():
         say_volume_threshold(now, role, args.section)
         return
 
+    # 🎯 КАРТОЧКА #701: судим ДО записи (история ещё без новой версии), печатаем ПОСЛЕ «OK» —
+    # тело записывается в любом случае, это предупреждение, а не условие сохранения.
+    # ⚖️ Сбой самой проверки сохранения не роняет: называется строкой и только.
+    try:
+        foreign_lines, foreign_note = (foreign_edit_report(conn, role, args.section, actor,
+                                                           prev_body, body)
+                                       if has_history else ([], ""))
+    except Exception as e:
+        foreign_lines, foreign_note = ([f"⚠️ проверка чужой правки НЕ выполнилась: {e}"], "")
+
     # 🕐 ОДНА МЕТКА ВРЕМЕНИ НА ДЕЙСТВИЕ (возврат COORD, карточка #605, вариант «б»).
     # ЗАЧЕМ. Ниже это ОДНО действие («настоящее сохранение») пишет ВРЕМЯ в ТРИ места:
     # phoenix.saved_at, phoenix.confirmed_at (если колонка есть) и phoenix_history.saved_at.
@@ -819,7 +892,8 @@ def main():
                  + ")"
                  + (" [--allow-shrink: сокращение разрешено словом]" if args.allow_shrink else "")
                  + ("" if has_history else " [БЕЗ ИСТОРИИ: таблицы phoenix_history нет]")
-                 + (f" [чужая секция: правил {actor}]" if actor != role else ""))
+                 + (f" [чужая секция: правил {actor}]" if actor != role else "")
+                 + foreign_note)
     conn.execute("""
         INSERT INTO audit_log (actor_role, action, target, diff_md)
         VALUES (?, 'save_phoenix', ?, ?)
@@ -843,6 +917,8 @@ def main():
           + ("   ⚠️ сокращение разрешено словом --allow-shrink"
              if args.allow_shrink and was > now else "")
           + (f"   ✍️ правил {actor} (чужая секция, журнал знает)" if actor != role else ""))
+    for line in foreign_lines:     # карточка #701 — сразу под «OK», до прочих строк
+        print(line)
     # 🎯 КАРТОЧКА #525, ЧАСТЬ А, ПУНКТ 2: тело ТОЛЬКО ЧТО записано и закоммичено (строки
     # выше) — слой `phoenix_records` обязан пересобраться СРАЗУ, а не ждать, пока роль
     # вспомнит позвать memory-records.py руками. До этой правки слой не звался ОТСЮДА
