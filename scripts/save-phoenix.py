@@ -573,8 +573,8 @@ def expected_version_refusal(conn, role, section, expected):
     ids = [v[0] for v in versions]
     if expected not in ids:
         return [f"⛔ ОТКАЗ: версии id={expected} у раздела {role}/{section} нет — тело НЕ записано.",
-                "   Номер берётся из --history этого же раздела: проверяются и роль, и раздел.",
-                f"   👉 python <scripts>/save-phoenix.py --role {role} --section {section} --history"]
+                "   Номер берётся из --read этого же раздела: проверяются и роль, и раздел.",
+                f"   👉 python <scripts>/save-phoenix.py --role {role} --section {section} --read --out <файл>"]
     i = ids.index(expected)
     newer = versions[i + 1:]
     if not newer:
@@ -593,9 +593,54 @@ def expected_version_refusal(conn, role, section, expected):
         out.append(f"      + {l[:110]}")
     if len(added_all) > 3:
         out.append(f"      … и ещё {len(added_all) - 3}")
-    out += [f"   👉 Перечитай раздел (read-phoenix.py --role {role} --section {section}), внеси свою "
-            f"правку в нынешний текст и повтори с --expect-version {newer[-1][0]}."]
+    out += [f"   👉 Перечитай раздел одним вызовом: save-phoenix.py --role {role} --section {section} "
+            f"--read --out <файл>, внеси правку в этот файл и повтори с номером из того же вызова "
+            f"(сейчас новейшая — --expect-version {newer[-1][0]})."]
     return out
+
+
+def read_with_version(conn, role, section, out, has_history):
+    """--read (карточка #705): номер версии и тело ОДНИМ запросом SQL; правь тело из --out ЭТОГО ЖЕ вызова.
+
+    🪤 Замечание CORE (записка #5730, замер на копии базы): номер и тело, взятые ДВУМЯ вызовами
+    в порядке «тело → номер», обходят --expect-version — между вызовами роль сохраняет новую
+    версию, рука берёт её номер, а правит прежнее тело; строка роли пропадает молча. Один запрос
+    видит одно состояние базы: номер и тело принадлежат одной версии.
+    ⚖️ Плохой порядок этим становится НЕНУЖНЫМ, а не невозможным: тело из read-phoenix.py и номер
+    из --read по-прежнему обходят проверку (граница названа замером CORE, записка #5734)."""
+    if has_history:
+        row = conn.execute(
+            "SELECT p.body, h.id, h.actor, h.saved_at, h.body FROM phoenix p "
+            "LEFT JOIN phoenix_history h ON h.id = (SELECT max(id) FROM phoenix_history "
+            "WHERE role = p.role AND section = p.section) "
+            "WHERE p.role = ? AND p.section = ?", (role, section)).fetchone()
+    else:
+        row = conn.execute("SELECT body, NULL, NULL, NULL, NULL FROM phoenix "
+                           "WHERE role = ? AND section = ?", (role, section)).fetchone()
+    conn.close()
+    if row is None:
+        sys.exit(f"⛔ Раздела {role}/{section} нет — читать нечего.")
+    body, vid, vactor, vtime, vbody = row
+    usable = vid is not None and vbody == body
+    if vid is None:
+        head = (f"⚠️ версии у раздела {role}/{section} нет — номера нет"
+                + ("" if has_history else " (таблицы phoenix_history в этой базе нет)")
+                + ": правка без --expect-version даст строку «НОМЕР ПРОЧИТАННОЙ ВЕРСИИ НЕ НАЗВАН»")
+    elif not usable:
+        head = (f"⚠️ новейшая версия id={vid} НЕ совпадает с телом раздела {role}/{section} — текст "
+                f"правили мимо инструмента; номер для --expect-version не годится, разбери: --history")
+    else:
+        head = (f"версия id={vid} · сохранил {vactor} · {vtime} UTC — для правки: "
+                f"--expect-version {vid} (правь тело из этого же вызова)")
+    print(head)
+    if out:
+        Path(out).write_text(body, encoding="utf-8")
+        print(f"   тело ({len(body)} знаков) записано в {out} — правь этот файл, затем:")
+        if usable:
+            print(f"   👉 python <scripts>/save-phoenix.py --role {role} --section {section} "
+                  f"--file {out} --expect-version {vid} --actor <ТЫ>")
+    else:
+        print(body, end="" if body.endswith("\n") else "\n")
 
 
 def main():
@@ -663,9 +708,18 @@ def main():
                              "откат отката тоже возможен")
     # ── КАРТОЧКА #705: рука называет версию, которую читала (см. expected_version_refusal).
     parser.add_argument("--expect-version", type=int, default=None, metavar="ID",
-                        help="номер версии раздела, которую ты прочитала перед правкой (первая "
-                             "строка --history). Раздел с тех пор менялся — отказ, тело не "
-                             "пишется. Нужен прежде всего при правке ЧУЖОЙ памяти (--actor)")
+                        help="номер версии раздела, которую ты прочитала перед правкой. Раздел с "
+                             "тех пор менялся — отказ, тело не пишется. Номер и тело бери ОДНИМ "
+                             "вызовом --read --out <файл> и правь тело из этого файла: номер, "
+                             "взятый ПОСЛЕ чтения тела, проверку обходит. Нужен прежде всего при "
+                             "правке ЧУЖОЙ памяти (--actor)")
+    parser.add_argument("--read", action="store_true",
+                        help="прочитать раздел вместе с номером его версии одним запросом: первая "
+                             "строка — «версия id=N … --expect-version N», дальше тело. Ничего не "
+                             "пишет. Тело не нужно")
+    parser.add_argument("--out", default=None, metavar="FILE",
+                        help="с --read: тело пишется в этот файл как есть (его и правь), на экран — "
+                             "только строка номера и команда записи")
     args = parser.parse_args()
 
     # Регистр роли НОРМАЛИЗУЕТСЯ к верхнему (как в read-messages.py/read-phoenix.py): иначе
@@ -685,7 +739,7 @@ def main():
     # 16:58 UTC: PROTO не сняла своё объявление о правке save-phoenix.py, прогнала приёмку
     # bite-phoenix-service-blocks.py (она зовёт --dry-run от имени STUD/BITE519), и в
     # tool_lease_waits живой базы осталась запись ожидания от холостого вызова.
-    readonly = True if args.dry_run else None
+    readonly = True if (args.dry_run or args.read) else None
     args.db = str(resolve_db(args.db, __file__, readonly=readonly))
 
     if args.confirm and (args.body or args.file):
@@ -693,9 +747,19 @@ def main():
               "сохраняй тело обычным вызовом (он сам погасит прежнюю отметку).", file=sys.stderr)
         sys.exit(1)
 
-    if not args.confirm and not args.history and not args.restore \
+    if args.out and not args.read:
+        print("ERR: --out работает только с --read.", file=sys.stderr)
+        sys.exit(1)
+
+    if args.read and (args.body or args.file or args.confirm or args.history or args.restore
+                      or args.expect_version is not None):
+        print("ERR: --read только читает; тело, --confirm, --history, --restore и "
+              "--expect-version с ним не сочетаются.", file=sys.stderr)
+        sys.exit(1)
+
+    if not args.confirm and not args.history and not args.restore and not args.read \
             and not args.body and not args.file:
-        print("ERR: укажите --body или --file (или --confirm / --history / --restore)",
+        print("ERR: укажите --body или --file (или --confirm / --history / --restore / --read)",
               file=sys.stderr)
         sys.exit(1)
 
@@ -704,7 +768,7 @@ def main():
               "--history записи тела нет.", file=sys.stderr)
         sys.exit(1)
 
-    body = (None if (args.confirm or args.history or args.restore)
+    body = (None if (args.confirm or args.history or args.restore or args.read)
             else (args.body if args.body else Path(args.file).read_text(encoding="utf-8")))
 
     try:  # mode=rw: connect НЕ создаёт пустую БД-фантом при опечатке пути (П1 16.07)
@@ -738,6 +802,10 @@ def main():
     has_history = bool(conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='phoenix_history'"
     ).fetchone())
+
+    if args.read:
+        read_with_version(conn, role, args.section, args.out, has_history)
+        return
 
     if (args.history or args.restore) and not has_history:
         conn.close()
@@ -908,7 +976,8 @@ def main():
     if actor != role and args.expect_version is None and has_history and prev_body is not None:
         foreign_lines.append(
             f"⚠️ НОМЕР ПРОЧИТАННОЙ ВЕРСИИ НЕ НАЗВАН: строки, которые {role} сохранила после твоего "
-            f"чтения, не проверены. В следующий раз — --expect-version <id> (первая строка --history).")
+            f"чтения, не проверены. В следующий раз — --read --out <файл> (номер и тело одним вызовом), "
+            f"правь этот файл и пиши с --expect-version <id из того же вызова>.")
 
     # 🕐 ОДНА МЕТКА ВРЕМЕНИ НА ДЕЙСТВИЕ (возврат COORD, карточка #605, вариант «б»).
     # ЗАЧЕМ. Ниже это ОДНО действие («настоящее сохранение») пишет ВРЕМЯ в ТРИ места:

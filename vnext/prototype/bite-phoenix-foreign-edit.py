@@ -36,15 +36,27 @@
   ⑪  строки разметки таблицы («|---|---|») чужой правкой не считаются и в показ не попадают
   (замечание CORE б: ①а — «Тело было бы записано», ① — «Тело записано»)
 
+КАРТОЧКА #705, замечание CORE о порядке «тело → номер» (записка #5730) — --read, роль BITE705E:
+  ⑫  --read: первая строка — номер НОВЕЙШЕЙ версии, дальше тело знак в знак с базой
+  ⑬  рука берёт номер и тело одним --read --out, роль сохраняется, рука пишет этот файл
+     с номером из того же вызова — ОТКАЗ, строка роли цела
+  ⑭  --out пишет тело без строки номера; на экране тела нет; --out без --read и --read
+     с телом — ошибка
+  ⑮  ГРАНИЦА (замер CORE, записка #5734): тело взято ДО сохранения роли, номер — --read
+     ПОСЛЕ — запись проходит молча. --read делает плохой порядок ненужным, а не невозможным;
+     случай записывает границу замером: если он провалится, средство стало сильнее — обнови его
+
 НАРОЧНЫЕ ПОЛОМКИ (в копии инструмента, во временном каталоге). Поломка, валящая всё подряд,
 не доказывала бы, что случаи смотрят на предмет, поэтому у каждой — точный набор провалов:
   --break off     вызов проверки карточки #701 заменён пустым ответом ⇒ ①, ①а, ⑤б, ⑪
-  --break expect  проверка новых версий карточки #705 выключена ⇒ ⑦, ⑦а
+  --break expect  проверка новых версий карточки #705 выключена ⇒ ⑦, ⑦а, ⑬ (⑬ держится на том же отказе)
+  --break read    --read берёт номер не новейшей версии ⇒ ⑫, ⑬, ⑮
 
 Запуск:
   python <пакет>/vnext/prototype/bite-phoenix-foreign-edit.py                  — обычный прогон
   python <пакет>/vnext/prototype/bite-phoenix-foreign-edit.py --break off      — ждём провалов ①, ①а, ⑤б, ⑪
-  python <пакет>/vnext/prototype/bite-phoenix-foreign-edit.py --break expect   — ждём провалов ⑦, ⑦а
+  python <пакет>/vnext/prototype/bite-phoenix-foreign-edit.py --break expect   — ждём провалов ⑦, ⑦а, ⑬
+  python <пакет>/vnext/prototype/bite-phoenix-foreign-edit.py --break read     — ждём провалов ⑫, ⑬, ⑮
 """
 import argparse
 import os
@@ -66,6 +78,7 @@ ROLE_A = "BITE701A"
 ROLE_B = "BITE701B"
 ROLE_C = "BITE705C"
 ROLE_D = "BITE705D"
+ROLE_E = "BITE705E"
 SECTION = "state"
 WARN = "ЧУЖАЯ ПРАВКА УХОДИТ"
 REFUSE = "⛔ ОТКАЗ"
@@ -77,8 +90,12 @@ BREAKS = {
             {"①", "①а", "⑤б", "⑪"}),
     "expect": ("    if not newer:\n        return None",
                "    if True:\n        return None",
-               {"⑦", "⑦а"}),
+               {"⑦", "⑦а", "⑬"}),
+    "read": ('"LEFT JOIN phoenix_history h ON h.id = (SELECT max(id) FROM phoenix_history "',
+             '"LEFT JOIN phoenix_history h ON h.id = (SELECT min(id) FROM phoenix_history "',
+             {"⑫", "⑬", "⑮"}),
 }
+READ_HEAD = re.compile(r"^версия id=(\d+) · .*--expect-version (\d+)")
 
 # Строки ≥ 12 знаков: короче проверка их не считает (lines_of в save-phoenix.py).
 BASE = ["# Состояние роли BITE701A на начало опыта",
@@ -114,6 +131,16 @@ class Stand:
         p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
                            errors="replace", env=self.env)
         return p.returncode, (p.stdout or "") + (p.stderr or "")
+
+    def read(self, role, out=None, extra=()):
+        """--read: (код, весь вывод, только stdout)."""
+        cmd = [sys.executable, str(self.tool), "--db", str(self.db), "--role", role,
+               "--section", SECTION, "--read", *extra]
+        if out is not None:
+            cmd += ["--out", str(out)]
+        p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", env=self.env)
+        return p.returncode, (p.stdout or "") + (p.stderr or ""), p.stdout or ""
 
     def body(self, role):
         con = sqlite3.connect(self.db)
@@ -340,13 +367,112 @@ def run_cases_705(st, r):
     return r
 
 
+def read_id(stdout):
+    """Номер из первой строки --read, или None."""
+    m = READ_HEAD.match(stdout.splitlines()[0] if stdout else "")
+    return int(m.group(1)) if m and m.group(1) == m.group(2) else None
+
+
+def run_cases_read(st, r):
+    """Карточка #705, замечание CORE: номер и тело одним вызовом --read."""
+    e_base = ["# Раздел BITE705E — текст самой роли",
+              "строка роли E номер один, до чтения руки",
+              "строка роли E номер два, до чтения руки"]
+    for lines in (e_base[:2], e_base):
+        code, out = st.save(ROLE_E, lines)
+        if code != 0:
+            print(f"⛔ ОПЫТ НЕ ПОСТАВЛЕН: подготовительное сохранение упало (код {code})")
+            print(out)
+            sys.exit(2)
+
+    # ⑫ номер новейшей версии и тело знак в знак
+    code, out, so = st.read(ROLE_E)
+    p = []
+    vid = read_id(so)
+    if code != 0:
+        p.append(f"код {code}")
+    if vid is None:
+        p.append("в первой строке нет «версия id=N … --expect-version N»")
+    elif vid != st.latest(ROLE_E):
+        p.append(f"номер {vid}, новейшая — {st.latest(ROLE_E)}")
+    body_part = so.split("\n", 1)[1] if "\n" in so else ""
+    if body_part != st.body(ROLE_E):
+        p.append("тело на экране не совпадает с телом в базе знак в знак")
+    verdict(r, "⑫ ", "--read: номер новейшей версии и тело знак в знак", p, out)
+
+    # ⑬ один вызов --read --out, роль сохраняется, рука пишет файл с номером того вызова — отказ
+    f = st.workdir / "read13.md"
+    code, out, so = st.read(ROLE_E, out=f)
+    vid = read_id(so)
+    role_new = e_base + ["роль E дописала после чтения руки — строка один"]
+    st.save(ROLE_E, role_new)
+    p = []
+    if vid is None or not f.exists():
+        p.append("--read --out не дал номера или файла")
+        code2, out2 = 0, ""
+    else:
+        f.write_text(f.read_text(encoding="utf-8") + "правка COORD в файле из --read\n", encoding="utf-8")
+        cmd = [sys.executable, str(st.tool), "--db", str(st.db), "--role", ROLE_E, "--section", SECTION,
+               "--file", str(f), "--allow-shrink", "--actor", "COORD", "--expect-version", str(vid)]
+        q = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=st.env)
+        code2, out2 = q.returncode, (q.stdout or "") + (q.stderr or "")
+        p += expect_refusal(code2, out2, [ROLE_E, "новых строк: 1", "--read"])
+    if st.body(ROLE_E) != text(role_new):
+        p.append("строка роли пропала — тело затёрто")
+    verdict(r, "⑬ ", "номер и тело из одного --read, роль сохранилась — отказ, строка роли цела", p, out + out2)
+
+    # ⑭ --out без строки номера; ошибки сочетаний
+    f14 = st.workdir / "read14.md"
+    code, out, so = st.read(ROLE_E, out=f14)
+    p = []
+    if not f14.exists() or f14.read_text(encoding="utf-8") != st.body(ROLE_E):
+        p.append("файл --out не равен телу раздела знак в знак")
+    if "роль E дописала" in so:
+        p.append("тело напечатано на экран при --out")
+    code_a, out_a, _ = st.read(ROLE_E, extra=("--file", str(f14)))
+    if code_a == 0 or "ERR" not in out_a:
+        p.append(f"--read с --file: код {code_a}, ждали ошибку")
+    q = subprocess.run([sys.executable, str(st.tool), "--db", str(st.db), "--role", ROLE_E, "--section",
+                        SECTION, "--out", str(f14), "--file", str(f14)],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", env=st.env)
+    if q.returncode == 0 or "ERR" not in (q.stdout or "") + (q.stderr or ""):
+        p.append(f"--out без --read: код {q.returncode}, ждали ошибку")
+    verdict(r, "⑭ ", "--out — тело без строки номера, на экране тела нет; неверные сочетания — ошибка", p, out)
+
+    # ⑮ ГРАНИЦА: тело до сохранения роли, номер --read после — проходит молча
+    stale = st.body(ROLE_E)
+    role_new2 = role_new + ["роль E дописала вторую строку — её и потеряет рука"]
+    st.save(ROLE_E, role_new2)
+    code, out, so = st.read(ROLE_E)
+    vid = read_id(so)
+    p = []
+    if vid is None:
+        p.append("--read не дал номера")
+        out2 = ""
+    else:
+        f15 = st.workdir / "read15.md"
+        f15.write_text(stale + "правка COORD поверх УСТАРЕВШЕГО тела\n", encoding="utf-8")
+        cmd = [sys.executable, str(st.tool), "--db", str(st.db), "--role", ROLE_E, "--section", SECTION,
+               "--file", str(f15), "--allow-shrink", "--actor", "COORD", "--expect-version", str(vid)]
+        q = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=st.env)
+        out2 = (q.stdout or "") + (q.stderr or "")
+        if q.returncode != 0 or REFUSE in out2:
+            p.append("отказ — граница сдвинулась: средство стало сильнее, обнови случай ⑮ и подсказки")
+        if "её и потеряет рука" in st.body(ROLE_E):
+            p.append("строка роли уцелела — граница сдвинулась, обнови случай ⑮")
+    verdict(r, "⑮ ", "ГРАНИЦА: тело взято до сохранения роли, номер --read после — проходит молча "
+            "(плохой порядок ненужен, а не невозможен)", p, out + out2)
+    return r
+
+
 def main():
     ap = argparse.ArgumentParser(description="Приёмка карточки #701: чужая правка памяти при сохранении")
     ap.add_argument("--tool", help="путь к save-phoenix.py (по умолчанию — испытуемая копия)")
     ap.add_argument("--db", help="путь к базе (по умолчанию — согласованная КОПИЯ живой)")
     ap.add_argument("--break", dest="breakage", choices=sorted(BREAKS),
                     help="нарочная поломка: off — вызов проверки карточки #701 выключен; "
-                         "expect — проверка новых версий карточки #705 выключена")
+                         "expect — проверка новых версий карточки #705 выключена; "
+                         "read — --read берёт номер не новейшей версии")
     a = ap.parse_args()
 
     tool = Path(a.tool) if a.tool else mezo_target.script("save-phoenix.py")
@@ -393,7 +519,7 @@ def main():
           + (f" · НАРОЧНАЯ ПОЛОМКА «{a.breakage}»" if a.breakage else ""))
     print("═" * 92)
     st = Stand(runner, db, workdir, env)
-    results = run_cases_705(st, run_cases(st))
+    results = run_cases_read(st, run_cases_705(st, run_cases(st)))
     shutil.rmtree(workdir, ignore_errors=True)
 
     passed = sum(ok for _, ok in results)
