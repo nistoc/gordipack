@@ -320,6 +320,78 @@ def check_header_times(body: str, now_utc: str):
     return warns, checked
 
 
+# ── ЧАСЫ В ТЕЛЕ НА СДВИГ ПОДПИСИ (карточка #708, находка @RCC, записка #5752). Подпись
+# исправлена на целое число часов вперёд ⇒ автор писал местным временем, и его же метки
+# «HH:MM UTC» в том же теле — подозреваемые по построению. Механизм сверял подпись и молчал
+# о них: у RCC исправлена одна метка из семи, шесть остались на +2 ч.
+# Тело НЕ правится (метка может быть цитатой или сроком); называется только час, отстоящий
+# от записи на ТОТ ЖЕ сдвиг, — цитата прошлого часа под это не попадает никогда.
+# ⚠️ Граница: сдвиг только вперёд (пояса восточнее UTC). Сдвиг назад неотличим от подписи,
+# написанной за час до отправки, и прошлые часы тела называл бы ложно.
+BODY_TIME = re.compile(r"(?:(\d{4}-\d{2}-\d{2})[ \tT]+)?\b(\d{1,2}):(\d{2})(?::\d{2})?[ \t]*UTC\b")
+WRITING_GAP_MIN = 45   # тот же порог, что у суда шапки: «начал писать → отправил»
+CLOCK_SLACK_MIN = 5    # метка чуть позже записи — расхождение часов, не сдвиг
+
+
+def _ahead_minutes(date, hh, mm, now_utc):
+    """На сколько минут метка опережает время записи. С датой — разность моментов;
+    без даты — время суток по кругу (через полночь), в пределах ±12 ч."""
+    now = datetime.strptime(now_utc[:16], "%Y-%m-%d %H:%M")
+    if date:
+        try:
+            t = datetime.strptime(f"{date} {int(hh):02d}:{mm}", "%Y-%m-%d %H:%M")
+        except ValueError:
+            return None
+        return int((t - now).total_seconds() // 60)
+    d = (int(hh) * 60 + int(mm) - (now.hour * 60 + now.minute)) % 1440
+    return d - 1440 if d > 720 else d
+
+
+def signature_shift(body: str, now_utc: str):
+    """Сдвиг подписи в минутах (кратен 60, больше нуля) и номер её строки — или (None, None).
+
+    Подпись пишется ДО отправки: её опережение = сдвиг − разрыв, разрыв от −5 до 45 мин.
+    Подпись без сдвига (верная или поздняя) — (None, None): говорить не о чем.
+    """
+    lines = body.rstrip("\n").split("\n")
+    for i in range(len(lines) - 1, -1, -1):
+        if not lines[i].strip():
+            continue
+        m = SIGN.match(lines[i])
+        if not m:
+            return None, None
+        stamp = re.sub(r"[ \t]+", " ", m.group(2).strip())
+        ahead = _ahead_minutes(stamp[:10], stamp[11:13], stamp[14:16], now_utc)
+        if ahead is None:
+            return None, None
+        shift = -(-(ahead - CLOCK_SLACK_MIN) // 60) * 60
+        if shift < 60 or not -CLOCK_SLACK_MIN <= shift - ahead <= WRITING_GAP_MIN:
+            return None, None
+        return shift, i
+    return None, None
+
+
+def times_on_signature_shift(body: str, now_utc: str):
+    """Метки «HH:MM UTC» в теле на ТОТ ЖЕ сдвиг, что у подписи. → (сдвиг в минутах, метки)
+    или (None, []). Зовётся на теле ДО исправления подписи: сама подпись не считается."""
+    shift, sign_line = signature_shift(body, now_utc)
+    if shift is None:
+        return None, []
+    found = []
+    for i, line in enumerate(body.rstrip("\n").split("\n")):
+        if i == sign_line:
+            continue
+        for m in BODY_TIME.finditer(line):
+            ahead = _ahead_minutes(m.group(1), m.group(2), m.group(3), now_utc)
+            if ahead is None:
+                continue
+            if -CLOCK_SLACK_MIN <= shift - ahead <= WRITING_GAP_MIN:
+                label = re.sub(r"[ \t]+", " ", m.group(0).strip())
+                if label not in found:
+                    found.append(label)
+    return shift, found
+
+
 def _save_phoenix_alongside(args, db_path: Path) -> list:
     """Сохранить память ТЕМ ЖЕ действием — и сказать вслух, если она отстала.
 
@@ -832,7 +904,9 @@ def main():
     _now_utc = conn.execute("SELECT datetime('now')").fetchone()[0]
     _stamped = None
     _hdr_warns, _hdr_checked = [], 0
+    _shift_min, _shift_times = None, []
     if has_note:
+        _shift_min, _shift_times = times_on_signature_shift(args.body, _now_utc)
         args.body, _stamped = stamp_signature(args.body, args.role, _now_utc)
         _hdr_warns, _hdr_checked = check_header_times(args.body, _now_utc)
 
@@ -1075,6 +1149,10 @@ def main():
     if _stamped:
         print(f"  🕐 {_stamped} — сверено с записью в базе по построению; это про ПОДПИСЬ,"
               f" не про весь текст")
+    if _shift_times:
+        print(f"  🕐 меток в теле на тот же сдвиг (+{_shift_min // 60} ч): {len(_shift_times)} — "
+              f"{' · '.join(_shift_times)}. Проверь: возможно, местное под меткой UTC. Тело НЕ"
+              f" правлено; своя метка — чини запиской-поправкой")
     for _w in _hdr_warns:
         print(f"  {_w} — похоже на местное время под буквами UTC. Тело НЕ правлено"
               f" (шапка может цитировать чужой час); своя метка — чини запиской-поправкой")

@@ -27,6 +27,12 @@
   ⑨ час в ШАПКЕ тела со сдвигом — назван предупреждением, тело цело     РАЗЛИЧАЮЩИЙ (карточка #371)
   ⑩ встречный: час в шапке верный — тишина + строка «сверен»            РАЗЛИЧАЮЩИЙ
   ⑪ час в ЗАГОЛОВКЕ со сдвигом — назван отдельно                        РАЗЛИЧАЮЩИЙ
+  ⑫–⑮ пробы AIA: огороженный блок · круговое сравнение                  РАЗЛИЧАЮЩИЕ (карточка #644)
+  ⑯ подпись на +2 ч — метки тела на тот же сдвиг названы, цитаты нет    РАЗЛИЧАЮЩИЙ (карточка #708)
+  ⑰ встречный: подпись без сдвига — меток не называет                   РАЗЛИЧАЮЩИЙ
+  ⑰а встречный: подпись на час раньше записи — не сдвиг                 РАЗЛИЧАЮЩИЙ
+  ⑰б встречный: срок вперёд, не на сдвиг подписи — не назван            РАЗЛИЧАЮЩИЙ
+  ⑱ запись: строка о метках на сдвиг в выводе, тело не правлено         РАЗЛИЧАЮЩИЙ
 
 ⛔ Живой базы не касается: своя песочница.
 """
@@ -62,23 +68,31 @@ BREAKS = {
                        "            d = _stamp_mismatch(h, mi, circular=True)",
                        "h, mi = map(int, m2.group(2).split(\":\"))\n"
                        "            d = _stamp_mismatch(h, mi, circular=False)"),
+    # карточка #708: метки тела на сдвиг подписи
+    "shift-call": ("        _shift_min, _shift_times = times_on_signature_shift(args.body, _now_utc)",
+                   "        _shift_min, _shift_times = None, []"),
+    "shift-sign": ("        if shift < 60 or not", "        if shift == 0 or not"),
+    "shift-window": ("            if -CLOCK_SLACK_MIN <= shift - ahead <= WRITING_GAP_MIN:\n"
+                     "                label",
+                     "            if True:\n"
+                     "                label"),
 }
 
 
-def _prepare_target(porcha_key):
-    """Без порчи — испытуемый WRITE как есть. С порчей — копия РЯДОМ с соседями
+def _prepare_target(break_key):
+    """Без поломки — испытуемый WRITE как есть. С поломкой — копия РЯДОМ с соседями
     (mezo_stand.copy_tool: write-message.py тянет dryrun/mezo_refs/refs_check) во
     временном стенде, с ОТКАЧЕННЫМ дефектом; путь подменяется на неё ОДНИМ местом."""
-    if not porcha_key:
+    if not break_key:
         return WRITE, None
     stand = mezo_stand.new("bite-stamp-porcha-")
     copy_path = mezo_stand.copy_tool(WRITE, stand)
     text = copy_path.read_text(encoding="utf-8")
-    old, new = BREAKS[porcha_key]
+    old, new = BREAKS[break_key]
     if old not in text:
-        raise SystemExit(f"⛔ порчу «{porcha_key}» НЕ УДАЛОСЬ навести: образец не найден в коде")
+        raise SystemExit(f"⛔ поломку «{break_key}» НЕ УДАЛОСЬ навести: образец не найден в коде")
     copy_path.write_text(text.replace(old, new, 1), encoding="utf-8")
-    print(f"🧪 НАРОЧНАЯ ПОЛОМКА «{porcha_key}» ВЗВЕДЕНА\n")
+    print(f"🧪 НАРОЧНАЯ ПОЛОМКА «{break_key}» ВЗВЕДЕНА\n")
     return str(copy_path), stand
 
 
@@ -144,10 +158,11 @@ def main() -> int:
     global WRITE
     import argparse
     ap = argparse.ArgumentParser()
-    ap.add_argument("--porcha", choices=sorted(BREAKS), default=None,
-                    help="нарочная поломка: откатить одну из двух правок предложения AIA 03")
+    ap.add_argument("--break", "--porcha", dest="break_key", choices=sorted(BREAKS), default=None,
+                    help="нарочная поломка: откатить одну правку (предложение AIA 03 или карточка "
+                         "#708); --porcha — прежнее имя флага")
     a = ap.parse_args()
-    WRITE, _porcha_stand = _prepare_target(a.porcha)
+    WRITE, _break_stand = _prepare_target(a.break_key)
 
     if not os.path.exists(WRITE):
         raise SystemExit(f"⛔ НЕ ЗАПУСТИЛАСЬ: {WRITE} не найден — приёмке нечего испытывать.")
@@ -282,14 +297,61 @@ def main() -> int:
                c == 1 and len(w) == 0,
                f"проверено {c} · тревог {len(w)} (ожидание AIA: 1 · 0)", differ=True)
 
+    # ⑯–⑱ карточка #708 (находка @RCC, записка #5752): подпись исправлена на целое число
+    # часов вперёд — метки «HH:MM UTC» того же автора в теле на тот же сдвиг называются.
+    # Случай ⑯ — живая форма записки #5751: запись 15:02, подпись 17:01, метки 16:55–17:00.
+    NOW_R = "2026-10-11 15:02"
+    body_rcc = ("замер остатка ленты 16:57 UTC · печатник 16:58:10 UTC\n"
+                "```\nзамер своей памяти 2026-10-11 16:55 UTC\n```\n"
+                "слово владельца 09:49:35 UTC · записка от 2026-10-02 22:56 UTC\n\n"
+                "— RCC 2026-10-11 17:01 UTC\n")
+    sh, found = wm.times_on_signature_shift(body_rcc, NOW_R)
+    want = ["16:57 UTC", "16:58:10 UTC", "2026-10-11 16:55 UTC"]
+    ok &= case("⑯ подпись на +2 ч — метки тела на тот же сдвиг названы, цитаты нет",
+               sh == 120 and found == want,
+               f"сдвиг {sh} мин · названы {found} (ожидание: 120 · {want}; "
+               f"09:49:35 и 2026-10-02 22:56 — цитаты, не названы)", differ=True)
+
+    body_ok_sign = "замер 17:00 UTC\n\n— RCC 2026-10-11 15:01 UTC\n"
+    sh, found = wm.times_on_signature_shift(body_ok_sign, NOW_R)
+    ok &= case("⑰ встречный: подпись без сдвига — меток не называет",
+               sh is None and found == [],
+               f"сдвиг {sh} · названы {found} (ожидание: None · []) — подпись не исправлялась, "
+               f"строки нет", differ=True)
+
+    body_stale = "замер 13:20 UTC\n\n— RCC 2026-10-11 14:00 UTC\n"
+    sh, found = wm.times_on_signature_shift(body_stale, NOW_R)
+    ok &= case("⑰а встречный: подпись на час раньше записи — не сдвиг, прошлые часы не названы",
+               sh is None and found == [],
+               f"сдвиг {sh} · названы {found} (ожидание: None · []) — подпись, написанная за час "
+               f"до отправки, неотличима от сдвига назад", differ=True)
+
+    body_deadline = "срок ответа 15:45 UTC · замер 16:59 UTC\n\n— RCC 2026-10-11 17:02 UTC\n"
+    sh, found = wm.times_on_signature_shift(body_deadline, NOW_R)
+    ok &= case("⑰б встречный: срок вперёд, не на сдвиг подписи — не назван",
+               sh == 120 and found == ["16:59 UTC"],
+               f"сдвиг {sh} · названы {found} (ожидание: 120 · ['16:59 UTC']; срок 15:45 — "
+               f"на 43 мин вперёд, не на 2 ч)", differ=True)
+
+    _sign = _now + timedelta(hours=2)
+    _own = _sign - timedelta(minutes=5)
+    SHIFTED = (f"замер сделан {_own.strftime('%H:%M')} UTC\n\n"
+               f"— PROTO {_sign.strftime('%Y-%m-%d %H:%M')} UTC\n")
+    row9, out9 = write(db, d, SHIFTED)
+    ok &= case("⑱ запись: строка о метках на сдвиг в выводе, тело не правлено",
+               "на тот же сдвиг (+2 ч)" in out9 and f"{_own.strftime('%H:%M')} UTC" in out9
+               and f"замер сделан {_own.strftime('%H:%M')} UTC" in (row9[2] or ""),
+               f"в выводе: {[l.strip()[:90] for l in out9.splitlines() if 'сдвиг' in l]}",
+               differ=True)
+
     print()
     print(f"{'✅ МЕХАНИЗМ ВРЕМЕНИ ПРИНЯТ' if ok else '🔴 НЕ ПРИНЯТ'} — случаев {CASES}, "
           f"различающих {DIFFER}, испытан {mezo_target.label()}")
-    if a.porcha and not ok:
-        print("✅ так и надо: под порчей случаи краснеют — они судят предмет, а не форму")
+    if a.break_key and not ok:
+        print("✅ так и надо: под поломкой случаи краснеют — они судят предмет, а не форму")
         return 0
-    if a.porcha and ok:
-        print("⚠️ ПОРЧА ВЗВЕДЕНА, А ВСЁ ПРОШЛО ПРИЁМКУ — случаи НЕ РАЗЛИЧАЮТ этот дефект")
+    if a.break_key and ok:
+        print("⚠️ ПОЛОМКА ВЗВЕДЕНА, А ВСЁ ПРОШЛО ПРИЁМКУ — случаи НЕ РАЗЛИЧАЮТ этот дефект")
         return 1
     return 0 if ok else 1
 
