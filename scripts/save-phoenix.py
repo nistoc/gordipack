@@ -97,6 +97,36 @@ def volume_limit():
     return limit, file.name
 
 
+def shift_end_lines(conn, role, section, body):
+    """Строки проверки блока «КОНЕЦ СМЕНЫ» (карточка #702) — под «OK», НИКОГДА не отказ.
+
+    🎯 Порядок ① (записка #5688): по команде «сохранись и закрой смену» роль пишет в state
+    блок из четырёх частей, а в plan — «сверен с state <UTC>». Судит одна функция
+    guard-shift-end.py:save_lines(); её же зовёт общий прогон проверок (guard-all.py).
+    ⚖️ Без слов «конец смены» в state модуль не грузится вовсе: роль, не закрывавшая смену,
+    не судится, и отсутствие соседнего файла у неё не печатает ничего.
+    Сбой самой проверки — строка «НЕ выполнена: причина»: сохранение уже состоялось."""
+    if section not in ("state", "plan"):
+        return []
+    try:
+        other = "plan" if section == "state" else "state"
+        row = conn.execute("SELECT body FROM phoenix WHERE role=? AND section=?",
+                           (role, other)).fetchone()
+        other_body = row[0] if row else None
+        state_body, plan_body = (body, other_body) if section == "state" else (other_body, body)
+        if not state_body or "конец смены" not in state_body.lower():
+            return []
+        file = vnext_tool("guard-shift-end.py")
+        if not file.exists():
+            raise FileNotFoundError(f"файла нет: {file}")
+        spec = importlib.util.spec_from_file_location("guard_shift_end", file)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.save_lines(state_body, plan_body, section)
+    except (Exception, SystemExit) as e:      # noqa: BLE001 — причина важнее вида беды
+        return [f"⚠️ проверка блока «КОНЕЦ СМЕНЫ» НЕ выполнена: {type(e).__name__}: {e}"]
+
+
 def say_volume_threshold(now, role, section):
     """Печатает долг по объёму. ОДНА функция на ОБЕ ветки выхода — не два места.
 
@@ -988,6 +1018,8 @@ def main():
     """, (actor, f"phoenix.{role}.{args.section}", diff_note))
 
     conn.commit()
+    # 🎯 КАРТОЧКА #702: второй раздел (state или plan) читается ДО закрытия соединения.
+    shift_lines = shift_end_lines(conn, role, args.section, body)
     # 🎯 КАРТОЧКА #656: в холостом прогоне копия для предпросмотра записей снимается ДО
     # закрытия — новое тело видит только это соединение, закрытие его отбросит.
     preview = None
@@ -1006,6 +1038,8 @@ def main():
              if args.allow_shrink and was > now else "")
           + (f"   ✍️ правил {actor} (чужая секция, журнал знает)" if actor != role else ""))
     for line in foreign_lines:     # карточка #701 — сразу под «OK», до прочих строк
+        print(line)
+    for line in shift_lines:       # карточка #702 — блок «КОНЕЦ СМЕНЫ», если он есть в state
         print(line)
     # 🎯 КАРТОЧКА #525, ЧАСТЬ А, ПУНКТ 2: тело ТОЛЬКО ЧТО записано и закоммичено (строки
     # выше) — слой `phoenix_records` обязан пересобраться СРАЗУ, а не ждать, пока роль
