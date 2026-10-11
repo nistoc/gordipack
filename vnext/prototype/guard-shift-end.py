@@ -18,6 +18,10 @@
     час не UTC) — «блок не узнан» и форма: роль, написавшая блок не по образцу, узнаёт об этом
 ⚖️ Записки ПОСЛЕ «смена закрыта» — уже новая смена (роль проснулась): они не находка, а строка
   «ℹ️ … блок прошлой смены»; сохранение state и plan тоже не ставит «✅» блоку прошлой смены.
+  «смена закрыта» ищется с МИНУТЫ блока (роль часто закрывается в ту же минуту) и в архиве ленты
+  тоже (messages_all); прочие записки той же минуты не считаются (карточка #706, замечания CORE #5744).
+⚖️ Блоков в state несколько — судится НОВЕЙШИЙ по часу, а лишние названы находкой: блок в state один,
+  а общий промпт ставит новый блок первым, НАД прежним (замечание COORD к карточке #703, 14:50 UTC).
 
 ЗОВУТ ДВА МЕСТА, одной функцией block_findings():
   save-phoenix.py при сохранении state или plan, когда в state есть блок, — строками под «OK»
@@ -45,11 +49,13 @@ from pathlib import Path
 TIME = r"(\d{4}-\d\d-\d\d[ T]\d\d:\d\d(?::\d\d)?)\s*UTC"
 # Между знаком заголовка и словами — любые не-буквы: пробел, «**», значок (записка #5738).
 HEADING = re.compile(r"^(#{1,6})[^\w\n]*КОНЕЦ\s+СМЕНЫ\b[^\n]*?" + TIME, re.I | re.M)
-# Строка, ПОХОЖАЯ на заголовок блока: в начале только не-буквы (кроме кавычек и маркера списка
-# «-»), дальше «КОНЕЦ СМЕНЫ» и где-то в строке цифра (дата или час). Прозу без часа
-# («- КОНЕЦ СМЕНЫ — в разделе state») не трогает. Замер 2026-10-11 по всем версиям памяти всех
-# ролей: строк такого вида 3, все три — настоящие заголовки блока.
-LOOKS_LIKE = re.compile(r"^[^\w\n«\"„“'•·-]*КОНЕЦ\s+СМЕНЫ\b[^\n]*\d", re.I | re.M)
+# Строка, ПОХОЖАЯ на заголовок блока: либо заголовок «#» со словами «конец смены» в любом регистре,
+# либо в начале только не-буквы (кроме кавычек и маркера списка «-») и «КОНЕЦ СМЕНЫ» ЗАГЛАВНЫМИ;
+# дальше в строке — дата или час (11.10 · 18:50 · 2026-10), а не любая цифра. Прозу («Конец смены
+# 11.10 — так и не закрыла…», «* КОНЕЦ СМЕНЫ — по записке #5688») не трогает (CORE, записка #5744).
+# Замер 2026-10-11 по всем версиям памяти всех ролей: строк такого вида 3, все три — настоящие заголовки.
+LOOKS_LIKE = re.compile(r"^(?:#{1,6}[^\w\n]*(?i:конец\s+смены)|[^\w\n«\"„“'•·-]*КОНЕЦ\s+СМЕНЫ)\b"
+                        r"[^\n]*?(?:\d{1,2}[.:]\d\d|\d{4}-\d\d)", re.M)
 ANY_HEADING = re.compile(r"^(#{1,6})\s+\S", re.M)
 # Начало строки части — любые не-буквы: «-», «*», «**», «###», значок (подзаголовки — записка #5738).
 LINE_START = r"^[^\w\n]*"
@@ -80,26 +86,27 @@ def norm(t):
 
 
 def find_block(state_body):
-    """(час блока, текст блока, начало заголовка) — по ПОСЛЕДНЕМУ заголовку «КОНЕЦ СМЕНЫ», или None.
+    """(час блока, текст блока, начало заголовка) — по НОВЕЙШЕМУ по часу заголовку «КОНЕЦ СМЕНЫ», или None.
 
-    Блок кончается следующим заголовком того же уровня или выше; заголовок, который сам
-    называет часть («### последним»), блок не кончает."""
+    Новейший, а не последний в тексте: новый блок ставят первым, и блок прошлой смены, если его
+    не убрали, лежит НИЖЕ — по последнему проверка судила бы его (замечание COORD к карточке #703).
+
+    Блок кончается ЛЮБЫМ следующим заголовком того же уровня или выше; части-подзаголовки
+    («### последним») принимаются только глубже заголовка блока. Раздел того же уровня, названный
+    словом части («## Ошибки и уроки месяца»), в блок не входит и пропущенную часть не прячет
+    (CORE, записка #5744)."""
     if not state_body:
         return None
     found = list(HEADING.finditer(state_body))
     if not found:
         return None
-    m = found[-1]
+    m = max(found, key=lambda x: (norm(x.group(2)), x.start()))
     level = len(m.group(1))
     end = len(state_body)
     for h in ANY_HEADING.finditer(state_body, m.end()):
-        if len(h.group(1)) > level:
-            continue
-        line = state_body[h.start():].split("\n", 1)[0]
-        if any(rx.match(line) for _, rx in PARTS):
-            continue
-        end = h.start()
-        break
+        if len(h.group(1)) <= level:
+            end = h.start()
+            break
     return norm(m.group(2)), state_body[m.start():end], m.start()
 
 
@@ -110,7 +117,9 @@ def unrecognized(state_body):
         return []
     starts = {m.start() for m in HEADING.finditer(state_body)}
     last = max(starts) if starts else -1
-    return [m.group(0).strip()[:100] for m in LOOKS_LIKE.finditer(state_body)
+    # Строка — целиком, а не совпавший кусок: образец кончается на первой дате, и «26.08 18:5x UTC»
+    # иначе показывался бы обрубком «… 26.08» (замер по истории памяти, карточка #706).
+    return [state_body[m.start():].split("\n", 1)[0].strip()[:100] for m in LOOKS_LIKE.finditer(state_body)
             if m.start() > last and m.start() not in starts]
 
 
@@ -137,6 +146,10 @@ def block_findings(state_body, plan_body):
         return None, [], None
     when, block, _ = got
     findings = []
+    heads = [norm(x.group(2))[:16] for x in HEADING.finditer(state_body)]
+    if len(heads) > 1:
+        findings.append(f"блоков «КОНЕЦ СМЕНЫ» в state {len(heads)} ({' · '.join(heads)} UTC) — судится "
+                        f"новейший, {when[:16]} UTC; блок прошлой смены убери: блок в state один")
     starts = []
     for name, rx in PARTS:
         m = rx.search(block)
@@ -177,19 +190,28 @@ def shift_notes(con, role, when):
     """Записки роли после блока: (до «смена закрыта» — [(номер, час)], первая «смена закрыта» —
     (номер, час) или None, записок после неё — число).
 
-    ⚖️ Час блока — с точностью до минуты, поэтому считаются записки с начала СЛЕДУЮЩЕЙ минуты:
-    записка той же минуты могла уйти до сохранения блока. Записки после «смена закрыта» —
-    уже новая смена (роль проснулась), находкой они не считаются."""
+    ⚖️ Час блока — с точностью до минуты. «смена закрыта» ищется С МИНУТЫ блока: роль часто
+    сохраняет блок и закрывается в одну минуту (CHROME — за 74 с). Прочие записки той же минуты
+    не считаются: они могли уйти до сохранения блока. Записки после «смена закрыта» — уже новая
+    смена (роль проснулась), находкой они не считаются. Читается messages_all — лента вместе
+    с архивом: роль спит и дольше срока переноса в архив (RCC — 34 дня)."""
+    has_view = con.execute("SELECT 1 FROM sqlite_master WHERE name='messages_all'").fetchone()
+    src = "messages_all" if has_view else "messages"
+    next_minute = con.execute("SELECT datetime(?, '+60 seconds')", (when[:16] + ":00",)).fetchone()[0]
+    since = when[:16] + ":00"
     rows = con.execute(
-        "SELECT id, timestamp, body_md FROM messages WHERE writer_role=? "
-        "AND timestamp >= datetime(?, '+60 seconds') ORDER BY timestamp, id", (role, when[:16] + ":00")).fetchall()
-    before, closed, later = [], None, 0
+        f"SELECT id, timestamp, body_md FROM {src} WHERE writer_role=? "
+        "AND timestamp >= ? ORDER BY timestamp, id", (role, since)).fetchall()
+    before, closed, later, seen = [], None, 0, set()
     for i, ts, b in rows:
+        if i in seen:
+            continue
+        seen.add(i)
         if closed:
             later += 1
         elif CLOSED.search("\n".join((b or "").splitlines()[:3])):
             closed = (i, ts)
-        else:
+        elif ts >= next_minute:
             before.append((i, ts))
     return before, closed, later
 
