@@ -54,6 +54,16 @@ MEZO_ROLE), затем — из данных (координатор конту�
       общее «только чтение» гасит по-прежнему
   ⑲  контроль второй части: схема пакета найдена, инструменты найдены, имена стенда не совпадают
       с литералами, у случаев было что считать
+  ⑳  сборка стенда: схема образца — только отслеживаемая git (карточка #695): в рабочей копии git
+      неотслеживаемая схема пропускается и называется строкой; в выгрузке без .git берутся все
+
+ОБРАЗЕЦ СТЕНДА — ТО, ЧТО ПОЛУЧАЕТ СОСЕД (карточка #695, разбор COORD 2026-10-10). Схема для баз второй
+части и для сборки контура в ⑪ берётся только из файлов, отслеживаемых git: рабочий клон может нести
+файл, которого в git нет (живой случай — неотслеживаемый schema/mezosync_v6.sql), а сосед получает
+пакет через git. С такой схемой все шаги после отметки версии уже «сведены», и ⑪ проходил на клоне,
+проваливаясь на чистой выгрузке. Со схемой из git сборка применяет шаги после отметки, и шаг
+20260904-rule-skill-delivery требует сборщик подсказок rules-to-skills.py — стенд кладёт его в
+vnext/prototype своего образца, откуда init-group.py берёт его звеном, как у настоящего пакета.
 
 НАРОЧНЫЕ ПОЛОМКИ (--break <имя>): на КОПИИ инструмента в стенде возвращается прежний литерал;
 ждём провала РОВНО названного случая (список записан ниже ДО прогона, в BREAK_FAILS).
@@ -75,7 +85,10 @@ MEZO_ROLE), затем — из данных (координатор конту�
   gordi-hint-literal ........ ⑯ (подсказка снова называет PROTO)
   phoenix-help-literal ...... ⑰ (справка снова называет PROTO)
   retired-pattern-restored .. ⑱ (в образец возвращены три чужих имени)
-  --break all ........ все подряд, итог «поломок N, ожидание подтвердилось N»
+  stand-no-rules-to-skills .. ⑪ (сборщик подсказок не положен в образец стенда; провал обязан
+                              нести слова шага схемы, а не быть молчаливым)
+  pack-schema-untracked ..... ⑳ (схема образца снова берётся вместе с неотслеживаемыми файлами)
+  --break all........ все подряд, итог «поломок N, ожидание подтвердилось N»
 
 Зовут так:
     python <КОНТУР>/vnext-tools/bite-roles-from-data.py
@@ -214,12 +227,24 @@ BREAKS = {
                                         'r"|только\\s+чтение"),',
                                         'r"|de-live|db_falcon|DE/DWH|только\\s+чтение"),')],
                                  "в образец перечня снятого возвращены три чужих имени"),
+    # ── поломки СБОРКИ СТЕНДА (карточка #695): правок по якорю нет, их кладёт build_stand
+    "stand-no-rules-to-skills": ("⑪", [],
+                                 "сборщик подсказок rules-to-skills.py не положен в образец стенда"),
+    "pack-schema-untracked": ("⑳", [],
+                              "схема образца снова берётся вместе с файлами, которых нет в git"),
 }
 # 📋 СПИСОК ПРОВАЛОВ КАЖДОЙ ПОЛОМКИ — записан ДО прогона. Прогон с --break сверяет с ним.
 BREAK_FAILS = {name: [spec[0]] for name, spec in BREAKS.items()}
+# Поломка, чей провал обязан нести СЛОВА причины, а не только номер случая: без сборщика подсказок
+# init-group.py останавливается на шаге схемы и называет его — молчаливый провал ⑪ не засчитывается.
+BREAK_WORDS = {"stand-no-rules-to-skills": "шаг схемы «20260904-rule-skill-delivery» отказал"}
+
+RULES_TO_SKILLS = "rules-to-skills.py"   # сборщик подсказок: его зовёт шаг схемы rule-skill-delivery
+HONOR_GIT = True                         # схема образца — только отслеживаемая git (поломка снимает)
 
 CASES = DIFFER = 0
 FAILED: list[str] = []
+FAILED_DETAILS: list[str] = []
 EVIDENCE: dict[str, int] = {}
 
 # ── заготовки инструментов контура на стенде ──────────────────────────────────
@@ -332,6 +357,8 @@ class Stand:
         self.paths: dict[str, Path] = {}
         self.schema_text = ""
         self.schema_name = ""
+        self.schema_notes: list[str] = []   # строки ℹ️: что из схем образца не взято и почему
+        self.rts_src: Path | None = None    # откуда взят сборщик подсказок (None — не положен)
 
 
 def case(label: str, subs: list[tuple[str, bool, str]], differ: bool = True) -> bool:
@@ -343,6 +370,8 @@ def case(label: str, subs: list[tuple[str, bool, str]], differ: bool = True) -> 
     print(f"{'✅' if ok else '🔴'} {label}")
     for name, sub_ok, detail in subs:
         print(f"   {'·' if sub_ok else '✗'} {name}: {detail}")
+        if not sub_ok:
+            FAILED_DETAILS.append(detail)
     if not ok:
         FAILED.append(label.split()[0])
     return ok
@@ -431,18 +460,63 @@ def sut_file(scripts_dir: Path, fname: str) -> Path:
     return path
 
 
-def find_pack_schema() -> Path:
-    """Схема пакета (образец контура): из неё строятся базы второй части — настоящая схема, подставные данные."""
+def tracked_schemas(root: Path) -> tuple[list[Path], list[str], str]:
+    """Схемы schema/mezosync_v*.sql образца, которые получит СОСЕД, — по возрастанию версии.
+
+    ⚡ КАРТОЧКА #695 (разбор COORD 2026-10-10). Рабочий клон пакета может нести схему, которой НЕТ
+    в git (живой случай — неотслеживаемый schema/mezosync_v6.sql), а сосед получает пакет через git.
+    С такой схемой все шаги после отметки версии уже «сведены», и случай ⑪ проходил на клоне,
+    проваливаясь на чистой выгрузке. ⇒ В рабочей копии git (есть .git) берём только то, что выдаёт
+    `git ls-files schema`; не рабочая копия или отказ git — берём все и говорим об этом строкой.
+    ⚖️ БЛИЗНЕЦ bite-fresh-circuit.py (copy_pack_subdir, карточка #633): меняешь здесь — смотри там.
+    Возвращает (взятые схемы, пропущенные неотслеживаемые вида schema/<имя>, строка ℹ️ или "").
+    """
+    found = sorted((root / "schema").glob("mezosync_v*.sql"),
+                   key=lambda p: int(re.search(r"_v(\d+)", p.name).group(1)))
+    if not HONOR_GIT:
+        return found, [], ""
+    if not (root / ".git").exists():
+        return found, [], (f"ℹ️ схема образца: {root} — не рабочая копия git (нет .git), "
+                           f"schema/ взята ЦЕЛИКОМ, как раньше")
+    r = subprocess.run(["git", "-C", str(root), "ls-files", "schema"],
+                       capture_output=True, text=True, timeout=30)
+    if r.returncode != 0:
+        return found, [], (f"ℹ️ схема образца: git ls-files отказал (код {r.returncode}) — "
+                           f"schema/ взята ЦЕЛИКОМ, как раньше")
+    tracked = {ln.strip() for ln in r.stdout.splitlines() if ln.strip()}
+    keep = [p for p in found if f"schema/{p.name}" in tracked]
+    skipped = [f"schema/{p.name}" for p in found if p not in keep]
+    return keep, skipped, ""
+
+
+def find_pack_schema() -> tuple[Path, list[str]]:
+    """Схема пакета (образец контура): из неё строятся базы второй части — настоящая схема, подставные данные.
+    Только то, что получит сосед (tracked_schemas); вторым — строки ℹ️ о взятом не так, как в git."""
+    notes: list[str] = []
     for root in template_roots():
-        found = sorted((root / "schema").glob("mezosync_v*.sql"),
-                       key=lambda p: int(re.search(r"_v(\d+)", p.name).group(1)))
+        found, skipped, note = tracked_schemas(root)
+        if note:
+            notes.append(note)
+        notes += [f"ℹ️ схема образца: {rel} не отслеживается git — стенд её не берёт: сосед получает "
+                  f"пакет из git" for rel in skipped]
         if found:
-            return found[-1]
+            return found[-1], notes
     raise NotRun("⛔ ПРИЁМКА НЕ СОСТОЯЛАСЬ: схемы пакета (schema/mezosync_v*.sql образца) нет — "
                  "базы второй части строить не из чего")
 
 
+def find_rules_to_skills(tools_dir: Path, scripts_dir: Path) -> Path | None:
+    """Сборщик подсказок для образца стенда: испытуемый каталог vnext-tools, каталог механизма,
+    vnext/prototype образца — в этом порядке (у Atlas он живёт в vnext-tools, в пакете — в vnext/prototype)."""
+    for d in (tools_dir, scripts_dir, *[r / "vnext" / "prototype" for r in template_roots()]):
+        if (d / RULES_TO_SKILLS).is_file():
+            return d / RULES_TO_SKILLS
+    return None
+
+
 def build_stand(tools_dir: Path, scripts_dir: Path, break_name: str | None) -> Stand:
+    global HONOR_GIT
+    HONOR_GIT = break_name != "pack-schema-untracked"
     # Сначала проверяем, что есть из чего строить, и только потом заводим стенд: отказ мерить не
     # должен оставлять за собой пустой каталог.
     for fname in TOOLS.values():
@@ -453,8 +527,14 @@ def build_stand(tools_dir: Path, scripts_dir: Path, break_name: str | None) -> S
     for fname in SUT.values():
         if not sut_file(scripts_dir, fname).exists():
             raise NotRun(f"⛔ ПРИЁМКА НЕ СОСТОЯЛАСЬ: инструмента механизма нет — {scripts_dir / fname}")
-    schema = find_pack_schema()
+    schema, schema_notes = find_pack_schema()
+    rts_src = find_rules_to_skills(tools_dir, scripts_dir)
+    if rts_src is None:
+        raise NotRun(f"⛔ ПРИЁМКА НЕ СОСТОЯЛАСЬ: сборщика подсказок {RULES_TO_SKILLS} нет ни в {tools_dir}, "
+                     f"ни в {scripts_dir}, ни в vnext/prototype образца — шаг схемы "
+                     f"20260904-rule-skill-delivery без него отказывает, и ⑪ судил бы не роли")
     st = Stand(mezo_stand.new("bite-roles-from-data-"))
+    st.schema_notes = schema_notes
     st.scripts.mkdir(parents=True)
     st.tools.mkdir(parents=True)
     for fname in TOOLS.values():
@@ -496,6 +576,12 @@ def build_stand(tools_dir: Path, scripts_dir: Path, break_name: str | None) -> S
     (st.pack / "templates").mkdir()
     (st.pack / "templates" / "coordinator.md").write_text("МАРКЕР-КООРДИНАТОР\n", encoding="utf-8")
     (st.pack / "templates" / "repo-dev.md").write_text("МАРКЕР-РАЗРАБОТЧИК\n", encoding="utf-8")
+    # Сборщик подсказок — в vnext/prototype образца, как в настоящем пакете: init-group.py находит его
+    # по имени в кавычках у шага схемы rule-skill-delivery и кладёт новому контуру звеном (карточка #695).
+    (st.pack / "vnext" / "prototype").mkdir(parents=True)
+    if break_name != "stand-no-rules-to-skills":
+        shutil.copy2(rts_src, st.pack / "vnext" / "prototype" / RULES_TO_SKILLS)
+        st.rts_src = rts_src
     st.paths["initg"] = st.pack / "scripts" / SUT["initg"]
     st.dbs.mkdir()
     st.contours.mkdir()
@@ -875,6 +961,18 @@ def contour_state(db: Path) -> tuple[dict[str, str], dict[str, str]]:
     return reasons, bodies
 
 
+def init_why(rc: int, out: str) -> str:
+    """Причина неудачной сборки словами самого init-group.py: строка «⛔» и следующая за ней.
+    Без неё провал ⑪ был бы молчаливым — «код 1» не говорит, роли это или шаг схемы (карточка #695)."""
+    if rc == 0:
+        return ""
+    lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
+    for i, ln in enumerate(lines):
+        if "⛔" in ln:
+            return "; причина: " + " ".join(lines[i:i + 2])[:400]
+    return "; причина: " + (lines[-1][:300] if lines else "вывода нет")
+
+
 def case_init_group(st: Stand) -> list[tuple[str, bool, str]]:
     subs: list[tuple[str, bool, str]] = []
     rc, out, target, db = init_run(st, "a")
@@ -895,14 +993,15 @@ def case_init_group(st: Stand) -> list[tuple[str, bool, str]]:
                  and "координатор" not in reasons.get("QQR", "") and line in out
                  and "МАРКЕР-КООРДИНАТОР" in bodies.get("ZZX", "") and "МАРКЕР-РАЗРАБОТЧИК" in bodies.get("QQR", ""),
                  f"код {rc}; роли {sorted(reasons)}; строка {'есть' if line in out else 'НЕТ'}; "
-                 f"заготовка ZZX {'координатора' if 'МАРКЕР-КООРДИНАТОР' in bodies.get('ZZX', '') else 'другая'}"))
+                 f"заготовка ZZX {'координатора' if 'МАРКЕР-КООРДИНАТОР' in bodies.get('ZZX', '') else 'другая'}"
+                 f"{init_why(rc, out)}"))
     rc, out, target, db = init_run(st, "d", "--roles", ROLE_ENV, ROLE_FLAG, "--coordinator", ROLE_FLAG)
     reasons, bodies = contour_state(db)
     subs.append(("г) --coordinator qqr — координатор другая, строка называет флаг",
                  rc == 0 and "координатор" in reasons.get("QQR", "") and "координатор" not in reasons.get("ZZX", "")
                  and "координатор — QQR (по флагу --coordinator)" in out
                  and "МАРКЕР-КООРДИНАТОР" in bodies.get("QQR", "") and "МАРКЕР-РАЗРАБОТЧИК" in bodies.get("ZZX", ""),
-                 f"код {rc}; роли {sorted(reasons)}"))
+                 f"код {rc}; роли {sorted(reasons)}{init_why(rc, out)}"))
     rc, out, target, db = init_run(st, "e", "--roles", ROLE_ENV, ROLE_FLAG, "--coordinator", "www")
     subs.append(("д) --coordinator вне --roles — отказ словами, база не создана",
                  rc == 2 and "не назван среди --roles" in out and not db.exists(),
@@ -913,7 +1012,7 @@ def case_init_group(st: Stand) -> list[tuple[str, bool, str]]:
                  rc == 0 and set(reasons) == {"COORD", "CORE"} and "координатор" in reasons.get("COORD", "")
                  and "координатор" not in reasons.get("CORE", "")
                  and "координатор — COORD (первая из --roles" in out,
-                 f"код {rc}; роли {sorted(reasons)}"))
+                 f"код {rc}; роли {sorted(reasons)}{init_why(rc, out)}"))
     return subs
 
 
@@ -1198,6 +1297,35 @@ def case_control_two(st: Stand, scripts_dir: Path) -> list[tuple[str, bool, str]
     ]
 
 
+# ⑳ сборка стенда: схема образца — только отслеживаемая git ─────────────────────
+def case_pack_schema_git(st: Stand) -> list[tuple[str, bool, str]]:
+    """Два образца на стенде: рабочая копия git (v5 добавлена в индекс, v6 — нет) и выгрузка без .git."""
+    if shutil.which("git") is None:
+        return [("git недоступен — различать нечем", False, "сосед получает пакет через git; приёмке он нужен")]
+    subs: list[tuple[str, bool, str]] = []
+    in_git, plain = st.root / "pack-git", st.root / "pack-plain"
+    for root in (in_git, plain):
+        (root / "schema").mkdir(parents=True)
+        (root / "schema" / "mezosync_v5.sql").write_text("-- v5: в git\n", encoding="utf-8")
+        (root / "schema" / "mezosync_v6.sql").write_text("-- v6: НЕ в git\n", encoding="utf-8")
+    r_init = subprocess.run(["git", "-C", str(in_git), "init", "-q"], capture_output=True, text=True, timeout=60)
+    r_add = subprocess.run(["git", "-C", str(in_git), "add", "schema/mezosync_v5.sql"],
+                           capture_output=True, text=True, timeout=60)
+    found, skipped, _note = tracked_schemas(in_git)
+    names = [p.name for p in found]
+    subs.append(("а) рабочая копия git: v5 в git, v6 нет — берётся v5, v6 назван пропущенным",
+                 r_init.returncode == 0 and r_add.returncode == 0
+                 and names == ["mezosync_v5.sql"] and skipped == ["schema/mezosync_v6.sql"],
+                 f"git init код {r_init.returncode}, add код {r_add.returncode}; взяты {names or 'ничего'}; "
+                 f"пропущены {skipped or 'ничего'}"))
+    found, skipped, note = tracked_schemas(plain)
+    names = [p.name for p in found]
+    subs.append(("б) выгрузка без .git — берутся все схемы, строка ℹ️ говорит, что целиком",
+                 names == ["mezosync_v5.sql", "mezosync_v6.sql"] and not skipped and "не рабочая копия git" in note,
+                 f"взяты {names}; строка {'есть' if note else 'НЕТ'}"))
+    return subs
+
+
 def run_cases(tools_dir: Path, scripts_dir: Path, break_name: str | None) -> int:
     st = build_stand(tools_dir, scripts_dir, break_name)
     if break_name:
@@ -1210,6 +1338,14 @@ def run_cases(tools_dir: Path, scripts_dir: Path, break_name: str | None) -> int
         src = sut_file(scripts_dir, fname)
         if src.parent != scripts_dir:
             print(f"   сборщик {fname} в контур не копируется — взят из образца: {src}")
+    print(f"⚖️ схема образца стенда: {st.schema_name} "
+          f"({'только то, что выдаёт git; карточка #695' if HONOR_GIT else 'отбор по git СНЯТ нарочной поломкой'})")
+    for note in st.schema_notes:
+        print(f"   {note}")
+    if st.rts_src:
+        print(f"   сборщик подсказок {RULES_TO_SKILLS} положен в vnext/prototype образца стенда из: {st.rts_src}")
+    else:
+        print(f"   сборщик подсказок {RULES_TO_SKILLS} в образец стенда НЕ положен")
     safe_case("① init-group-vnext.py: роли названы вызовом, умолчания нет", lambda: case_init(st, tools_dir))
     safe_case("② guard-printed-forms.py, observe(): без роли память не читается",
               lambda: case_guard_observe(st))
@@ -1248,16 +1384,23 @@ def run_cases(tools_dir: Path, scripts_dir: Path, break_name: str | None) -> int
               lambda: case_retired(st))
     safe_case("⑲ контроль второй части: приёмке было на что смотреть",
               lambda: case_control_two(st, scripts_dir), differ=False)
+    safe_case("⑳ сборка стенда: схема образца — только отслеживаемая git",
+              lambda: case_pack_schema_git(st))
     print()
     if break_name:
         expected = set(BREAK_FAILS[break_name])
         actual = set(FAILED)
-        if actual == expected:
+        words = BREAK_WORDS.get(break_name)
+        words_ok = words is None or any(words in d for d in FAILED_DETAILS)
+        if words:
+            print(f"   слова причины «{words}» в провале: {'есть' if words_ok else 'НЕТ — провал молчаливый'}")
+        if actual == expected and words_ok:
             print(f"🧪 ожидание поломки «{break_name}» ПОДТВЕРДИЛОСЬ: провален ровно {' '.join(sorted(actual))}")
             mezo_stand.expected_break()
         else:
             print(f"⚠️ ожидание поломки «{break_name}» НЕ ПОДТВЕРДИЛОСЬ: ждали {' '.join(sorted(expected))}, "
-                  f"провалено {' '.join(sorted(actual)) or 'ничего'}")
+                  f"провалено {' '.join(sorted(actual)) or 'ничего'}"
+                  f"{'' if words_ok else '; слов причины в провале нет'}")
         print(f"🔴 НАРОЧНАЯ ПОЛОМКА — случаев {CASES}, различающих {DIFFER}, провалено {len(FAILED)}")
         return 1
     if FAILED:
