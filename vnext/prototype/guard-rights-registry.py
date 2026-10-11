@@ -55,6 +55,7 @@ import argparse
 import re
 import sqlite3
 import sys
+import unicodedata
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -112,6 +113,133 @@ NOT_IN_REGISTRY_MARK = re.compile(r"НЕ\s+В\s+РЕЕСТРЕ", re.I)
 PROSE_POINTER = re.compile(
     r"(?:реестр\w*|запис[ьи]\b|прав[оа]\b)\s*(?:прав\w*)?[\s*_«»\"\[]*#\s*\d+(?:\s*/\s*#?\s*\d+)*",
     re.I)
+
+
+# ━━ СНЯТОЕ ПРАВО, КОТОРОМУ УЧИТ ПРОЗА (карточка #709, находка @RCC, записка #5751) ━━
+# Таблица прав судится построчно, проза рядом — нет. У RCC право push снято и в реестре,
+# и в таблице, а четыре других раздела памяти (rebirth · sources · launcher · identity) учили
+# «обычная отправка вопроса НЕ требует» — и проверка давала код 0 рядом с ними. Право сняли
+# в одной таблице, а учит ему память всеми разделами.
+# ⇒ Право, СНЯТОЕ у роли в реестре (есть отозванная запись её или ALL с этим right_key,
+# действующей нет), ищется в прозе ВСЕХ её разделов, по предложениям: предмет права +
+# разрешительная примета, без запрета в том же предложении. Текст в «кавычках» не судится:
+# это цитата снятого, а не учение («⚰️ здесь стояло «…» — неправда»).
+# ⚠️ Граница: судится только право со словарём предмета (сейчас push); строки таблиц здесь
+# не судятся (их суд — выше); предупреждение, а не провал: код возврата не меняет.
+REVOKED_SUBJECT = {
+    "push": re.compile(r"push|пуш\w*|отправ\w*", re.I),
+}
+# «отправка» записки или сигнала — не push, если рядом нет слова о репозитории
+NOT_PUSH_CONTEXT = re.compile(r"записк\w*|сообщени\w*|сигнал\w*|письм\w*|\bнот[аеуы]?\b", re.I)
+PUSH_CONTEXT = re.compile(r"push|пуш\w*|репозитор\w*|gitlab|github|удалённ\w*|origin", re.I)
+# «разрешение / разрешений» — существительное о чужом счёте, не разрешение; судится причастие.
+# «можно» — только рядом с предметом: «память можно сохранить» в одном предложении с
+# «перед отправкой записки» не учит push (замер на живой базе 11.10, ING)
+PROSE_PERMIT = re.compile(
+    r"без\s+(?:отдельного\s+)?(?:вопроса|спроса|слова)(?![-\w])|"
+    r"вопрос\w*\s+(?:больше\s+)?не\s+требу\w*|не\s+требу\w*\s+вопрос\w*|"
+    r"разреш[её]н[аоы]?\b|"
+    r"(?:push|пуш\w*|отправ\w*)[^.;]{0,30}?\bможно\b|\bможно\b[^.;]{0,30}?(?:push|пуш\w*|отправ\w*)|"
+    r"запрет\w*[^.;]{0,40}?(?:отозван\w*|\bсня\w*)|(?:отозван\w*|\bсня\w*)[^.;]{0,25}?запрет\w*",
+    re.I)
+# запрет, пометка «история / перекрыто / не действует» и пересказ («учат, что …») — не учение
+PROSE_DENY = re.compile(
+    r"⛔|❌|нельзя|запрещ\w*|только\s+по\s+(?:живому\s+)?слову|"
+    r"прав[оа]\w*[^.;]{0,40}?(?:\bсня\w*|отозван\w*)|(?:\bсня\w*|отозван\w*)[^.;]{0,25}?прав[оа]\b|"
+    r"истори\w*|перекрыт\w*|не\s+действу\w*|\bуч(?:ат|ит|или|ила?)\b,?\s+что",
+    re.I)
+# раздел-летопись: записи в нём — о прошлом по самому назначению раздела
+PROSE_SKIP_SECTIONS = {"history"}
+UNIT_START = re.compile(r"^\s*(?:[-•*|]|═|─|\d+[.)]\s|[①-⑳])")
+HEADING = re.compile(r"^\s*#{1,6}\s")
+FENCE = re.compile(r"^\s*```")
+SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
+
+
+def blank_quotes(body: str) -> str:
+    """Текст внутри «…» (с вложенностью) и зачёркнутый ~~…~~ — пробелами той же длины;
+    переводы строк целы."""
+    body = re.sub(r"~~[^~\n]*~~", lambda m: " " * len(m.group(0)), body)
+    out, depth = [], 0
+    for ch in body:
+        if ch == "«":
+            depth += 1
+            out.append(ch)
+        elif ch == "»" and depth:
+            depth -= 1
+            out.append(ch)
+        elif depth and ch != "\n":
+            out.append(" ")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def starts_unit(line: str, in_fence: bool) -> bool:
+    """Пункт начинается маркером списка или значком (⛔ ✅ ⚰️ 🩸 …); внутри ограды ```
+    новую запись начинает строка без отступа — продолжение записи идёт с отступом."""
+    if UNIT_START.match(line):
+        return True
+    head = line.lstrip()[:1]
+    if head and unicodedata.category(head) == "So":
+        return True
+    return in_fence and not line[:1].isspace()
+
+
+def prose_sentences(body: str):
+    """(номер строки начала, предложение) — проза раздела без строк таблиц и заголовков,
+    «кавычки» погашены."""
+    lines = blank_quotes(body or "").split("\n")
+    units, cur, start, in_fence = [], [], 0, False
+    for i, line in enumerate(lines):
+        boundary = (not line.strip() or FENCE.match(line) or HEADING.match(line)
+                    or line.strip().startswith("|"))
+        if boundary or starts_unit(line, in_fence):
+            if cur:
+                units.append((start, cur))
+            cur, start = [], i
+            if FENCE.match(line):
+                in_fence = not in_fence
+            if boundary:
+                continue
+        if not cur:
+            start = i
+        cur.append(line)
+    if cur:
+        units.append((start, cur))
+    for start, unit in units:
+        text = "\n".join(unit)
+        pos = 0
+        for part in SENTENCE_END.split(text):
+            at = text.find(part, pos)
+            pos = at + len(part)
+            if part.strip():
+                yield start + text[:at].count("\n") + 1, " ".join(part.split())
+
+
+def revoked_keys(role: str, rights) -> dict:
+    """{right_key: [номера отозванных записей]} — права, снятые у роли и не выданные заново."""
+    active = {k for _, r, k, rev in rights if k and not rev and r in (role, "ALL")}
+    result = {}
+    for i, r, k, rev in rights:
+        if k and rev and r in (role, "ALL") and k not in active:
+            result.setdefault(k, []).append(i)
+    return result
+
+
+def taught_revoked(body: str, keys: dict):
+    """[(строка, право, предложение)] — проза учит праву, снятому в реестре."""
+    found = []
+    for n, s in prose_sentences(body):
+        for k in keys:
+            subject = REVOKED_SUBJECT.get(k)
+            if not subject or not subject.search(s):
+                continue
+            if k == "push" and NOT_PUSH_CONTEXT.search(s) and not PUSH_CONTEXT.search(s):
+                continue
+            if PROSE_PERMIT.search(s) and not PROSE_DENY.search(s):
+                found.append((n, k, s))
+    return found
 
 
 def rights_table_rows(body: str):
@@ -286,8 +414,17 @@ def main() -> int:
         con = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
         memory = con.execute("SELECT role, section, body FROM phoenix "
                              "ORDER BY role, section").fetchall()
-        registry = {i: (r, rev) for i, r, rev in
-                  con.execute("SELECT id, role, revoked_at FROM role_rights")}
+        # ключ права нужен суду прозы (карточка #709); старый реестр без столбца right_key
+        # не отказывает — проза тогда не судится, и это печатается в итоге
+        try:
+            rights = con.execute(
+                "SELECT id, role, right_key, revoked_at FROM role_rights").fetchall()
+            has_right_key = True
+        except sqlite3.OperationalError:
+            rights = [(i, r, None, rev) for i, r, rev in
+                      con.execute("SELECT id, role, revoked_at FROM role_rights")]
+            has_right_key = False
+        registry = {i: (r, rev) for i, r, _, rev in rights}
         rules = {k for (k,) in con.execute(
             "SELECT rule_key FROM rules WHERE status='active'")}
         con.close()
@@ -366,6 +503,14 @@ def main() -> int:
             if not ok:
                 red_pointers.append((role, section, n, word))
 
+    # проза, учащая праву, снятому в реестре (карточка #709) — по всем разделам роли
+    taught = []
+    for role, section, body in memory:
+        if (a.role and role != a.role) or section in PROSE_SKIP_SECTIONS:
+            continue
+        keys = revoked_keys(role, rights)
+        taught += [(role, section, n, k, s, keys[k]) for n, k, s in taught_revoked(body, keys)]
+
     considered = len(red_rows) + len(green_rows)
     print(f"ролей с таблицей прав: {len(roles_with_table)} · записей реестра: {len(registry)} · "
           f"строк в таблицах НАЙДЕНО: {found} · рассмотрено: {considered} · "
@@ -419,22 +564,39 @@ def main() -> int:
         print(f"      {s[:180]}")
     for role, section, n, word in red_pointers:
         print(f"🔴 [{role} · {section} · раздел со строки {n}] указатель в прозе: {word}")
+    for role, section, n, k, s, ids in taught:
+        recs = ", ".join(f"запись #{i}" for i in ids)
+        print(f"⚠️ [{role} · {section} · строка {n}] проза учит праву «{k}», снятому в реестре ({recs})")
+        print(f"      {s[:180]}")
     if a.verbose:
         for role, section, n, s, word in green_rows:
             print(f"✅ [{role} · {section} · строка {n}] {word}")
+    # граница суда прозы — в той же строке, что итог: код 0 при находках не читается как «чисто»
+    prose_scope = ("судится только push, по предложениям; «кавычки», зачёркнутое "
+                   "и раздел history не судятся")
+    if not has_right_key:
+        prose_note = "проза о снятых правах не судится: в реестре нет столбца right_key"
+    elif taught:
+        prose_note = (f"⚠️ строк прозы, учащих снятому праву: {len(taught)} (см. ⚠️ выше) — "
+                      f"это не «чисто», код возврата их не считает ({prose_scope})")
+    else:
+        prose_note = f"прозы, учащей снятому праву, не найдено ({prose_scope})"
     reds = len(red_rows) + len(red_pointers)
     if not reds:
         print("✅ строк права без записи реестра нет; негодных указателей в прозе у ролей без таблицы нет"
               + (f" · у ролей С таблицей не сверено указателей: {unchecked_pointers} (см. ℹ️ выше)"
-                 if unchecked_pointers else ""))
+                 if unchecked_pointers else "")
+              + " · " + prose_note)
     else:
+        print("итог прозы: " + prose_note)
         print("ℹ️ Это ПРОВЕРКА, а не запрет: сохранение памяти проходит как обычно. "
               "Закрыть строку — ДВА пути, оба законны: завести право в реестр "
               "(role-rights.py add, по слову владельца) и вписать «запись #N» ЛИБО, если "
               "права в реестре нет и не будет, пометить строку «⛔ НЕ В РЕЕСТРЕ — след: …».")
     # граница печатается и при успехе: итог «чисто» без неё обещал бы больше, чем смотрели
     print("⚖️ ЧЕГО ПРОВЕРКА НЕ ВИДИТ: верна ли САМА ссылка по существу (что запись #N "
-          "про это же право); права, записанные прозой БЕЗ указателя на реестр; указатели "
+          "про это же право); права, записанные прозой БЕЗ указателя на реестр (кроме прозы, "
+          "учащей праву, снятому в реестре, — судится только push); указатели "
           "в прозе у роли С таблицей прав (в любом её разделе) — там проза считается "
           "пояснением и не судится.")
     return 1 if reds else 0

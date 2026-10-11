@@ -25,6 +25,14 @@
    pointer-reds-silent — негодный указатель печатается, но код и итог «чисто» (случай ㉙)
    unchecked-silent    — у роли С таблицей несверенные указатели в прозе не названы
                          (случаи ㉞ и ㉞-бис; возврат приёмки не автора 10.10)
+   ── суд прозы о снятом праве (карточка #709, находка @RCC, записка #5751) ──
+   prose-off           — проза не судится вовсе (случаи ㉟)
+   prose-fence         — внутри ограды ``` строка без отступа не начинает пункт (㉟ж)
+   prose-symbol        — значок (⛔ ✅ ⚰️ 🩸) не начинает пункт (㉟е)
+   prose-scope-silent  — итог без строки о прозе: код 0 читается как «чисто» (㊱)
+   prose-quotes · prose-strike · prose-deny · prose-marks · prose-noun · prose-mozhno ·
+   prose-dash · prose-section · prose-active — снят один признак; встречный ㊲ этого
+                         признака становится ложной находкой
 
 ⚖️ ПОЧЕМУ СЛУЧАИ ИЩУТ «🔴 [РОЛЬ», А НЕ ИМЯ РОЛИ (с Э5): проверка печатает строку-сводку по
 КАЖДОЙ роли, и голое имя есть в выводе всегда. Случай «ZZE not in out» стал бы проваливаться
@@ -85,6 +93,29 @@ BREAKS = {
     "unchecked-silent": ('        if st["rows"] and st["pointers"]:\n', "        if False:\n"),
     "pointer-reds-silent": ("    reds = len(red_rows) + len(red_pointers)\n",
                             "    reds = len(red_rows)\n"),
+    # ── суд прозы о снятом праве (карточка #709, находка @RCC, записка #5751) ──
+    "prose-off": ("        taught += [(role, section, n, k, s, keys[k]) for n, k, s in "
+                  "taught_revoked(body, keys)]\n", "        pass\n"),
+    "prose-quotes": ('    lines = blank_quotes(body or "").split("\\n")\n',
+                     '    lines = (body or "").split("\\n")\n'),
+    "prose-strike": ('    body = re.sub(r"~~[^~\\n]*~~", lambda m: " " * len(m.group(0)), body)\n', ""),
+    "prose-deny": ('    r"⛔|❌|нельзя|запрещ\\w*|только\\s+по\\s+(?:живому\\s+)?слову|"\n',
+                   '    r"(?!x)x|"\n'),
+    "prose-marks": ('    r"истори\\w*|перекрыт\\w*|не\\s+действу\\w*|\\bуч(?:ат|ит|или|ила?)\\b,?\\s+что",\n',
+                    '    r"(?!x)x",\n'),
+    "prose-noun": ('    r"разреш[её]н[аоы]?\\b|"\n', '    r"разрешен\\w*|"\n'),
+    "prose-mozhno": ('    r"(?:push|пуш\\w*|отправ\\w*)[^.;]{0,30}?\\bможно\\b|'
+                     '\\bможно\\b[^.;]{0,30}?(?:push|пуш\\w*|отправ\\w*)|"\n',
+                     '    r"\\bможно\\b|"\n'),
+    "prose-dash": ('    r"без\\s+(?:отдельного\\s+)?(?:вопроса|спроса|слова)(?![-\\w])|"\n',
+                   '    r"без\\s+(?:отдельного\\s+)?(?:вопроса|спроса|слова)|"\n'),
+    "prose-section": ("        if (a.role and role != a.role) or section in PROSE_SKIP_SECTIONS:\n",
+                      "        if a.role and role != a.role:\n"),
+    "prose-active": ('    active = {k for _, r, k, rev in rights if k and not rev and r in (role, "ALL")}\n',
+                     "    active = set()\n"),
+    "prose-fence": ("    return in_fence and not line[:1].isspace()\n", "    return False\n"),
+    "prose-symbol": ('    if head and unicodedata.category(head) == "So":\n', "    if False:\n"),
+    "prose-scope-silent": ('              + " · " + prose_note)\n', "              )\n"),
 }
 
 CASES, OK = 0, True
@@ -99,13 +130,14 @@ def case(title, verdict, detail=""):
         print(f"   {detail}")
 
 
-def make_stand(tmp, name, memory, rights):
-    """память: [(роль, раздел, тело)] · права: [(id, роль, отозвана_или_None)]"""
+def make_stand(tmp, name, memory, rights, with_key=True):
+    """память: [(роль, раздел, тело)] · права: [(id, роль, отозвана_или_None[, ключ_права])]
+    with_key=False — реестр старой формы, без столбца right_key (карточка #709)"""
     db = Path(tmp) / f"{name}.db"
     con = sqlite3.connect(str(db))
     con.execute("CREATE TABLE phoenix (role TEXT, section TEXT, body TEXT)")
     con.execute("CREATE TABLE role_rights (id INTEGER PRIMARY KEY, role TEXT, "
-                "revoked_at TEXT)")
+                + ("right_key TEXT, " if with_key else "") + "revoked_at TEXT)")
     # 🩸 добавлено 05.09 08:14 UTC: проверка стала спрашивать и СВОД ПРАВИЛ — чтобы
     # отличать «записи нет вовсе, источник — правило свода» от «ни ссылки, ни пометки»
     # (по слову @COORD, записка #4810 §②). Стенд без этой таблицы даёт код 2
@@ -115,8 +147,13 @@ def make_stand(tmp, name, memory, rights):
         con.execute("INSERT INTO rules VALUES (?, 'active')", (k,))
     for role, section, body in memory:
         con.execute("INSERT INTO phoenix VALUES (?,?,?)", (role, section, body))
-    for i, role, revoked in rights:
-        con.execute("INSERT INTO role_rights VALUES (?,?,?)", (i, role, revoked))
+    for i, role, revoked, *key in rights:
+        if with_key:
+            con.execute("INSERT INTO role_rights (id, role, right_key, revoked_at) "
+                        "VALUES (?,?,?,?)", (i, role, key[0] if key else None, revoked))
+        else:
+            con.execute("INSERT INTO role_rights (id, role, revoked_at) VALUES (?,?,?)",
+                        (i, role, revoked))
     con.commit()
     con.close()
     return db
@@ -124,6 +161,68 @@ def make_stand(tmp, name, memory, rights):
 
 RIGHTS = [(11, "TAXO", None), (12, "ALL", None), (13, "OPSSRE", None),
          (18, "STUD", None), (3, "COORD", "2026-08-10 15:11:07")]
+
+# ── суд прозы о снятом праве (карточка #709) ──
+# реестр как живой на 11.10: общий push снят дважды, у роли NI — своё действующее право push
+PUSH_RIGHTS = [(1, "ALL", "2026-08-11 11:32:08", "push"), (12, "ALL", "2026-09-25 11:12:02", "push"),
+               (20, "NI", None, "push"), (17, "RCC", None, "accept-review")]
+# строки по образцу памяти RCC до правки (история памяти 11.10 до 15:08 UTC, записка #5753):
+# каждая учит праву push, снятому в реестре; последние две — тот же текст без значка ✅
+# вне ограды и внутри ограды ``` (суд пункта по значку и по строке без отступа)
+TAUGHT = [
+    ("ZZW", "rebirth",
+     "⚰️ ⛔ ЗДЕСЬ СТОЯЛО «PUSH — НИКОГДА» — ОТОЗВАНО ВЛАДЕЛЬЦЕМ 2026-08-08\n"
+     "   15:58:46 UTC, дословно «пушить можно». Обычная отправка вопроса\n"
+     "   НЕ требует. Разрушающее — под rule8-destructive."),
+    ("ZZW", "sources",
+     "  владельца; коммичу САМ. ⚰️ «⛔ push НЕТ» снято 13.08 — общий запрет отозван владельцем\n"
+     "  08.08 15:58:46 UTC; удалёнки у репо всё равно нет, отправлять некуда):"),
+    ("ZZW", "launcher",
+     "## ШАГ 0½ — СПРОСИ ПРАВА\n```\npython role-rights.py list --role ZZW\n```\n"
+     "🩸 У тебя это место дороже: общий запрет на отправку сняли 08.08, а в памяти\n"
+     "осталось «PUSH — НИКОГДА». Устаревший запрет не сработал.\n```\n"
+     "⛔ разрушающее (force push · reset --hard) — по живому слову владельца\n"
+     "✅ в НАШИХ репозиториях отправка разрешена без отдельного вопроса (слово владельца 08.08)\n"
+     "```"),
+    ("ZZW", "identity",
+     "- ⚰️ ЗДЕСЬ СТОЯЛО «PUSH — НИКОГДА, ни в один репозиторий» —\n"
+     "  ОТОЗВАНО ВЛАДЕЛЬЦЕМ 2026-08-08 15:58:46 UTC (дословно\n"
+     "  «пушить можно»). Обычная отправка больше НЕ требует вопроса. Разрушающее — rule8."),
+    ("ZZW", "state",
+     "⛔ разрушающее (force push) — по живому слову владельца\n"
+     "✅ отправка кода разрешена без отдельного вопроса"),
+    ("ZZW", "plan",
+     "```\n⛔ разрушающее — по живому слову владельца\n"
+     "в НАШИХ репозиториях отправка разрешена без отдельного вопроса\n```"),
+]
+TAUGHT_EXPECTED = [("а", "rebirth", 2), ("б", "sources", 1), ("в", "launcher", 5),
+                   ("г", "launcher", 9), ("д", "identity", 3), ("е", "state", 2), ("ж", "plan", 3)]
+# встречные: у каждого признака свой — по одной роли на признак, чтобы провал назвал его
+NOT_TAUGHT = [
+    ("NA", "identity", "⛔ отправка без отдельного вопроса запрещена с 25.09 — только по слову владельца.",
+     "запрет в том же предложении (⛔ · запрещена)"),
+    ("NB", "identity", "⚰️ ЗДЕСЬ СТОЯЛО, И ЭТО БЫЛО НЕПРАВДОЙ: «общий запрет на push отозван\n"
+     "владельцем 08.08. Отправлять отсюда РАЗРЕШЕНО без вопроса». Строка прожила 16 суток.",
+     "снятое — в «кавычках» (цитата, а не учение; образец RCC identity 24–25)"),
+    ("NC", "identity", "push — только по живому слову владельца; без отдельного вопроса нельзя.",
+     "«только по живому слову» (верная строка критерия ②)"),
+    ("ND", "identity", "- ~~PUSH РАЗРЕШЁН БЕЗ ОТДЕЛЬНОГО ВОПРОСА~~ — владелец снял 25.09.",
+     "снятое зачёркнуто ~~…~~ (образец COORD identity)"),
+    ("NE", "identity", "- (история, перекрыто 25.09) `git push` был разрешён без отдельного слова.",
+     "пометка «история · перекрыто» (образец COORD launcher)"),
+    ("NJ", "identity", "Три раздела памяти учат, что отправка не требует вопроса — это неправда с 25.09.",
+     "пересказ «учат, что …» (образец RCC state)"),
+    ("NF", "identity", "Перед отправкой: check-dangling-refs.py --file <файл> · память можно сохранить "
+     "тем же вызовом.", "«можно» далеко от предмета (образец ING rebirth)"),
+    ("NG", "identity", "Проверка нашла ссылку без слова-типа до отправки.",
+     "«без слова-типа» — не «без слова» (образец CHROME state)"),
+    ("NK", "identity", "Счёт разрешений на отправку — четыре, все 08.08.",
+     "«разрешений» — существительное о счёте, не разрешение (образец TAXO identity)"),
+    ("NH", "history", "- 2026-08-08: запрет на push снят владельцем, push без вопроса.",
+     "раздел history — летопись, не судится (образец CORE history)"),
+    ("NI", "identity", "push в gordipack (GitHub) — без слова владельца.",
+     "у роли своё ДЕЙСТВУЮЩЕЕ право push (образец PROTO, запись #20)"),
+]
 
 
 def table(*rows):
@@ -528,6 +627,43 @@ def main() -> int:
              code == 0 and "🔴" not in out
              and "ℹ️ указателей на реестр в прозе 1 (#999) — НЕ сверены" in out)
 
+        # ㉟ ПРОЗА УЧИТ ПРАВУ, СНЯТОМУ В РЕЕСТРЕ (карточка #709, находка @RCC, записка #5751):
+        #    таблица у роли чиста, а четыре других раздела учили «отправка вопроса НЕ требует» —
+        #    и проверка давала код 0 рядом с ними. Каждая строка названа поимённо: раздел и строка.
+        db = make_stand(tmp, "prose-taught", TAUGHT, PUSH_RIGHTS)
+        out, code = run(db, guard)
+        for letter, section, n in TAUGHT_EXPECTED:
+            mark = f"⚠️ [ZZW · {section} · строка {n}] проза учит праву «push», снятому в реестре"
+            case(f"㉟{letter} проза учит снятому push: {section}, строка {n} → «{mark[:40]}…»",
+                 mark in out, "" if mark in out else f"нет строки находки:\n   {out[:600]}")
+        # ㊱ код 0 при находках не печатается как «чисто»: граница — В ТОЙ ЖЕ строке, что итог
+        summary = next((l for l in out.splitlines() if l.startswith("✅ строк права без записи")), "")
+        case("㊱ итог при находках прозы: код 0, и в ТОЙ ЖЕ строке «⚠️ строк прозы, учащих снятому "
+             "праву: 7 … не «чисто»» с границей «судится только push»",
+             code == 0 and "⚠️ строк прозы, учащих снятому праву: 7" in summary
+             and "это не «чисто»" in summary and "судится только push" in summary,
+             f"строка итога: {summary[:300]}")
+
+        # ㊲ встречные — по одной роли на признак; провал называет признак
+        db = make_stand(tmp, "prose-not-taught",
+                        [(r, s, b) for r, s, b, _ in NOT_TAUGHT], PUSH_RIGHTS)
+        out, code = run(db, guard)
+        for r, s, b, why in NOT_TAUGHT:
+            case(f"㊲ встречный {r}: {why} — не находка", f"⚠️ [{r} ·" not in out,
+                 "" if f"⚠️ [{r} ·" not in out else f"ложная находка у {r}")
+        case("㊲ итог встречных: «прозы, учащей снятому праву, не найдено (судится только push…)»",
+             code == 0 and "прозы, учащей снятому праву, не найдено (судится только push" in out)
+
+        # ㊳ реестр старой формы без столбца right_key — не отказ, а названная граница
+        db = make_stand(tmp, "prose-no-key", TAUGHT,
+                        [(1, "ALL", "2026-08-11 11:32:08"), (12, "ALL", "2026-09-25 11:12:02")],
+                        with_key=False)
+        out, code = run(db, guard)
+        case("㊳ реестр без столбца right_key → код 0 и «проза о снятых правах не судится», "
+             "находок нет",
+             code == 0 and "проза о снятых правах не судится: в реестре нет столбца right_key" in out
+             and "⚠️ [ZZW" not in out)
+
         # ⑮ ⑯ отказы чтения — «не проверено», а не «чисто»
         out, code = run(Path(tmp) / "нет-такой.db", guard)
         case("⑮ базы нет → «НЕ ПРОВЕРЕНО» кодом 2, а не зелёное", code == 2)
@@ -588,6 +724,17 @@ def main() -> int:
                 "| что-то | ✅ ДА | запись #12 |") + "\n\nсм. также [реестр #999]")], RIGHTS)
             run_break("unchecked-silent", db, "ℹ️ указателей на реестр в прозе 1 (#999) — НЕ сверены",
                       absent=True)
+            # ── суд прозы о снятом праве (карточка #709) ──
+            db = make_stand(tmp, "p-taught", TAUGHT, PUSH_RIGHTS)
+            run_break("prose-off", db, "⚠️ [ZZW · rebirth · строка 2]", absent=True)
+            run_break("prose-fence", db, "⚠️ [ZZW · plan · строка 3]", absent=True)
+            run_break("prose-symbol", db, "⚠️ [ZZW · state · строка 2]", absent=True)
+            run_break("prose-scope-silent", db, "строк прозы, учащих снятому праву: 7", absent=True)
+            db = make_stand(tmp, "p-not-taught", [(r, s, b) for r, s, b, _ in NOT_TAUGHT], PUSH_RIGHTS)
+            for key, role in (("prose-quotes", "NB"), ("prose-strike", "ND"), ("prose-deny", "NA"),
+                              ("prose-marks", "NE"), ("prose-noun", "NK"), ("prose-mozhno", "NF"),
+                              ("prose-dash", "NG"), ("prose-section", "NH"), ("prose-active", "NI")):
+                run_break(key, db, f"⚠️ [{role} ·")
 
         print()
         print(f"{'✅ ПРОВЕРКА ПРИНЯТА' if OK else '🔴 НЕ ПРИНЯТА'} — случаев {CASES}")
