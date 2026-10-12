@@ -897,6 +897,22 @@ def main() -> int:
         # (контур без таблиц памяти) обязан вернуться. Поломка — КОПИЯ init-group.py рядом
         # со своим именем файла внутри pack_633/scripts/ (сам pack_633 остаётся исправен —
         # он ещё нужен случаям ⑰/⑱ ниже).
+        # ⚖️ Поломка отнимает только то, что дают ШАГИ сверх базовой схемы, а не сам файл
+        # схемы. С базой v5 это все пять таблиц памяти; с базой v6 (карточка #696) четыре
+        # из них лежат в mezosync_v6.sql статикой, и шагам остаётся role_rebirths_foreign.
+        # Судить «таблиц памяти снова нет» по всем пяти значило бы ждать от поломки
+        # невозможного. Набор считаем от того же файла схемы, что берёт сборка (самый
+        # свежий по номеру), а не впечатываем: при следующем подъёме базы он сдвинется сам.
+        base_schema_633 = sorted(
+            (pack_633 / "schema").glob("mezosync_v*.sql"),
+            key=lambda p: int("".join(ch for ch in p.stem.split("_v")[-1] if ch.isdigit()) or 0))[-1]
+        base_text_633 = base_schema_633.read_text(encoding="utf-8")
+        from_steps_633 = {t for t in want_tables_633 if not re.search(
+            r"CREATE\s+(?:VIRTUAL\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[\"']?" + t + r"\b",
+            base_text_633)}
+        if not from_steps_633:
+            sys.exit(f"⛔ НЕ ЗАПУСТИЛАСЬ: все таблицы случая ⑯ уже лежат в {base_schema_633.name} — "
+                     "поломке «шаги не применяются» нечего отнять, случай ничего не различает")
         ig_src = (pack_633 / "scripts" / "init-group.py").read_text(encoding="utf-8")
         ig_anchor = "    considered = [s for s in schema_step_order.STEPS if s in on_disk]\n"
         if ig_src.count(ig_anchor) != 1:
@@ -917,11 +933,12 @@ def main() -> int:
             tabs16p = {row[0] for row in con16p.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             con16p.close()
         ok &= case("⑯ ПОЛОМКА (init-group не применяет шаги схемы) КРАСИТ случай ⑯ — таблиц "
-                  "памяти снова нет",
-                  r16p.returncode == 0 and not (want_tables_633 & tabs16p),
-                  f"код сборки {r16p.returncode} (ждём 0 — сборка не обязана упасть); таблицы "
-                  f"памяти, ошибочно найденные: {sorted(want_tables_633 & tabs16p)} (ждём "
-                  f"пусто — старый дефект #633 обязан вернуться)", differ=True)
+                  "из шагов сверх базовой схемы снова нет",
+                  r16p.returncode == 0 and not (from_steps_633 & tabs16p),
+                  f"база {base_schema_633.name}; таблицы из шагов {sorted(from_steps_633)}; код "
+                  f"сборки {r16p.returncode} (ждём 0 — сборка не обязана упасть); из них ошибочно "
+                  f"найдены: {sorted(from_steps_633 & tabs16p)} (ждём пусто — старый дефект #633 "
+                  f"обязан вернуться)", differ=True)
 
         # ── ⑰ свежий контур: отметок Atlas в role_rebirths 0 (карточка #640 — засев только
         # в САМ контур Atlas по meta.group_name, а не в любую базу подряд).

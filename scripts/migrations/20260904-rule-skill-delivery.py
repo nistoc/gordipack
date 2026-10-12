@@ -96,6 +96,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--db', default=os.path.join(os.path.dirname(SCRIPTS), 'mezosync.db'))
     ap.add_argument('--dry-run', action='store_true')
+    ap.add_argument('--fill-undecided', action='store_true',
+                    help="колонка уже есть (база v6 и новее): проставить 'yes' только ПУСТЫМ полям "
+                         "живых правил, названных в пакетах; журнал схемы не трогать")
     a = ap.parse_args()
 
     db = os.path.abspath(a.db)
@@ -109,8 +112,11 @@ def main():
 
     conn = sqlite3.connect(db)
     have = {r[1] for r in conn.execute("PRAGMA table_info(rules)")}
-    if 'skill_delivery' in have:
+    if 'skill_delivery' in have and not a.fill_undecided:
         print('✅ уже сведено (колонка skill_delivery на месте) — делать нечего')
+        return
+    if a.fill_undecided:
+        fill_undecided(conn, db, a.dry_run)
         return
 
     # ── состав пакетов: ИМПОРТОМ из сборщика ──
@@ -171,6 +177,44 @@ def main():
         "SELECT COALESCE(skill_delivery,'не решено'), COUNT(*) FROM rules "
         "WHERE status='active' GROUP BY 1 ORDER BY 2 DESC").fetchall()
     print('контрольное чтение поля:', ' · '.join(f'{v}: {n}' for v, n in summary))
+
+
+def fill_undecided(conn, db, dry_run):
+    """Режим --fill-undecided: данные шага без схемной половины (карточка #696).
+
+    🪤 ПОВОД. С базовой схемой v6 колонка skill_delivery приходит в свежий контур статикой
+    из schema/mezosync_v6.sql, и шаг выше отвечает «уже сведено», НЕ проставляя значений:
+    свежий контур рождался с 56 правилами «не решено» вместо 'yes' (замер COORD 2026-10-10
+    22:48 UTC — два свежих контура из v5 и из v6, сличение данных). Сборка контура
+    (init-group.py) зовёт этот режим после шагов схемы.
+    ⚖️ Ставит 'yes' ТОЛЬКО пустым полям: решение, уже принятое рукой ('yes' или 'no'),
+    не перетирается. Состав — той же функцией package_rule_keys, не копией списка.
+    В журнал схемы не пишет: схема не меняется, меняются данные.
+    """
+    if 'skill_delivery' not in {r[1] for r in conn.execute("PRAGMA table_info(rules)")}:
+        sys.exit('⛔ НЕ ЗАПУСТИЛСЯ: --fill-undecided — для базы, где колонка skill_delivery уже есть; '
+                 'здесь её нет — прогони шаг без флага')
+    container = os.path.dirname(os.path.dirname(SCRIPTS))
+    in_packages, why_not = package_rule_keys(container)
+    if in_packages is None:
+        sys.exit(f'⛔ НЕ ЗАПУСТИЛСЯ: состав пакетов взять неоткуда — {why_not}')
+    empty = {r[0] for r in conn.execute(
+        "SELECT rule_key FROM rules WHERE status='active' AND skill_delivery IS NULL")}
+    to_yes = sorted(empty & in_packages)
+    print(f'пустых полей у живых правил: {len(empty)} · из них названы в пакетах: {len(to_yes)}')
+    if dry_run:
+        print('⟨ВХОЛОСТУЮ⟩ база не тронута.')
+        return
+    conn.execute("BEGIN")
+    for k in to_yes:
+        conn.execute("UPDATE rules SET skill_delivery='yes', updated_at=updated_at "
+                     "WHERE rule_key=? AND skill_delivery IS NULL", (k,))
+    conn.commit()
+    summary = conn.execute(
+        "SELECT COALESCE(skill_delivery,'не решено'), COUNT(*) FROM rules "
+        "WHERE status='active' GROUP BY 1 ORDER BY 2 DESC").fetchall()
+    print(f'✅ проставлено yes: {len(to_yes)} · контрольное чтение поля: '
+          + ' · '.join(f'{v}: {n}' for v, n in summary))
 
 
 if __name__ == '__main__':
