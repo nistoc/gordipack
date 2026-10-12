@@ -55,6 +55,26 @@ r"""ПРИЁМКА гарда убыли дампа в backup-db.py — карт
 (тревоги→alerts, прежние_счётчики→previous_counts и т. п.) — тем же ходом переведены
 и здесь. Смысл случаев ⑨/⑩ не изменился, изменился только якорь-строка (она ищет
 английское имя переменной в тексте гарда, а не русское).
+
+🩸 КАРТОЧКА #690 (2026-10-12): особые ветки (messages, переносы, записи памяти) журнал
+remove_rows не спрашивали — снятие строк инструментом remove-rows.py, со следом в журнале,
+давало в них тревогу. Теперь журнал судит ОСТАТОК, который ветка своим механизмом не
+объяснила. Снятие идёт НАСТОЯЩИМ remove-rows.py, а не вставкой строки журнала рукой:
+форму записи даёт инструмент, а не память приёмки о ней.
+  ㉕ messages: снятие remove-rows.py → «убыль названа журналом», код 0              РАЗЛИЧАЮЩИЙ
+  ㉖ phoenix_records: то же у несохранённого раздела → код 0                       РАЗЛИЧАЮЩИЙ
+  ㉗ role_rebirths: то же → код 0                                                  РАЗЛИЧАЮЩИЙ
+  ㉘ messages_archive: то же → код 0                                               РАЗЛИЧАЮЩИЙ
+  ㉙ СМЕСЬ: из архива одна записка вернулась в ленту, вторая снята → код 0         РАЗЛИЧАЮЩИЙ
+    (журнал назвал 1 при убыли 2 — сверка со всей убылью сказала бы «тревога»)
+  ㉚ ВСТРЕЧНЫЙ messages: журнал назвал 2, рукой снята ещё 1 → 🔴, код 1          РАЗЛИЧАЮЩИЙ
+  ㉛ ВСТРЕЧНЫЙ messages_archive: то же в ветке переносов → 🔴, код 1               РАЗЛИЧАЮЩИЙ
+  ㉜ ВСТРЕЧНЫЙ phoenix_records: то же в ветке записей → 🔴, код 1                  РАЗЛИЧАЮЩИЙ
+  ㉝ ОБРАТНЫЙ ХОД: ветка messages не спрашивает журнал → проваливается ровно ㉕     РАЗЛИЧАЮЩИЙ
+  ㉞ ОБРАТНЫЙ ХОД: ветка переносов — ровно ㉗ и ㉘                                  РАЗЛИЧАЮЩИЙ
+  ㉟ ОБРАТНЫЙ ХОД: ветка записей — ровно ㉖                                        РАЗЛИЧАЮЩИЙ
+⚖️ «Ровно» проверяется: каждая сломанная копия гоняется на ВСЕХ четырёх состояниях
+㉕–㉘, и провалиться обязаны только случаи её таблиц — иначе поломка мерила бы не ту ветку.
 """
 from __future__ import annotations
 
@@ -71,7 +91,18 @@ import mezo_stand  # noqa: E402
 
 SCRIPTS = mezo_paths.container_root(__file__) / ".mezosync" / "scripts"
 TOOL = SCRIPTS / "backup-db.py"
+REMOVE_TOOL = SCRIPTS / "remove-rows.py"   # карточка #690: снятие со следом в журнале
 CASES = DIFFER = 0
+
+# Карточка #690: журнал той же формы, что в живой базе (взято у bite-remove-rows-shrink.py).
+AUDIT_LOG_DDL = """CREATE TABLE audit_log (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp   TEXT NOT NULL DEFAULT (datetime('now')),
+    actor_role  TEXT NOT NULL,
+    action      TEXT NOT NULL,
+    target      TEXT NOT NULL,
+    diff_md     TEXT
+)"""
 
 
 def case(title, verdict, detail, differ=False):
@@ -103,6 +134,7 @@ def build_stand(d: pathlib.Path) -> pathlib.Path:
     # пересекаются — так их держат messages-fold.py и memory-history-fold.py.
     con.execute("CREATE TABLE messages_archive (id INTEGER PRIMARY KEY, body TEXT)")
     con.execute("CREATE TABLE phoenix_history_archive (id INTEGER PRIMARY KEY, body TEXT)")
+    con.execute(AUDIT_LOG_DDL)   # карточка #690: пуст, пока случай не снимет строки
     con.executemany("INSERT INTO messages_archive VALUES (?, ?)",
                     [(100 + i, f"свёрнутая записка {i}") for i in range(4)])
     con.executemany("INSERT INTO phoenix_history_archive VALUES (?, ?)",
@@ -153,6 +185,24 @@ def sql(db, *stmts):
         con.execute(s)
     con.commit()
     con.close()
+
+
+def removal_stand(pref: str, table: str, where: str, params, *extra_sql):
+    """Карточка #690: стенд с базовым дампом, затем снятие строк НАСТОЯЩИМ remove-rows.py
+    (запись в журнале пишет он сам) и, по нужде, правка рукой — без следа в журнале."""
+    d, db, out = fresh_stand(pref)
+    cmd = [sys.executable, str(REMOVE_TOOL), "--db", str(db), "--table", table, "--where", where,
+           "--actor", "COORD", "--basis", "приёмка карточки #690 — снятие на стенде", "--apply"]
+    for p in params:
+        cmd += ["--param", str(p)]
+    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       timeout=60, env=mezo_stand.stand_env(d))
+    if r.returncode != 0:
+        sys.exit(f"⛔ НЕ ЗАПУСТИЛАСЬ: снятие remove-rows.py на стенде не удалось"
+                 f" (код {r.returncode})\n{r.stdout}{r.stderr}")
+    if extra_sql:
+        sql(db, *extra_sql)
+    return d, db, out
 
 
 def weaken(d: pathlib.Path, anchor: str, replacement: str) -> pathlib.Path:
@@ -484,6 +534,82 @@ def main() -> int:
             ok &= case("㉔ ОБРАТНЫЙ ХОД свёртки ленты — случай ⑳ ПРОВАЛИВАЕТСЯ у сломанной",
                        code24 == 1 and code20 == 0,
                        f"сломанная {code24} против настоящей {code20}", differ=True)
+
+        # ━━ КАРТОЧКА #690: снятие remove-rows.py в особых ветках ━━
+        # ㉕–㉘ журнал называет ровно убыль — по случаю на таблицу.
+        named = {}
+        for mark, pref, table, where, params, expect in (
+                ("㉕", "bite-shrink-25-", "messages", "id <= ?", [3], "messages −3"),
+                ("㉖", "bite-shrink-26-", "phoenix_records", "role = ? AND section = ?",
+                 ["ALPHA", "plan"], "phoenix_records −2"),
+                ("㉗", "bite-shrink-27-", "role_rebirths", "id <= ?", [2], "role_rebirths −2"),
+                ("㉘", "bite-shrink-28-", "messages_archive", "id <= ?", [101],
+                 "messages_archive −2")):
+            dn, dbn, outn = removal_stand(pref, table, where, params)
+            cleanup_dirs.append(dn)
+            coden, outputn = run_tool(dbn, outn)
+            named[table] = (dbn, outn, coden)
+            ok &= case(f"{mark} {table}: снятие remove-rows.py названо журналом → без тревоги, код 0",
+                       coden == 0 and "🔴" not in outputn
+                       and f"{expect} — убыль названа журналом" in outputn,
+                       f"код {coden}; до карточки #690 здесь была тревога своей ветки — журнал"
+                       " она не спрашивала", differ=True)
+
+        # ㉙ СМЕСЬ: записка 100 вернулась из архива в ленту, записка 101 снята remove-rows.py.
+        # Журнал называет 1 при убыли архива 2 — судится остаток, а не вся убыль.
+        d29, db29, out29 = removal_stand(
+            "bite-shrink-29-", "messages_archive", "id = ?", [101],
+            "INSERT INTO messages SELECT id, body FROM messages_archive WHERE id = 100",
+            "DELETE FROM messages_archive WHERE id = 100")
+        cleanup_dirs.append(d29)
+        code29, output29 = run_tool(db29, out29)
+        ok &= case("㉙ СМЕСЬ: перенос объяснил 1, журнал назвал остаток 1 → без тревоги, код 0",
+                   code29 == 0 and "🔴" not in output29
+                   and "остаток 1) — убыль названа журналом" in output29,
+                   f"код {code29}; сверка журнала со всей убылью (1 против 2) дала бы тревогу",
+                   differ=True)
+
+        # ㉚–㉜ ВСТРЕЧНЫЕ: журнал называет меньше остатка — ещё одна строка снята рукой.
+        for mark, pref, table, where, params, extra, expect in (
+                ("㉚", "bite-shrink-30-", "messages", "id <= ?", [2],
+                 "DELETE FROM messages WHERE id = 5", "журналом названо лишь 2 из остатка 3"),
+                ("㉛", "bite-shrink-31-", "messages_archive", "id = ?", [100],
+                 "DELETE FROM messages_archive WHERE id = 101",
+                 "журналом названо лишь 1 из остатка 2"),
+                ("㉜", "bite-shrink-32-", "phoenix_records", "id = ?", [4],
+                 "DELETE FROM phoenix_records WHERE id = 5",
+                 "журналом названо лишь 1 из остатка 2")):
+            dc, dbc, outc = removal_stand(pref, table, where, params, extra)
+            cleanup_dirs.append(dc)
+            codec, outputc = run_tool(dbc, outc)
+            alertc = next((l for l in outputc.splitlines() if table in l and "НЕ объяснено" in l), "")
+            ok &= case(f"{mark} ВСТРЕЧНЫЙ {table}: журнал назвал меньше остатка → 🔴, код 1",
+                       codec == 1 and expect in alertc,
+                       f"код {codec}; строка тревоги: {alertc.strip()[:170] or '— нет'}",
+                       differ=True)
+
+        # ㉝–㉟ ОБРАТНЫЕ ХОДЫ: одна особая ветка перестаёт спрашивать журнал. Сломанная копия
+        # гоняется на всех четырёх состояниях ㉕–㉘: провалиться обязаны ровно случаи её таблиц.
+        for mark, label, rest_var, own in (
+                ("㉝", "ветка messages", "messages_rest", {"messages"}),
+                ("㉞", "ветка переносов", "moves_rest", {"role_rebirths", "messages_archive"}),
+                ("㉟", "ветка записей", "records_rest", {"phoenix_records"})):
+            dw = pathlib.Path(tempfile.mkdtemp(prefix=f"bite-shrink-690-{rest_var}-"))
+            cleanup_dirs.append(dw)
+            weak = weaken(dw, f"journal_rest_verdict(conn, t, since, was - now, {rest_var}",
+                          f"(lambda *_: (None, None))(conn, t, since, was - now, {rest_var}")
+            if weak is None:
+                ok &= case(f"{mark} ОБРАТНЫЙ ХОД: {label} не спрашивает журнал", False,
+                           f"⛔ НЕ ЗАПУСТИЛСЯ: якоря вызова журнала в ({label}) нет —"
+                           " backup-db.py менялся, правь приёмку")
+                continue
+            codes = {t: run_tool(dbn, outn, script=weak)[0] for t, (dbn, outn, _) in named.items()}
+            failed = {t for t, c in codes.items() if c != 0}
+            ok &= case(f"{mark} ОБРАТНЫЙ ХОД: {label} не спрашивает журнал — проваливаются ровно"
+                       f" её случаи ({', '.join(sorted(own))})",
+                       failed == own and all(named[t][2] == 0 for t in own),
+                       "коды сломанной: " + " · ".join(f"{t} {c}" for t, c in codes.items()),
+                       differ=True)
     finally:
         for d in cleanup_dirs:
             shutil.rmtree(d, ignore_errors=True)

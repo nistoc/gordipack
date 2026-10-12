@@ -247,6 +247,10 @@ RECORDS_SHOWN = 6   # сколько разделов назвать поимё�
 # который зовут лишь приёмки на своих стендах; message_addressee — разовый шаг
 # migrate-addressee-vnext.py (август); DROP TABLE в шагах схемы — пересборка таблицы с тем же
 # числом строк; INSERT OR REPLACE числа строк не меняет.
+# Объявление отметки версии в migrate-live.py (стр. 586 на 12.10): DELETE строки
+# schema_migrations и её повторный INSERT идут до ОДНОГО commit — в выгрузку попадает
+# либо прежнее состояние, либо новое, убыли нет и ветка ей не нужна (замечание COORD
+# на карточке #678, 09.10 02:00 UTC; внесено по карточке #690).
 MOVES = {
     "messages_archive": (("messages",), "обратный ход свёртки ленты (messages-fold.py)"),
     "phoenix_history_archive": (("phoenix_history",),
@@ -446,23 +450,64 @@ def move_verdict(conn, table: str, prev_ids, was: int, now: int, targets, mechan
                   f" из {len(gone)} пропавших номеров — переносом НЕ объяснено")
 
 
+def unmoved_count(conn, table: str, prev_ids, was: int, targets):
+    """→ сколько пропавших номеров НЕ нашлось ни в одной таблице-цели, или None —
+    номера прежней выгрузки разобрать нельзя (тогда остаток считается всей убылью)."""
+    if prev_ids is None or len(prev_ids) != was:
+        return None
+    current = {r[0] for r in conn.execute(f'SELECT id FROM "{table}"')}
+    gone = prev_ids - current
+    return len(gone - moved_under_same_ids(conn, gone, targets))
+
+
+def journal_rest_verdict(conn, table: str, since, shrink: int, rest: int, branch: str):
+    """→ (объяснение, None) · (None, добавка к тревоге ветки) · (None, None) — журнал молчит.
+
+    🩸 КАРТОЧКА #690. Особые ветки check_row_shrink (messages, переносы MOVES, записи
+    памяти) судили убыль только своим механизмом — переездом или пересборкой — и журнал
+    remove_rows не спрашивали: снятие строк из них инструментом remove-rows.py, с записью
+    в журнале и сходящимся числом, давало тревогу «удалять никто не должен» того же рода,
+    что карточка #612 сняла у обычных таблиц.
+    Журнал судит ОСТАТОК (rest) — ту часть убыли, которую ветка своим механизмом не
+    объяснила, а не всю убыль: переезд и снятие в одном окне складываются. Остаток ветка
+    считает по номерам строк, где они разбираются, иначе — счётом.
+    Сравнение то же, что у обычной таблицы ниже (там оно оставлено на месте: за его
+    строки держатся якоря нарочных поломок двух приёмок): ровно — объяснено; больше или
+    меньше — тревога ветки остаётся, к ней дописано, что журнал всё же назвал."""
+    named, notes = named_removals(conn, table, since) if conn is not None else (0, [])
+    if not named:
+        return None, None
+    listed = "; ".join(notes)
+    if named == rest:
+        head = f"{table} −{shrink}" + (f" ({branch} объяснил не всё, остаток {rest})"
+                                       if rest != shrink else "")
+        return f"{head} — убыль названа журналом: {listed}", None
+    if named > rest:
+        return None, (f"; журнал называет больше остатка ({rest}) — {named}: часть снятого"
+                      f" вернули или добавили новые строки, сверь по журналу: {listed}")
+    return None, (f"; журналом названо лишь {named} из остатка {rest} — часть снята без"
+                  f" следа: {listed}")
+
+
 def records_shrink_verdict(conn, previous_keys, was: int, now: int, since):
-    """→ (объяснение, None) или (None, тревога) для убыли phoenix_records (карточка #683).
+    """→ (объяснение, None, 0) или (None, тревога, остаток) для убыли phoenix_records
+    (карточка #683).
 
     Законна, только если КАЖДАЯ пропавшая запись принадлежит разделу, сохранённому
     (phoenix.saved_at) не раньше часа прежней выгрузки: такую запись удалила пересборка
     при сохранении. Иначе — тревога с поимённым перечнем разделов, которых сохранение
-    не объясняет."""
+    не объясняет. Остаток (карточка #690) — сколько пропавших записей сохранение не
+    объясняет; его сверяет с журналом вызывающий. Записи не разобраны — остаток вся убыль."""
     shrink = was - now
     if previous_keys is None or since is None:
         why = ("час прежней выгрузки неизвестен" if since is None
                else "записи прежней выгрузки разобрать не удалось")
         return None, (f"{RECORDS_TABLE} −{shrink} строк — {why}, пересборкой при сохранении"
-                      " памяти не объяснено")
+                      " памяти не объяснено"), shrink
     if len(previous_keys) != was:
         return None, (f"{RECORDS_TABLE} −{shrink} строк — в прежней выгрузке записей"
                       f" {len(previous_keys)}, а в её шапке {was}: разбор не сходится,"
-                      " пересборкой при сохранении памяти не объяснено")
+                      " пересборкой при сохранении памяти не объяснено"), shrink
     current = {r[0] for r in conn.execute(f'SELECT id FROM "{RECORDS_TABLE}"')}
     gone = {}
     for rid, key in previous_keys.items():
@@ -483,11 +528,11 @@ def records_shrink_verdict(conn, previous_keys, was: int, now: int, since):
     if unnamed:
         return None, (f"{RECORDS_TABLE} −{shrink} строк — записи пропали у разделов, не"
                       f" сохранённых после прежней выгрузки: {listing(unnamed)}; пересборкой"
-                      " при сохранении памяти НЕ объяснено")
+                      " при сохранении памяти НЕ объяснено"), sum(gone[k] for k in unnamed)
     removed = sum(gone.values())
     return (f"{RECORDS_TABLE} −{shrink} — пересборка записей при сохранении памяти"
             f" (save-phoenix.py): ушло записей {removed}, новых {removed - shrink}; разделы"
-            f" сохранены после прежней выгрузки — {listing(named)}"), None
+            f" сохранены после прежней выгрузки — {listing(named)}"), None, 0
 
 
 SEARCH_HEADER_NOTE = ("таблицы поиска в прежней шапке — теперь сверяются выдачей,"
@@ -516,6 +561,11 @@ def check_row_shrink(previous: dict, counts: dict, search_related_names: set = f
     молчать) — тревога, как и раньше, с добавкой того, что журнал всё же назвал.
     `conn`/`since` не даны (вызов без них, например старым кодом) — ветка ведёт
     себя ТОЧНО как до карточки #612: журнал не спрашивается вовсе.
+
+    🩸 КАРТОЧКА #690. Тот же журнал теперь спрашивают и особые ветки — messages,
+    переносы MOVES и записи памяти, — когда их механизм (переезд, перенос под теми же
+    номерами, пересборка при сохранении) объяснил убыль не целиком; судится остаток,
+    см. journal_rest_verdict. Журнал молчит — тревога ветки та же, что до карточки.
 
     🩸 ПЕРЕХОД (находка COORD, карточка #610). Прежняя выгрузка, снятая СТАРОЙ версией,
     несёт в шапке счётчиков таблицу поиска и её служебные — они там ЕСТЬ, а в счётчиках
@@ -553,8 +603,19 @@ def check_row_shrink(previous: dict, counts: dict, search_related_names: set = f
                 elif fold[0]:
                     explanations.append(fold[0])
                 else:
-                    alerts.append(f"messages −{was - now}, а messages_history выросла лишь"
-                                  f" на {growth} — переездом НЕ объяснено")
+                    # Карточка #690: остаток — номера, не нашедшиеся ни в архиве, ни в истории;
+                    # номеров нет — убыль сверх роста messages_history.
+                    messages_rest = (unmoved_count(conn, t, previous_ids_of(t), was,
+                                                   MESSAGES_MOVE_TARGETS)
+                                     if conn is not None and previous_ids_of else None)
+                    if messages_rest is None:
+                        messages_rest = (was - now) - max(growth, 0)
+                    journal = journal_rest_verdict(conn, t, since, was - now, messages_rest, "переезд")
+                    if journal[0]:
+                        explanations.append(journal[0])
+                    else:
+                        alerts.append(f"messages −{was - now}, а messages_history выросла лишь"
+                                      f" на {growth} — переездом НЕ объяснено" + (journal[1] or ""))
             elif t in MOVES:
                 # Карточка #683: переезд строк под теми же номерами (находка AIA ④-7 и обход
                 # мест удаления по коду пакета). Без выгрузки и базы судить нечем — тревога.
@@ -568,14 +629,29 @@ def check_row_shrink(previous: dict, counts: dict, search_related_names: set = f
                     if explanation:
                         explanations.append(explanation)
                     else:
-                        alerts.append(alert)
+                        # Карточка #690: остаток — номера, не нашедшиеся в цели переноса.
+                        moves_rest = unmoved_count(conn, t, previous_ids_of(t), was, targets)
+                        if moves_rest is None:
+                            moves_rest = was - now
+                        journal = journal_rest_verdict(conn, t, since, was - now, moves_rest, "перенос")
+                        if journal[0]:
+                            explanations.append(journal[0])
+                        else:
+                            alerts.append(alert + (journal[1] or ""))
             elif t == RECORDS_TABLE and conn is not None:
                 # Карточка #683: убыль записей памяти судится по самим пропавшим записям.
-                explanation, alert = records_shrink_verdict(conn, previous_keys, was, now, since)
+                explanation, alert, records_rest = records_shrink_verdict(conn, previous_keys,
+                                                                          was, now, since)
                 if explanation:
                     explanations.append(explanation)
                 else:
-                    alerts.append(alert)
+                    # Карточка #690: остаток — записи у разделов, которых сохранение не объясняет.
+                    journal = journal_rest_verdict(conn, t, since, was - now, records_rest,
+                                                   "пересборка при сохранении памяти")
+                    if journal[0]:
+                        explanations.append(journal[0])
+                    else:
+                        alerts.append(alert + (journal[1] or ""))
             else:
                 # 🪤 КАРТОЧКА #612, ЛОВУШКА ②. Финальная строка тревоги ниже — тот же
                 # литерал, что и ДО карточки #612 («удалять из неё никто не должен»,
