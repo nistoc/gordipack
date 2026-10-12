@@ -9,9 +9,21 @@ r"""ПРИЁМКА второго ВИДА предмета в check-retired-mec
 СТЕРЕТЬ ДЕЙСТВУЮЩЕЕ. Запрет на отправку снят, запрет на РАЗРУШАЮЩЕЕ (force push, drop,
 reset --hard) НЕ снят — а формы у них соседние. Признак, не различающий их, вычистит
 живую защиту, и выглядеть это будет как успешная уборка.
+
+КАРТОЧКА #715 (находки контура .onto 2026-10-12 12:53 UTC, замечания 1 и 3):
+  · запись включалась по НОМЕРУ версии правила; у .onto правило стало v4 с текстом пакета
+    (запрет действует), и проверка провалилась на верной строке. Теперь снятие читается полем
+    статуса правила, а без поля — пометкой о снятии в начале текста; номер не сравнивается.
+    Прежний случай ⑥ («версия выросла — ПЕРЕЧЕНЬ УСТАРЕЛ») снят НАМЕРЕННО: рост номера у
+    снятого правила больше не значит, что перечень отстал. На его месте ⑥а–⑥в.
+  · час и чат наследника печатались словом владельца контура-автора, впечатанным в запись;
+    теперь — из строки правила в базе испытуемого контура (⑨-бис), и час снятия в красной
+    строке — тоже (⑥в).
+  Нарочные поломки — в копии испытуемого на стенде (на диск рядом с испытуемым ничего не
+  пишется): П1 «снятие снова не спрашивает базу» красит ровно ⑥а/⑥б · П2 «час наследника
+  снова впечатан» — ровно ⑨-бис · П3 «час снятия снова из записи» — ровно ⑥в.
 """
 import os
-import re
 import shutil
 import sqlite3
 import subprocess
@@ -42,41 +54,24 @@ RULE_MD = "md-to-sqlite-phased-cutover"
 RULE_PUSH = "no-push-without-owner"
 RULE_FREEZE = "gitlab-push-frozen"   # наследник: запрет отправки вернулся 2026-09-25
 
-# ⚡ ВЕРСИЯ ПРАВИЛА ДЛЯ ПЕСОЧНИЦЫ БЕРЁТСЯ ИЗ ИСПЫТУЕМОГО, А НЕ ВПЕЧАТЫВАЕТСЯ ЗДЕСЬ.
-# 🩸 Оплачено 2026-09-04 15:26 UTC. Здесь стояло `push_version=2` — ровно та версия,
-# что была впечатана в перечень испытуемого. Пока оба числа совпадали, приёмка давала
-# 9/9. Стои́ло поднять сверку в перечне до v4 (правило в базе давно v4) — и приёмка
-# упала до 6/9, объявив мою ВЕРНУЮ правку поломкой.
-# ⚖️ И хуже того, в обратную сторону: пока перечень отставал от свода, испытуемый на
-# ЖИВОЙ базе всегда отвечал «перечень устарел» (код 2), а приёмка ждала кода 1 и... тоже
-# зеленела — потому что в ЕЁ песочнице стояла старая версия. Оба конца были согласованы
-# друг с другом и оба разошлись с жизнью.
-# ⇒ КЛАСС: ДВА ВПЕЧАТАННЫХ ЧИСЛА, СВЕРЯЕМЫЕ ДРУГ С ДРУГОМ, ДАЮТ ЗЕЛЁНОЕ НАВСЕГДА —
-#   и перестают говорить о предмете вовсе. Число теперь ОДНО, и живёт в перечне.
-def _check_version_from_target() -> int:
-    """Прочитать «версия_сверки» правила о push прямо из перечня испытуемого."""
-    try:
-        text = open(CHECK, encoding="utf-8").read()
-        # берём блок записи про push и число из него: перечень — обычный литерал
-        chunk = text.split(f'"правило": "{RULE_PUSH}"', 1)
-        if len(chunk) > 1:
-            m = re.search(r'"версия_сверки":\s*(\d+)', chunk[1])
-            if m:
-                return int(m.group(1))
-    except OSError:
-        pass
-    # ⛔ Не молчим и не подставляем «разумное»: неизвестная версия — отказ мерить.
-    print("⛔ НЕ ПРОЧЛА «версия_сверки» из перечня испытуемого — это отказ мерить, "
-          "а не «возьму двойку». Подставленное число вернуло бы ту самую пару\n"
-          "   впечатанных чисел, ради которой эта функция и написана.")
-    sys.exit(2)
-
-
-CHECK_VERSION = _check_version_from_target()
+# ⚖️ НОМЕР ВЕРСИИ В ПЕСОЧНИЦЕ — ПРОСТО ДАННЫЕ (карточка #715). До неё здесь стояла функция,
+# читавшая «версия_сверки» записи о push из перечня испытуемого: проверка сравнивала номер
+# правила с этим числом, и два впечатанных числа, сверяемые друг с другом, давали зелёное
+# навсегда (оплачено 2026-09-04 15:26 UTC). Теперь испытуемый номер у этой записи не
+# сравнивает вовсе — снятие читается полем статуса либо пометкой о снятии в начале текста.
+# 4 — номер, на котором споткнулся контур .onto: тот же, что у эталона, а текст другой.
+PUSH_VERSION = 4
+TOMBSTONE_BODY = ("⛔ ОТОЗВАНО 2026-08-08 15:58 UTC · решил: owner\n"
+                  "Текст ниже оставлен как след прежнего решения, а НЕ как приказ.\n"
+                  "push только по слову владельца")
+PACK_BODY = "отправка — по слову владельца; владелец вправе снять умолчание"  # текст пакета, запрет жив
+STAND_REVOKED_AT = "2026-10-01 09:00 UTC"          # час снятия в базе СТЕНДА, не эталона
+STAND_HEIR_SOURCE = "чат стенда 2026-10-04 17:58 UTC"  # слово о наследнике в базе СТЕНДА
+DONOR_HOURS = ("2026-08-08 15:58:46", "2026-09-25 11:02:36")  # часы эталона в записи перечня
 cases, bad, differ = [], 0, 0
 
 
-def build_db(path, push_version=CHECK_VERSION, trace=True, frozen=None):
+def build_db(path, push_version=PUSH_VERSION, trace=True, frozen=None, push="tombstone"):
     """trace — есть ли у правила след в журнале решений этого контура.
 
     🪤 РАЗЛИЧЕНИЕ, ВВЕДЁННОЕ 18.08 ПРИ ЧИСТКЕ ПОСЕВА. «Правила нет» бывает ДВУХ родов:
@@ -84,24 +79,41 @@ def build_db(path, push_version=CHECK_VERSION, trace=True, frozen=None):
     НЕ БЫЛО ВОВСЕ (новая команда не наследует чужую историю перехода — сверять нечего).
     Различаются следом в журнале. Приёмка обязана держать оба рода, иначе она требует
     красного у любого свежего контура — ровно то, что мы тогда и чинили.
+
+    push — как правило о push записано в базе стенда (карточка #715):
+      tombstone .... снято пометкой о снятии в начале текста; поле статуса — по frozen
+      pack-active .. текст пакета, запрет ДЕЙСТВУЕТ (как у .onto); поле статуса — по frozen
+      field ........ снято ПОЛЕМ статуса (с часом и рукой), текст без пометки; поле есть всегда
+    frozen — правило-наследник (2026-09-25) и поле статуса у всех правил: 'active' либо
+    'revoked'; None — поля статуса нет (кроме push="field").
     """
+    with_field = frozen is not None or push == "field"
     con = sqlite3.connect(path)
     con.execute("CREATE TABLE rules (id INTEGER PRIMARY KEY, rule_key TEXT, body TEXT,"
-                " locked_by TEXT, version INTEGER)")
+                " locked_by TEXT, version INTEGER"
+                + (", status TEXT, revoked_at TEXT, revoked_by TEXT, updated_at TEXT,"
+                   " authorized TEXT, source_ref TEXT" if with_field else "") + ")")
     con.execute("CREATE TABLE audit_log (id INTEGER PRIMARY KEY, target TEXT)")
     con.execute("INSERT INTO rules (rule_key, body, locked_by, version) VALUES (?,?,?,?)",
                 (RULE_MD, "тело", "owner", 5))
     if push_version is not None:
+        body = {"tombstone": TOMBSTONE_BODY, "pack-active": PACK_BODY,
+                "field": "push только по слову владельца"}[push]
         con.execute("INSERT INTO rules (rule_key, body, locked_by, version) VALUES (?,?,?,?)",
-                    (RULE_PUSH, "надгробие: запрет снят", "owner", push_version))
+                    (RULE_PUSH, body, "owner", push_version))
+        if with_field:
+            revoked = push in ("tombstone", "field")
+            con.execute("UPDATE rules SET status=?, revoked_at=?, revoked_by=? WHERE rule_key=?",
+                        ("revoked" if revoked else "active",
+                         STAND_REVOKED_AT if revoked else None,
+                         "owner" if revoked else None, RULE_PUSH))
     if trace:
         con.execute("INSERT INTO audit_log (target) VALUES (?)", (RULE_PUSH,))
     if frozen is not None:
-        # правило-наследник запрета (2026-09-25) с полем статуса: 'active' либо 'revoked'
-        con.execute("ALTER TABLE rules ADD COLUMN status TEXT")
-        con.execute("INSERT INTO rules (rule_key, body, locked_by, version, status) "
-                    "VALUES (?,?,?,?,?)", (RULE_FREEZE, "запрет отправки в GitLab", "owner",
-                                           2, frozen))
+        con.execute("INSERT INTO rules (rule_key, body, locked_by, version, status, updated_at,"
+                    " authorized, source_ref) VALUES (?,?,?,?,?,?,?,?)",
+                    (RULE_FREEZE, "запрет отправки в GitLab", "owner", 2, frozen,
+                     "2026-10-04 18:00:00", "владелец стенда", STAND_HEIR_SOURCE))
     con.commit()
     con.close()
 
@@ -119,15 +131,30 @@ def build_src(root, unsaved_lines):
             f.write("\n".join(body) + "\n")
 
 
-def run(lines, push_version=CHECK_VERSION, trace=True, frozen=None):
+def run(lines, push_version=PUSH_VERSION, trace=True, frozen=None, push="tombstone", broken=None):
+    """broken — (что заменить, на что) в КОПИИ испытуемого на стенде; соседи испытуемого
+    (rule_status.py, mezo_paths.py) берутся из его каталога через PYTHONPATH."""
     tmp = str(mezo_stand.new("bite-presc-"))
     db = os.path.join(tmp, "c.db")
     root = os.path.join(tmp, "src")
-    build_db(db, push_version, trace, frozen)
+    build_db(db, push_version, trace, frozen, push)
     build_src(root, lines)
-    r = subprocess.run([sys.executable, CHECK, "--db", db, "--root", root, "--only", "no-push-without-owner"],
-                       capture_output=True, text=True, encoding="utf-8", errors="replace",
-                       env=mezo_stand.stand_env(tmp))  # карточка #613: env закреплён за стендом
+    target, env = CHECK, mezo_stand.stand_env(tmp)  # карточка #613: env закреплён за стендом
+    if broken is not None:
+        src = open(CHECK, encoding="utf-8").read()
+        old, new = broken
+        if src.count(old) != 1:
+            # Случай поломки проваливается со словами, а прогон идёт дальше: на прежней версии
+            # испытуемого якоря нет — итог обязан показать ВСЕ случаи, а не оборваться на первом.
+            mezo_stand.release(tmp)
+            return (f"⛔ НЕ ЗАПУСТИЛСЯ: строка-цель поломки найдена {src.count(old)} раз (нужна "
+                    f"одна) — испытуемое изменилось, поломку надо пересмотреть: {old[:80]!r}"), None
+        target = os.path.join(tmp, "check-retired-mechanism.py")
+        with open(target, "w", encoding="utf-8") as f:
+            f.write(src.replace(old, new))
+        env = dict(env, PYTHONPATH=os.path.dirname(os.path.abspath(CHECK)))
+    r = subprocess.run([sys.executable, target, "--db", db, "--root", root, "--only", "no-push-without-owner"],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
     mezo_stand.release(tmp)  # уборка отложена до исхода прогона
     return (r.stdout or "") + (r.stderr or ""), r.returncode
 
@@ -166,14 +193,29 @@ out, code = run(['print("⛔ push — только по живому слову 
 case("⑤ обычная отправка в той же форме — КРАСНОЕ (встречный к ④)", code == 1,
      f"код {code}", True)
 
-# ⑥ ПРАВИЛО ПЕРЕПИСАНО — «перечень устарел», источники не обвиняются
-# ⑥ версия в песочнице ВЫШЕ той, против которой сверялся перечень — на единицу,
-#    чтобы случай оставался про «правило переписали», а не про конкретное число
-out, code = run(['print("   ② лечит только слово владельца (push)")'],
-                push_version=CHECK_VERSION + 1)
-case("⑥ версия правила выросла — ПЕРЕЧЕНЬ УСТАРЕЛ (код 2), источник не назван виновным",
-     code == 2 and "ПЕРЕЧЕНЬ УСТАРЕЛ" in out and "unsaved.py:" not in out,
-     f"код {code}", True)
+# ⑥ (до карточки #715: «версия выросла — ПЕРЕЧЕНЬ УСТАРЕЛ») снят намеренно — см. шапку.
+# ⑥а 🔴 НАХОДКА .onto: тот же номер версии, что у эталона, а правило ДЕЙСТВУЕТ (текст пакета,
+#     поле статуса «active»). Снятия здесь не было — источники не судятся, строка верна.
+TEACH = ['print("   ② лечит только слово владельца (push) — роль не может")']
+out, code = run(TEACH, frozen="revoked", push="pack-active")
+case("⑥а тот же номер версии, правило действует по полю статуса — НЕПРИМЕНИМА, источник не судится",
+     code == 0 and "НЕПРИМЕНИМА" in out and "unsaved.py:" not in out,
+     f"код {code}: {out.strip()[:160]}", True)
+
+# ⑥б то же в базе БЕЗ поля статуса: текст без пометки о снятии — правило действует
+out, code = run(TEACH, push="pack-active")
+case("⑥б тот же номер, поля статуса нет, пометки о снятии нет — НЕПРИМЕНИМА",
+     code == 0 and "НЕПРИМЕНИМА" in out and "unsaved.py:" not in out,
+     f"код {code}: {out.strip()[:160]}", True)
+
+# ⑥в ВСТРЕЧНЫЙ к ⑥а: правило снято ПОЛЕМ статуса, номер далеко за прежней отметкой (v9),
+#     текст без пометки — судится (поле сильнее текста, номер не судья), и час снятия в
+#     красной строке — из базы стенда, а не впечатанный час эталона.
+out, code = run(TEACH, push_version=9, push="field")
+case("⑥в снято полем статуса при v9 — судится, источник назван, час снятия из базы контура",
+     code == 1 and "unsaved.py" in out and STAND_REVOKED_AT in out
+     and not any(h in out for h in DONOR_HOURS),
+     f"код {code}: {out.strip()[:200]}", True)
 
 # ⑦ ПРАВИЛО ИСЧЕЗЛО (след в журнале есть) — отказ мерить, а не «чисто» (встречный к ⑥)
 out, code = run(['# пусто'], push_version=None)
@@ -201,11 +243,44 @@ case("⑨ наследник действует — признак НЕ СУДИ
      code == 0 and "НЕ СУЖУ" in out and RULE_FREEZE in out and "unsaved.py:" not in out,
      f"код {code}: {out.strip()[:160]}", True)
 
+# ⑨-бис 🔴 НАХОДКА .onto (замечание 3): кто и когда завёл наследника — из строки правила в
+#     базе испытуемого контура, а не впечатанное слово владельца контура-автора.
+out, code = run(['print("⛔ push — только по живому слову владельца")'], frozen="active")
+case("⑨-бис час и источник наследника — из базы контура, часа эталона в выводе нет",
+     code == 0 and STAND_HEIR_SOURCE in out and not any(h in out for h in DONOR_HOURS),
+     f"код {code}: {out.strip()[:200]}", True)
+
 # ⑩ ВСТРЕЧНЫЙ к ⑨: наследник СНЯТ (поле статуса 'revoked') — признак снова судит.
 #    Без этой пары ⑨ зеленел бы и у признака, ослепшего на всё сразу.
 out, code = run(['print("⛔ push — только по живому слову владельца")'], frozen="revoked")
 case("⑩ наследник снят — признак снова судит, та же строка КРАСНАЯ (встречный к ⑨)",
      code == 1 and "unsaved.py" in out and "НЕ СУЖУ" not in out, f"код {code}", True)
+
+# ── НАРОЧНЫЕ ПОЛОМКИ карточки #715 — в копии испытуемого на стенде. Каждая обязана
+#    провалить ровно свой случай: тот же прогон, что у случая, ждёт ответа прежней версии.
+P1 = ('            if rule_status.rule_in_force(conn, item["правило"]):\n',
+      '            if False:  # ПОЛОМКА П1: снятие снова не спрашивает базу контура\n')
+out, code = run(TEACH, frozen="revoked", push="pack-active", broken=P1)
+out_b, code_b = run(TEACH, push="pack-active", broken=P1)
+case("П1 «снятие не спрашивает базу» красит ровно ⑥а и ⑥б: строка судится, источник назван",
+     code == 1 and "unsaved.py" in out and code_b == 1 and "unsaved.py" in out_b,
+     f"коды под поломкой: ⑥а {code} · ⑥б {code_b} (под верным кодом — 0 и 0)"
+     + (f"; {out.strip()[:160]}" if code is None else ""), True)
+
+P2 = ("({heir_origin(conn, heir)})", "(слово владельца 2026-09-25 11:02:36 UTC, чат PROTO)")
+out, code = run(['print("⛔ push — только по живому слову владельца")'], frozen="active",
+                broken=P2)
+case("П2 «час наследника снова впечатан» красит ровно ⑨-бис: в выводе час эталона",
+     code == 0 and "НЕ СУЖУ" in out and STAND_HEIR_SOURCE not in out
+     and DONOR_HOURS[1] in out,
+     f"код {code}: {out.strip()[:200]}", True)
+
+P3 = ("снято: {revoke_origin(conn, item['правило'])}", "снято: {item['снято']}")
+out, code = run(TEACH, push_version=9, push="field", broken=P3)
+case("П3 «час снятия снова из записи» красит ровно ⑥в: в красной строке час эталона",
+     code == 1 and "unsaved.py" in out and STAND_REVOKED_AT not in out
+     and DONOR_HOURS[0] in out,
+     f"код {code}: {out.strip()[:200]}", True)
 
 print("🔬 ПРИЁМКА: снятое ПРЕДПИСАНИЕ (второй вид предмета)")
 print(f"   испытуемый: {CHECK}")

@@ -1264,9 +1264,15 @@ def case_retired(st: Stand) -> list[tuple[str, bool, str]]:
         "# db_falcon: push нельзя без слова владельца\n"
         "# DE/DWH: push нельзя без слова владельца\n"
         "# только чтение: push нельзя без слова владельца\n", encoding="utf-8")
+    # Карточка #715 (находка .onto 1): запись о запрете push судится только там, где правило
+    # СНЯТО самим контуром — полем статуса. Прежде стенд держал правило v4 без снятия, и проверка
+    # судила его по номеру версии; теперь такое правило действует и запись к нему неприменима.
+    # Предмет этого случая — чужие имена в образце, а не снятие: стенд снимает правило явно.
     db = pack_db(st, "retired", roles_without_coordinator(),
-                 [("INSERT INTO rules (rule_key, body, locked_by, version) VALUES (?,?,?,?)",
-                   ("no-push-without-owner", "правило стенда", "coord", 4))])
+                 [("INSERT INTO rules (rule_key, body, locked_by, version, status, revoked_at, "
+                   "revoked_by, revoked_reason) VALUES (?,?,?,?,?,?,?,?)",
+                   ("no-push-without-owner", "⛔ ОТОЗВАНО — правило стенда", "coord", 4, "revoked",
+                    "2026-10-01 09:00:00", "owner", "стенд: запрет снят"))])
     rc, out = sut(st, "retired", ["--db", str(db), "--root", str(root), "--only", "no-push-without-owner"])
     reported = sorted(int(n) for n in re.findall(r"read-phoenix\.py:(\d+)", out))
     return [("а) чужие имена (de-live · db_falcon · DE/DWH) находку НЕ гасят: строки 1–3 названы, код 1",

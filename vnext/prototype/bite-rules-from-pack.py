@@ -81,6 +81,12 @@ UTC): ㊼/поломка — --show на «изменено с обеих сто
 --role COORD) · Щ (текст снятой пометки несёт слово «координатор» — «бывший координатор» пометку не
 снимает) · Э (сверка названного выключена) · Ю (прежняя слабая проверка слов отказа). Каждая красит
 ровно названные случаи.
+
+КАРТОЧКА #715 (находка контура .onto 2026-10-12 12:53 UTC, замечание 2): совет «снять у себя» у
+разряда «снято в пакете» велел переписать тело с «⛔ ОТОЗВАНО» в начале; поле status оставалось
+active, и сверка дальше показывала «снято в пакете». Случай ㊿г исполняет НАПЕЧАТАННУЮ команду
+настоящим set-rule.py (места «<…>» заполнены) и ждёт: поле статуса «revoked», ключа в списке нет.
+Поломка (#715) возвращает прежний совет — проваливается ровно ㊿г.
 """
 from __future__ import annotations
 
@@ -90,6 +96,7 @@ import io
 import json
 import os
 import re
+import shlex
 import sqlite3
 import subprocess
 import sys
@@ -508,6 +515,17 @@ def patch_names_hidden(src: str):
     return src.replace(old, new), src.count(old)
 
 
+def patch_retire_advice_body_file(src: str):
+    """(#715) совет «снять у себя» снова велит переписать тело с «⛔ ОТОЗВАНО», а не снять
+    полем (--revoke) — прежний текст до карточки #715. Красит ровно ㊿г."""
+    old = ("    return (f'python {SET_RULE_PY} --db {db_path} --key {key} --revoke '\n"
+           "            f'--reason \"{basis}\" --revoked-by \"<кто решил: owner · coord · роль>\" '\n")
+    new = ("    return (f'python {SET_RULE_PY} --db {db_path} --key {key} '  # ПОЛОМКА (#715)\n"
+           "            f'--body-file <файл: тело начни с «⛔ ОТОЗВАНО — …»> '\n"
+           "            f'--basis \"{basis}\" --authorized-by \"<кто разрешил>\" '\n")
+    return src.replace(old, new), src.count(old)
+
+
 def load_broken_mezo_paths(patch, name):
     """Общий модуль mezo_paths с нарочной поломкой — В ПАМЯТИ, на диск ничего не пишется (тот же
     приём, что у load_rfp). Берётся файл ИСПЫТУЕМОГО каталога — рядом с rules-from-pack.py."""
@@ -750,6 +768,43 @@ def rows_for_fixture(mod, circuit_db: Path, pack_dir: Path) -> tuple:
     counts = mod.summarize(rows, only)
     conn.close(); pconn.close()
     return rows, counts
+
+
+# Места «<…>» готовой команды «снять у себя» и чем их заполняет приёмка (карточка #715).
+RETIRE_FILL = {"<кто решил: owner · coord · роль>": "owner",
+               "<где сказано>": "приёмка карточки #715",
+               "<твоя роль>": "BITE715",
+               "<кто разрешил>": "owner"}
+
+
+def run_printed_retire(mod, circuit_db: Path, pack_dir: Path, key: str) -> tuple:
+    """Карточка #715: напечатать список фикстуры ИСПЫТУЕМЫМ print_listing, взять строку
+    «снять у себя:», заполнить места «<…>» и исполнить команду НАСТОЯЩИМ set-rule.py — так,
+    как её исполнит роль. → (код, поле статуса после, состояние ключа в новом списке, команда).
+    Строки нет — код None: случай читается как «не прошёл», а не роняет прогон."""
+    rows, only = rows_for_fixture(mod, circuit_db, pack_dir)
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        mod.print_listing(rows, only, None, circuit_db)
+    line = next((s for s in buf.getvalue().splitlines() if "снять у себя:" in s), None)
+    if line is None:
+        return None, None, "строки «снять у себя» нет", None
+    cmd = line.split("снять у себя:", 1)[1].strip()
+    for hole, value in RETIRE_FILL.items():
+        cmd = cmd.replace(hole, value)
+    # posix=False — пути Windows с обратной косой не портятся; кавычки снимаем сами
+    argv = [t[1:-1] if len(t) >= 2 and t[0] == t[-1] == '"' else t
+            for t in shlex.split(cmd, posix=False)]
+    argv[0] = sys.executable
+    cp = subprocess.run(argv, env=mod.subprocess_env(), capture_output=True, text=True,
+                        encoding="utf-8", errors="replace")
+    conn = sqlite3.connect(f"file:{circuit_db.as_posix()}?mode=ro", uri=True)
+    status = (conn.execute("SELECT status FROM rules WHERE rule_key=?", (key,)).fetchone()
+              or (None,))[0]
+    conn.close()
+    rows_after, _ = rows_for_fixture(mod, circuit_db, pack_dir)
+    state = next((r["state"] for r in rows_after if r["rule_key"] == key), "нет в списке")
+    return cp.returncode, status, state, cmd
 
 
 # ── ФИКСТУРА: «СНЯТО В ПАКЕТЕ» (карточка #614 ②, G3/PROTO) ─────────────────────────────
@@ -2373,6 +2428,18 @@ def main() -> int:
               state_after_move3 == "removed",
               f"состояние после смены текста пакета: «{state_after_move3}» (ждём removed)")
 
+    # ── ㊿г КАРТОЧКА #715 (находка .onto 2026-10-12, замечание 2): готовая команда «снять у
+    # себя», ИСПОЛНЕННАЯ как напечатана, доводит до снятия — поле статуса «revoked», а ключа
+    # в следующем списке нет (снят и у контура, и в пакете — случай №51). Прежний совет (тело
+    # с «⛔ ОТОЗВАНО») поле не трогал: сверка у соседа дальше показывала «снято в пакете».
+    db715, pack715, key715 = build_removed_fixture(root / "removed-715-revoke", mod.text_sha)
+    rc715, status715, state715, cmd715 = run_printed_retire(mod, db715, pack715, key715)
+    ok &= case("㊿г готовая команда «снять у себя», исполненная как напечатана, снимает правило: "
+              "поле статуса «revoked», ключа в списке больше нет",
+              rc715 == 0 and status715 == "revoked" and state715 == "нет в списке",
+              f"код set-rule.py {rc715}; поле статуса {status715!r}; состояние «{state715}»; "
+              f"команда: {cmd715!r}")
+
     # ── ПОЛОМКИ (М/Н/О/П) карточки #614 — по одной на новую ветку. Собраны ЗДЕСЬ, ПОСЛЕ
     # ВСЕХ новых позитивных случаев (㊾а-в, ㊿а-в): поломки бьют по коду, которого на
     # версии ДО правки нет вовсе — прогон на ней обязан сперва честно провалить каждый
@@ -2459,6 +2526,15 @@ def main() -> int:
               state_p == "removed",
               f"состояние под поломкой после --skip --apply: «{state_p}» (под верным "
               f"кодом — «skipped»)")
+
+    mod_715 = load_rfp(patch=patch_retire_advice_body_file, name="rfp_bite_retire_body_file")
+    db715b, pack715b, key715b = build_removed_fixture(root / "removed-715-break", mod_715.text_sha)
+    rc715b, status715b, state715b, _ = run_printed_retire(mod_715, db715b, pack715b, key715b)
+    ok &= case("㊿ ПОЛОМКА (#715) «совет снова переписывает тело» красит ровно ㊿г: правило "
+              "не снято, ключ по-прежнему «снято в пакете»",
+              status715b != "revoked" and state715b == "removed",
+              f"код set-rule.py {rc715b}; поле статуса {status715b!r}; состояние «{state715b}» "
+              f"(под верным кодом — «revoked» и «нет в списке»)")
 
     # ═══ №51 26.09, НАХОДКА PROTO НА ЖИВОМ КОНТУРЕ: правило, снятое С ОБЕИХ сторон (у контура
     # status='revoked', у пакета removed_at), в список не идёт. Раньше шло как «снято у вас»,

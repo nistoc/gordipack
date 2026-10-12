@@ -28,7 +28,6 @@
 file	name	kind	class	text	reason
 scripts/backlog.py	COORD	shown	printed	f"и о нём стоит сказать @COORD.", file=sys.stderr)	печатаемый текст «кому сообщить»: вне счёта, вариант «в» не выбран (e3-forks.md, слово владельца В1 б 2026-10-05 10:53 UTC)
 scripts/check-errors.py	COORD	shown	printed	help="Пометить сообщения как resolved (COORD подтвердил фикс)")	печатаемый текст, не подсказка-команда: вне счёта по слову владельца В1 б (2026-10-05 10:53 UTC)
-scripts/check-retired-mechanism.py	PROTO	code	provenance	"перекрыто_когда": "слово владельца 2026-09-25 11:02:36 UTC, чат PROTO",	строка происхождения: «слово владельца … чат PROTO»
 scripts/dashboard.py	atlas	code	printed	<title>Мезосинк — состояние контура Atlas</title>	заголовок HTML «контур Atlas» — только печать
 scripts/dashboard.py	atlas	code	printed	<h1>Состояние контура Atlas</h1>	заголовок HTML «контур Atlas» — только печать
 scripts/export-channels.py	COORD	shown	printed	print(f"Дальше: COORD коммитит каталог {out_dir.name}/ в том репозитории, где он лежит; "	печатаемый текст «кому сообщить»: вне счёта, вариант «в» не выбран (e3-forks.md, слово владельца В1 б 2026-10-05 10:53 UTC)
