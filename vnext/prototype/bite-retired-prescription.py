@@ -152,7 +152,9 @@ def run(lines, push_version=PUSH_VERSION, trace=True, frozen=None, push="tombsto
         target = os.path.join(tmp, "check-retired-mechanism.py")
         with open(target, "w", encoding="utf-8") as f:
             f.write(src.replace(old, new))
-        env = dict(env, PYTHONPATH=os.path.dirname(os.path.abspath(CHECK)))
+        # среда — снова прямо от стенда: проверка check-acceptance-env.py видит stand_env( в
+        # присваивании, а пересборку dict(env, …) не прослеживает (нашёл общий прогон эталона 12.10)
+        env = mezo_stand.stand_env(tmp, PYTHONPATH=os.path.dirname(os.path.abspath(CHECK)))
     r = subprocess.run([sys.executable, target, "--db", db, "--root", root, "--only", "no-push-without-owner"],
                        capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
     mezo_stand.release(tmp)  # уборка отложена до исхода прогона
