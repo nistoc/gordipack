@@ -12,6 +12,12 @@ bite-stand-cleanup.py — приёмка помощника mezo_stand.py и у�
 «освобождено» считает только удалённое, соединение каталогов наружу не проходится
 ни удалением, ни подсчётом размера. У каждого — своя нарочная поломка в копии
 утилиты, и случай обязан на ней провалиться. (17)–(19) — по замечаниям приёмки OPSSRE.
+
+Этап Э6 (карточка #680, план COORD e6/stands-coord.md): список начал имён и размер стенда
+переехали в mezo_stand.py (решение В2) — у автоуборки по сроку и у утилиты одно правило.
+Поэтому нарочная поломка ищет своё место в ОБОИХ файлах (ровно одно на двоих), копия утилиты
+едет в свой каталог вместе с mezo_stand.py, и утилита грузится вместе со своим соседом.
+(21)–(23) — правка С2: возраст не ниже нуля, показ называет срок автоуборки, размер — os.lstat.
 """
 import os
 import re
@@ -71,30 +77,47 @@ def run_probe(body, env_extra=None, helper=None):
     return stand, out, p.returncode
 
 
-def janitor(sandbox, tools, *extra, script=None):
+def janitor(sandbox, tools, *extra, script=None, env=None):
     p = subprocess.run([sys.executable, str(script or JANITOR),
                         "--temp-dir", str(sandbox), "--tools-dir", str(tools), *extra],
                        capture_output=True, text=True, encoding="utf-8", errors="replace",
-                       env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+                       env=dict(env if env is not None else os.environ, PYTHONIOENCODING="utf-8"))
     return (p.stdout or "") + (p.stderr or ""), p.returncode
 
 
 def load(path, name):
-    spec = importlib.util.spec_from_file_location(name, path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    """Загрузить утилиту ВМЕСТЕ с mezo_stand.py из её каталога: список начал имён она берёт оттуда,
+    и нарочная поломка помощника обязана до неё дойти. Без этого import взял бы уже загруженный
+    помощник рядом с приёмкой — и поломка молча не действовала бы."""
+    folder = str(Path(path).parent)
+    saved = sys.modules.pop("mezo_stand", None)
+    sys.path.insert(0, folder)
+    try:
+        spec = importlib.util.spec_from_file_location(name, path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    finally:
+        sys.path.remove(folder)
+        sys.modules.pop("mezo_stand", None)
+        if saved is not None:
+            sys.modules["mezo_stand"] = saved
     return mod
 
 
 def broken_copy(holder, needle, replacement):
-    """Копия утилиты с одной нарочной поломкой. Места нет — громкий отказ, а не тихий пропуск."""
-    src = JANITOR.read_text(encoding="utf-8")
-    if src.count(needle) != 1:
-        sys.exit(f"НЕ ЗАПУСТИЛАСЬ: место для нарочной поломки найдено {src.count(needle)} раз "
-                 f"(нужно ровно 1) — утилита менялась, правь приёмку:\n    {needle!r}")
-    path = holder / f"janitor-broken-{abs(hash(needle)) % 10**6}.py"
-    path.write_text(src.replace(needle, replacement, 1), encoding="utf-8")
-    return path
+    """Копия утилиты с одной нарочной поломкой — в ней самой или в её mezo_stand.py (список начал имён
+    и размер стенда живут там с этапа Э6). Оба файла едут в свой каталог: утилита берёт соседа оттуда.
+    Места нет или их больше одного на оба файла — громкий отказ, а не тихий пропуск."""
+    sources = {name: (HERE / name).read_text(encoding="utf-8") for name in (JANITOR.name, "mezo_stand.py")}
+    found = sum(text.count(needle) for text in sources.values())
+    if found != 1:
+        sys.exit(f"НЕ ЗАПУСТИЛАСЬ: место для нарочной поломки найдено {found} раз в {JANITOR.name} "
+                 f"и mezo_stand.py вместе (нужно ровно 1) — утилита менялась, правь приёмку:\n    {needle!r}")
+    folder = holder / f"broken-{abs(hash(needle)) % 10**6}"
+    folder.mkdir(exist_ok=True)
+    for name, text in sources.items():
+        (folder / name).write_text(text.replace(needle, replacement, 1), encoding="utf-8")
+    return folder / JANITOR.name
 
 
 def old_dirs(root, *names, age=LONG_AGO):
@@ -246,6 +269,8 @@ def main():
         own_synth = synth / "vnext-tools"
         own_synth.mkdir(parents=True)
         shutil.copy2(JANITOR, own_synth / "janitor-stands.py")
+        # список начал имён утилита берёт у mezo_stand.py — он лежит рядом, как в живом vnext-tools
+        shutil.copy2(HERE / "mezo_stand.py", own_synth / "mezo_stand.py")
         # сосед по СВОЕМУ каталогу (как остальные ~270 bite-*.py рядом с janitor-stands.py
         # в живом vnext-tools) — чтобы «из своего» тоже было НЕ ноль, а не только «из всех»
         (own_synth / "bite-fake-check.py").write_text(
@@ -286,7 +311,7 @@ def main():
 
 
 def new_cases():
-    """(12)–(20): правка карточки #657. Каждый случай гоняется на целой утилите и на копии
+    """(12)–(20): правка карточки #657; (21)–(23) — правка С2 этапа Э6. Каждый случай гоняется на целой утилите и на копии
     с СВОЕЙ нарочной поломкой; на поломке он обязан провалиться, иначе случай ничего не доказывает.
 
     ⚠️ Все начала имён в строках-примерах этого файла — с корнем «jprobe-». Уборщик читает
@@ -480,10 +505,87 @@ def new_cases():
                 return "освободит 0.00 ГБ" in out, out
             ok, out = c20(JANITOR)
             bad, _ = c20(broken_copy(
-                work, "        dirs[:] = [x for x in dirs if not _is_link(os.path.join(root, x))]\n", ""))
+                work, "        dirs[:] = [x for x in dirs if not _is_link_path(os.path.join(top, x))]\n", ""))
             line = next((s.strip() for s in out.splitlines() if "освободит" in s), "строки нет")
             case("(20) размер стенда без файлов за соединением каталогов: стенд 1 КБ, снаружи 30 МБ — "
                  "показ «освободит 0.00 ГБ»; поломка «подсчёт проходит соединение» проваливает случай",
+                 ok and not bad,
+                 f"на целой: {line} · на поломке "
+                 f"{'провалился, как должен' if not bad else 'ПРОШЁЛ — приёмка слепа'}")
+
+        # (21) дата изменения из будущего — возраст ноль, а не «-1.0 ч» (С2 плана Э6). Смотрится и
+        #      строка «Самому молодому», и перечень по --all: в перечень идёт возраст каждого каталога
+        def c21(script):
+            sb = old_dirs(work / f"sb21-{abs(hash(str(script))) % 10**6}", "jprobe-future-aaa", age=-3600)
+            out_young, _ = janitor(sb, tools, "--prefix", "jprobe-future-", script=script)
+            out_all, _ = janitor(sb, tools, "--prefix", "jprobe-future-", "--all", script=script)
+            listed = next((s for s in out_all.splitlines() if s.strip().endswith("jprobe-future-aaa")), "")
+            ok = ("Самому молодому 0.0 ч" in out_young
+                  and re.search(r"-\d+\.\d ч", out_young + out_all) is None
+                  and re.search(r"\b0\.0 ч", listed) is not None)
+            return ok, (out_young, listed)
+        ok, (out_young, listed) = c21(JANITOR)
+        bad, _ = c21(broken_copy(work, "            age = max(0.0, now - d.stat().st_mtime)   "
+                                       "# дата из будущего — не «-0.0 ч», а ноль\n",
+                                 "            age = now - d.stat().st_mtime\n"))
+        young_line = next((s.strip() for s in out_young.splitlines() if "Самому молодому" in s), "строки нет")
+        case("(21) каталог с датой из будущего: возраст 0.0 ч, а не отрицательный — в строке «Самому "
+             "молодому» и в перечне --all; поломка «возраст без нижней границы» проваливает случай",
+             ok and not bad,
+             f"на целой: {young_line} · перечень: {listed.strip() or 'строки нет'} · на поломке "
+             f"{'провалился, как должен' if not bad else 'ПРОШЁЛ — приёмка слепа'}")
+
+        # (22) показ называет срок автоуборки mezo_stand.py — из той же переменной, что и сама уборка:
+        #      без переменной 48 ч, MEZO_STAND_MAX_AGE_H=6 — 6 ч, =0 — «выключена»
+        def c22(script):
+            sb = old_dirs(work / f"sb22-{abs(hash(str(script))) % 10**6}", "jprobe-auto-aaa")
+            base = {k: v for k, v in os.environ.items() if k != "MEZO_STAND_MAX_AGE_H"}
+            lines = []
+            for value in (None, "6", "0"):
+                env = dict(base) if value is None else dict(base, MEZO_STAND_MAX_AGE_H=value)
+                out, _ = janitor(sb, tools, "--prefix", "jprobe-auto-", script=script, env=env)
+                lines.append(next((s.strip() for s in out.splitlines() if "автоуборка" in s), "строки нет"))
+            ok = ("старше 48 ч" in lines[0] and "Корзину" in lines[0] and "старше 6 ч" in lines[1]
+                  and "выключена" in lines[2])
+            return ok, lines
+        ok, lines = c22(JANITOR)
+        bad, _ = c22(broken_copy(work, "    auto = mezo_stand.max_age_hours()\n", "    auto = 48.0\n"))
+        case("(22) показ называет срок автоуборки: без переменной 48 ч, MEZO_STAND_MAX_AGE_H=6 — 6 ч, "
+             "=0 — выключена; поломка «срок впечатан» проваливает случай",
+             ok and not bad,
+             f"на целой: {' | '.join(lines)} · на поломке "
+             f"{'провалился, как должен' if not bad else 'ПРОШЁЛ — приёмка слепа'}")
+
+        # (23) размер — os.lstat: ссылка на файл 30 МБ снаружи весит как ссылка, а не как файл
+        #      (замечание OPSSRE 10.10, перенесено в Э6). Ссылку на файл Windows без прав
+        #      разработчика не даёт — тогда случай не проверяется и это сказано
+        probe_dir = work / "symlink-probe"
+        probe_dir.mkdir()
+        try:
+            os.symlink(JANITOR, probe_dir / "l")
+            can_link = True
+        except (OSError, NotImplementedError):
+            can_link = False
+        if not can_link:
+            print("⚪ (23) не проверено: ссылку на файл эта учётная запись создать не может "
+                  "(Windows без прав разработчика) — разницы os.lstat и getsize здесь не поставить")
+        else:
+            def c23(script):
+                tag = abs(hash(str(script))) % 10**6
+                sb = old_dirs(work / f"sb23-{tag}", "jprobe-flink-aaa")
+                big = work / f"sb23-{tag}-outside.bin"
+                big.write_bytes(b"x" * (30 * 1024 * 1024))
+                os.symlink(big, sb / "jprobe-flink-aaa" / "big.lnk")
+                when = time.time() - LONG_AGO
+                os.utime(sb / "jprobe-flink-aaa", (when, when))
+                out, _ = janitor(sb, tools, "--prefix", "jprobe-flink-", script=script)
+                return "освободит 0.00 ГБ" in out, out
+            ok, out = c23(JANITOR)
+            bad, _ = c23(broken_copy(work, "                total += os.lstat(os.path.join(top, name)).st_size\n",
+                                     "                total += os.path.getsize(os.path.join(top, name))\n"))
+            line = next((s.strip() for s in out.splitlines() if "освободит" in s), "строки нет")
+            case("(23) размер стенда — os.lstat: ссылка на файл 30 МБ снаружи не входит в «освободит»; "
+                 "поломка «размер по getsize» проваливает случай",
                  ok and not bad,
                  f"на целой: {line} · на поломке "
                  f"{'провалился, как должен' if not bad else 'ПРОШЁЛ — приёмка слепа'}")

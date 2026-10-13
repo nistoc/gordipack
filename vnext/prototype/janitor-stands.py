@@ -9,6 +9,13 @@ janitor-stands.py — убрать старые временные рабочи�
 ПО УМОЛЧАНИЮ НИЧЕГО НЕ УДАЛЯЕТ — только показывает. Удаление включается указанием --apply.
 ⚠️ Удаление — НАВСЕГДА, мимо Корзины (shutil.rmtree): десятки гигабайт копий базы
 Корзина не вместила бы. Поэтому --apply запускает рука человека, а не роль.
+С этапа Э6 (карточка #680) стенды старше срока (MEZO_STAND_MAX_AGE_H, по умолчанию 48 ч) переносит
+в Корзину сам mezo_stand.py — первый за час верхний прогон любой проверки. Эта утилита остаётся для
+того, что моложе срока, и для уборки мимо Корзины рукой человека; показ называет срок автоуборки.
+
+СПИСОК НАЧАЛ ИМЁН И РАЗМЕР СТЕНДА — ИЗ mezo_stand.py (решение В2 плана Э6, записка #5832): у
+автоуборки и у этой утилиты одно правило, какой каталог наш и сколько он весит. Утилита поэтому
+работает только рядом со своим mezo_stand.py — как и лежит в vnext-tools и в пакете.
 
 ⚠️ ПОРОГ ЗАДАЁТСЯ В ЧАСАХ, А НЕ В ДНЯХ, И ЭТО НЕ МЕЛОЧЬ. Замер 24.08.2026: самому старому
 каталогу было 6 дней, поэтому порог «старше 7 дней» удалил бы РОВНО НОЛЬ, отчитавшись
@@ -41,33 +48,23 @@ janitor-stands.py — убрать старые временные рабочи�
     python janitor-stands.py --all --apply         # удалить всё, включая сегодняшнее
 """
 import argparse
-import io
 import os
-import re
 import shutil
 import stat
 import sys
 import tempfile
 import time
-import tokenize
 from pathlib import Path
 
+import mezo_stand
+from mezo_stand import (MIN_PREFIX_LEN, PREFIX_RE, RESERVED_NAMES,  # noqa: F401 — прежние имена утилиты
+                        code_without_comments, prefixes_from_sources, split_short)
+
 TOOLS_DIR = Path(__file__).resolve().parent
-# Два способа завести каталог — tempfile.mkdtemp с указанием prefix и mezo_stand.new.
-# Строка в кавычках берётся целиком; у f-строки — начало до первой подстановки:
-# prefix=f"bite-birth-{x}-" даёт «bite-birth-». Так заводят каталоги восемь мест в семи
-# файлах контура, и прежняя редакция их не видела (замер PROTO 2026-10-10 08:58 UTC).
-PREFIX_RE = re.compile(
-    r'(?:mkdtemp\s*\(\s*prefix\s*=|mezo_stand\.new\s*\(\s*)'
-    r'(?:[fF]["\']([^"\'{]+)|["\']([^"\']+)["\'])')
-# Короче — подходит к чужим каталогам (начало «g» снесло бы gordi и всё на «g»)
-MIN_PREFIX_LEN = 4
-# Имена каталогов в корне временной папки, которые утилита не берёт ни при каком начале
-RESERVED_NAMES = {"gordi"}
 
 
 def tool_dirs() -> list[Path]:
-    """Все каталоги контура, где живут инструменты, — ПО ПРИЗНАКУ, а не одним путём.
+    """Все каталоги контура, где живут инструменты, — ПО ПРИЗНАКУ, а не одним путём (поиск — mezo_stand.tool_dirs).
 
     🩸 Первая редакция брала ОДИН каталог (свой) и знала 72 начала имён. Каталогов
     оказалось два: инструменты роли и инструменты согласования, и во втором лежали
@@ -78,68 +75,11 @@ def tool_dirs() -> list[Path]:
     «убрано», умолчав, что смотрела в половину мест. Ровно то, вместо чего строятся
     механизмы.
     """
-    own = TOOLS_DIR
-    dirs = [own]
-    root = own.parent
-    for candidate in (root / ".mezosync" / "scripts", root.parent / ".mezosync" / "scripts",
-                      own.parent / "scripts"):
-        if candidate.is_dir() and candidate.resolve() != own.resolve():
-            dirs.append(candidate)
-    # + инструменты соседних репозиториев контура, если контур так разложен
-    try:
-        for d in sorted(root.iterdir()):
-            sub = d / ".mezosync" / "scripts"
-            if sub.is_dir() and all(sub.resolve() != m.resolve() for m in dirs):
-                dirs.append(sub)
-    except OSError:
-        pass
-    return dirs
+    return mezo_stand.tool_dirs(TOOLS_DIR)
 
 
 # прежнее имя — переходный синоним (слово владельца 07.09: имена кода по-английски при касании)
 каталоги_инструментов = tool_dirs
-
-
-def code_without_comments(text: str) -> str:
-    """Исходник без комментариев. Разбор языком: «#» внутри строки — не комментарий.
-
-    Файл, который язык не разбирает, — откат к построчному признаку (строка, начатая «#»):
-    хвостовой комментарий у такого файла останется, и это названо, а не скрыто.
-    """
-    try:
-        comments = [t.start for t in tokenize.generate_tokens(io.StringIO(text).readline)
-                    if t.type == tokenize.COMMENT]
-    except (tokenize.TokenError, SyntaxError, IndentationError, ValueError):
-        return "\n".join(line for line in text.splitlines()
-                         if not line.lstrip().startswith("#"))
-    lines = text.splitlines(keepends=True)
-    for row, col in comments:
-        line = lines[row - 1]
-        ending = line[len(line.rstrip("\r\n")):]
-        lines[row - 1] = line[:col] + ending
-    return "".join(lines)
-
-
-def prefixes_from_sources(tools_dirs) -> tuple[set[str], int]:
-    """Собрать начала имён из исходников проверок. Возвращает (начала, сколько файлов прочитано)."""
-    if isinstance(tools_dirs, Path):
-        tools_dirs = [tools_dirs]
-    found, read = set(), 0
-    for folder in tools_dirs:
-        for f in sorted(Path(folder).glob("*.py")):
-            try:
-                text = f.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                continue
-            read += 1
-            found.update(a or b for a, b in PREFIX_RE.findall(code_without_comments(text)))
-    return found, read
-
-
-def split_short(prefixes) -> tuple[set[str], set[str]]:
-    """(годные, короткие): короткое начало подходит к чужим каталогам — его не берём."""
-    good = {p for p in prefixes if len(p) >= MIN_PREFIX_LEN}
-    return good, set(prefixes) - good
 
 
 def _force_writable(func, path, _exc):
@@ -148,23 +88,8 @@ def _force_writable(func, path, _exc):
     func(path)
 
 
-def _is_link(path: str) -> bool:
-    """Ссылка или соединение каталогов (junction): для os.path.islink соединение — не ссылка."""
-    return os.path.islink(path) or (hasattr(os.path, "isjunction") and os.path.isjunction(path))
-
-
-def size_of(p: Path) -> int:
-    total = 0
-    for root, dirs, files in os.walk(p, onerror=lambda _e: None):
-        # за соединение не ходим: файлы за ним лежат вне стенда, rmtree их не удаляет,
-        # а os.walk на Windows соединение проходит — размер вырос бы на чужое
-        dirs[:] = [x for x in dirs if not _is_link(os.path.join(root, x))]
-        for name in files:
-            try:
-                total += os.path.getsize(os.path.join(root, name))
-            except OSError:
-                pass
-    return total
+# Размер — тем же счётом, что у автоуборки: os.lstat, за соединения каталогов не ходит
+size_of = mezo_stand.stand_size
 
 
 def main() -> int:
@@ -219,7 +144,7 @@ def main() -> int:
             reserved.append(d)
             continue
         try:
-            age = now - d.stat().st_mtime
+            age = max(0.0, now - d.stat().st_mtime)   # дата из будущего — не «-0.0 ч», а ноль
         except OSError:
             continue
         found.append(d)
@@ -242,6 +167,11 @@ def main() -> int:
         print(f"  НЕ взяты (короче {MIN_PREFIX_LEN} знаков, подошли бы к чужим каталогам): "
               + " · ".join(sorted(too_short)))
     print(f"  порог .............. {threshold}")
+    auto = mezo_stand.max_age_hours()
+    print("  автоуборка ......... " + (
+        f"старше {auto:g} ч переносит в Корзину сам mezo_stand.py, не чаще раза в час "
+        f"({mezo_stand.MAX_AGE_ENV})" if auto is not None else
+        f"выключена ({mezo_stand.MAX_AGE_ENV}={os.environ.get(mezo_stand.MAX_AGE_ENV, '')!r})"))
     print("=" * 78)
     for d in reserved:
         print(f"🔒 не трогаю {d.name}: общий корень стендов, утилита его не берёт ни при каком начале")
@@ -256,10 +186,10 @@ def main() -> int:
           + (f"{len(aged)} ({gb:.2f} ГБ)" if aged else "НОЛЬ"))
 
     if not aged:
-        youngest = min(now - d.stat().st_mtime for d in found) / 3600
+        youngest = max(0.0, min(now - d.stat().st_mtime for d in found)) / 3600
         print(f"⚠️ Ни один каталог не старше порога. Самому молодому {youngest:.1f} ч,")
         print("   самому старому " +
-              f"{max(now - d.stat().st_mtime for d in found) / 3600:.1f} ч. "
+              f"{max(0.0, max(now - d.stat().st_mtime for d in found)) / 3600:.1f} ч. "
               "Понизьте порог или укажите --all.")
         return 0
 

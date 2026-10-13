@@ -6,6 +6,10 @@ bite-stand-keep-last.py — приёмка: mezo_stand.py хранит при п
 доделка по возврату PROTO 03.10 01:38 UTC, записка #5452 — случаи ③б ⑤б ⑩б ⑬–㉖; по второму возврату
 02:39 UTC, записка #5459 — ⑤в ⑮б ⑲б ㉗–㉙ и вложенные вызовы; по семи мелочам третьей приёмки 03:56 UTC —
 ⑮в ㉚–㉟, а ① теперь ждёт счёт убранных В строке «СОХРАНЕНЫ»).
+Срок хранения — ㊱–㊾ (этап Э6, карточка #680, план COORD e6/stands-coord.md С3; слово владельца
+2026-10-12 17:18:27 UTC «2» — в Корзину, автоматически, не чаще раза в час; условия OPSSRE У1–У6,
+записка #5832). Корзину в песочнице заменяет её каталог bin (MEZO_STAND_TEST_BIN): живая Корзина
+и живая временная папка приёмкой не трогаются.
 
 Проверяет ЗАПУСКОМ: поднимает подставные скрипты, которые заводят стенды помощником и кончаются
 как велено, и смотрит, что осталось на диске. Стенды подставных скриптов ложатся в песочницу
@@ -44,6 +48,13 @@ SAID_BUSY = "занято, не тронуто:"
 SAID_ANY_PRUNE = "этого вызова убрано"
 SAID_OWN = "убрано временных каталогов:"
 SAID_NESTED = "лежат внутри стенда вызывающего прогона"
+SAID_SWEEP = "→ в Корзину (проверочная, вместо Корзины):"
+SAID_SWEEP_ANY = "→ в Корзину"
+SAID_SWEEP_BUSY = "занятых не тронуто:"
+SAID_SWEEP_ROOM = "Корзина мала, не тронуто:"
+SAID_SWEEP_REST = "остатков прежней уборки:"
+SWEEP_STAMP = ".mezo_stand_sweep"
+HOUR = 3600
 
 _EARLY_MARKER = ("    _prefixes.add(prefix)\n"
                  "    _offer_home(p)\n"
@@ -125,6 +136,28 @@ BREAKS = {
                  "    p = Path(tempfile.mkdtemp(prefix=prefix))")],
     "home-ignores-temp": [("        return            # вызывающий нарочно дал другую временную папку — его слово главнее",
                            "        pass")],
+    # ── срок хранения (этап Э6) ──
+    "sweep-age-ignored": [("        if now - changed <= limit_s:\n            continue\n", ""),
+                          ("        if now - kept_at > limit_s:", "        if True:")],
+    "sweep-nested": [("    if _home is not None or _swept:", "    if _swept:")],
+    "sweep-no-stamp": [("    if age is not None and 0 <= age < SWEEP_EVERY_S:\n        return False\n", "")],
+    "sweep-any-prefix": [("        unmarked = [p for p in unmarked if p.name.startswith(tuple(known))]\n", "")],
+    "sweep-rest-any-prefix": [("        leftovers = [(p, base) for p, base in leftovers if base.startswith(tuple(known))]\n",
+                               "")],
+    "sweep-links": [("            if _is_link(entry) or not entry.is_dir(follow_symlinks=False):\n"
+                     "                continue\n            changed =",
+                     "            if not entry.is_dir(follow_symlinks=False):\n"
+                     "                continue\n            changed =")],
+    "sweep-no-stand-check": [('        if fields is None or fields.get("stand") != _real(path):',
+                              "        if fields is None:")],
+    "sweep-bad-at-ts": [("        except ValueError:\n            continue\n        if now - kept_at",
+                         "        except ValueError:\n            kept_at = 0.0\n        if now - kept_at")],
+    "sweep-no-room-check": [("        if sizes[p] <= room:", "        if True:")],
+    "sweep-keep-env-spared": [("        if now - kept_at > limit_s:",
+                               '        if now - kept_at > limit_s and fields.get("kind") != "keep_env":')],
+    "sweep-var-ignored": [('    raw = os.environ.get(MAX_AGE_ENV, "").strip()', '    raw = ""')],
+    "sweep-zero-on": [("    return hours if hours > 0 and math.isfinite(hours) else None",
+                       "    return hours if math.isfinite(hours) else None")],
 }
 # Какие случаи ОБЯЗАНЫ провалиться при каждой поломке — записано ДО прогона.
 BREAK_FAILS = {
@@ -150,7 +183,7 @@ BREAK_FAILS = {
     "marker-at-new-undeclared": ["⑲", "⑲б"],
     "no-stand-check": ["㉒"],
     "links-followed": ["㉓"],
-    "no-rename-probe": ["㉑", "㉞"],
+    "no-rename-probe": ["㉑", "㉞", "㊶"],
     "release-no-prefix": ["㉔"],
     "zero-line": ["③", "④", "㉓"],
     "prune-own-line": ["①"],
@@ -161,10 +194,25 @@ BREAK_FAILS = {
     # ㉚ дописан ПОСЛЕ прогона 03.10 14:21 UTC: прогноз не учёл, что ㉚ требует первый стенд внутри дома
     "no-home": ["㉗", "㉙", "㉚"],
     "home-ignores-temp": ["㉘", "㉝"],
+    # срок хранения: ④ — каталог без метки лежит до первого прогона, и срок без сверки снял бы его;
+    # ㊺ — молодой каталог верхнего уровня уносит вложенный старый
+    "sweep-age-ignored": ["④", "㊱", "㊲", "㊺", "㊼"],
+    "sweep-nested": ["㊹"],
+    "sweep-no-stamp": ["㊽"],
+    "sweep-any-prefix": ["㊲"],
+    "sweep-rest-any-prefix": ["㊷"],
+    "sweep-links": ["㊳"],
+    "sweep-no-stand-check": ["㊴"],
+    "sweep-bad-at-ts": ["㊵"],
+    "sweep-no-room-check": ["㊸"],
+    "sweep-keep-env-spared": ["㊻"],
+    "sweep-var-ignored": ["㊼", "㊾"],
+    "sweep-zero-on": ["㊾"],
 }
 CASE_IDS = ["①", "②", "③", "③б", "④", "⑤", "⑤б", "⑤в", "⑥", "⑦", "⑧", "⑨", "⑩", "⑩б", "⑪", "⑫",
             "⑬", "⑭", "⑮", "⑮б", "⑮в", "⑯", "⑰", "⑱", "⑲", "⑲б", "⑳", "㉑", "㉒", "㉓", "㉔", "㉕", "㉖",
-            "㉗", "㉘", "㉙", "㉚", "㉛", "㉜", "㉝", "㉞", "㉟"]
+            "㉗", "㉘", "㉙", "㉚", "㉛", "㉜", "㉝", "㉞", "㉟",
+            "㊱", "㊲", "㊳", "㊴", "㊵", "㊶", "㊷", "㊸", "㊹", "㊺", "㊻", "㊼", "㊽", "㊾"]
 
 OUTCOMES = {
     "ok": ["sys.exit(mezo_stand.finish(0))"],
@@ -271,6 +319,7 @@ class Lab:
         self.base = root / name
         self.tmp = self.base / "tmp"
         self.tmp.mkdir(parents=True)
+        self.bin = self.base / "bin"
         self.helper = helper
 
     def put(self, host: str, name: str, code: str) -> Path:
@@ -303,8 +352,11 @@ class Lab:
         # стенд самой приёмки (MEZO_STAND_HOME) подставным скриптам не наследуется: вложение
         # испытывается отдельно, случаями ㉗–㉙
         for name in ("MEZO_KEEP_STANDS", "MEZO_SCRIPTS_ROOT", "PROBE_WAIT", "MEZO_STAND_HOME",
-                     "MEZO_STAND_HOME_TEMP"):
+                     "MEZO_STAND_HOME_TEMP", "MEZO_STAND_MAX_AGE_H", "MEZO_STAND_TEST_BIN_MB"):
             env.pop(name, None)
+        # уборка по сроку переносит не в живую Корзину, а в каталог песочницы; срок — по умолчанию
+        # помощника (48 ч), даже если приёмку запустили с MEZO_STAND_MAX_AGE_H=0 ради живой папки
+        env["MEZO_STAND_TEST_BIN"] = str(self.bin)
         env.update(env_extra or {})
         return env
 
@@ -854,6 +906,228 @@ def run_cases(root: Path, helper: Path) -> None:
          f"{'есть' if SAID_KEPT in out2 else 'нет'} · свой убран: {len(own) == 1 and not own[0].exists()}")
 
 
+def aged(lab: Lab, name: str, hours: float = 72.0, kind: str | None = "failed", at_ts=None, stand=None,
+         changed_hours: float | None = None, inside: Path | None = None) -> Path:
+    """Стенд, состаренный рукой: каталог с файлом и (kind не None) меткой. Час метки и дата изменения
+    каталога — давностью hours (дату можно задать отдельно — changed_hours)."""
+    d = (inside or lab.tmp) / name
+    d.mkdir()
+    (d / "data.txt").write_text("x", encoding="utf-8")
+    when = time.time() - hours * HOUR
+    if kind is not None:
+        (d / MARKER).write_text(
+            f"script=C:/elsewhere/bite-x.py\nargs=[]\nroot=\nkind={kind}\n"
+            f"stand={real(d) if stand is None else stand}\nreason=прогон провалился\n"
+            f"at=2026-10-10T00:00:00Z\nat_ts={repr(when) if at_ts is None else at_ts}\npid=1\n",
+            encoding="utf-8")
+    changed = time.time() - (hours if changed_hours is None else changed_hours) * HOUR
+    os.utime(d, (changed, changed))
+    return d
+
+
+def set_stamp(lab: Lab, hours_ago: float | None) -> None:
+    """Отметка уборки по сроку в песочнице: None — убрать, иначе — поставить давностью hours_ago."""
+    s = lab.tmp / SWEEP_STAMP
+    if hours_ago is None:
+        if s.exists():
+            s.unlink()
+        return
+    s.write_text("x", encoding="utf-8")
+    when = time.time() - hours_ago * HOUR
+    os.utime(s, (when, when))
+
+
+def in_bin(lab: Lab, d: Path) -> bool:
+    """Стенд лежит в каталоге-Корзине песочницы (под своим именем с хвостом «.removing-<номер>»)."""
+    return lab.bin.is_dir() and any(x.name.startswith(d.name) for x in lab.bin.iterdir())
+
+
+def age_link(link: Path, hours: float) -> bool:
+    """Состарить САМУ ссылку на каталог, а не цель. os.utime на Windows ссылку не различает
+    (follow_symlinks недоступен) — дата ставится через SetFileTime с FILE_FLAG_OPEN_REPARSE_POINT."""
+    when = time.time() - hours * HOUR
+    if os.name != "nt":
+        try:
+            os.utime(link, (when, when), follow_symlinks=False)
+            return True
+        except (NotImplementedError, OSError):
+            return False
+    import ctypes
+    from ctypes import wintypes
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    k.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+                              wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    k.CreateFileW.restype = ctypes.c_void_p
+    k.SetFileTime.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+    k.SetFileTime.restype = wintypes.BOOL
+    k.CloseHandle.argtypes = [ctypes.c_void_p]
+    # 0x100 FILE_WRITE_ATTRIBUTES · 7 — общий доступ на всё · 3 OPEN_EXISTING ·
+    # 0x02000000 FILE_FLAG_BACKUP_SEMANTICS (каталог) | 0x00200000 FILE_FLAG_OPEN_REPARSE_POINT (саму ссылку)
+    h = k.CreateFileW(str(link), 0x100, 7, None, 3, 0x02000000 | 0x00200000, None)
+    if h is None or h == ctypes.c_void_p(-1).value:
+        return False
+    ticks = int((when + 11644473600) * 10 ** 7)
+    ft = wintypes.FILETIME(ticks & 0xFFFFFFFF, ticks >> 32)
+    ok = k.SetFileTime(h, None, ctypes.byref(ft), ctypes.byref(ft))
+    k.CloseHandle(h)
+    return bool(ok)
+
+
+def run_sweep_cases(root: Path, helper: Path) -> None:
+    """㊱–㊾: срок хранения (этап Э6). Подставной прогон «ok» с другого места (host-s) — верхний,
+    его первый new() переносит в каталог-Корзину песочницы то, что старше срока."""
+    # ㊱ с меткой: старше срока — в Корзину; моложе — цел; метка старая, но внутри работали час назад — цел
+    lab = Lab(root, "c36", helper)
+    old = aged(lab, PREFIX + "old00001")
+    young = aged(lab, PREFIX + "young001", hours=1)
+    touched = aged(lab, PREFIX + "touch001", changed_hours=1)
+    _, out, rc = lab.run("ok", host="host-s")
+    case("㊱", "с меткой: 72 ч — в Корзину; 1 ч — цел; метка 72 ч, но каталог менялся час назад — цел",
+         rc == 0 and not old.exists() and in_bin(lab, old) and young.exists() and touched.exists()
+         and said(out, SAID_SWEEP, 1),
+         f"код {rc} · старый в Корзине: {in_bin(lab, old)} · молодой на месте: {young.exists()} · "
+         f"менявшийся на месте: {touched.exists()} · «в Корзину: 1»: {said(out, SAID_SWEEP, 1)}")
+
+    # ㊲ без метки: известное начало и старше срока — в Корзину; чужое начало — цело; молодой — цел
+    lab = Lab(root, "c37", helper)
+    known = aged(lab, PREFIX + "nomark01", kind=None)
+    foreign = aged(lab, "keep-last-z-nomark01", kind=None)
+    young = aged(lab, PREFIX + "nomark02", hours=1, kind=None)
+    _, out, rc = lab.run("ok", host="host-s")
+    case("㊲", "без метки: известное начало 72 ч — в Корзину; чужое начало 72 ч — цело; известное 1 ч — цело",
+         rc == 0 and not known.exists() and in_bin(lab, known) and foreign.exists() and young.exists()
+         and said(out, SAID_SWEEP, 1),
+         f"код {rc} · известный в Корзине: {in_bin(lab, known)} · чужой на месте: {foreign.exists()} · "
+         f"молодой на месте: {young.exists()}")
+
+    # ㊳ ссылка (junction) с известным началом, сама старше срока, цель с подходящей меткой — не тронута
+    lab = Lab(root, "c38", helper)
+    target = aged(lab, "link-target", inside=lab.base)
+    link = lab.tmp / (PREFIX + "junction2")
+    make_link(link, target)
+    link_old = age_link(link, 72)
+    _, out, rc = lab.run("ok", host="host-s")
+    case("㊳", "ссылка на каталог, сама 72 ч, цель с меткой — ссылка и цель целы, строки уборки нет",
+         link_old and rc == 0 and os.path.lexists(link) and (target / "data.txt").is_file()
+         and SAID_SWEEP_ANY not in out,
+         f"ссылку удалось состарить: {link_old} · ссылка на месте: {os.path.lexists(link)} · "
+         f"цель цела: {(target / 'data.txt').is_file()} · строка уборки: {'есть' if SAID_SWEEP_ANY in out else 'нет'}")
+
+    # ㊴ метка указывает на другой каталог (копия стенда) · ㊵ час метки не число — оба не тронуты
+    lab = Lab(root, "c39", helper)
+    elsewhere = aged(lab, PREFIX + "copy0001", stand=real(lab.base / "elsewhere"))
+    bad_ts = aged(lab, PREFIX + "badts001", at_ts="вчера")
+    _, out, rc = lab.run("ok", host="host-s")
+    case("㊴", "метка 72 ч указывает на другой каталог — не тронут",
+         rc == 0 and elsewhere.exists() and not in_bin(lab, elsewhere),
+         f"код {rc} · на месте: {elsewhere.exists()}")
+    case("㊵", "час метки не число («вчера»), каталог 72 ч — не тронут",
+         rc == 0 and bad_ts.exists() and not in_bin(lab, bad_ts),
+         f"код {rc} · на месте: {bad_ts.exists()}")
+
+    # ㊶ занятый (открыт файл) — цел целиком, назван «занятых не тронуто: 1»
+    lab = Lab(root, "c41", helper)
+    busy = aged(lab, PREFIX + "busy0001")
+    held = open(busy / "data.txt", encoding="utf-8")
+    try:
+        _, out, rc = lab.run("ok", host="host-s")
+    finally:
+        held.close()
+    case("㊶", "старый стенд с открытым файлом — цел целиком (метка и файл), назван «занятых не тронуто: 1»",
+         rc == 0 and busy.exists() and (busy / MARKER).is_file() and (busy / "data.txt").is_file()
+         and said(out, SAID_SWEEP_BUSY, 1) and said(out, SAID_SWEEP, 0),
+         f"код {rc} · на месте: {busy.exists()} · метка: {(busy / MARKER).is_file()} · "
+         f"«занятых не тронуто: 1»: {said(out, SAID_SWEEP_BUSY, 1)}")
+
+    # ㊷ остаток прерванной уборки «<имя>.removing-<номер>»: известное начало — в Корзину отдельным
+    #    числом; чужое начало — цело
+    lab = Lab(root, "c42", helper)
+    rest = aged(lab, PREFIX + "left0001.removing-4242", kind=None)
+    rest_foreign = aged(lab, "keep-last-z-left0001.removing-4242", kind=None)
+    _, out, rc = lab.run("ok", host="host-s")
+    case("㊷", "остаток «.removing-<номер>» с известным началом — в Корзину, «остатков прежней уборки: 1»; "
+         "с чужим — цел",
+         rc == 0 and not rest.exists() and in_bin(lab, rest) and rest_foreign.exists()
+         and said(out, SAID_SWEEP_REST, 1) and said(out, SAID_SWEEP, 0),
+         f"код {rc} · остаток в Корзине: {in_bin(lab, rest)} · чужой на месте: {rest_foreign.exists()} · "
+         f"«остатков: 1»: {said(out, SAID_SWEEP_REST, 1)}")
+
+    # ㊸ Корзина мала: стенд больше её свободного места — не тронут и назван
+    lab = Lab(root, "c43", helper)
+    big = aged(lab, PREFIX + "big00001")
+    (big / "big.bin").write_bytes(b"x" * 8192)
+    when = time.time() - 72 * HOUR
+    os.utime(big, (when, when))
+    _, out, rc = lab.run("ok", host="host-s", env_extra={"MEZO_STAND_TEST_BIN_MB": "0.001"})
+    case("㊸", "Корзина на 1 КБ, стенд 8 КБ — не тронут, назван «Корзина мала, не тронуто: 1»",
+         rc == 0 and big.exists() and not in_bin(lab, big) and said(out, SAID_SWEEP_ROOM, 1),
+         f"код {rc} · на месте: {big.exists()} · «Корзина мала»: {said(out, SAID_SWEEP_ROOM, 1)}")
+
+    # ㊹ вложенный прогон (дом есть) — уборки нет и отметки нет
+    lab = Lab(root, "c44", helper)
+    old = aged(lab, PREFIX + "old00044")
+    home = lab.base / "home"
+    home.mkdir()
+    _, out, rc = lab.run("ok", host="host-s", env_extra={"MEZO_STAND_HOME": str(home),
+                                                         "MEZO_STAND_HOME_TEMP": str(lab.tmp)})
+    case("㊹", "вложенный прогон — старый стенд цел, отметки уборки нет",
+         rc == 0 and old.exists() and not (lab.tmp / SWEEP_STAMP).exists() and SAID_SWEEP_ANY not in out,
+         f"код {rc} · на месте: {old.exists()} · отметка: {(lab.tmp / SWEEP_STAMP).exists()}")
+
+    # ㊺ только верхний уровень: старый стенд с меткой ВНУТРИ молодого каталога — цел
+    lab = Lab(root, "c45", helper)
+    top = aged(lab, PREFIX + "youngtop", hours=1, kind=None)
+    inner = aged(lab, PREFIX + "innerold", inside=top)
+    os.utime(top, (time.time() - HOUR, time.time() - HOUR))
+    _, out, rc = lab.run("ok", host="host-s")
+    case("㊺", "старый стенд внутри молодого каталога верхнего уровня — цел (вглубь уборка не идёт)",
+         rc == 0 and top.exists() and inner.exists(),
+         f"код {rc} · верхний на месте: {top.exists()} · вложенный на месте: {inner.exists()}")
+
+    # ㊻ сохранённое по MEZO_KEEP_STANDS старше срока — в Корзину (решение В1)
+    lab = Lab(root, "c46", helper)
+    kept = aged(lab, PREFIX + "keepenv1", kind="keep_env")
+    _, out, rc = lab.run("ok", host="host-s")
+    case("㊻", "сохранённое по MEZO_KEEP_STANDS, 72 ч — в Корзину (срок действует и на него)",
+         rc == 0 and not kept.exists() and in_bin(lab, kept) and said(out, SAID_SWEEP, 1),
+         f"код {rc} · в Корзине: {in_bin(lab, kept)}")
+
+    # ㊼ срок из переменной: стенд 2 ч при сроке по умолчанию (48 ч) цел; при MEZO_STAND_MAX_AGE_H=1 — в Корзину
+    lab = Lab(root, "c47", helper)
+    two = aged(lab, PREFIX + "twohours", hours=2)
+    _, out1, rc1 = lab.run("ok", host="host-s")
+    kept_default = two.exists()
+    set_stamp(lab, None)
+    _, out2, rc2 = lab.run("ok", host="host-s", env_extra={"MEZO_STAND_MAX_AGE_H": "1"})
+    case("㊼", "стенд 2 ч: при сроке по умолчанию цел, при MEZO_STAND_MAX_AGE_H=1 — в Корзину",
+         rc1 == 0 and rc2 == 0 and kept_default and not two.exists() and in_bin(lab, two)
+         and "стенды старше 1 ч" in out2,
+         f"цел при 48 ч: {kept_default} · в Корзине при 1 ч: {in_bin(lab, two)}")
+
+    # ㊽ не чаще раза в час: отметка 10 минут — уборки нет; отметка 2 ч — уборка
+    lab = Lab(root, "c48", helper)
+    old = aged(lab, PREFIX + "old00048")
+    set_stamp(lab, 10 / 60)
+    _, out1, _ = lab.run("ok", host="host-s")
+    kept_fresh = old.exists()
+    set_stamp(lab, 2)
+    _, out2, _ = lab.run("ok", host="host-s")
+    case("㊽", "отметка уборки 10 минут назад — старый стенд цел; 2 ч назад — в Корзину",
+         kept_fresh and SAID_SWEEP_ANY not in out1 and not old.exists() and in_bin(lab, old),
+         f"цел при свежей отметке: {kept_fresh} · в Корзине при старой: {in_bin(lab, old)}")
+
+    # ㊾ срок выключен: MEZO_STAND_MAX_AGE_H=0 — уборки и отметки нет; не число — так же, и это сказано
+    lab = Lab(root, "c49", helper)
+    old = aged(lab, PREFIX + "old00049")
+    _, out1, rc1 = lab.run("ok", host="host-s", env_extra={"MEZO_STAND_MAX_AGE_H": "0"})
+    _, out2, rc2 = lab.run("ok", host="host-s", env_extra={"MEZO_STAND_MAX_AGE_H": "сорок"})
+    case("㊾", "MEZO_STAND_MAX_AGE_H=0 и «сорок» — старый стенд цел, отметки нет, «не число» сказано",
+         rc1 == 0 and rc2 == 0 and old.exists() and not (lab.tmp / SWEEP_STAMP).exists()
+         and "не число часов" in out2 and SAID_SWEEP_ANY not in out1 + out2,
+         f"на месте: {old.exists()} · отметка: {(lab.tmp / SWEEP_STAMP).exists()} · "
+         f"«не число»: {'сказано' if 'не число часов' in out2 else 'НЕТ'}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="приёмка: стенды только последнего провала приёмки")
     ap.add_argument("--helper", default=str(HERE / "mezo_stand.py"), help="помощник под испытанием")
@@ -868,6 +1142,7 @@ def main() -> int:
               f"(записано в BREAK_FAILS до прогона)\n")
     print(f"помощник под испытанием: {helper}\n")
     run_cases(root, helper)
+    run_sweep_cases(root, helper)
 
     failed = [n for n, ok in RESULTS if not ok]
     passed = len(RESULTS) - len(failed)

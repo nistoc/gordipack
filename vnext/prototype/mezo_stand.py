@@ -60,8 +60,8 @@ mezo_stand.py — временные рабочие каталоги прове�
     прежние отказы и падения — отказ доказывает меньше провала и не вправе стирать его (П2);
   · убираются только метки, поставленные РАНЬШЕ начала этого прогона: из двух параллельных
     прогонов хранится тот, что кончил последним, лишь если он и начал позже (П3);
-  · каталог БЕЗ метки не трогается никогда: так выглядит прогон, идущий прямо сейчас, и всё,
-    накопленное до этой правки (его убирает janitor-stands.py рукой владельца); метка,
+  · каталог БЕЗ метки этой уборкой не трогается: так выглядит прогон, идущий прямо сейчас, и всё,
+    накопленное до этой правки (его убирает срок хранения — ниже — или janitor-stands.py); метка,
     указывающая на другой каталог (копия стенда рядом), — тоже; ссылка (junction) — тоже;
     занятый каталог (пробное переименование не прошло) не трогается вовсе, а не по частям;
     строка об уборке печатается ДО списка сохранённых и только когда есть что назвать;
@@ -87,6 +87,33 @@ mezo_stand.py — временные рабочие каталоги прове�
     этого не отменяет — сохранить всё можно только переменной у вызывающего;
   · метки редакции 16c525f (с полем cwd) убираются как свои: поле cwd не сверяется — тот же
     вызов из другого каталога и есть тот же вызов.
+СРОК ХРАНЕНИЯ — В КОРЗИНУ (этап Э6, карточка #680; слово владельца 2026-10-12 17:18:27 UTC, чат COORD,
+дословно «2»: в Корзину, автоматически, не чаще раза в час). Замер 12.10: стендов старше 48 ч — 290, 4,97 ГиБ;
+сохранённый провал копии пакета из черновой папки не убирался никогда — его ключ «тот же вызов» больше не
+повторяется. Теперь:
+  · верхний прогон (не вложенный: дома нет) при первом new() переносит в Корзину стенды верхнего уровня
+    временной папки СТАРШЕ срока. Срок — MEZO_STAND_MAX_AGE_H в часах, по умолчанию 48; 0 — выключено.
+    Не чаще раза в час на временную папку: отметка .mezo_stand_sweep в её корне ставится ДО обхода,
+    иначе общий прогон приёмок обходил бы %TEMP% на каждой из них;
+  · с меткой — любое начало имени (метка доказывает, что каталог наш), и вид исхода любой, в том числе
+    MEZO_KEEP_STANDS: «сохранить всё» нужно для осмотра, 48 ч на это хватает. Возраст — по полю at_ts
+    метки (не число — не трогается) И по дате изменения каталога (внутри работают — не трогается);
+    метка на чужой каталог (stand) — не трогается;
+  · без метки — только известные начала имён: они вычитываются из исходников проверок, как у
+    janitor-stands.py (список один, здесь; janitor берёт его отсюда). Чужое во временной папке похоже
+    на стенд только началом имени — неизвестное начало не берётся никогда;
+  · остаток прерванной уборки «<имя>.removing-<номер>» — по известному началу, отдельным числом;
+  · ссылка (junction), занятый каталог (пробное переименование не прошло), общий корень gordi,
+    стенды этого прогона — не трогаются; внутрь стендов уборка не спускается;
+  · Корзина не должна вытеснять чужое: стенд переносится, только если он вместе с уже лежащим в Корзине
+    помещается в её предел (иначе Windows молча удалила бы навсегда старое содержимое Корзины или сам
+    стенд). Не помещается — «Корзина мала, не тронуто». Настроек Корзины тома нет, Корзина выключена
+    или система не Windows — только показ;
+  · строка уборки — одна и только когда есть что назвать: сколько перенесено и сколько ГБ, остатки,
+    занятые, «Корзина мала», не перенесённые (Корзина отказала — каталогу возвращается прежнее имя).
+  Место освобождается, когда Корзина чистит себя сама: копии базы лежат в ней до её очистки (цена,
+  названная владельцу). Приёмка подставляет вместо Корзины каталог: MEZO_STAND_TEST_BIN и его
+  вместимость MEZO_STAND_TEST_BIN_MB — живая Корзина в приёмке не используется.
 ⚖️ Границы: кандидатов на уборку ищу среди каталогов с теми же началами имён, что у стендов
 этого прогона (полный обход %TEMP% — около 2 с на 21 тыс. каталогов, замер 02.10). Начало
 имени, которым этот прогон не пользовался, не смотрится — его стенды остаются до
@@ -97,18 +124,23 @@ import ast
 import atexit
 import datetime as dt
 import gc
+import io
 import json
+import math
 import os
+import re
 import shutil
 import sqlite3
 import stat
 import sys
 import tempfile
 import time
+import tokenize
 from pathlib import Path
 
 __all__ = ["new", "release", "finish", "keep_reason", "copy_tool", "neighbours_of", "stand_env",
-           "snapshot_db", "crlf_twin", "expected_break"]
+           "snapshot_db", "crlf_twin", "expected_break", "known_prefixes", "prefixes_from_sources",
+           "tool_dirs", "stand_size", "max_age_hours"]
 
 _stands: list[Path] = []
 _prefixes: set[str] = set()           # начала имён, которыми этот прогон заводил стенды
@@ -126,6 +158,28 @@ _HOME_TEMP_ENV = "MEZO_STAND_HOME_TEMP"  # временная папка выз�
 _home: str | None = None              # унаследованный стенд вызывающего (None — этот прогон верхний)
 _home_resolved = False
 _home_offered = False
+MAX_AGE_ENV = "MEZO_STAND_MAX_AGE_H"  # срок хранения стенда в часах; 0 — уборка по сроку выключена
+DEFAULT_MAX_AGE_H = 48.0
+SWEEP_STAMP = ".mezo_stand_sweep"     # отметка последней уборки по сроку — в корне временной папки
+SWEEP_EVERY_S = 3600                  # не чаще раза в час на временную папку
+TEST_BIN_ENV = "MEZO_STAND_TEST_BIN"  # приёмка: каталог вместо Корзины Windows
+TEST_BIN_MB_ENV = "MEZO_STAND_TEST_BIN_MB"  # приёмка: вместимость такого каталога в МБ (нет — без предела)
+_REMOVING = ".removing-"              # остаток прерванной уборки: <имя>.removing-<номер процесса>
+_swept = False                        # уборка по сроку в этом прогоне уже решена (была или не нужна)
+
+# Начала имён стендов вычитываются из исходников проверок — список один на механизм: отсюда его
+# берут и уборка по сроку, и janitor-stands.py (решение В2 плана Э6, записка #5832).
+# Два способа завести каталог — tempfile.mkdtemp с указанием prefix и mezo_stand.new.
+# Строка в кавычках берётся целиком; у f-строки — начало до первой подстановки:
+# prefix=f"bite-birth-{x}-" даёт «bite-birth-». Так заводят каталоги восемь мест в семи
+# файлах контура, и прежняя редакция их не видела (замер PROTO 2026-10-10 08:58 UTC).
+PREFIX_RE = re.compile(
+    r'(?:mkdtemp\s*\(\s*prefix\s*=|mezo_stand\.new\s*\(\s*)'
+    r'(?:[fF]["\']([^"\'{]+)|["\']([^"\']+)["\'])')
+# Короче — подходит к чужим каталогам (начало «g» снесло бы gordi и всё на «g»)
+MIN_PREFIX_LEN = 4
+# Имена каталогов в корне временной папки, которые уборка не берёт ни при каком начале
+RESERVED_NAMES = {"gordi"}
 
 
 def _resolve_home() -> None:
@@ -176,6 +230,7 @@ def new(prefix: str) -> Path:
     """Создать временный рабочий каталог. Дальше он убирается сам — по исходу прогона."""
     _resolve_home()
     _drop_vanished_home()
+    _sweep_aged_once()
     p = Path(tempfile.mkdtemp(prefix=prefix, dir=_home))
     _stands.append(p)
     _prefixes.add(prefix)
@@ -621,8 +676,12 @@ def _remove_all(paths) -> tuple[int, list[Path]]:
     return removed, remaining
 
 
-def _remove_previous(paths) -> tuple[int, list[Path], list[Path]]:
+def _remove_previous(paths, discard=None) -> tuple[int, list[Path], list[Path]]:
     """Убрать стенды прежних прогонов. Вернуть (сколько убрано, занятые — не тронуты, убранные не до конца).
+
+    discard — чем убрать переименованный каталог, с тем же видом, что у _remove_all (список →
+    сколько убрано, какие остались); None — удалить. Уборка по сроку передаёт перенос в Корзину:
+    пробное переименование одно на обе уборки (условие У2 OPSSRE, записка #5832).
 
     Сначала ПРОБНОЕ ПЕРЕИМЕНОВАНИЕ: Windows не даёт переименовать каталог, в котором открыт
     файл. Занятый стенд (его как раз осматривают) так не трогается вовсе — раньше удаление
@@ -645,10 +704,397 @@ def _remove_previous(paths) -> tuple[int, list[Path], list[Path]]:
         except OSError:
             busy.append(p)
             continue
-        done, rest = _remove_all([probe])
+        done, rest = (discard or _remove_all)([probe])
         removed += done
         partial.extend(rest)
     return removed, busy, partial
+
+
+# ── список начал имён (один на механизм) ──
+
+def tool_dirs(own) -> list[Path]:
+    """Все каталоги контура, где живут инструменты, — ПО ПРИЗНАКУ, а не одним путём. own — откуда смотреть.
+
+    🩸 Первая редакция janitor-stands.py брала ОДИН каталог (свой) и знала 72 начала имён. Каталогов
+    оказалось два: инструменты роли и инструменты согласования, и во втором лежали
+    ещё 7 начал — среди них `gordi-src-`, по которому накопилось 245 каталогов
+    (замер PROTO 2026-08-24 16:43 UTC, 0.31 ГБ).
+    ⚖️ Смотреть приходится из ОБОИХ: уборка по сроку идёт из той копии помощника, которой
+    пользуется первый за час прогон, — из vnext-tools или из .mezosync/scripts. Из второго
+    каталога прежний поиск первого не видел (vnext-tools лежит рядом с .mezosync, а не под ним) —
+    отсюда кандидат «<контейнер>/vnext-tools».
+    """
+    own = Path(own)
+    dirs = [own]
+    root = own.parent
+    for candidate in (root / ".mezosync" / "scripts", root.parent / ".mezosync" / "scripts",
+                      own.parent / "scripts", root.parent / "vnext-tools"):
+        if candidate.is_dir() and all(candidate.resolve() != m.resolve() for m in dirs):
+            dirs.append(candidate)
+    # + инструменты соседних репозиториев контура, если контур так разложен
+    try:
+        for d in sorted(root.iterdir()):
+            sub = d / ".mezosync" / "scripts"
+            if sub.is_dir() and all(sub.resolve() != m.resolve() for m in dirs):
+                dirs.append(sub)
+    except OSError:
+        pass
+    return dirs
+
+
+def code_without_comments(text: str) -> str:
+    """Исходник без комментариев. Разбор языком: «#» внутри строки — не комментарий.
+
+    Файл, который язык не разбирает, — откат к построчному признаку (строка, начатая «#»):
+    хвостовой комментарий у такого файла останется, и это названо, а не скрыто.
+    """
+    try:
+        comments = [t.start for t in tokenize.generate_tokens(io.StringIO(text).readline)
+                    if t.type == tokenize.COMMENT]
+    except (tokenize.TokenError, SyntaxError, IndentationError, ValueError):
+        return "\n".join(line for line in text.splitlines()
+                         if not line.lstrip().startswith("#"))
+    lines = text.splitlines(keepends=True)
+    for row, col in comments:
+        line = lines[row - 1]
+        ending = line[len(line.rstrip("\r\n")):]
+        lines[row - 1] = line[:col] + ending
+    return "".join(lines)
+
+
+def prefixes_from_sources(tools_dirs) -> tuple[set[str], int]:
+    """Собрать начала имён из исходников проверок. Возвращает (начала, сколько файлов прочитано)."""
+    if isinstance(tools_dirs, Path):
+        tools_dirs = [tools_dirs]
+    found, read = set(), 0
+    for folder in tools_dirs:
+        for f in sorted(Path(folder).glob("*.py")):
+            try:
+                text = f.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            read += 1
+            found.update(a or b for a, b in PREFIX_RE.findall(code_without_comments(text)))
+    return found, read
+
+
+def split_short(prefixes) -> tuple[set[str], set[str]]:
+    """(годные, короткие): короткое начало подходит к чужим каталогам — его не берём."""
+    good = {p for p in prefixes if len(p) >= MIN_PREFIX_LEN}
+    return good, set(prefixes) - good
+
+
+def known_prefixes(own=None) -> set[str]:
+    """Годные начала имён из исходников всех каталогов инструментов (по умолчанию — смотря отсюда)."""
+    found, _ = prefixes_from_sources(tool_dirs(own or Path(__file__).resolve().parent))
+    return split_short(found)[0]
+
+
+def _is_link_path(path: str) -> bool:
+    """Ссылка или соединение каталогов (junction) по пути: для os.path.islink соединение — не ссылка."""
+    return os.path.islink(path) or (hasattr(os.path, "isjunction") and os.path.isjunction(path))
+
+
+def stand_size(p) -> int:
+    """Размер стенда в байтах: os.lstat, за ссылки и соединения каталогов не ходит.
+
+    rmtree и перенос в Корзину файлов за соединением не трогают, а os.walk на Windows соединение
+    проходит — размер вырос бы на чужое. os.lstat, а не getsize: ссылка на файл весит как ссылка
+    (замечание OPSSRE 10.10, перенесено в Э6 с карточки #657).
+    """
+    total = 0
+    for top, dirs, files in os.walk(p, onerror=lambda _e: None):
+        dirs[:] = [x for x in dirs if not _is_link_path(os.path.join(top, x))]
+        for name in files:
+            try:
+                total += os.lstat(os.path.join(top, name)).st_size
+            except OSError:
+                pass
+    return total
+
+
+# ── срок хранения: перенос в Корзину ──
+
+def max_age_hours() -> float | None:
+    """Срок хранения стенда в часах из MEZO_STAND_MAX_AGE_H; None — уборка по сроку выключена."""
+    raw = os.environ.get(MAX_AGE_ENV, "").strip()
+    if not raw:
+        return DEFAULT_MAX_AGE_H
+    try:
+        hours = float(raw.replace(",", "."))
+    except ValueError:
+        print(f"⚠️ {MAX_AGE_ENV}={raw!r} — не число часов; уборка стендов по сроку выключена")
+        return None
+    return hours if hours > 0 and math.isfinite(hours) else None
+
+
+def _sweep_due(temp: Path) -> bool:
+    """Пора ли убирать по сроку: отметки нет, ей час и больше или она из будущего. Ставит отметку ДО обхода.
+
+    Отметку поставить нельзя — уборки нет: без отметки каждый прогон обходил бы временную папку заново.
+    """
+    stamp = temp / SWEEP_STAMP
+    now = time.time()
+    try:
+        age = now - stamp.stat().st_mtime
+    except FileNotFoundError:
+        age = None
+    except OSError:
+        return False
+    if age is not None and 0 <= age < SWEEP_EVERY_S:
+        return False
+    try:
+        stamp.write_text(dt.datetime.fromtimestamp(now, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                         + f" pid={os.getpid()}\n", encoding="utf-8")
+    except OSError:
+        return False
+    return True
+
+
+def _aged_candidates(temp: Path, limit_s: float):
+    """Верхний уровень временной папки старше срока: (с меткой, без метки, остатки прежней уборки).
+
+    Начала имён здесь НЕ сверяются: без метки и остатки сверяет вызывающий, и только если такие
+    нашлись — вычитывание начал из исходников стоит секунды. Вниз по каталогам обход не идёт.
+    """
+    now = time.time()
+    own = {_norm(p) for p in _stands}
+    marked: list[Path] = []
+    unmarked: list[Path] = []
+    leftovers: list[tuple[Path, str]] = []
+    try:
+        with os.scandir(temp) as it:
+            entries = list(it)
+    except OSError:
+        return marked, unmarked, leftovers
+    for entry in entries:
+        try:
+            if _is_link(entry) or not entry.is_dir(follow_symlinks=False):
+                continue
+            changed = entry.stat(follow_symlinks=False).st_mtime
+        except OSError:
+            continue
+        path = Path(entry.path)
+        if _norm(path) in own or entry.name.lower() in RESERVED_NAMES:
+            continue
+        if now - changed <= limit_s:
+            continue
+        base, sep, pid = entry.name.rpartition(_REMOVING)
+        if sep and pid.isdigit():
+            leftovers.append((path, base))
+            continue
+        label = path / KEPT_MARKER
+        if not os.path.lexists(label):
+            unmarked.append(path)
+            continue
+        fields = _read_marker(label)
+        if fields is None or fields.get("stand") != _real(path):
+            continue                       # метка не читается или указывает на другой каталог
+        try:
+            kept_at = float(fields.get("at_ts", ""))
+        except ValueError:
+            continue
+        if now - kept_at > limit_s:
+            marked.append(path)
+    return marked, unmarked, leftovers
+
+
+def _test_bin():
+    """Приёмка: каталог вместо Корзины. (свободно байт, перенос, None) или (None, None, почему нет)."""
+    folder = Path(os.environ[TEST_BIN_ENV].strip())
+    raw = os.environ.get(TEST_BIN_MB_ENV, "").strip()
+    try:
+        capacity = float(raw) * 1024 ** 2 if raw else math.inf
+    except ValueError:
+        return None, None, f"{TEST_BIN_MB_ENV}={raw!r} не число"
+    used = stand_size(folder) if folder.is_dir() else 0
+
+    def move(paths):
+        folder.mkdir(parents=True, exist_ok=True)
+        moved, left = 0, []
+        for p in paths:
+            try:
+                os.replace(p, folder / Path(p).name)
+                moved += 1
+            except OSError:
+                left.append(p)
+        return moved, left
+    return capacity - used, move, None
+
+
+def _windows_bin(temp: Path):
+    """Корзина тома временной папки. (свободно байт, перенос, None) или (None, None, почему только показ).
+
+    Предел Корзины — из настроек тома (MaxCapacity, МБ), занятость — SHQueryRecycleBinW. Перенос —
+    SHFileOperationW с FOF_ALLOWUNDO (в Корзину) без окон и вопросов. ⚠️ Без окон Windows молча удаляет
+    НАВСЕГДА то, что в Корзину не помещается, и вытесняет из неё старое: поэтому вызывающий переносит
+    только то, что помещается в свободное место целиком.
+    """
+    import ctypes
+    import winreg
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+    wide = 64 if ctypes.sizeof(ctypes.c_void_p) == 8 else 32
+
+    class QueryInfo(ctypes.Structure):           # SHQUERYRBINFO
+        _pack_ = 8 if wide == 64 else 1
+        _fields_ = [("cbSize", wintypes.DWORD), ("i64Size", ctypes.c_longlong),
+                    ("i64NumItems", ctypes.c_longlong)]
+
+    class FileOp(ctypes.Structure):              # SHFILEOPSTRUCTW
+        _pack_ = 8 if wide == 64 else 1
+        _fields_ = [("hwnd", wintypes.HWND), ("wFunc", wintypes.UINT), ("pFrom", ctypes.c_void_p),
+                    ("pTo", ctypes.c_void_p), ("fFlags", ctypes.c_ushort),
+                    ("fAnyOperationsAborted", wintypes.BOOL), ("hNameMappings", ctypes.c_void_p),
+                    ("lpszProgressTitle", ctypes.c_void_p)]
+
+    kernel32.GetVolumePathNameW.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+    kernel32.GetVolumePathNameW.restype = wintypes.BOOL
+    kernel32.GetVolumeNameForVolumeMountPointW.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+    kernel32.GetVolumeNameForVolumeMountPointW.restype = wintypes.BOOL
+    shell32.SHQueryRecycleBinW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(QueryInfo)]
+    shell32.SHQueryRecycleBinW.restype = ctypes.c_long
+    shell32.SHFileOperationW.argtypes = [ctypes.POINTER(FileOp)]
+    shell32.SHFileOperationW.restype = ctypes.c_int
+
+    root = ctypes.create_unicode_buffer(300)
+    if not kernel32.GetVolumePathNameW(str(temp), root, len(root)):
+        return None, None, "том временной папки не определён"
+    volume = ctypes.create_unicode_buffer(64)
+    if not kernel32.GetVolumeNameForVolumeMountPointW(root.value, volume, len(volume)):
+        return None, None, "имя тома временной папки не определено"
+    guid = volume.value[volume.value.find("{"):volume.value.find("}") + 1]
+    key = "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\BitBucket\\Volume\\" + guid
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key) as k:
+            capacity_mb = winreg.QueryValueEx(k, "MaxCapacity")[0]
+            try:
+                nuke = winreg.QueryValueEx(k, "NukeOnDelete")[0]
+            except FileNotFoundError:
+                nuke = 0
+    except OSError:
+        return None, None, f"предел Корзины тома {root.value} не найден в настройках"
+    if nuke:
+        return None, None, f"Корзина тома {root.value} выключена — удаление шло бы мимо неё"
+    info = QueryInfo()
+    info.cbSize = ctypes.sizeof(QueryInfo)
+    if shell32.SHQueryRecycleBinW(root.value, ctypes.byref(info)) != 0:
+        return None, None, f"занятость Корзины тома {root.value} не определена"
+
+    def move(paths):
+        moved, left = 0, []
+        for p in paths:
+            full = os.path.abspath(p)
+            names = ctypes.create_unicode_buffer(full + "\0")   # список путей кончается двумя нулями
+            op = FileOp(hwnd=None, wFunc=3, pFrom=ctypes.addressof(names), pTo=None,   # 3 — FO_DELETE
+                        fFlags=0x40 | 0x10 | 0x4 | 0x400 | 0x200)
+            # 0x40 FOF_ALLOWUNDO (в Корзину) · 0x10 FOF_NOCONFIRMATION · 0x4 FOF_SILENT ·
+            # 0x400 FOF_NOERRORUI · 0x200 FOF_NOCONFIRMMKDIR — ни одного окна: прогон идёт без человека
+            rc = shell32.SHFileOperationW(ctypes.byref(op))
+            if rc == 0 and not op.fAnyOperationsAborted and not os.path.lexists(full):
+                moved += 1
+            else:
+                left.append(p)
+        return moved, left
+    return capacity_mb * 1024 ** 2 - info.i64Size, move, None
+
+
+def _recycle_bin(temp: Path):
+    """Куда уходят стенды старше срока: (свободно байт, перенос, None) или (None, None, почему только показ)."""
+    if os.environ.get(TEST_BIN_ENV, "").strip():
+        return _test_bin()
+    if os.name != "nt":
+        return None, None, "Корзины на этой системе нет"
+    return _windows_bin(temp)
+
+
+def _sweep_aged_once() -> None:
+    """Перенести в Корзину стенды старше срока. Только верхний прогон, только первый new(), не чаще раза в час.
+
+    Сбой уборки прогон не роняет: печатается одной строкой, проверка идёт дальше.
+    """
+    global _swept
+    if _home is not None or _swept:
+        return
+    _swept = True
+    try:
+        _sweep_aged()
+    except Exception as e:  # noqa: BLE001 — уборка вспомогательна, прогон важнее
+        print(f"⚠️ уборка стендов по сроку не выполнена: {type(e).__name__}: {e}")
+
+
+def _sweep_aged() -> None:
+    hours = max_age_hours()
+    if hours is None:
+        return
+    temp = Path(tempfile.gettempdir())
+    if not _sweep_due(temp):
+        return
+    limit_s = hours * 3600
+    marked, unmarked, leftovers = _aged_candidates(temp, limit_s)
+    if unmarked or leftovers:
+        known = known_prefixes()
+        unmarked = [p for p in unmarked if p.name.startswith(tuple(known))]
+        leftovers = [(p, base) for p, base in leftovers if base.startswith(tuple(known))]
+    stands = marked + unmarked
+    rests = [p for p, _ in leftovers]
+    if not stands and not rests:
+        return
+    sizes = {p: stand_size(p) for p in stands + rests}
+
+    def gb(paths) -> str:
+        return f"{sum(sizes[p] for p in paths) / 1024 ** 3:.2f} ГБ"
+
+    room, move, why_not = _recycle_bin(temp)
+    if move is None:
+        print(f"🧺 стенды старше {hours:g} ч: {len(stands)} ({gb(stands)})"
+              + (f" · остатков прежней уборки: {len(rests)}" if rests else "")
+              + f" — только показ: {why_not}")
+        return
+    def changed(q) -> float:
+        try:
+            return q.stat(follow_symlinks=False).st_mtime
+        except OSError:
+            return 0.0
+
+    # Сначала старейшие: не поместится всё — уйдёт самое старое. В Корзину — только то, что помещается
+    # вместе с уже лежащим в ней: иначе Windows вытеснит её старое содержимое или удалит стенд навсегда.
+    fits, no_room = [], []
+    for p in sorted(stands + rests, key=changed):
+        if sizes[p] <= room:
+            fits.append(p)
+            room -= sizes[p]
+        else:
+            no_room.append(p)
+    moved_paths = []
+
+    def discard(probes):
+        done, left = move(probes)
+        moved_paths.extend(q for q in probes if q not in left)
+        for q in left:
+            # Корзина отказала — вернуть прежнее имя: иначе каждый час имя росло бы ещё одним «.removing-»
+            former = q.name.rpartition(_REMOVING)[0]
+            if not former:
+                continue
+            try:
+                os.rename(q, q.with_name(former))
+            except OSError:
+                pass
+        return done, left
+    n_st, busy, partial = _remove_previous([p for p in fits if p in stands], discard)
+    n_rest, busy_r, partial_r = _remove_previous([p for p in fits if p in rests], discard)
+    busy += busy_r
+    partial += partial_r
+    moved_names = {q.name.rpartition(_REMOVING)[0] for q in moved_paths}
+    moved_st = [p for p in stands if p.name in moved_names]
+    test = " (проверочная, вместо Корзины)" if os.environ.get(TEST_BIN_ENV, "").strip() else ""
+    print(f"🧺 стенды старше {hours:g} ч → в Корзину{test}: {n_st} ({gb(moved_st)})"
+          + (f" · остатков прежней уборки: {n_rest}" if rests else "")
+          + (f" · занятых не тронуто: {len(busy)}" if busy else "")
+          + (f" · Корзина мала, не тронуто: {len(no_room)} ({gb(no_room)})" if no_room else "")
+          + (f" · не перенесено: {len(partial)}" if partial else ""))
 
 
 def _prune_for_keep() -> tuple[str, list[Path]]:
