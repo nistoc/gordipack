@@ -205,15 +205,29 @@ def fill_undecided(conn, db, dry_run):
     if dry_run:
         print('⟨ВХОЛОСТУЮ⟩ база не тронута.')
         return
+    # 🩹 ДОГОН М4 (находка OPSSRE, записка #5840; Э6, карточка #680): прежде строка «проставлено
+    # yes: N» печатала длину ПЛАНА, а не число задетых строк. UPDATE с ложным условием
+    # не задевал ничего, шаг выходил с кодом 0 и «✅ проставлено yes: 56», а контрольное
+    # чтение рядом честно печатало «не решено: 65» — две строки с «✅» говорили противоположное.
+    # ⇒ Считаем задетые строки, и при расхождении с планом откатываем и выходим кодом 1:
+    # частичная доставка хуже никакой — её не видно в строке итога.
     conn.execute("BEGIN")
+    done = 0
     for k in to_yes:
-        conn.execute("UPDATE rules SET skill_delivery='yes', updated_at=updated_at "
-                     "WHERE rule_key=? AND skill_delivery IS NULL", (k,))
+        cur = conn.execute("UPDATE rules SET skill_delivery='yes', updated_at=updated_at "
+                           "WHERE rule_key=? AND skill_delivery IS NULL", (k,))
+        done += cur.rowcount
+    if done != len(to_yes):
+        conn.rollback()
+        print(f'🔴 проставлено yes: {done} из {len(to_yes)} по плану — изменение откачено, база не тронута. '
+              'Значит, запрос правки задел не те строки, которые выбрал отбор выше; прогони с --dry-run '
+              'и сличи список')
+        sys.exit(1)
     conn.commit()
     summary = conn.execute(
         "SELECT COALESCE(skill_delivery,'не решено'), COUNT(*) FROM rules "
         "WHERE status='active' GROUP BY 1 ORDER BY 2 DESC").fetchall()
-    print(f'✅ проставлено yes: {len(to_yes)} · контрольное чтение поля: '
+    print(f'✅ проставлено yes: {done} из {len(to_yes)} по плану · контрольное чтение поля: '
           + ' · '.join(f'{v}: {n}' for v, n in summary))
 
 

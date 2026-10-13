@@ -1198,6 +1198,86 @@ def main() -> int:
                   f"COORD-A под этим различителем не считается чужой); COORD-A перенесено "
                   f"{coord_a_moved19p} (ждём 0)", differ=True)
 
+        # ── ㉒ ДОСТАВКА ПРАВИЛ ДО ПОДСКАЗОК: слова шага сходятся с базой (М4 — находка OPSSRE,
+        # записка #5840; Э6, карточка #680). Шаг 20260904-rule-skill-delivery в режиме
+        # --fill-undecided печатал длину ПЛАНА как сделанное, а блок 6в сборки верил только
+        # коду выхода: поломка «UPDATE … AND 0» давала код 0, «✅ проставлено yes: 56» и в базе
+        # «не решено: 65» — полный набор этой приёмки (37 из 37) её не замечал.
+        # Основная сборка `mez` наверху: шаг назвал «N из N по плану», сборка назвала разницу
+        # по базе, и база с ней согласна.
+        said22 = re.search(r"проставлено yes: (\d+) из (\d+) по плану", out)
+        base22 = re.search(r"по базе 'yes' (\d+) → (\d+)", out)
+        con22 = sqlite3.connect(str(mez / "mezosync.db"))
+        yes22 = con22.execute("SELECT COUNT(*) FROM rules WHERE status='active' "
+                              "AND skill_delivery='yes'").fetchone()[0]
+        con22.close()
+        ok &= case("㉒ доставка правил до подсказок: шаг называет «N из N по плану», сборка — "
+                  "разницу по базе, и база с обоими согласна (М4, записка #5840)",
+                  bool(said22 and base22) and said22.group(1) == said22.group(2)
+                  and int(said22.group(1)) > 0
+                  and int(base22.group(2)) - int(base22.group(1)) == int(said22.group(1))
+                  and int(base22.group(2)) == yes22,
+                  f"шаг: {said22.group(0) if said22 else 'строки «N из M по плану» НЕТ'}; сборка: "
+                  f"{base22.group(0) if base22 else 'строки «по базе» НЕТ'}; в базе 'yes' у живых "
+                  f"правил {yes22}", differ=True)
+
+        # ── КОНТРОЛЬ ㉒ двумя нарочными поломками КОПИИ шага. Шаг подменяется в своей копии
+        # пакета ПОД ТЕМ ЖЕ ИМЕНЕМ: сборка зовёт копию из каталога инструментов нового контура
+        # по имени файла, другое имя она не позовёт.
+        pack_696 = tmp / "pack-696"
+        for name in ("rules", "schema", "scripts", "templates", "vnext"):
+            copy_pack_subdir(PACK, name, pack_696)
+        step_696_path = pack_696 / "scripts" / "migrations" / "20260904-rule-skill-delivery.py"
+        step_696_src = step_696_path.read_text(encoding="utf-8")
+        step_696_update = '"WHERE rule_key=? AND skill_delivery IS NULL", (k,))\n'
+        step_696_count = "        done += cur.rowcount\n"
+        if step_696_src.count(step_696_update) != 1 or step_696_src.count(step_696_count) != 1:
+            sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: условие правки или счёт задетых строк не найдены дословно "
+                     "в 20260904-rule-skill-delivery.py — испытуемое изменилось, поломки ㉒ бьют мимо")
+        update_missing = '"WHERE rule_key=? AND skill_delivery IS NULL AND 0", (k,))  # ПОЛОМКА\n'
+
+        def build_696(label: str):
+            mez696 = tmp / f".mezosync-696-{label}"
+            r696 = subprocess.run(
+                [sys.executable, str(pack_696 / "scripts" / "init-group.py"), "--name",
+                 f"bite696{label}", "--path", str(mez696), "--roles", "coord"],
+                capture_output=True, text=True, encoding="utf-8", timeout=300, env=env)
+            return r696.returncode, (r696.stdout or "") + (r696.stderr or "")
+
+        # (а) правка не задевает ни одной строки, шаг считает честно ⇒ шаг сам откатывает и
+        #     выходит кодом 1, сборка останавливается и приводит его слова. Судим по словам
+        #     ШАГА в выводе сборки: остановить сборку мог бы и её собственный сличитель, а
+        #     здесь испытывается счёт шага.
+        step_696_path.write_text(step_696_src.replace(step_696_update, update_missing, 1),
+                                 encoding="utf-8")
+        rc22a, out22a = build_696("miss")
+        ok &= case("㉒ ПОЛОМКА (правка шага доставки не задевает строк) КРАСИТ случай ㉒ — шаг "
+                  "откатывает и выходит кодом 1, сборка остановлена, «🎉» нет",
+                  rc22a != 0 and "СБОРКА ОСТАНОВЛЕНА" in out22a and "(код 1)" in out22a
+                  and "🔴 проставлено yes: 0 из" in out22a and "🎉 Группа" not in out22a,
+                  f"код сборки {rc22a} (ждём ≠0); «СБОРКА ОСТАНОВЛЕНА»: "
+                  f"{'СБОРКА ОСТАНОВЛЕНА' in out22a}; слова шага «🔴 проставлено yes: 0 из»: "
+                  f"{'🔴 проставлено yes: 0 из' in out22a}; «🎉 Группа»: {'🎉 Группа' in out22a} "
+                  f"(ждём False)", differ=True)
+
+        # (б) прежний ЛЖИВЫЙ шаг: правка не задевает строк, а счёт берёт план (как до починки
+        #     печать брала len(to_yes)) ⇒ шаг выходит кодом 0 и «56 из 56». Останавливает
+        #     сборку только её собственное сличение с базой — его и испытываем.
+        step_696_path.write_text(
+            step_696_src.replace(step_696_update, update_missing, 1)
+                        .replace(step_696_count, "        done += 1  # ПОЛОМКА: счёт по плану\n", 1),
+            encoding="utf-8")
+        rc22b, out22b = build_696("lie")
+        ok &= case("㉒ ПОЛОМКА (шаг доставки печатает план как сделанное, код 0) КРАСИТ случай ㉒ — "
+                  "сборка сличает слова шага с базой и останавливается",
+                  rc22b != 0 and "его слова с базой не сходятся" in out22b
+                  and "🎉 Группа" not in out22b,
+                  f"код сборки {rc22b} (ждём ≠0); «слова с базой не сходятся»: "
+                  f"{'его слова с базой не сходятся' in out22b}; «🎉 Группа»: "
+                  f"{'🎉 Группа' in out22b} (ждём False) — без сличения сборка верила коду 0",
+                  differ=True)
+        step_696_path.write_text(step_696_src, encoding="utf-8")
+
     finally:
         mezo_stand.release(tmp)  # уборка отложена до исхода прогона
 

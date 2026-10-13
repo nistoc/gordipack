@@ -151,6 +151,15 @@ def write_session(store: pathlib.Path, session_id: str, title: str, archived: bo
 # Строка печатника, отказывающая адресу по возрасту, — её бьют четыре поломки ниже.
 AGE_REFUSAL = '    if session.state != SESSION_LIVE and age is not None and age >= VALID_HOURS:'
 BREAKS = {
+    # ⚡ Э6 (карточка #680): своя поломка случая ④. До неё ④ держала только «condition-for-all»,
+    # ломающая 21 случай разом (прогон 13.10 17:27 UTC), — и не было поломки, бьющей ровно
+    # в то свойство, которое ④ обещает: взятие карточки ЧУЖОЙ ролью не превращается в «ты держишь».
+    "foreign-holder-trusted": (
+        'if claim and claim["holder"] and claim["holder"].upper() == to_role:',
+        'if claim and claim["holder"]:',
+        "печатник принимает ЛЮБОЕ последнее взятие карточки за взятие адресата. Ждём провала "
+        "РОВНО ④ (чужая карточка входит в текст «ТЫ держишь»); ⑥ цел — там последнее взятие "
+        "и так за самим адресатом; остальные случаи вид «держишь» не зовут"),
     "hardcoded-sender": (
         '"text": ("{from} → {role}: в ленте записка #{last_note} к тебе. ',
         '"text": ("PROTO → {role}: в ленте записка #{last_note} к тебе. ',
@@ -302,6 +311,7 @@ BREAKS = {
 # поломкой, а какие нет. Отдельный словарь, а не четвёртое поле BREAKS: так форма
 # (до, после, пояснение) остаётся прежней для тех, кто дописывает поломки снаружи.
 BREAK_FAILS = {
+    "foreign-holder-trusted": "④",
     "hardcoded-sender": "②",
     "blind-link": "⑩⑬",
     "blind-exchange-dir": "⑭",
@@ -439,6 +449,14 @@ def main() -> int:
         con.execute("INSERT INTO tool_leases (role, tools, reason, taken_at, until_utc) "
                     "VALUES ('COORD', 'x.py', 'опыт приёмки', datetime('now','-3 hours'), "
                     "datetime('now','-2 hours'))")
+        # 🩹 ДОГОН (находка PROTO, записка #5845; Э6, карточка #680): живые объявления о правке
+        # адресата COORD гасятся ЗДЕСЬ, в общей раскладке, — до ④, а не только перед ⑥. Копия
+        # базы снимается с живого контура и несёт ЖИВЫЕ объявления COORD, если COORD сейчас
+        # что-то правит. Тогда в ④ печатнику законно есть что сказать «держишь» — объявление,
+        # — и он печатает текст с кодом 0 вместо отказа про чужую карточку: широкий прогон
+        # 13.10 08:55 UTC дал 28 из 29 ровно на ④. Случай судил живые данные, а не печатник.
+        con.execute("UPDATE tool_leases SET until_utc = datetime('now','-2 hours') "
+                    "WHERE role = 'COORD' AND released_at IS NULL")
         con.commit()
         con.close()
         con2 = sqlite3.connect(str(db))
@@ -514,9 +532,8 @@ def main() -> int:
         con3 = sqlite3.connect(str(db))
         # ⚠️ Раскладка обязана оставить у адресата ТОЛЬКО истёкшее объявление: первый прогон
         # покраснел честно — у роли нашлось ещё и ЖИВОЕ, и печатник верно его напечатал.
-        # Опыт судил бы тогда не то, что обещает.
-        con3.execute("UPDATE tool_leases SET until_utc = datetime('now','-2 hours') "
-                     "WHERE role = 'COORD' AND released_at IS NULL")
+        # Опыт судил бы тогда не то, что обещает. Живые объявления COORD гасит общая раскладка
+        # выше (до ④); здесь новых не заводится, поэтому второго гашения не нужно.
         # 🩹 ДОГОН (класс ошибок (107)/(127)): раньше own_card брался запросом
         # max(backlog_id) FROM backlog_events — на живом контуре это случайно совпадало
         # с нашей же подставной карточкой (она и была максимумом), а на пустом backlog_events

@@ -457,6 +457,21 @@ def main():
     # он ничего не меняет.
     rsd = migr_dir / "20260904-rule-skill-delivery.py"
     if rsd.is_file():
+        # 🩹 ДОГОН М4 (находка OPSSRE, записка #5840; Э6, карточка #680): блок судил шаг ТОЛЬКО
+        # по коду выхода, а шаг печатал план как сделанное — сборка говорила «✅ доставка …
+        # проставлено yes: 56», а в базе оставалось «не решено: 65». Теперь слова шага
+        # сличаются с базой: число 'yes' у живых правил до и после шага, разница обязана
+        # равняться числу, которое шаг назвал проставленным, и плану.
+        def _yes_count():
+            c = sqlite3.connect(str(db_path))
+            try:
+                if "skill_delivery" not in {row[1] for row in c.execute("PRAGMA table_info(rules)")}:
+                    return None
+                return c.execute("SELECT COUNT(*) FROM rules WHERE status='active' "
+                                 "AND skill_delivery='yes'").fetchone()[0]
+            finally:
+                c.close()
+        yes_before = _yes_count()
         r = _sp_mig.run([sys.executable, str(rsd), "--db", str(db_path), "--fill-undecided"],
                         capture_output=True, text=True, timeout=120, env=step_env)
         rsd_out = ((r.stdout or "") + (r.stderr or "")).strip()
@@ -465,7 +480,16 @@ def main():
             sys.exit(f"⛔ СБОРКА ОСТАНОВЛЕНА: решение о доставке правил не проставлено "
                      f"(код {r.returncode}):\n     {rsd_last[:300]}\n"
                      f"     Прогони сам для полного вывода: python {rsd} --db {db_path} --fill-undecided")
-        print(f"  ✅ доставка правил до подсказок: {rsd_last[:150]}")
+        yes_after = _yes_count()
+        said = re.search(r"проставлено yes: (\d+) из (\d+)", rsd_out)
+        delta = (yes_after - yes_before) if yes_before is not None and yes_after is not None else None
+        if not said or int(said.group(1)) != int(said.group(2)) or delta != int(said.group(1)):
+            told = f"{said.group(1)} из {said.group(2)} по плану" if said else "строки «проставлено yes: N из M» нет"
+            sys.exit(f"⛔ СБОРКА ОСТАНОВЛЕНА: шаг доставки правил вышел с кодом 0, но его слова "
+                     f"с базой не сходятся — шаг сказал: {told}; в базе 'yes' у живых правил "
+                     f"было {yes_before}, стало {yes_after}.\n     {rsd_last[:300]}\n"
+                     f"     Прогони сам для полного вывода: python {rsd} --db {db_path} --fill-undecided")
+        print(f"  ✅ доставка правил до подсказок: {rsd_last[:150]} · по базе 'yes' {yes_before} → {yes_after}")
     else:
         # ⚠️ Не молчим: без шага решения о доставке не проставлены, и правила свежего контура
         # всплывут «не решено» только при первой сборке навыков — далеко от причины.
