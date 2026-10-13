@@ -25,6 +25,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
+import mezo_target  # noqa: E402 — какой каталог инструментов испытуем (карточка #682)
 
 import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
@@ -49,7 +50,10 @@ def build(tmp: pathlib.Path, with_ask: bool, with_answer: bool, with_box: bool,
     # и приёмка падала ещё до первого случая (замер 2026-08-19 16:34 UTC).
     live = mezo_paths.container_root(__file__) / ".mezosync"
     ours = tmp / "atlas"
-    shutil.copytree(live / "scripts", ours / ".mezosync" / "scripts")
+    # Инструменты стенда — из ИСПЫТУЕМОГО каталога (mezo_target), а не из живого контура: иначе
+    # прогон «по клону» испытывал живые скрипты и молчал о клоне (карточка #682, Э7 #681).
+    shutil.copytree(mezo_target.scripts_root(), ours / ".mezosync" / "scripts",
+                    ignore=shutil.ignore_patterns("__pycache__"))
     mezo_stand.snapshot_db(live / "mezosync.db", ours / ".mezosync" / "mezosync.db")
     ourbox = ours / "atlas.archs" / ".mezosync" / "bridges" / "atlas-neigh"
     ourbox.mkdir(parents=True)

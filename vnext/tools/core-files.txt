@@ -16,6 +16,7 @@ scripts/backlog.py
 scripts/backlog_view.py
 scripts/backup-db.py
 scripts/bridge-groups.py
+scripts/bridge_letter.py
 scripts/broadcast.py
 scripts/check-copy-asymmetry.py
 scripts/check-errors.py
@@ -47,6 +48,7 @@ scripts/mezo_paths.py
 scripts/mezo_refs.py
 scripts/mezo_sessions.py
 scripts/mezo_stand.py
+scripts/new-bridge-letter.py
 scripts/phoenix_lag.py
 scripts/read-broadcasts.py
 scripts/read-messages.py

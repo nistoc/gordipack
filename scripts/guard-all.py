@@ -46,6 +46,7 @@ from pathlib import Path
 # **Починка, не доехавшая до образца, лечит одного и учит неправде всех** — этот донос
 # закрывает обратную половину: починка образца доезжает до живой копии.
 import mezo_paths  # noqa: E402
+import bridge_letter  # noqa: E402 — шапка письма между контурами (Э7, карточка #681)
 
 SCRIPTS = Path(__file__).resolve().parent
 DB = mezo_paths.default_db(__file__)
@@ -1358,6 +1359,43 @@ def main():
     except Exception:                                      # noqa: BLE001
         _own_name = None
 
+    # ⚡ ПИСЬМА С ПОЛЯМИ (Э7, карточка #681). Письмо с годной шапкой судится ПО ПОЛЯМ — кто
+    # написал (from), кому (to), на что ответ (reply-to), — и имя файла, первая строка и папка
+    # в этом суде не участвуют. Письмо без шапки — прежними признаками ниже (решение Р5: старые
+    # письма не трогаем). Шапка, начатая и заполненная неверно, — не годна и не «нет»: называется
+    # отдельно, а судится прежними правилами, чтобы опечатка в поле не выводила письмо из-под суда.
+    # Счёт ведётся по ВСЕМ письмам моста — нашим папкам и папкам соседей — и печатается одной
+    # строкой «📨 мост: …» в конце раздела (без полей — числом: так старые не теряются).
+    _census = {"ok": 0, "ours": 0, "bad": [], "none": 0, "fix": 0, "fix_foreign": [],
+               "first_fields": {}, "plain": []}
+
+    def _census_add(file, head, author=""):
+        """Учесть письмо в счёте моста. author — контур-автор письма без шапки, если он известен
+        прежними признаками (для перехода Р6: письмо без полей после первого письма с полями)."""
+        try:
+            mtime = file.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        if head.valid:
+            _census["ok"] += 1
+            sender = head.sender_contour()
+            if _own_name and sender == bridge_letter.norm_contour(_own_name):
+                _census["ours"] += 1
+            first = _census["first_fields"].get(sender)
+            _census["first_fields"][sender] = mtime if first is None else min(first, mtime)
+            if head.kind == "fix":
+                _census["fix"] += 1
+                target = bridge_letter.split_id(head.reply_to)
+                if not target or target[0] != sender:
+                    _census["fix_foreign"].append(f"{file.parent.name}/{file.name}")
+        elif head.found:
+            _census["bad"].append(f"{file.parent.name}/{file.name}: " + "; ".join(head.problems))
+        else:
+            _census["none"] += 1
+            if author:
+                _census["plain"].append((bridge_letter.norm_contour(author), mtime,
+                                         f"{file.parent.name}/{file.name}"))
+
     # ⚡ ТРИ ПРИЗНАКА СВОЕГО ПИСЬМА (карточка #665; находка контура tapas 26.09, их письмо
     # ask.atlas.guard-all-own-letter-recognition.md). Первая редакция знала один признак —
     # «контура <мы>» в первой строке, — а письма до 25.08 его не несут. 📏 Замер у нас
@@ -1402,7 +1440,14 @@ def main():
         for f in sorted(BRIDGES.glob("*/*.md")):
             if f.name == "INDEX.md":       # указатель правится при каждой записке, о нём не сообщают
                 continue
-            sign = _our_letter_sign(f)
+            # Э7: годная шапка решает сама — письмо соседа с полями в нашей папке больше не «наше по папке»
+            head = bridge_letter.read_header(f)
+            if head.valid:
+                sign = ("fields" if _own_name and head.sender_contour()
+                        == bridge_letter.norm_contour(_own_name) else None)
+            else:
+                sign = _our_letter_sign(f)
+            _census_add(f, head, _own_name if sign else "")
             if sign:
                 our_letters_count += 1
                 if sign == "folder":
@@ -1638,14 +1683,51 @@ def main():
 
     def _answers_to(topic: str, group: str, ask_name: str = "") -> list:
         """Наши ответы ЭТОМУ соседу: тема содержит эту или содержится в ней, либо первая
-        строка ответа называет файл вопроса (ask_name)."""
+        строка ответа называет файл вопроса (ask_name).
+        Э7: ответ с годной шапкой здесь НЕ сличается — он отвечает ровно на то письмо, которое
+        назвал в reply-to (_field_replies), и к чужому вопросу с похожей темой не прилипает."""
+        def _plain(name: str) -> bool:
+            return not any(bridge_letter.read_header(d / name).valid
+                           for d in _neighbor_dirs(group) if (d / name).is_file())
         by_topic = [o for o in sorted(_box_files(group)) if o.startswith("answer.")
-                    and (_topic(o) in topic or topic in _topic(o))]
+                    and (_topic(o) in topic or topic in _topic(o)) and _plain(o)]
         if not ask_name:
             return by_topic
         by_reference = [o for o in sorted(_box_files(group)) if o.startswith("answer.")
-                        and o not in by_topic and _answer_cites(group, o, ask_name)]
+                        and o not in by_topic and _plain(o) and _answer_cites(group, o, ask_name)]
         return by_topic + by_reference
+
+    # Э7: ОТВЕТ ПО ПОЛЮ reply-to. Вопрос отвечен, если в папках пары лежит НАШЕ письмо с полями,
+    # чей reply-to называет этот вопрос (по id места — Р2: контур-владелец места, папка, имя).
+    # Поправка (fix) ответом не считается: она — к своему письму. Ответ соседа на собственный
+    # вопрос тоже не считается — отвечать должны мы.
+    _replies_cache: dict = {}
+
+    def _field_replies(ask_ids, places) -> list:
+        key = tuple(sorted(str(p) for p in places))
+        if key not in _replies_cache:
+            index = {}
+            for place in places:
+                try:
+                    files = sorted(Path(place).glob("*.md"))
+                except OSError:
+                    continue
+                for letter in files:
+                    head = bridge_letter.read_header(letter)
+                    if (not head.valid or head.kind == "fix" or not _own_name
+                            or head.sender_contour() != bridge_letter.norm_contour(_own_name)):
+                        continue
+                    target = bridge_letter.split_id(head.reply_to)
+                    if target:
+                        index.setdefault(target, []).append(letter.name)
+            _replies_cache[key] = index
+        found = []
+        for ask_id in ask_ids:
+            target = bridge_letter.split_id(ask_id)
+            for name in _replies_cache[key].get(target, []) if target else []:
+                if name not in found:
+                    found.append(name)
+        return found
 
     # 🪤 ВТОРОЕ УСТРОЙСТВО ПАПКИ МОСТА (карточка #684). У контура onto папки моста лежат в корне
     # контура — <контейнер>/bridges/<папка>, а не <контейнер>/<репо>/.mezosync/bridges/<папка>:
@@ -1653,6 +1735,14 @@ def main():
     # лежали на месте. Перечень устройств — тот же, что у обхода писем при чтении ленты: два
     # перечня в двух инструментах разошлись бы молча.
     from sync_backoff import BRIDGE_LAYOUTS
+
+    def _field_question(head, group: str) -> bool:
+        """Э7: письмо с годной шапкой — вопрос К НАМ: kind ask, в to есть наш контур, автор — не мы.
+        Имя файла и папка здесь не участвуют (класс карточек #221, #242, #665, #673)."""
+        return (head.valid and head.kind == "ask" and bool(our_group)
+                and head.addressed_to(our_group)
+                and head.sender_contour() != bridge_letter.norm_contour(our_group))
+
     for group, dbp in links:
         container = Path(dbp).parent.parent          # <контур>/.mezosync/mezosync.db
         boxes = sorted(b for layout in BRIDGE_LAYOUTS for b in container.glob(layout))
@@ -1684,24 +1774,38 @@ def main():
                     return bool(our_group) and second.startswith(our_group)
                 return second.startswith(group)           # старое имя: второе слово — АВТОР
 
-            legacy = [f for d in _neighbor_dirs(group) for f in sorted(d.glob("ask.*.md"))
-                      if _is_neighbor_question(f.name)]
+            # Э7: письмо с годной шапкой — вопрос, если так говорят поля (_field_question), и
+            # отвечено, если наше письмо с полями называет его в reply-to; без шапки — прежнее правило.
+            legacy = []
+            for d in _neighbor_dirs(group):
+                for f in sorted(d.glob("*.md")):
+                    head = bridge_letter.read_header(f)
+                    ids = [bridge_letter.place_id(our_group, d.name, f.name)]
+                    if head.valid:
+                        if _field_question(head, group):
+                            legacy.append((f, ids + [head.letter_id], True))
+                    elif f.name.startswith("ask.") and _is_neighbor_question(f.name):
+                        legacy.append((f, ids, False))
             if legacy:
                 answered = 0
-                for f in legacy:
-                    # У старых имён адресат и тема СКЛЕЕНЫ дефисом («ask.aia-тема.md»),
-                    # у новых разделены точкой («answer.aia.тема.md»). Снимаем имя соседа
-                    # с обоих концов и сличаем ТЕМУ — иначе свежий ответ на старый вопрос
-                    # не связывается с ним, и долг числится вечным (замер 18.08 16:45).
-                    # ⚖️ Снимаем ОБА имени: у старого вопроса впереди стои́т автор (сосед),
-                    # у нового — адресат (мы). Одного мало: тема осталась бы с приклеенным
-                    # именем и не связалась с ответом.
-                    topic = f.name[len("ask."):-3]
-                    names = [group] + ([our_group] if our_group else [])
-                    for pref in [nm + sep for nm in names for sep in ("-", ".")]:
-                        if topic.startswith(pref):
-                            topic = topic[len(pref):]
-                    hit = _answers_to(topic, group, f.name)
+                for f, ids, by_fields in legacy:
+                    if by_fields:
+                        hit = _field_replies(ids, _neighbor_dirs(group))
+                    else:
+                        # У старых имён адресат и тема СКЛЕЕНЫ дефисом («ask.aia-тема.md»),
+                        # у новых разделены точкой («answer.aia.тема.md»). Снимаем имя соседа
+                        # с обоих концов и сличаем ТЕМУ — иначе свежий ответ на старый вопрос
+                        # не связывается с ним, и долг числится вечным (замер 18.08 16:45).
+                        # ⚖️ Снимаем ОБА имени: у старого вопроса впереди стои́т автор (сосед),
+                        # у нового — адресат (мы). Одного мало: тема осталась бы с приклеенным
+                        # именем и не связалась с ответом.
+                        topic = f.name[len("ask."):-3]
+                        names = [group] + ([our_group] if our_group else [])
+                        for pref in [nm + sep for nm in names for sep in ("-", ".")]:
+                            if topic.startswith(pref):
+                                topic = topic[len(pref):]
+                        hit = _answers_to(topic, group, f.name)
+                        hit += [o for o in _field_replies(ids, _neighbor_dirs(group)) if o not in hit]
                     if hit:
                         answered += 1
                         # ⚡ КРАТКИЙ РЕЖИМ (карточка #593): пара строк «✅ …»/«⚖️ Сверены ИМЕНА
@@ -1737,8 +1841,34 @@ def main():
                 unreachable.append(f"{group} (искали в {container})")
             continue
         old_ours, old_theirs = [], 0                     # общие папки старого вида у соседа
+        pair_places = list(boxes) + _neighbor_dirs(group)   # Э7: ответ с полями ищется в любой папке пары
         for box in boxes:
-            for ask in sorted(box.glob("ask.*.md")):
+            for ask in sorted(box.glob("*.md")):
+                # Э7: письмо с годной шапкой судится по полям; без шапки — прежним разбором ниже
+                # (только имена «ask.*»). Автор письма без шапки для счёта перехода (Р6): мы — по первой
+                # строке («контура <мы>», «пишет РОЛЬ (<мы>)»), иначе сосед; признак папки здесь не
+                # годится — у onto обе стороны пишут в одну папку «<мы>-onto».
+                head = bridge_letter.read_header(ask)
+                ask_ids = [bridge_letter.place_id(group, box.name, ask.name)]
+                _census_add(ask, head, "" if head.valid else
+                            (_own_name if _our_letter_sign(ask) in ("line", "role") else group))
+                if head.valid:
+                    if not _field_question(head, group):
+                        continue
+                    hit = _field_replies(ask_ids + [head.letter_id], pair_places)
+                    if hit:
+                        bridge_answered += 1
+                        bridge_neighbors.add(group)
+                        if FULL:
+                            print(f"✅ мост соседей [{group}]: «{ask.name}» отвечен по полю reply-to — "
+                                  f"{' · '.join(hit)}")
+                            print("   ⚖️ Связь — по полям письма. Полон ли ответ по существу, машина не знает.")
+                        continue
+                    age_h = (datetime.now(timezone.utc).timestamp() - ask.stat().st_mtime) / 3600
+                    waiting.append((age_h, group, ask.name))
+                    continue
+                if not ask.name.startswith("ask."):
+                    continue
                 # 🔴 ВОПРОС СЧИТАЕТСЯ НАШИМ, ТОЛЬКО ЕСЛИ ОН АДРЕСОВАН НАМ. Сосед смотрит
                 # ВСЕ папки обмена в чужом контейнере — в том числе мосты, к которым он
                 # не сторона. У контура tapas это дало ШЕСТЬ чужих вопросов (наш обмен
@@ -1778,6 +1908,7 @@ def main():
                 # ⇒ Тема совпала, если одна содержит другую. Совпавшие файлы ПЕЧАТАЮТСЯ:
                 # механизм судит ИМЕНА, а полон ли ответ — видит только человек.
                 hit = _answers_to(_topic(ask.name), group, ask.name)
+                hit += [o for o in _field_replies(ask_ids, pair_places) if o not in hit]
                 if hit:
                     # ⚡ КРАТКИЙ РЕЖИМ (карточка #593) — то же правило, что в ветке старого
                     # вида выше: пара строк печатается сразу только при --full или переписанном
@@ -1914,6 +2045,32 @@ def main():
                  if _own_name
                  else " ⚠️ имя контура не прочитано из базы — признак не работал, "
                       "исключено НИЧЕГО, и это не то же самое, что «исключать было нечего»"))
+    # ⚡ ПИСЬМА С ПОЛЯМИ (Э7) — счёт печатается ВСЕГДА, когда мост смотрели: «без полей: N» говорит,
+    # сколько писем судится ещё прежними правилами по имени, а «писем-поправок» мерит критерий
+    # карточки #681 прямо (решение В3). Переход (Р6): контур, приславший первое письмо с годной
+    # шапкой, дальше пишет с полями — его письмо без полей позже первого называется предупреждением.
+    if not _bridge_skip and ((BRIDGES and BRIDGES.exists()) or links):
+        late = [(c, n) for c, m, n in _census["plain"]
+                if c in _census["first_fields"] and m > _census["first_fields"][c]]
+        # Краткий вид — строка счёта только над предупреждениями: без них она шум каждого прогона.
+        if FULL or _census["bad"] or _census["fix_foreign"] or late:
+            print(f"📨 мост: писем с полями (Э7) — годных {_census['ok']} (наших {_census['ours']}) · "
+                  f"шапка негодна — {len(_census['bad'])} · без полей — {_census['none']} · "
+                  f"писем-поправок — {_census['fix']}")
+        if FULL:
+            print("   ⚖️ письмо с полями судится только по полям; без полей — прежними правилами по имени "
+                  "файла и первой строке")
+        for line in _census["bad"][:6]:
+            print(f"   ⚠️ шапка негодна, письмо судится прежними правилами: {line}")
+        if len(_census["bad"]) > 6:
+            print(f"   ⚠️ …и ещё негодных шапок: {len(_census['bad']) - 6}")
+        for name in _census["fix_foreign"]:
+            print(f"   ⚠️ поправка (fix) не к своему письму: {name} — reply-to называет письмо другого контура")
+        if late:
+            print(f"   ⚠️ писем БЕЗ полей после первого письма с полями того же контура — {len(late)}: "
+                  + " · ".join(f"{c}: {n}" for c, n in late[:6])
+                  + (f" · …ещё {len(late) - 6}" if len(late) > 6 else ""))
+            print("      👉 новое письмо соседу — инструментом new-bridge-letter.py: он ставит поля сам")
     if sect_lag and show_sect:
         print(f"⚠️ память ПО РАЗДЕЛАМ (>{STALE_HOURS} ч от последней записки): " + " · ".join(sect_lag)
               + "\n   — состояние врёт о прошлом, ПЛАН ПРИКАЗЫВАЕТ В БУДУЩЕЕ (@PROTO #3051):"

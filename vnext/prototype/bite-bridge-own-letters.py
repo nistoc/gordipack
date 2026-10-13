@@ -99,8 +99,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
 import mezo_stand  # noqa: E402
+import mezo_target  # noqa: E402
 
-GUARD_ALL = Path(mezo_paths.live_scripts(__file__)) / "guard-all.py"
+# Испытуемый guard-all.py — из каталога, который назвал запускающий (mezo_target), а не всегда
+# живой: прогон «по клону» иначе судил живые скрипты (карточка #682, Э7 #681).
+GUARD_ALL = mezo_target.script("guard-all.py")
 SOURCE_TEXT = GUARD_ALL.read_text(encoding="utf-8")
 
 results: list[tuple[str, bool, str]] = []
@@ -143,7 +146,8 @@ def seeded_bridge_run(stand: Path) -> str:
     стёрты — проверка на копии не ходит в настоящие соседние контуры."""
     live = mezo_paths.container_root(__file__) / ".mezosync"
     root = stand / "seeded"
-    shutil.copytree(live / "scripts", root / ".mezosync" / "scripts")
+    shutil.copytree(mezo_target.scripts_root(), root / ".mezosync" / "scripts",
+                    ignore=shutil.ignore_patterns("__pycache__"))
     db = mezo_stand.snapshot_db(live / "mezosync.db", root / ".mezosync" / "mezosync.db")
     con = sqlite3.connect(db)
     con.execute("INSERT INTO meta (key, value) VALUES ('group_name', 'atlas') "
@@ -240,7 +244,8 @@ def neighbor_old_names_run(stand: Path, tag: str, break_from: str = "", break_to
     → (применена ли поломка, вывод проверки: stdout + stderr)."""
     live = mezo_paths.container_root(__file__) / ".mezosync"
     root = stand / tag / "own"
-    shutil.copytree(live / "scripts", root / ".mezosync" / "scripts")
+    shutil.copytree(mezo_target.scripts_root(), root / ".mezosync" / "scripts",
+                    ignore=shutil.ignore_patterns("__pycache__"))
     if break_from:
         copy_path = root / ".mezosync" / "scripts" / "guard-all.py"
         text = copy_path.read_bytes().decode("utf-8")
@@ -335,6 +340,20 @@ def own_letter_namespace(group_name: str, source: str = "") -> dict:
     return namespace
 
 
+def bridge_letter_module():
+    """Модуль шапки письма (bridge_letter.py) рядом с испытуемым guard-all.py. Нет файла — отказ
+    словами: функции сличения без него не исполнить, и «прошло» здесь было бы ложью."""
+    import importlib.util
+    path = GUARD_ALL.parent / "bridge_letter.py"
+    if not path.is_file():
+        sys.exit(f"⛔ приёмка не запустилась: рядом с {GUARD_ALL} нет bridge_letter.py — "
+                 "испытуемый guard-all.py его зовёт (Э7, карточка #681)")
+    spec = importlib.util.spec_from_file_location("bridge_letter", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def extract_function(name: str, namespace: dict) -> None:
     """Достать из исходника проверки одну вложенную функцию (отступ 4) и исполнить её
     в namespace. Тело — строки глубже отступа 4 до первой строки с отступом ≤ 4."""
@@ -390,11 +409,16 @@ def main() -> int:
         record_case("⑤ живой прогон НАЗЫВАЕТ число исключённых писем", False,
                     "в исходнике проверки нет _by_marker — каталог обмена тем же способом "
                     "не найти, предпосылку случая спросить нечем")
-    elif letters_total == 0:
+    elif letters_total == 0 or mezo_target.scripts_root() != mezo_target.LIVE_SCRIPTS:
+        # ⚖️ Испытуется КОПИЯ (клон пакета) — живой прогон её guard-all.py не годится: копия вне
+        #    контура не находит своей базы, а с чужой средой судила бы живой контур чужим кодом.
+        #    Тогда ⑤ — на копии контура с подставными письмами, как на пустом контуре (Э7 #681).
         output = seeded_bridge_run(stand)
         match = re.search(r"📤 мост: наших собственных писем (\d+)", output)
+        why = ("в каталоге обмена контура писем нет ни одного" if letters_total == 0
+               else f"испытуется копия: {mezo_target.scripts_root()}")
         record_case("⑤ прогон НАЗЫВАЕТ число исключённых писем (копия контура с подставными "
-                    "письмами: в каталоге обмена контура писем нет ни одного)",
+                    f"письмами: {why})",
                     match is not None and int(match.group(1)) == 1,
                     (f"сказано: {match.group(0)}" if match else "строки нет — исключение молчаливо")
                     + " · ждём ровно 1: наше письмо из двух (наше и соседа)")
@@ -456,8 +480,10 @@ def main() -> int:
                 reverse_src != SOURCE_TEXT and reverse(old_kind) is None and reverse(headless) is None,
                 "разница двух прогонов и есть починка; сойдись они — ⑦ и ⑨ зеленели бы по другой причине")
 
-    # ⑫–⑬ ответ по ссылке: функции сличения берутся из исходника, папки — на стенде
-    answer_ns: dict = {"BRIDGES": stand, "Path": Path}
+    # ⑫–⑬ ответ по ссылке: функции сличения берутся из исходника, папки — на стенде.
+    # Э7 (карточка #681): сличение пропускает ответы с годной шапкой и зовёт модуль шапки письма —
+    # он берётся из того же каталога, что испытуемый guard-all.py, а не из каталога приёмки.
+    answer_ns: dict = {"BRIDGES": stand, "Path": Path, "bridge_letter": bridge_letter_module()}
     for fn_name in ("_neighbor_dirs", "_box_files", "_topic", "_answer_cites", "_answers_to"):
         extract_function(fn_name, answer_ns)
     ask_name = "ask.atlas.caller-identity-service-kind-and-receiver-sets-owner.md"

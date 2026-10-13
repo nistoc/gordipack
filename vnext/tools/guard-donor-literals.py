@@ -461,6 +461,11 @@ def reconcile(goal, root, data_dir, commit=None, out=print, allowed_file=None):
             allowed = allowed_of_commit(root, data_dir, commit)
             allowed_from = "commit %s" % commit
         res = check(root, data_dir, commit, allowed)
+        # Файл ядра, которого нет на судимом commit, но который есть в рабочем дереве пакета, — новый после
+        # этой версии (Э7 добавил bridge_letter.py и new-bridge-letter.py): попаданий замера Э2 у него нет,
+        # в сверке он не участвует. Нет его и в рабочем дереве — ошибка перечня, отказ как прежде.
+        later = [p for p in res.missing if (root / p).is_file()]
+        res.missing = [p for p in res.missing if p not in later]
         if res.problems or res.missing:
             raise Incomplete("проверка на commit %s не выполнена полностью: %s"
                              % (commit, (res.problems + ["нет файлов ядра: " + ", ".join(res.missing)])[0]))
@@ -470,6 +475,9 @@ def reconcile(goal, root, data_dir, commit=None, out=print, allowed_file=None):
         out("НЕ ПРОВЕРЕНО: %s" % e)
         return 2
     out("версия пакета: commit %s · файлов ядра в перечне пакета: %d" % (commit, len(res.core)))
+    if later:
+        out("ℹ️ файлов ядра новее commit %s (там их нет, в рабочем дереве есть): %d — %s; в сверке не участвуют"
+            % (commit, len(later), ", ".join(later)))
     out("перечень исключений: %s · записей %d" % (allowed_from, res.allowed_total))
     core = set(res.core)
     e2_groups = {r["group"] for r in hits_rows}

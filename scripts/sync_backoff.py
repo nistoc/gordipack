@@ -42,7 +42,9 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-START_SEC = 5 * 60          # с чего начинаем и куда возвращаемся при сбросе
+import bridge_letter        # шапка письма между контурами (Э7, карточка #681) — разбор в одном месте
+
+START_SEC = 5 * 60         # с чего начинаем и куда возвращаемся при сбросе
 STEP_SEC = 5 * 60           # на сколько прибавляем за каждую тишину подряд
 MAX_SEC = 50 * 60           # потолок: дальше не растём
 # П② пула (27.08): пока в АКТИВНОМ пуле есть живые объявления, потолок сна УЧАСТНИЦЫ
@@ -284,6 +286,22 @@ def _bridge_letters(conn, db_path, role: str, since: float) -> list:
             continue
         for f, mtime in files:
             if mtime <= since:
+                continue
+            # Э7 (карточка #681): письмо с годной шапкой судится по полям — сосед из from,
+            # адресаты из to, — а не по имени папки и разбору первых строк. Своё письмо в общей
+            # папке (у onto обе стороны пишут в одну) новостью не считается. Без шапки — как прежде.
+            head = bridge_letter.read_header(f)
+            if head.valid:
+                sender = head.sender_contour()
+                if our_group and sender == bridge_letter.norm_contour(our_group):
+                    continue
+                if our_group and not head.addressed_to(our_group):
+                    to, to_me = [f"контур {', '.join(head.to_contours())}"], False
+                else:
+                    to = head.roles_for(our_group) if our_group else [r for r, _ in head.to]
+                    to_me = role in to or to == ["всем"]
+                letters.append({"when": mtime, "neighbour": sender or neighbour, "to": to,
+                                "to_me": to_me, "file": f.name, "dir": d.as_posix()})
                 continue
             if other_contour:
                 to, to_me = [f"контур {other_contour}"], False
