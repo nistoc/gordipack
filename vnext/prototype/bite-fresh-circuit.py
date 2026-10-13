@@ -1241,7 +1241,8 @@ def main() -> int:
             r696 = subprocess.run(
                 [sys.executable, str(pack_696 / "scripts" / "init-group.py"), "--name",
                  f"bite696{label}", "--path", str(mez696), "--roles", "coord"],
-                capture_output=True, text=True, encoding="utf-8", timeout=300, env=env)
+                capture_output=True, text=True, encoding="utf-8", timeout=300,
+                env=mezo_stand.stand_env(tmp))
             return r696.returncode, (r696.stdout or "") + (r696.stderr or "")
 
         # (а) правка не задевает ни одной строки, шаг считает честно ⇒ шаг сам откатывает и
