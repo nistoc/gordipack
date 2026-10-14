@@ -69,11 +69,13 @@ def default_scan_targets(this_file: pathlib.Path) -> list:
     """Свои каталоги ПО УМОЛЧАНИЮ (когда путь не назван) — вычисляются от расположения
     ЭТОГО файла, а не впечатаны: ни одного пути AIA или машины в исполняемых строках.
 
-    Работают ОБЕ раскладки — тот же приём, каким tool() в guard-all.py ищет звенья
+    Работают ВСЕ ТРИ раскладки — тот же приём, каким tool() в guard-all.py ищет звенья
     по обе стороны (раскладка контейнера / раскладка пакета), только наоборот: там
     ищут, ГДЕ лежит звено, здесь — что звену смотреть по умолчанию.
       · раскладка контейнера: этот файл лежит в `<контейнер>/vnext-tools/…`,
         сосед — `<контейнер>/.mezosync/scripts`;
+      · единственная копия: этот файл лежит в `<контейнер>/.mezosync/scripts/…` — так у контура
+        без второго каталога установки (AIA, письмо 2026-10-14 02:00 UTC);
       · раскладка пакета: этот файл лежит в `<пакет>/vnext/prototype/…`,
         сосед — `<пакет>/scripts`.
     Кандидат, которого нет на диске, молча пропускается — а не отказывает: это ЦЕЛИ
@@ -92,9 +94,18 @@ def default_scan_targets(this_file: pathlib.Path) -> list:
     # Признак тот же, что _by_marker() в guard-all.py: `coordination` и `bridges` прямо в корне
     # контейнера или в `<репозиторий>/.mezosync/`. Имена репозиториев — С ДИСКА, не списком.
     # ⛔ КОРЕНЬ — ТОЛЬКО СВОЙ: раскладка контейнера узнаётся по `.mezosync` рядом с каталогом
-    # инструмента. Без этого признака корнем не берётся ничего выше — иначе обход ушёл бы
-    # в соседние контейнеры (чужие контуры не сканируются).
-    root = here.parent if (here.parent / ".mezosync").is_dir() else None
+    # инструмента, единственная копия — по тому, что сам каталог инструмента есть
+    # `.mezosync/scripts`. Без одного из двух признаков корнем не берётся ничего выше — иначе
+    # обход ушёл бы в соседние контейнеры (чужие контуры не сканируются).
+    # 🩹 Выпуск 2740aaf знал только первый признак: у AIA единственная копия лежит
+    # в `<контейнер>/.mezosync/scripts`, и папки координации по умолчанию не брались (их письмо
+    # 2026-10-14 02:00 UTC). Самопроверка строила только vnext-tools и vnext/prototype — и молчала.
+    if (here.parent / ".mezosync").is_dir():
+        root = here.parent
+    elif here.name == "scripts" and here.parent.name == ".mezosync":
+        root = here.parent.parent
+    else:
+        root = None
     if root is not None:
         for name in ("coordination", "bridges"):
             candidates.append(root / name)
@@ -308,6 +319,30 @@ def selftest() -> int:
             fails.append("папка coordination без .mezosync взята — признак не тот, что в guard-all.py")
         if any("сосед" in p.parts for p in got):
             fails.append("обход ушёл в соседний контейнер — корень взят выше своего")
+        # ЕДИНСТВЕННАЯ КОПИЯ в `<контейнер>/.mezosync/scripts` (находка AIA, письмо 2026-10-14
+        # 02:00 UTC): второго каталога установки нет — папки координации берутся всё равно, а
+        # папка без `.mezosync` и папка соседнего контейнера — нет, как и в раскладке выше.
+        one = box / "одна-копия"
+        for p in (one / ".mezosync" / "scripts", one / "repo" / ".mezosync" / "coordination",
+                  one / "repo" / ".mezosync" / "bridges", one / "голый" / "coordination",
+                  box / "сосед-2" / ".mezosync" / "coordination"):
+            p.mkdir(parents=True)
+        got = default_scan_targets(one / ".mezosync" / "scripts" / "guard-control-chars.py")
+        want = {(one / "repo" / ".mezosync" / n).resolve() for n in ("coordination", "bridges")}
+        if not want <= {p.resolve() for p in got}:
+            fails.append("единственная копия в .mezosync/scripts: папки координации не взяты по умолчанию")
+        if any(p.name == "coordination" and p.parent.name == "голый" for p in got):
+            fails.append("единственная копия: папка coordination без .mezosync взята")
+        if any("сосед-2" in p.parts for p in got):
+            fails.append("единственная копия: обход ушёл в соседний контейнер")
+        # встречный: каталог `scripts` НЕ под `.mezosync` — корнем ничего не берётся. Признак
+        # «каталог называется scripts» без `.mezosync` над ним угадывал бы корень где попало.
+        loose = box / "просто-scripts"
+        for p in (loose / "scripts", loose / "repo" / ".mezosync" / "coordination"):
+            p.mkdir(parents=True)
+        got = default_scan_targets(loose / "scripts" / "guard-control-chars.py")
+        if any(p.name in ("coordination", "bridges") for p in got):
+            fails.append("каталог scripts не под .mezosync принят за раскладку контейнера")
         # раскладка пакета: признака .mezosync рядом нет — папок координации не ищет и не отказывает
         pack = box / "пакет"
         for p in (pack / "scripts", pack / "vnext" / "prototype", pack / "repo" / ".mezosync" / "coordination"):
