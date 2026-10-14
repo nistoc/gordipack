@@ -335,7 +335,14 @@ def main() -> int:
                                 "LONG_BY_NATURE, эта в него не входит)", where))
             continue
         out = (r.stdout or "") + (r.stderr or "")
-        if ("unrecognized arguments: --db" in out or "no such option: --db" in out):
+        # 🩸 ПРИЗНАКИ ОТКАЗА СУДЯТСЯ ТОЛЬКО ПРИ КОДЕ ≠ 0 (карточка #680, разбор 13.10 17:58 UTC).
+        # Механизм, ПЕЧАТАЮЩИЙ текст, печатает и чужие слова: read-phoenix.py выводит память
+        # роли, а в памяти PROTO стоит пояснение «отказ «unrecognized arguments»». Поиск
+        # подстрокой во всём выводе принимал его за отказ самого механизма при коде 0 —
+        # «🔴 МЕХАНИЗМ НЕ ЗНАЕТ ЭТОЙ ФОРМЫ:» с пустым пояснением. Разборщик доводов отказывает
+        # кодом 2, падение — кодом 1: при коде 0 механизм ответил, что бы он ни напечатал.
+        if r.returncode != 0 and ("unrecognized arguments: --db" in out
+                                  or "no such option: --db" in out):
             # механизм не умеет указывать базу. Читающему это не мешает — он ничего не пишет;
             # пишущий на живой базе запускать НЕЛЬЗЯ, и это разные исходы, а не один
             if READING.match(exe.name):
@@ -354,18 +361,19 @@ def main() -> int:
         # traceback, назвал бы такую форму отвечающей: память зовёт то, чего у механизма нет
         # (это же класс, что и «механизм печатает имя, которого у него нет»).
         unknown = [f for f in flags if f not in FORBIDDEN and not values(f, ctx)]
-        if "Traceback (most recent call last)" in out:
+        refused = r.returncode != 0
+        if refused and "Traceback (most recent call last)" in out:
             last = [l for l in out.strip().splitlines() if l.strip()][-1][:110]
             red += 1
             reds.append((shown, f"🔴 ПАДАЕТ: {last}", where))
             if a.verbose:
                 print(out)
-        elif "unrecognized arguments" in out or "invalid choice" in out:
+        elif refused and ("unrecognized arguments" in out or "invalid choice" in out):
             bad = re.search(r"unrecognized arguments: (.+)|invalid choice: (.+)", out)
             red += 1
             reds.append((shown, "🔴 МЕХАНИЗМ НЕ ЗНАЕТ ЭТОЙ ФОРМЫ: "
                                 f"{(bad.group(0) if bad else '')[:90]}", where))
-        elif "expected one argument" in out and unknown:
+        elif refused and "expected one argument" in out and unknown:
             skip += 1
             skips.append((shown, f"нечего подставить в {' '.join(unknown)} — инструмент, а не механизм",
                           where))
@@ -379,7 +387,7 @@ def main() -> int:
             red += 1
             reds.append((shown, f"🔴 МОЛЧА ОТКАЗЫВАЕТ кодом {r.returncode}: ни строки вывода — "
                                 "роль решит, что команда отработала", where))
-        elif "the following arguments are required" in out:
+        elif refused and "the following arguments are required" in out:
             skip += 1
             skips.append((shown, "форма в памяти НЕПОЛНА: механизм требует ещё аргументы", where))
         else:

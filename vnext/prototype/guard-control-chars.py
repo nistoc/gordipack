@@ -81,11 +81,28 @@ def default_scan_targets(this_file: pathlib.Path) -> list:
     здесь несуществующий кандидат не повод для громкого ERR — просто пусто по нему).
     """
     here = this_file.resolve().parent
-    candidates = (
+    candidates = [
         here,                                    # сам каталог инструмента
         here.parent / ".mezosync" / "scripts",    # раскладка контейнера: сосед vnext-tools
         here.parent.parent / "scripts",           # раскладка пакета: сосед vnext/
-    )
+    ]
+    # ПАПКИ КООРДИНАЦИИ И МОСТА — по предложению AIA (их письмо status.aia.e5-accepted-and-card-715.md,
+    # карточка #715 п.4): общий прогон зовёт инструмент без аргументов, и папки, где роли пишут
+    # записи и письма, на невидимые байты не проверялись вовсе — AIA держала для них обёртку.
+    # Признак тот же, что _by_marker() в guard-all.py: `coordination` и `bridges` прямо в корне
+    # контейнера или в `<репозиторий>/.mezosync/`. Имена репозиториев — С ДИСКА, не списком.
+    # ⛔ КОРЕНЬ — ТОЛЬКО СВОЙ: раскладка контейнера узнаётся по `.mezosync` рядом с каталогом
+    # инструмента. Без этого признака корнем не берётся ничего выше — иначе обход ушёл бы
+    # в соседние контейнеры (чужие контуры не сканируются).
+    root = here.parent if (here.parent / ".mezosync").is_dir() else None
+    if root is not None:
+        for name in ("coordination", "bridges"):
+            candidates.append(root / name)
+            try:
+                repos = sorted(d for d in root.iterdir() if d.is_dir())
+            except OSError:
+                repos = []
+            candidates.extend(repo / ".mezosync" / name for repo in repos)
     seen, out = set(), []
     for c in candidates:
         if c.is_dir() and c not in seen:
@@ -272,6 +289,32 @@ def selftest() -> int:
             fails.append("--fix не вылечил байт, не рождённый уполовиниванием")
         if (d / "шум.md").read_bytes().decode("utf-8") != "допосле":
             fails.append("--fix на обычном шуме испортил текст")
+
+        # ПАПКИ КООРДИНАЦИИ ПО УМОЛЧАНИЮ (карточка #715 п.4, предложение AIA): раскладка
+        # контейнера — coordination и bridges берутся по признаку `.mezosync`; рядом с ними —
+        # то, что брать нельзя: та же папка без `.mezosync` и папка СОСЕДНЕГО контейнера.
+        box = d / "box"
+        cont = box / "свой"
+        for p in (cont / ".mezosync" / "scripts", cont / "vnext-tools",
+                  cont / "repo" / ".mezosync" / "coordination", cont / "repo" / ".mezosync" / "bridges",
+                  cont / "голый" / "coordination", box / "сосед" / ".mezosync" / "coordination"):
+            p.mkdir(parents=True)
+        got = default_scan_targets(cont / "vnext-tools" / "guard-control-chars.py")
+        # сравнение после resolve(): временная папка бывает коротким именем 8.3, инструмент — длинным
+        want = {(cont / "repo" / ".mezosync" / n).resolve() for n in ("coordination", "bridges")}
+        if not want <= {p.resolve() for p in got}:
+            fails.append("папки coordination и bridges с признаком .mezosync не взяты по умолчанию")
+        if any(p.name == "coordination" and p.parent.name == "голый" for p in got):
+            fails.append("папка coordination без .mezosync взята — признак не тот, что в guard-all.py")
+        if any("сосед" in p.parts for p in got):
+            fails.append("обход ушёл в соседний контейнер — корень взят выше своего")
+        # раскладка пакета: признака .mezosync рядом нет — папок координации не ищет и не отказывает
+        pack = box / "пакет"
+        for p in (pack / "scripts", pack / "vnext" / "prototype", pack / "repo" / ".mezosync" / "coordination"):
+            p.mkdir(parents=True)
+        got = default_scan_targets(pack / "vnext" / "prototype" / "guard-control-chars.py")
+        if any(p.name in ("coordination", "bridges") for p in got):
+            fails.append("в раскладке пакета взяты папки координации — корень контейнера угадан")
     for x in fails:
         print("СБОЙ самопроверки: " + x)
     n = inspect.getsource(selftest).count("fails.append(")
