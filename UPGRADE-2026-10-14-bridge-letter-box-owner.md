@@ -53,14 +53,15 @@ vnext/prototype/bite-bridge-letter-fields.py ... приёмка этапа Э7
 0 ... резервная копия — UPGRADE.md, раздел 3, шаг 0
 1 ... план:
         python <КОНТУР>/.mezosync/scripts/update-tools.py --rev 8ad486d
-      ожидаемо «≠» у new-bridge-letter.py; у bite-bridge-letter-fields.py — «≠», если приёмка у вас стои́т,
-      иначе «+». «✋» — вы правили файл у себя: остановитесь и пришлите вывод
+      ожидаемо ровно 1 строка «≠» — new-bridge-letter.py (у эталона — тоже 1). Приёмка
+      bite-bridge-letter-fields.py обновлением не приезжает: её не зовёт ни один скрипт, она в строке «Вне
+      обновления». «✋» — вы правили файл у себя: остановитесь и пришлите вывод
 2 ... запись, второй план — до «+ ≠ ≈» нет:
         python <КОНТУР>/.mezosync/scripts/update-tools.py --rev 8ad486d --apply
         python <КОНТУР>/.mezosync/scripts/update-tools.py --rev 8ad486d
 3 ... шагов схемы нет — шаг 2 раздела 3 UPGRADE.md пропустите
-4 ... проверка — из каталога, где у вас стои́т приёмка:
-        python <каталог>/bite-bridge-letter-fields.py
+4 ... проверка — приёмкой из клона пакета на версии 8ad486d или новее (испытывает ваш установленный каталог):
+        python <клон пакета>/vnext/prototype/bite-bridge-letter-fields.py
       → «ПИСЬМА С ПОЛЯМИ (Э7) — ПРИНЯТО — случаев 38, различающих 34»
 ```
 👉 Пишете в папку моста в каталоге соседа (как dominal в `atlas-dominal`) — запишите соседа в `cross_links`:
@@ -73,6 +74,7 @@ vnext/prototype/bite-bridge-letter-fields.py ... приёмка этапа Э7
                           И8: id neigh:atlas-neigh-exchange/…, ответ по нему письмо находит; под П7 тот же случай —
                           id atlas:atlas-neigh-exchange/…, ответ письмо не находит
 литералы донора ......... guard-donor-literals.py по рабочему дереву — находок 0
+план установки .......... update-tools.py --rev 8ad486d у эталона, 17:02 UTC — 1 строка «≠» new-bridge-letter.py
 ```
 
 ## 5. Известно и в этом выпуске НЕ сделано
