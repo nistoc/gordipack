@@ -20,6 +20,9 @@ r"""bite-bridge-letter-fields.py — приёмка этапа Э7 (карточ
                       <адресат>» · И2 ответ без reply-to — отказ · И3 имя занято — отказ, файл цел ·
                       И4 поправка к чужому письму — отказ · И5 проверка письма без шапки — код 2 ·
                       И6 роль «9P» пишет письмо — код 0, шапка годна
+  владелец места .... (карточка #717) --box: И7 папка нашего каталога — своё имя в id · И8 папка каталога
+                      соседа из cross_links — имя соседа, ответ по id письмо находит · И9 папка вне известных
+                      каталогов — отказ · И10 она же с --place-owner — записано · И11 флаг спорит с каталогом — отказ
   ① ................. вопрос с полями и ЛЖИВЫМ именем: старое имя в общей папке («ours» по имени) — судится
                       по полям как вопрос к нам; новое имя «к нам» с полями «к третьему» — не судится
   ② ................. два ответа двух ролей на один вопрос — оба целы, проверка называет оба
@@ -39,6 +42,7 @@ r"""bite-bridge-letter-fields.py — приёмка этапа Э7 (карточ
   П3 guard-all судит письма в НАШЕЙ папке по имени ............................ падает «своё / чужое»
   П4 блок первым (⑦) и П5 «контура <адресат>» в первой строке (⑦б) — на тексте письма
   П6 прежнее выражение адреса «роль начинается с буквы» в копии модуля ....... падает Ш7, Ш1 устоял
+  П7 «владелец места всегда свой» в копии инструмента (прежнее поведение) ..... падают И8–И11, И7 устоял
 
 ═══ ГРАНИЦА, НАЗВАНА ПРЯМО
 ⑤ (старые письма: раздел моста до и после — построчно тот же) здесь НЕ судится: старой копии
@@ -182,6 +186,42 @@ def digit_role_ok(mod) -> tuple:
     return good, f"9P@dominal → {addr} · шапка: {h.describe()}" + (f" · причины: {h.problems}" if h.problems else "")
 
 
+def box_letter(stand: dict, bl, box: Path, topic: str, body: Path, *extra) -> tuple:
+    """Письмо инструментом в папку --box → (код, id из шапки нового письма или "", новых писем, вывод)."""
+    before = set(box.glob("*.md")) if box.is_dir() else set()
+    code, out = run_tool(stand, "--role", "PROTO", "--to", "COORD@neigh", "--kind", "status",
+                         "--topic", topic, "--file", str(body), "--box", str(box), *extra)
+    made = sorted(set(box.glob("*.md")) - before) if box.is_dir() else []
+    letter_id = bl.read_header(made[0]).letter_id if len(made) == 1 else ""
+    return code, letter_id or "", len(made), out
+
+
+def box_owner_branches(stand: dict, bl, boxes: dict, body: Path, tag: str) -> dict:
+    """Карточка #717: владелец места в id при --box по веткам → {ветка: (годно ли, подробность)}.
+    tag отличает темы прогона под поломкой: имена писем не совпадают с первыми."""
+    res = {}
+    code, lid, n, out = box_letter(stand, bl, boxes["own"], f"e7-box-own{tag}", body)
+    res["own"] = (code == 0 and n == 1 and lid.startswith(f"atlas:{boxes['own'].name}/"),
+                  f"код {code} · писем {n} · id {lid or '—'}")
+    code, lid, n, out = box_letter(stand, bl, boxes["neigh"], f"e7-box-neigh{tag}", body)
+    rcode, rout = run_tool(stand, "--role", "PROTO", "--to", "COORD@neigh", "--kind", "answer",
+                           "--topic", f"e7-box-reply{tag}", "--reply-to", lid or "neigh:none/none",
+                           "--file", str(body), "--dry-run")
+    seen = rcode == 0 and "отсюда не видно" not in rout
+    res["neigh"] = (code == 0 and n == 1 and lid.startswith(f"neigh:{boxes['neigh'].name}/") and seen,
+                    f"код {code} · писем {n} · id {lid or '—'} · ответ по этому id находит письмо: {seen}")
+    code, lid, n, out = box_letter(stand, bl, boxes["out"], f"e7-box-out{tag}", body)
+    res["out"] = (code == 1 and n == 0 and "--place-owner" in out,
+                  f"код {code} · писем {n} · " + (lines_with(out, "НЕ записано") or [out.strip()[:120]])[0][:200])
+    code, lid, n, out = box_letter(stand, bl, boxes["out"], f"e7-box-declared{tag}", body, "--place-owner", "neigh")
+    res["declared"] = (code == 0 and n == 1 and lid.startswith(f"neigh:{boxes['out'].name}/"),
+                       f"код {code} · писем {n} · id {lid or '—'}")
+    code, lid, n, out = box_letter(stand, bl, boxes["neigh"], f"e7-box-dispute{tag}", body, "--place-owner", "atlas")
+    res["dispute"] = (code == 1 and n == 0 and "спорит с местом" in out,
+                      f"код {code} · писем {n} · " + (lines_with(out, "НЕ записано") or [out.strip()[:120]])[0][:200])
+    return res
+
+
 def main() -> int:
     ok = True
     # испытуемые названы поимённо: нет файла — «не запустилась», а общий прогон видит, что испытано
@@ -321,6 +361,37 @@ def main() -> int:
                    code == 0 and len(made6) == 1 and ccode6 == 0,
                    f"код {code} · файлов {len(made6)} · проверка шапки код {ccode6}"
                    + ("" if code == 0 else " · " + out.strip()[:160]), differ=True)
+
+        # ── ВЛАДЕЛЕЦ МЕСТА ПРИ --box (карточка #717) ──────────────────────────────────────────
+        # три ветки по каталогу (своя · соседа из cross_links · вне известных) и явный флаг владельца
+        boxes = {"own": st["ours"] / "atlas.archs" / ".mezosync" / "bridges" / "atlas-neigh-second",
+                 "neigh": st["their_shared"], "out": tmp / "stray" / "atlas-neigh"}
+        for box in boxes.values():
+            box.mkdir(parents=True, exist_ok=True)
+        br = box_owner_branches(st, bl, boxes, body, "")
+        ok &= case("И7 --box в папку нашего каталога — в id своё имя «atlas»", *br["own"])
+        ok &= case("И8 --box в папку каталога соседа из cross_links — в id имя соседа «neigh»; ответ по этому id "
+                   "находит письмо", *br["neigh"], differ=True)
+        ok &= case("И9 --box в папку вне известных каталогов — отказ со словами про --place-owner, письма нет",
+                   *br["out"], differ=True)
+        ok &= case("И10 та же папка с --place-owner neigh — письмо записано, в id «neigh»", *br["declared"], differ=True)
+        ok &= case("И11 --place-owner atlas для папки в каталоге соседа — отказ «флаг спорит с местом»",
+                   *br["dispute"], differ=True)
+        # П7: прежнее поведение «владелец места всегда свой» в копии инструмента на стенде
+        tool_before = patched(st["tool"],
+                              "owner, owner_how = place_owner(box, container, ours, neighbour_containers(db), declared)",
+                              'owner, owner_how = ours, ""')
+        if tool_before is None:
+            print("⛔ НЕ ЗАПУСТИЛАСЬ: поломку П7 некуда вложить — образец не найден ровно один раз")
+            return 2
+        try:
+            pb = box_owner_branches(st, bl, boxes, body, "-p7")
+        finally:
+            st["tool"].write_text(tool_before, encoding="utf-8")
+        fell = [k for k in ("neigh", "out", "declared", "dispute") if not pb[k][0]]
+        ok &= case("П7 поломка «владелец места всегда свой»: падают И8–И11, И7 устоял",
+                   pb["own"][0] and len(fell) == 4,
+                   f"под поломкой упали: {fell} · И7 годен: {pb['own'][0]} · И8 под поломкой: {pb['neigh'][1]}")
 
         # ── guard-all НА СТЕНДЕ ───────────────────────────────────────────────────────────────
         g = build_guard_stand(tmp / "g")

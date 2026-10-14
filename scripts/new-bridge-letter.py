@@ -7,6 +7,9 @@ r"""new-bridge-letter.py — письмо соседнему контуру с �
         --topic e7-fields --file <текст.md> [--due 2026-10-20] [--dry-run]
     python <контур>/.mezosync/scripts/new-bridge-letter.py --role PROTO --to COORD@onto --kind answer \
         --topic e7-fields --reply-to onto:atlas-onto/ask.atlas.e7-fields.20261013-0930 --file <текст.md>
+    python <контур>/.mezosync/scripts/new-bridge-letter.py --role 9P --to PROTO@atlas --kind answer \
+        --topic e7-fields --reply-to atlas:atlas-dominal/ask.dominal.e7.20261014-0100 --file <текст.md> \
+        --box <каталог контура atlas>/atlas.archs/.mezosync/bridges/atlas-dominal [--place-owner atlas]
     python <контур>/.mezosync/scripts/new-bridge-letter.py --check <файл письма>
 
 ЧТО ДЕЛАЕТ. Кладёт письмо в НАШУ исходящую папку моста для контура-адресата (с 25.08 каждый контур
@@ -14,6 +17,12 @@ r"""new-bridge-letter.py — письмо соседнему контуру с �
 для человека, вторым — блок полей. Имя контура-автора — из базы (meta.group_name), не впечатано.
 Файл пишется только новым: существующий не перезаписывается (второй ответ не стирает первый).
 --check читает шапку готового письма и говорит: годна · негодна (с причинами) · шапки нет.
+
+ПАПКА ФЛАГОМ --box (карточка #717). id письма называет контур-владелец МЕСТА (решение Р2), и для
+папки, названной флагом, он берётся по каталогу: папка в каталоге нашего контура — своё имя; в каталоге
+соседа из cross_links — имя соседа (вложенные каталоги — решает самый глубокий). Папка вне известных
+каталогов — отказ, пока владелец не назван флагом --place-owner; флаг, спорящий с каталогом, — отказ.
+Прежде владельцем всегда ставился свой контур, и ответ на такое письмо его не находил.
 
 КОДЫ ВЫХОДА: 0 — письмо записано (или шапка годна) · 1 — отказ, письмо не записано (или шапка
 негодна) · 2 — у проверяемого письма шапки нет либо файл не прочитан.
@@ -25,6 +34,7 @@ no-scan-external-contours): reply-to сверяется только с файл
 from __future__ import annotations
 
 import argparse
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -101,6 +111,46 @@ def outgoing_box(places: list, ours: str, to_contour: str):
                   "и папку с обоими именами в папках моста контура) — заведи её или назови флагом --box")
 
 
+def inside(path: Path, root: Path) -> bool:
+    """Лежит ли path в каталоге root (или совпадает с ним); регистр букв — по правилам системы."""
+    try:
+        p, r = os.path.normcase(str(path.resolve())), os.path.normcase(str(root.resolve()))
+        return os.path.commonpath([p, r]) == r
+    except (OSError, ValueError):     # ValueError — разные диски Windows
+        return False
+
+
+def place_owner(box: Path, container: Path, ours: str, neighbours: list, declared: str):
+    """Контур-владелец папки --box по каталогу → (контур | None, слова: как определён или почему отказ).
+    Без молчаливого «своё»: папка вне известных каталогов получает владельца только явным флагом."""
+    known = [(ours, container)] + [(g, root) for g, root in neighbours if g and g != ours]
+    found = {}                        # глубина каталога → контуры, чьи каталоги вмещают папку
+    for group, root in known:
+        if inside(box, root):
+            try:
+                depth = len(root.resolve().parts)
+            except OSError:
+                continue
+            found.setdefault(depth, set()).add(group)
+    if found:
+        owners = sorted(found[max(found)])
+        if len(owners) > 1:
+            return None, (f"папка {box.as_posix()} лежит в каталоге, записанном за несколькими контурами "
+                          f"({', '.join(owners)}) — проверь cross_links")
+        owner = owners[0]
+        if declared and declared != owner:
+            return None, (f"--place-owner «{declared}», а папка {box.as_posix()} лежит в каталоге контура "
+                          f"«{owner}» — флаг спорит с местом")
+        how = ("папка в каталоге нашего контура" if owner == ours
+               else f"папка в каталоге контура «{owner}» (по cross_links)")
+        return owner, how
+    if declared:
+        return declared, "владелец места назван флагом --place-owner"
+    return None, (f"папка {box.as_posix()} лежит вне каталога нашего контура и каталогов соседей из cross_links — "
+                  "владельца места для id не определить. Назови его флагом --place-owner <контур> "
+                  "или запиши соседа в cross_links")
+
+
 def check_letter(path: Path) -> int:
     h = bridge_letter.read_header(path)
     if not h.found:
@@ -137,7 +187,11 @@ def main() -> int:
     ap.add_argument("--reply-to", default="", help="id письма, на которое это ответ (у answer и fix обязателен)")
     ap.add_argument("--due", default="", help="у вопроса: до какой даты ждём ответа, ГГГГ-ММ-ДД")
     ap.add_argument("--file", help="текст письма (UTF-8); шапку инструмент ставит сам")
-    ap.add_argument("--box", help="папка, куда положить письмо, если инструмент не нашёл её сам")
+    ap.add_argument("--box", help="папка, куда положить письмо, если инструмент не нашёл её сам; "
+                                  "владелец места в id — по каталогу, где она лежит")
+    ap.add_argument("--place-owner", default="",
+                    help="контур-владелец папки --box, если она лежит вне каталогов нашего контура и соседей "
+                         "из cross_links; флаг, спорящий с каталогом, — отказ")
     ap.add_argument("--db", help="база контура (по умолчанию — рядом с инструментом)")
     ap.add_argument("--dry-run", action="store_true", help="показать имя и текст письма, ничего не записывать")
     args = ap.parse_args()
@@ -185,6 +239,15 @@ def main() -> int:
         return refuse(f"--due — только у вопроса (ask): письмо вида {args.kind} ответа не ждёт")
     if args.due and not bridge_letter.DUE_RE.match(args.due):
         return refuse(f"--due «{args.due}» — не вида ГГГГ-ММ-ДД")
+    declared = ""
+    if args.place_owner:
+        if not args.box:
+            return refuse("--place-owner — только вместе с --box: свою исходящую папку инструмент находит сам")
+        # имя контура сверяется тем же правилом, что в адресе («all@<контур>» — годный адрес)
+        address = bridge_letter.parse_address(f"all@{args.place_owner}")
+        if not address:
+            return refuse(f"--place-owner «{args.place_owner}» — не имя контура")
+        declared = address[1]
 
     try:
         body = Path(args.file).read_text(encoding="utf-8")
@@ -195,10 +258,14 @@ def main() -> int:
 
     container = mezo_paths.container_root(__file__)
     places = bridge_places(container)
+    owner, owner_how = ours, ""
     if args.box:
         box = Path(args.box)
         if not box.is_dir():
             return refuse(f"папки {box} нет")
+        owner, owner_how = place_owner(box, container, ours, neighbour_containers(db), declared)
+        if owner is None:
+            return refuse(owner_how)
     else:
         box, words = outgoing_box(places, ours, to_contour)
         if box is None:
@@ -209,7 +276,7 @@ def main() -> int:
         name = bridge_letter.letter_name(args.kind, to_contour, args.topic, when)
     except ValueError as exc:
         return refuse(str(exc))
-    letter_id = bridge_letter.place_id(ours, box.name, name)
+    letter_id = bridge_letter.place_id(owner, box.name, name)
     text = bridge_letter.compose(when, (role, ours), to, args.kind, letter_id,
                                  reply_to=args.reply_to, due=args.due, body=body)
     path = box / name
@@ -229,6 +296,8 @@ def main() -> int:
 
     if args.dry_run:
         print(f"ℹ️ ХОЛОСТОЙ ПРОГОН — ничего не записано. Письмо легло бы в {path.as_posix()}")
+        if owner_how:
+            print(f"   владелец места в id — «{owner}»: {owner_how}")
         for w in warnings:
             print(f"⚠️ {w}")
         print("─" * 60)
@@ -250,6 +319,8 @@ def main() -> int:
     print(f"✅ письмо записано: {path.as_posix()}")
     print(f"   {h.describe()}")
     print(f"   id: {letter_id}")
+    if owner_how:
+        print(f"   владелец места в id — «{owner}»: {owner_how}")
     for w in warnings:
         print(f"⚠️ {w}")
     print("   👉 внутри контура о письме узнают из ленты: назови его в записке (имя файла и адресата)")
