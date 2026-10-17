@@ -42,8 +42,15 @@ import tempfile
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402 — пути машины выводятся, не впечатаны (#208)
 import mezo_stand  # noqa: E402 — среда запусков на стенде (записка #5096)
+import mezo_target  # noqa: E402 — какую копию испытываем (карточка #148)
 
-GUARD = mezo_paths.container_root(__file__) / ".mezosync" / "scripts" / "guard-all.py"
+# 🪤 17.10 (записка #5838): прежде GUARD брался из корня контейнера по файлу путей — то есть
+# всегда из ЖИВОГО контура, и при --target на копию приёмка испытывала оригинал. А с Э7
+# (import bridge_letter в guard-all.py, карточка #681) загрузка падала ModuleNotFoundError и на
+# живом: bridge_letter лежит только рядом с guard-all.py, а в sys.path стоял каталог приёмки.
+# ⇒ Испытуемая копия — через mezo_target; её соседи — первыми в sys.path, как при её запуске.
+GUARD = mezo_target.script("guard-all.py")
+sys.path.insert(0, str(GUARD.parent))
 TEMPLATE = next((p for p in (mezo_paths.template_root(),
                             pathlib.Path(__file__).resolve().parents[2] / "gordipack")
                 if (p / "scripts" / "init-group.py").exists()), None)

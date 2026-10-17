@@ -41,17 +41,78 @@ def resolve_target(word: str) -> str:
     return {"live": LIVE_SCRIPTS, "template": TEMPLATE_SCRIPTS}.get(word, word)
 
 
-def env_for(target: str) -> dict:
+def env_for(target: str, laid_out: bool = False) -> dict:
     """Окружение прогона. ⛔ Для НЕ-живой копии ставится запрет молчаливого займа:
     без него приёмка, не нашедшая файл в шаблоне, тихо возьмёт его из живого — и прогон
-    «по шаблону» на деле проверит оригинал (ровно дефект, ради которого всё заведено)."""
+    «по шаблону» на деле проверит оригинал (ровно дефект, ради которого всё заведено).
+    laid_out — копию разложил контуром сам набор (lay_out_contour): MEZO_CONTAINER вызывающего
+    снимается, контур испытуемые находят по признаку, как на живом."""
     env = dict(os.environ)
     env["MEZO_SCRIPTS_ROOT"] = target
     if os.path.normcase(os.path.abspath(target)) != os.path.normcase(os.path.abspath(LIVE_SCRIPTS)):
         env["MEZO_FORBID_LIVE"] = "1"
     else:
         env.pop("MEZO_FORBID_LIVE", None)
+    if laid_out:
+        # Урок 13.09 (mezo_paths.mezo_root): копия с MEZO_CONTAINER живого записала meta Atlas.
+        # Среда стоит ПЕРВОЙ в container_root — унаследованная увела бы испытуемых мимо стенда.
+        env.pop("MEZO_CONTAINER", None)
     return env
+
+
+# ═══ КОПИЯ БЕЗ СВОЕГО КОНТУРА (находка PROTO, записка #5838; карточка #680) ═══
+# 🪤 ПОВОД. Прогон «--target template» по клону пакета 12.10 17:19–17:49 UTC: держится 170 · сломано 23 ·
+# не проверено 6 из 199, и у тех же 29 приёмок исход тот же на прежнем коде. Скрипты клона лежат
+# в <клон>/scripts, а не в <контейнер>/.mezosync/scripts рядом с базой: испытуемые не находят контур
+# («контейнер группы НЕ НАЙДЕН»), а приёмки, берущие базу рядом с испытуемыми (<скрипты>/../mezosync.db),
+# брали пустой файл корня клона. Набор красил это «СЛОМАНО» — не поломки, а нечем мерить.
+# ⇒ Копию без своего контура набор раскладывает контуром сам, во временном каталоге:
+#     <стенд>/.mezosync/scripts ......... копия испытуемых (байт в байт, без __pycache__)
+#     <стенд>/.mezosync/mezosync.db ..... согласованная копия живой базы (резервное копирование sqlite3)
+#     <стенд>/.mezosync/local/paths.json  файл путей живого БЕЗ ключа container
+# Живой контур не трогается: испытуемые находят стенд по признаку .mezosync/mezosync.db и пишут в копию.
+# ⚖️ Испытуется по-прежнему код копии — подпись называет и копию, и стенд.
+
+
+def own_contour(target: str) -> bool:
+    """Лежит ли испытуемый каталог контуром: <контейнер>/.mezosync/scripts рядом с НЕпустой базой."""
+    parent = os.path.dirname(os.path.abspath(target))
+    db = os.path.join(parent, "mezosync.db")
+    return os.path.basename(parent) == ".mezosync" and os.path.isfile(db) and os.path.getsize(db) > 0
+
+
+def lay_out_contour(target: str):
+    """Разложить копию испытуемых контуром во временном каталоге. (стенд, его скрипты, что сделано)."""
+    import json
+    import shutil
+    import mezo_stand  # согласованная копия базы (карточка #505)
+    stand = tempfile.mkdtemp(prefix="bite-all-contour-")
+    mz = os.path.join(stand, ".mezosync")
+    scripts = os.path.join(mz, "scripts")
+    shutil.copytree(target, scripts, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    live_db = mezo_paths.live_db()
+    mezo_stand.snapshot_db(live_db, os.path.join(mz, "mezosync.db"))
+    words = [f"скрипты — копия {target}", f"база — копия {live_db}"]
+    # 🪤 17.10 (разбор провала bite-shift-end.py под раскладкой): save-phoenix.py и соседи ищут
+    # проверки (guard-shift-end.py, guard-phoenix-volume.py, memory-records.py) относительно СВОЕГО
+    # файла — vnext_tool(), четыре места. В клоне их находит <клон>/vnext/prototype; перенесённые
+    # в <стенд>/.mezosync/scripts скрипты соседей теряли, и шесть случаев падали «файла нет».
+    # ⇒ Соседей копии кладём туда же, где их ищет четвёртое место: <стенд>/vnext/prototype.
+    # local.paths не берём: старый файл путей увёл бы испытуемых в живой контур.
+    proto = os.path.join(os.path.dirname(os.path.abspath(target)), "vnext", "prototype")
+    if os.path.isdir(proto):
+        shutil.copytree(proto, os.path.join(stand, "vnext", "prototype"),
+                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "local.paths"))
+        words.append(f"соседние проверки — копия {proto}")
+    paths_file = mezo_paths.local_dir(live_db) / "paths.json"
+    if paths_file.is_file():
+        data = json.loads(paths_file.read_text(encoding="utf-8-sig"))
+        data.pop("container", None)
+        os.makedirs(os.path.join(mz, "local"))
+        with open(os.path.join(mz, "local", "paths.json"), "w", encoding="utf-8") as fh:
+            json.dump(data, fh, ensure_ascii=False, indent=2)
+        words.append(f"файл путей — {paths_file.as_posix()} без ключа container")
+    return stand, scripts, words
 # Приметы того, что приёмка не сломана, а не смогла начаться. Ищем в выводе.
 CANT_START = (
     "no such file", "не найден", "unable to open database", "no such table",
@@ -143,9 +204,21 @@ def main() -> int:
     # 🎯 Подпись СПРАШИВАЕТ, что испытано, и печатается ДО прогона и ПОСЛЕ него.
     #    Зашитая строка «испытан живой модуль» уже однажды соврала при работе по шаблону.
     banner = f"{'⚡ ЖИВОЙ КОНТУР' if live else '📦 КОПИЯ'}: {target}"
+    stand, laid = None, []
+    if not live and not own_contour(target):
+        try:
+            stand, target, laid = lay_out_contour(target)
+        except Exception as e:  # noqa: BLE001 — нечем мерить: отказ, а не «сломано» у каждой приёмки
+            print(f"⛔ НЕ ЗАПУСТИЛСЯ НАБОР: копию {target} не удалось разложить контуром — "
+                  f"{type(e).__name__}: {e}\n   Проверять нечего. Это НЕ «всё зелено».")
+            return 2
     print("=" * 78)
     print(f"ПРИЁМКИ: {len(names)} шт. в {where}")
     print(f"ИСПЫТУЕМЫЕ МЕХАНИЗМЫ — {banner}")
+    if stand:
+        print(f"🧱 копия не лежит контуром — разложена во временном каталоге {stand}:")
+        for w in laid:
+            print(f"   · {w}")
     if not live:
         print("⛔ заём из живого контура ЗАПРЕЩЁН на этот прогон (MEZO_FORBID_LIVE=1)")
     print("=" * 78)
@@ -155,7 +228,7 @@ def main() -> int:
         try:
             r = subprocess.run([sys.executable, os.path.join(where, name)],
                                capture_output=True, text=True, encoding="utf-8",
-                               timeout=args.timeout, env=env_for(target))
+                               timeout=args.timeout, env=env_for(target, laid_out=bool(stand)))
             out, code = (r.stdout or "") + (r.stderr or ""), r.returncode
         except subprocess.TimeoutExpired:
             out, code = f"потолок {args.timeout} с исчерпан", 1
@@ -208,6 +281,12 @@ def main() -> int:
         print("⚖️ И про живой контур этот прогон не говорит ничего.")
     if stuck:
         print("⚠️  «не проверено» — это НЕ «в порядке». Пока такие есть, «всё чисто» сказать нельзя.")
+    if stand:
+        if red or stuck:
+            print(f"📂 контур копии сохранён для осмотра: {stand} — уберёт срок хранения стендов")
+        else:
+            import shutil
+            shutil.rmtree(stand, ignore_errors=True)
     return 1 if red else 0
 
 

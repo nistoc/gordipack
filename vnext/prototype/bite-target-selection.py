@@ -26,6 +26,12 @@ BITE_ALL = os.path.join(HERE, "bite-all.py")
 LIVE = str(mezo_paths.live_scripts())
 # приёмки, которые ТОЧНО зовут механизм через резолвер (замер: script("read-messages.py"))
 ONLY = "to-me-empty"
+# приёмка, чьему испытуемому НУЖЕН контур (write-message.py зовёт container_root): без раскладки
+# копии «файлы рядом» она отказывает «контейнер группы НЕ НАЙДЕН» — замер 14.10 на прежнем bite-all.py
+ONLY_CONTOUR = "default-stamp"
+# ⚖️ Зелёное здесь — «держится 1», а не код 0: отказ испытуемого эта приёмка отдаёт кодом 2, набор
+# печатает его «не запустилась» и итог кодом 0 — на прежнем bite-all.py ⑧ «прошёл» бы по коду
+GREEN_ONE = "держится 1 · сломано 0 · НЕ ПРОВЕРЕНО 0"
 
 CASES = 0
 DIFFERENTIATING = 0
@@ -62,6 +68,25 @@ def copy_scripts(tmp, name, break_files=()):
         with open(os.path.join(dst, f), "w", encoding="utf-8") as fh:
             fh.write("import sys\nsys.exit('НАРОЧНО СЛОМАН В КОПИИ')\n")
     return dst
+
+
+def copy_flat(tmp, name, break_files=()):
+    # Копия «файлы рядом» — как скрипты в клоне пакета: без .mezosync и без базы рядом
+    # (находка PROTO, записка #5838: 29 приёмок прогона по клону мерить было нечем).
+    dst = os.path.join(tmp, name, "scripts")
+    shutil.copytree(LIVE, dst, ignore=shutil.ignore_patterns("__pycache__"))
+    for f in break_files:
+        with open(os.path.join(dst, f), "w", encoding="utf-8") as fh:
+            fh.write("import sys\nsys.exit('НАРОЧНО СЛОМАН В КОПИИ')\n")
+    return dst
+
+
+def laid_stand(out):
+    """Временный каталог, в котором набор разложил копию контуром (из его подписи), или None."""
+    for line in out.splitlines():
+        if "разложена во временном каталоге" in line:
+            return line.split("разложена во временном каталоге", 1)[1].strip().rstrip(":")
+    return None
 
 
 def main() -> int:
@@ -120,6 +145,38 @@ def main() -> int:
     ok &= case("⑦ живой прогон не печатает границу копии (встречный к ⑥)",
                "ГРАНИЦА НАБОРА" not in out_live,
                "перенос чужой оговорки на другой случай — тоже способ соврать формой")
+
+    # ⑧ КОПИЯ БЕЗ СВОЕГО КОНТУРА (как скрипты клона пакета) — набор раскладывает её контуром
+    #    сам и меряет. До правки (записка #5838) испытуемые не находили контур, и набор красил
+    #    «СЛОМАНО» то, что мерить было нечем. Зелёный прогон — убирает свой временный каталог.
+    flat = copy_flat(tmp, "flat")
+    out_flat, code_flat = run(flat, ONLY_CONTOUR)
+    st_flat = laid_stand(out_flat)
+    ok &= case("⑧ копия без контура — набор раскладывает её сам: прогон зелёный, каталог назван и убран",
+               code_flat == 0 and GREEN_ONE in out_flat and st_flat is not None
+               and flat in out_flat and not os.path.exists(st_flat),
+               f"код {code_flat}; разложена в {st_flat}; после зелёного прогона каталог "
+               f"{'убран' if st_flat and not os.path.exists(st_flat) else 'НЕ убран или не назван'}",
+               differ=True)
+
+    # ⑨ ВСТРЕЧНЫЙ к ⑧: раскладка несёт ИСПЫТУЕМЫЙ код, а не берёт его откуда-то ещё. Поломка
+    #    в копии без контура обязана покраснеть — иначе ⑧ зелёный потому, что испытывает не то.
+    flat_bad = copy_flat(tmp, "flat-broken", break_files=("write-message.py",))
+    out_flat_bad, code_flat_bad = run(flat_bad, ONLY_CONTOUR)
+    st_bad = laid_stand(out_flat_bad)
+    ok &= case("⑨ сломанный механизм в копии без контура — прогон НЕ зелёный (встречный к ⑧)",
+               GREEN_ONE not in out_flat_bad and st_bad is not None
+               and ("СЛОМАНО" in out_flat_bad or "не запустилась" in out_flat_bad),
+               f"код {code_flat_bad}; раскладка копирует испытуемое байт в байт — сломанный "
+               "write-message.py эта приёмка называет отказом мерить (код 2), не «сломано»", differ=True)
+    if st_bad:
+        shutil.rmtree(st_bad, ignore_errors=True)   # сохранён набором для осмотра — здесь осматривать нечего
+
+    # ⑩ ВСТРЕЧНЫЙ к ⑧: копия, уже лежащая контуром (①), не раскладывается заново — её
+    #    собственная база и раскладка и есть предмет опыта.
+    ok &= case("⑩ копия, лежащая контуром, не раскладывается (встречный к ⑧)",
+               laid_stand(out_whole) is None and laid_stand(out_live) is None,
+               "раскладка — только там, где своего контура нет", differ=True)
 
     print()
     print(f"✅ ВЫБОР КОПИИ ПРИНЯТ — случаев {CASES}, различающих {DIFFERENTIATING}, "
