@@ -79,8 +79,13 @@ schema_step_order.py) лежит в migrations/ законно: основная
 NOT_SCHEMA_STEPS). С базой v6 эти объекты лежат в mezosync_v6.sql статикой, и выпавший из файла
 объект сборка не замечала: код 0, «🎉», полный набор 37 из 37. Самый свежий файл схемы в эталон
 НЕ берётся — иначе эталон пропадал бы вместе с объектом. Поломки ㉓ — из копии файла базовой
-схемы убрана таблица hint_seen (М2), затем индекс idx_addressee_msg (М3): случай обязан назвать
-ровно пропавшее имя.
+схемы убрана таблица hint_seen (М2), затем индекс idx_addressee_msg (М3), затем таблица
+bridge_reviewed: случай обязан назвать ровно пропавшее имя. Третья поломка охраняет само решение
+«прежний файл схемы, а не самый свежий»: hint_seen и idx_addressee_msg эталон получает ещё и из
+шагов, поэтому правка `[schemas[-2]]` → `[schemas[-1]]` оставляла М2 и М3 пройденными, а случай
+слепым на объектах, которых нет ни в одном шаге (19 из 69 на 17.10). bridge_reviewed — как раз
+такой: её имени нет ни в одном файле migrations/, и это проверяется в коде перед поломкой
+(приёмка COORD, записка #5898).
 ⚖️ Граница эталона: имя, собранное подстановкой (`{TABLE}` в 20260830-lease-waits), разбору
 не видно; объекты, снятые неявно (индексы таблицы, удалённой DROP TABLE), он не вычитает.
 
@@ -1402,38 +1407,52 @@ def main() -> int:
                   f"эталон: {prev23} и шагов {steps23} — имён {len(ref23)}; в контуре не хватает: "
                   f"{describe_objects(miss23)} (ждём «ничего»)", differ=True)
 
-        # ── КОНТРОЛЬ ㉓ двумя нарочными поломками КОПИИ самого свежего файла схемы: из него
-        # убирается таблица (М2), затем индекс (М3). Эталон берётся из ТОЙ ЖЕ копии пакета, что
-        # собирала контур: прежний файл схемы и шаги в ней целы, поэтому пропажа видна.
+        # ── КОНТРОЛЬ ㉓ тремя нарочными поломками КОПИИ самого свежего файла схемы: из него
+        # убирается таблица (М2), затем индекс (М3), затем таблица, которой нет ни в одном шаге.
+        # Эталон берётся из ТОЙ ЖЕ копии пакета, что собирала контур: прежний файл схемы и шаги
+        # в ней целы, поэтому пропажа видна. Объекты М2 и М3 эталон знает ещё и из шагов — они
+        # не различают, какой файл схемы взят в эталон; третья поломка различает: её объект
+        # эталон знает ТОЛЬКО из прежнего файла схемы (приёмка COORD, записка #5898).
         pack_m23 = tmp / "pack-m23"
         for name in ("rules", "schema", "scripts", "templates", "vnext"):
             copy_pack_subdir(PACK, name, pack_m23)
         base23_path = sorted((pack_m23 / "schema").glob("mezosync_v*.sql"), key=schema_file_number)[-1]
         base23_src = base23_path.read_text(encoding="utf-8")
-        cuts23 = (
+        cuts23 = (  # (вид, имя, что вырезать, объект ТОЛЬКО прежнего файла схемы)
             ("table", "hint_seen",
-             re.compile(r"CREATE TABLE IF NOT EXISTS hint_seen \(.*?\n\);\n", re.S)),
+             re.compile(r"CREATE TABLE IF NOT EXISTS hint_seen \(.*?\n\);\n", re.S), False),
             ("index", "idx_addressee_msg",
-             re.compile(r"CREATE INDEX IF NOT EXISTS idx_addressee_msg\b[^\n]*\n")),
+             re.compile(r"CREATE INDEX IF NOT EXISTS idx_addressee_msg\b[^\n]*\n"), False),
+            ("table", "bridge_reviewed",
+             re.compile(r"CREATE TABLE IF NOT EXISTS bridge_reviewed \([^\n]*\n"), True),
         )
-        for kind23, name23, cut23 in cuts23:
+        steps_text23 = "\n".join(p.read_text(encoding="utf-8") for p in
+                                 sorted((pack_m23 / "scripts" / "migrations").glob("*.py")))
+        for kind23, name23, cut23, prev_only23 in cuts23:
             if len(cut23.findall(base23_src)) != 1 or (kind23, name23) not in ref23:
                 stop_unrunnable(f"⛔ НЕ ЗАПУСТИЛАСЬ: {kind23} {name23} не найден ровно один раз в "
                          f"{base23_path.name} или его нет в эталоне ㉓ — испытуемое изменилось, "
                          "поломки ㉓ бьют мимо")
-        for kind23, name23, cut23 in cuts23:
+            if prev_only23 and re.search(rf"\b{name23}\b", steps_text23):
+                stop_unrunnable(f"⛔ НЕ ЗАПУСТИЛАСЬ: {kind23} {name23} назван в файле шага migrations/ — "
+                         "третья поломка ㉓ больше не различает, какой файл схемы взят в эталон; "
+                         "нужен другой объект, которого нет ни в одном шаге")
+        for n23, (kind23, name23, cut23, prev_only23) in enumerate(cuts23, 1):
             base23_path.write_text(cut23.sub("", base23_src, count=1), encoding="utf-8")
-            mez23p = tmp / f".mezosync-m23-{kind23}"
+            # свой каталог и своё имя группы у каждой поломки: две из трёх режут таблицу
+            mez23p = tmp / f".mezosync-m23-{n23}-{name23}"
             r23p = subprocess.run(
                 [sys.executable, str(pack_m23 / "scripts" / "init-group.py"), "--name",
-                 f"bitem23{kind23}", "--path", str(mez23p), "--roles", "coord"],
+                 f"bitem23c{n23}", "--path", str(mez23p), "--roles", "coord"],
                 capture_output=True, text=True, encoding="utf-8", timeout=300, env=env)
             ref23p, _, _ = folded_schema_reference(pack_m23)
             miss23p = (missing_schema_objects(mez23p / "mezosync.db", ref23p)
                        if (mez23p / "mezosync.db").exists() else None)
             what23 = "таблица" if kind23 == "table" else "индекс"
+            only23 = ("; её нет ни в одном шаге — эталон знает её только из прежнего файла схемы"
+                      if prev_only23 else "")
             ok &= case(f"㉓ ПОЛОМКА (из {base23_path.name} убран{'а' if kind23 == 'table' else ''} "
-                      f"{what23} {name23}) КРАСИТ случай ㉓ — недостача названа ровно этим именем",
+                      f"{what23} {name23}{only23}) КРАСИТ случай ㉓ — недостача названа ровно этим именем",
                       miss23p == {(kind23, name23)},
                       f"код сборки {r23p.returncode} (сама сборка пропажи не замечает — затем случай и "
                       f"нужен); в контуре не хватает: "
