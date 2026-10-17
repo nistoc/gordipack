@@ -10,6 +10,10 @@ r"""bite-gordi-issue.py — приёмка гейта писателя кана�
 литерал «COORD» остаётся ТОЛЬКО запасным путём — и печатает, откуда взять верное.
 
 СЛУЧАИ (различающий = обязан ответить ИНАЧЕ, а не одинаково):
+  ⓪ СТЕНД (gordipack issue #40, карточка #699): исходная копия ставится в три раскладки —
+     «Atlas» (слово «координатор» у COORD) · «dominal» (слово у 3P, у COORD его нет) ·
+     «никто не назван»; после посева во всех назван РОВНО COORD, и COORD пишет.
+     «Atlas» — контроль, «dominal» и «никто не назван» — РАЗЛИЧАЮЩИЕ
   ① координатор из данных пишет — гейт пропускает                              контроль
   ② НЕ координатор (по данным) отказан, отказ НАЗЫВАЕТ настоящего координатора  РАЗЛИЧАЮЩИЙ
   ③ данные не называют РОВНО ОДНУ роль-координатора → запасной литерал «COORD»,
@@ -21,10 +25,10 @@ r"""bite-gordi-issue.py — приёмка гейта писателя кана�
      слово всё равно найдено (возврат COORD 2026-09-15: запрос LIKE сворачивает
      регистр только у латиницы и такую причину не видел вовсе)                   РАЗЛИЧАЮЩИЙ
 
-НАРОЧНАЯ ПОЛОМКА (--porcha revert-to-literal): _writer_gate возвращён к литералу «COORD» —
-ждём красным РОВНО ④ (роль-координатор из данных «TAXO» перестаёт писать, а «COORD» —
-роль, переставшая быть координатором — снова пишет); ① ② ③ целы, потому что в них
-координатор данных СОВПАДАЕТ с «COORD» и литерал их не различает.
+НАРОЧНАЯ ПОЛОМКА (--porcha revert-to-literal): при не ровно одной роли-координаторе снова
+подставляется литерал «COORD» без отказа — ждём красным РОВНО ③ и ③-бис; остальные целы.
+⚰️ Здесь стояло «ждём красным РОВНО ④» — разошлось с кодом и с прогоном (замер PROTO
+2026-10-17 10:48 UTC: под этой поломкой красны ③ и ③-бис, ④ цел); поправлено при правке #699.
 ВТОРАЯ НАРОЧНАЯ ПОЛОМКА (--porcha revert-to-like): ОБЩАЯ функция поиска координатора
 (mezo_paths.find_coordinator — с карточки #677, этап Э3, отбор живёт там, а не в gordi-issue.py)
 ищет слово запросом LIKE вместо casefold(). Портится копия mezo_paths.py В СТЕНДЕ, а не
@@ -33,6 +37,12 @@ gordi-issue.py: поломка, оставшаяся в старом месте,
 ТРЕТЬЯ (--porcha common-first): при двух ролях общая функция берёт первую — ждём красным
 РОВНО ③-бис. ЧЕТВЁРТАЯ (--porcha common-literal): общая функция отвечает литералом «COORD» —
 ждём красным ③-бис и ④ (координатор TAXO перестаёт писать).
+ПЯТАЯ (--porcha seed-without-clear, карточка #699): портится САМ СТЕНД, а не инструмент —
+посев прежний: слово «координатор» у ролей копии не снимается, строки, уже бывшие в копии,
+не трогаются (ON CONFLICT DO NOTHING). Ждём красным ⓪ в раскладках «dominal» и «никто не
+назван»; «Atlas» цела. ①–⑤ на копии живого Atlas целы (там слово стоит у COORD — прежний
+посев его и не трогал); на копии контура, где слово у другой роли (у dominal — 3P), под
+этой поломкой краснеют и они — это и была беда issue #40.
 
 ⛔ Живой базы не касается: работает на КОПИИ (backup API) в своём временном контейнере
 (структура `<конт>/.mezosync/mezosync.db`, опознаётся `MEZO_CONTAINER`). Сеть (`gh`) не
@@ -89,6 +99,80 @@ COMMON_BREAKS = {
         "Ждём красным ③-бис и ④ (координатор TAXO перестаёт писать); ①②③⑤ целы"),
 }
 
+# ═══ ПОСЕВ РОЛЕЙ СТЕНДА (gordipack issue #40, карточка #699) ═══════════════════════════════════
+# 🪤 БЕДА. Стенд строится из копии ЖИВОЙ базы испытуемого контура и досевал пять ролей случаев
+# через ON CONFLICT DO NOTHING, не снимая слово «координатор» у ролей копии. У Atlas слово стоит
+# у COORD — посев с ним совпадал, и беда не видна. У dominal координатор — 3P: на копии названы
+# двое (COORD и 3P), и приёмка проваливала 0 из 7 при исправном инструменте.
+# ⚖️ ЛЕЧЕНИЕ. Перед посевом слово снимается у ВСЕХ ролей копии (поиск — тем же casefold(), что у
+# mezo_paths.find_coordinator, и тем же словом COORDINATOR_WORD), а посев ставит пять ролей
+# целиком (ON CONFLICT DO UPDATE): на копии назван ровно COORD, как бы ни был устроен контур.
+SEEDED_ROLES = (("COORD", "координатор контура; в живом реестре"),
+                ("PROTO", "в живом реестре"), ("TAXO", "в живом реестре"),
+                ("CORE", "в живом реестре"), ("STUD", "в живом реестре"))
+# 🪤 Тексты снятой пометки НЕ несут корня «координатор» ни в каком виде: «бывший координатор»
+# пометку не снимает (поиск смотрит на буквы, а не на смысл).
+SEED_REMOVED = "пометка снята стендом приёмки bite-gordi-issue"
+LAYOUT_REMOVED = "пометка снята раскладкой стенда bite-gordi-issue"
+LAYOUT_MARK = "координатор контура (раскладка стенда bite-gordi-issue)"
+# Раскладки исходной копии: кто назван ДО посева. Ставятся целиком на отдельной копии каждая.
+STAND_LAYOUTS = (
+    ("Atlas", ("COORD",), "слово у COORD"),
+    ("dominal", ("3P",), "слово у 3P, у COORD его нет; роль 3P заводится на копии"),
+    ("никто не назван", (), "слова нет ни у кого"),
+)
+
+
+def clear_coordinator_word(con, removed_text):
+    """Снимает слово «координатор» у ВСЕХ ролей копии (живых и нет) — заменой причины целиком."""
+    rows = con.execute("SELECT role, lifecycle_reason FROM roles "
+                       "WHERE lifecycle_reason IS NOT NULL").fetchall()
+    for role, reason in rows:
+        if mezo_paths.COORDINATOR_WORD in reason.casefold():
+            con.execute("UPDATE roles SET lifecycle_reason=? WHERE role=?", (removed_text, role))
+
+
+def seed_roles(db, clear=True):
+    """Посев пяти ролей случаев. clear=False — прежний посев (нарочная поломка seed-without-clear):
+    слово у ролей копии не снимается, бывшие в копии строки не трогаются."""
+    con = sqlite3.connect(str(db))
+    try:
+        if clear:
+            clear_coordinator_word(con, SEED_REMOVED)
+            conflict = ("ON CONFLICT(role) DO UPDATE SET lifecycle='alive', "
+                        "lifecycle_reason=excluded.lifecycle_reason")
+        else:
+            conflict = "ON CONFLICT(role) DO NOTHING"
+        for role, reason in SEEDED_ROLES:
+            con.execute("INSERT INTO roles (role, lifecycle, lifecycle_reason) "
+                        f"VALUES (?, 'alive', ?) {conflict}", (role, reason))
+        con.commit()
+    finally:
+        con.close()
+
+
+def make_layout_container(stand: Path, label: str, source_db: Path, named) -> Path:
+    """Отдельный контейнер с копией исходной базы в раскладке «названы ровно named».
+    Раскладка сверяется поиском контура; не встала — None (приёмка не состоялась)."""
+    container = stand / f"layout-{label}"
+    (container / ".mezosync").mkdir(parents=True, exist_ok=True)
+    db = container / ".mezosync" / "mezosync.db"
+    src = sqlite3.connect(str(source_db))
+    dst = sqlite3.connect(str(db))
+    src.backup(dst)
+    src.close()
+    try:
+        clear_coordinator_word(dst, LAYOUT_REMOVED)
+        for role in named:
+            dst.execute("INSERT INTO roles (role, lifecycle, lifecycle_reason) VALUES (?, 'alive', ?) "
+                        "ON CONFLICT(role) DO UPDATE SET lifecycle='alive', "
+                        "lifecycle_reason=excluded.lifecycle_reason", (role, LAYOUT_MARK))
+        dst.commit()
+    finally:
+        dst.close()
+    got = mezo_paths.find_coordinator(db)
+    return container if not got.error and got.found == sorted(named) else None
+
 
 def call_tool(tool: Path, container: Path, *args):
     r = subprocess.run(
@@ -101,11 +185,13 @@ def call_tool(tool: Path, container: Path, *args):
 def main() -> int:
     import argparse
     ap = argparse.ArgumentParser()
-    ap.add_argument("--porcha", choices=["revert-to-literal", *COMMON_BREAKS],
+    ap.add_argument("--porcha", choices=["revert-to-literal", *COMMON_BREAKS, "seed-without-clear"],
                     help="нарочная поломка: revert-to-literal — вернуть проверку писателя "
                          "к литералу «COORD»; revert-to-like — общая функция поиска координатора "
                          "ищет слово запросом LIKE, слепым к заглавной кириллице; common-first — "
-                         "при двух ролях берёт первую; common-literal — отвечает литералом «COORD»")
+                         "при двух ролях берёт первую; common-literal — отвечает литералом «COORD»; "
+                         "seed-without-clear — стенд сеет роли, не сняв слово «координатор» "
+                         "у ролей копии")
     a = ap.parse_args()
 
     # было: live_tool = Path(__file__).resolve().parent.parent / ".mezosync" / "scripts" / "gordi-issue.py"
@@ -135,18 +221,18 @@ def main() -> int:
         # ⚠️ С 26.09 (пакет 1e4d7c7) init-group.py сам пишет роли из --roles в реестр —
         # но ТОЛЬКО их (обычно одну, координатора), а случаям ниже нужны пять имён.
         # Приёмке нужна СВОЯ раскладка ролей для случаев ①–⑤ — досеваем РОВНО те роли, которых
-        # случаи касаются, UPSERT'ом (ON CONFLICT DO NOTHING): если контур случайно живой и
-        # строки уже настоящие — не трогаем; если пуст — даём базовую, той же формы, что и
-        # у живого roster.json (COORD — координатор, остальные — рядовые).
-        con = sqlite3.connect(str(db))
-        for role, reason in (("COORD", "координатор контура; в живом реестре"),
-                             ("PROTO", "в живом реестре"), ("TAXO", "в живом реестре"),
-                             ("CORE", "в живом реестре"), ("STUD", "в живом реестре")):
-            con.execute(
-                "INSERT INTO roles (role, lifecycle, lifecycle_reason) VALUES (?, 'alive', ?) "
-                "ON CONFLICT(role) DO NOTHING", (role, reason))
-        con.commit()
-        con.close()
+        # случаи касаются, той же формы, что и у живого roster.json (COORD — координатор,
+        # остальные — рядовые).
+        # ⚰️ Было: ON CONFLICT DO NOTHING без снятия слова — «если строки уже настоящие, не
+        # трогаем». Верно только там, где настоящий координатор и есть COORD; у dominal (3P)
+        # на копии оказывались двое (gordipack issue #40, карточка #699). Теперь — seed_roles().
+        pristine = stand / "pristine.db"   # исходная копия ДО посева — для раскладок случая ⓪
+        src = sqlite3.connect(str(db))
+        dst = sqlite3.connect(str(pristine))
+        src.backup(dst)
+        dst.close()
+        src.close()
+        seed_roles(db, clear=a.porcha != "seed-without-clear")
 
         # копия скриптов рядом — gordi-issue.py лениво импортирует mezo_paths из своего
         # каталога через sys.path.insert(parent); кладём инструмент и mezo_paths РЯДОМ
@@ -192,6 +278,31 @@ def main() -> int:
                 f"поломка НЕ ЛЕГЛА: найдено {shared_text.count(anchor)}")
             shared_copy.write_text(shared_text.replace(anchor, broken), encoding="utf-8")
             print(said + "\n")
+
+        if a.porcha == "seed-without-clear":
+            print("🧪 НАРОЧНАЯ ПОЛОМКА «seed-without-clear»: стенд сеет роли прежним посевом — слово "
+                  "«координатор» у ролей копии не снимается, бывшие строки не трогаются. Ждём провала "
+                  "⓪ в раскладках «dominal» и «никто не назван»; «Atlas» цела. ①–⑤ на копии живого "
+                  "Atlas целы; на копии контура, где слово у другой роли, проваливаются и они\n")
+
+        # ⓪ СТЕНД: три раскладки исходной копии — после посева назван РОВНО COORD, и COORD пишет
+        for label, named, words in STAND_LAYOUTS:
+            layout_container = make_layout_container(stand, label, pristine, named)
+            if layout_container is None:
+                print(f"⛔ ПРИЁМКА НЕ СОСТОЯЛАСЬ: раскладка «{label}» ({words}) не встала на копии "
+                      f"базы — мерить нечем")
+                return 2
+            layout_db = layout_container / ".mezosync" / "mezosync.db"
+            seed_roles(layout_db, clear=a.porcha != "seed-without-clear")
+            seeded = mezo_paths.find_coordinator(layout_db)
+            code0, out0 = call_tool(tool, layout_container, "--role", "COORD", "--title", "t",
+                                    "--body-file", str(body_file), "--dry-run")
+            case(f"⓪ стенд, раскладка «{label}» ({words}): после посева назван ровно COORD, "
+                 f"и COORD пишет" + (" (контроль)" if label == "Atlas" else ""),
+                 seeded.found == ["COORD"] and code0 == 0 and "⟨ВХОЛОСТУЮ⟩" in out0,
+                 f"после посева названо: {', '.join(seeded.found) or 'никого'} (ждём COORD) · "
+                 f"код {code0}" + ("" if code0 == 0 else f" · отказ: {out0.strip()[:160]}"),
+                 differ=label != "Atlas")
 
         # ① координатор из данных (сейчас — COORD) пишет
         code1, out1 = call_tool(tool, container, "--role", "COORD", "--title", "t",
