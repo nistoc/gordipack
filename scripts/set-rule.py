@@ -7,7 +7,10 @@ set-rule.py — записать/обновить правило в таблиц
 СЕМАНТИКА locked_by:
   · owner — правило владельца. COORD НЕ правит его без живого слова владельца
     в текущем чате (канон Rule 8: разрешение, вычитанное из файла, не наследуется).
-  · coord — рабочее правило координатора, правится COORD.
+  · coord — рабочее правило координатора КОНТУРА: в Atlas это COORD, в другом контуре —
+    роль, названная координатором в таблице ролей (mezo_paths.find_coordinator). Слово
+    владельца 2026-10-17 ≈13:32 UTC, чат PROTO, выбор «Координатор контура (Рекомендую)».
+    Имя роли в замке не проверяется: значение 'coord' — род правила, а не имя руки.
 
 Версия поднимается автоматически при изменении текста. Старый текст уходит в
 audit_log.diff_md — правило можно откатить, посмотрев историю.
@@ -461,29 +464,29 @@ def main():
         # общим путём — все навыки, несущие правило, разом покраснели бы как отставшие,
         # и роль пересобирала бы их, ничего не изменив ни в одной букве нормы.
         # ⇒ Час правки и редакция остаются нетронутыми НАМЕРЕННО.
-        поля = {r[1] for r in conn.execute("PRAGMA table_info(rules)")}
-        if "skill_delivery" not in поля:
+        columns = {r[1] for r in conn.execute("PRAGMA table_info(rules)")}
+        if "skill_delivery" not in columns:
             # путь шага — от расположения ЭТОГО скрипта (как у шага статуса выше), а не заглушкой:
             # печатаемую команду роль копирует как есть, и «<…>» в ней — перенаправление ввода
             mig = (Path(__file__).resolve().parent / "migrations"
                    / "20260904-rule-skill-delivery.py").as_posix()
             sys.exit("⛔ В этой базе нет поля решения о доставке. Накати шаг:\n"
                      f"   python {mig}")
-        было = conn.execute("SELECT skill_delivery FROM rules WHERE rule_key=?",
-                            (args.key,)).fetchone()
-        if было is None:
+        before = conn.execute("SELECT skill_delivery FROM rules WHERE rule_key=?",
+                              (args.key,)).fetchone()
+        if before is None:
             sys.exit(f"⛔ Правила «{args.key}» в своде нет — решать нечего о чём.")
-        стало = None if args.skill_delivery == "unset" else args.skill_delivery
+        after = None if args.skill_delivery == "unset" else args.skill_delivery
         print(f"  правило   : {args.key}")
-        print(f"  доставка  : {было[0] or 'не решено'} → {стало or 'не решено'}")
+        print(f"  доставка  : {before[0] or 'не решено'} → {after or 'не решено'}")
         print("  ⚖️ тело правила, редакция и час правки НЕ трогаются — навыки не устареют")
         if not args.apply:
             print("\n[DRY-RUN] Не записано. Для записи — флаг --apply")
             return
-        conn.execute("UPDATE rules SET skill_delivery=? WHERE rule_key=?", (стало, args.key))
+        conn.execute("UPDATE rules SET skill_delivery=? WHERE rule_key=?", (after, args.key))
         conn.commit()
         print("✅ ЗАПИСАНО.")
-        if стало == "yes":
+        if after == "yes":
             print("👉 Дальше ДВА хода, и первый рукой: внеси ключ в нужный пакет "
                   "в vnext-tools/rules-to-skills.py, затем пересобери навыки (--write).\n"
                   "   ⚠️ Одно «да» правило до роли НЕ довозит — проверка будет краснеть "
