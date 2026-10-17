@@ -72,6 +72,21 @@ soft_failures.append у отказа опоры снят обратно.
 schema_step_order.py) лежит в migrations/ законно: основная сборка называет его строкой «ℹ️»,
 отставшим не считает и отвечает «🎉». Поломка ㉑ — перечень опустошён в копии пакета: шаг снова
 «отставший», сборка «с отказами».
+
+㉓ (М2 и М3 — находка OPSSRE при приёмке карточки #696, записка #5840; Э6, карточка #680) —
+свежий контур несёт КАЖДУЮ таблицу и индекс, которые дают прежний файл базовой схемы (второй
+по номеру) и файлы шагов, уже вошедшие в базу (все в migrations/, кроме STEPS и
+NOT_SCHEMA_STEPS). С базой v6 эти объекты лежат в mezosync_v6.sql статикой, и выпавший из файла
+объект сборка не замечала: код 0, «🎉», полный набор 37 из 37. Самый свежий файл схемы в эталон
+НЕ берётся — иначе эталон пропадал бы вместе с объектом. Поломки ㉓ — из копии файла базовой
+схемы убрана таблица hint_seen (М2), затем индекс idx_addressee_msg (М3): случай обязан назвать
+ровно пропавшее имя.
+⚖️ Граница эталона: имя, собранное подстановкой (`{TABLE}` в 20260830-lease-waits), разбору
+не видно; объекты, снятые неявно (индексы таблицы, удалённой DROP TABLE), он не вычитает.
+
+ОСТАНОВКА ПОСРЕДИ ПРОГОНА (записка #5879, слово COORD записка #5881): если нарочную поломку
+поставить не во что (якорь в испытуемом не найден), приёмка печатает итог дошедших случаев —
+«НЕ ПРИНЯТА», сколько дошло и сколько провалено — и только потом строку «⛔ НЕ ЗАПУСТИЛАСЬ».
 """
 import sys
 from pathlib import Path
@@ -80,6 +95,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_paths  # пути машины ВЫВОДЯТСЯ, не впечатаны (карточка #208)
 import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
 
+import importlib.util
 import json
 import os
 import re
@@ -102,15 +118,33 @@ if PACK is None:
 
 CASES = 0
 DIFFER = 0
+FAILED = 0
 
 
 def case(title, verdict, detail, differ=False):
-    global CASES, DIFFER
+    global CASES, DIFFER, FAILED
     CASES += 1
     DIFFER += bool(differ)
+    FAILED += not verdict
     print(f"{'✅' if verdict else '🔴'} {title}")
     print(f"   {detail}")
     return verdict
+
+
+def stop_unrunnable(reason: str):
+    """Остановка посреди прогона: нарочную поломку поставить не во что — якорь в испытуемом не
+    найден. Итог дошедших случаев печатается ДО строки об остановке. Иначе последней строкой
+    стояло «не запустилась» после случаев, которые уже поймали дефект, и читающий решал, что
+    сломана приёмка, а не испытуемое (замечание OPSSRE при приёмке М4, записка #5879: копия
+    с поломкой шага доставки — ㉒ провален, затем «⛔ НЕ ЗАПУСТИЛАСЬ»; слово COORD, записка #5881)."""
+    print()
+    if FAILED:
+        print(f"🔴 СБОРКА НЕ ПРИНЯТА — дошло случаев {CASES}, провалено {FAILED} (они выше); "
+              "до конца прогон не дошёл — причина последней строкой")
+    else:
+        print(f"🔴 СБОРКА НЕ ПРИНЯТА — дошло случаев {CASES}, провалов среди них нет, но до конца "
+              "прогон не дошёл — причина последней строкой")
+    sys.exit(reason)
 
 
 # ── случай ⑫: что пакет снимает при сборке, что снято в контуре, что говорит сверка ──────
@@ -261,6 +295,77 @@ def build_pack_copy_with_rules_db(dest: pathlib.Path) -> tuple[bool, str]:
         reason = ((r.stderr or "") + (r.stdout or "")).strip().splitlines()
         return False, (reason[-1] if reason else f"код {r.returncode}, без сообщения")
     return True, ""
+
+
+# ── случай ㉓: структура свежего контура против эталона, НЕЗАВИСИМОГО от файла базовой схемы ──
+# Имя объекта берётся, только если за ним идёт «(», ON, USING или AS: так не ловятся подстановки
+# f-строк (`{TABLE}`, `ix_{TABLE}_…`) и русский текст комментариев («CREATE TABLE на куски»).
+SCHEMA_OBJECT_CREATE = re.compile(
+    r"CREATE\s+(?:UNIQUE\s+)?(?:VIRTUAL\s+)?(TABLE|INDEX)\s+(?:IF\s+NOT\s+EXISTS\s+)?"
+    r"[\"'`\[]?([A-Za-z_][A-Za-z0-9_]*)[\"'`\]]?(?=\s*\(|\s+ON\b|\s+USING\b|\s+AS\b)", re.I)
+SCHEMA_OBJECT_RENAME = re.compile(
+    r"ALTER\s+TABLE\s+[\"'`\[]?([A-Za-z_][A-Za-z0-9_]*)[\"'`\]]?\s+RENAME\s+TO\s+"
+    r"[\"'`\[]?([A-Za-z_][A-Za-z0-9_]*)", re.I)
+SCHEMA_OBJECT_DROP = re.compile(
+    r"DROP\s+(TABLE|INDEX)\s+(?:IF\s+EXISTS\s+)?[\"'`\[]?([A-Za-z_][A-Za-z0-9_]*)", re.I)
+
+
+def schema_file_number(path: pathlib.Path) -> int:
+    """Номер файла схемы `mezosync_vN.sql` — тот же разбор, что у случая ⑯."""
+    return int("".join(ch for ch in path.stem.split("_v")[-1] if ch.isdigit()) or 0)
+
+
+def folded_schema_reference(pack: pathlib.Path) -> tuple[dict, str, int]:
+    """Эталон случая ㉓: таблицы и индексы, которые дают ПРЕЖНИЙ файл базовой схемы (второй
+    по номеру) и файлы шагов, уже вошедшие в базу, — все в migrations/, кроме
+    schema_step_order.STEPS и NOT_SCHEMA_STEPS (их сборка применяет сама или не применяет вовсе).
+    Самый свежий файл схемы в эталон НЕ берётся: объект, выпавший из него, иначе выпадал бы
+    и из эталона.
+    Имя, которое шаг лишь переименовывает (`x_new … RENAME TO x`) или удаляет и в том же файле
+    не создаёт заново, в эталон не идёт.
+    Возвращает ({(вид, имя): файл-источник}, имя прежнего файла схемы, число файлов шагов);
+    пустой эталон — если файлов схемы меньше двух."""
+    schemas = sorted((pack / "schema").glob("mezosync_v*.sql"), key=schema_file_number)
+    if len(schemas) < 2:
+        return {}, "", 0
+    spec = importlib.util.spec_from_file_location(
+        "schema_step_order_bite23", pack / "scripts" / "schema_step_order.py")
+    order = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(order)
+    applied_by_build = set(order.STEPS) | set(getattr(order, "NOT_SCHEMA_STEPS", ()))
+    folded = [p for p in sorted((pack / "scripts" / "migrations").glob("*.py"))
+              if p.stem not in applied_by_build]
+    reference: dict = {}
+    renamed_away: set = set()
+    for src in [schemas[-2]] + folded:
+        body = src.read_text(encoding="utf-8")
+        renames = SCHEMA_OBJECT_RENAME.findall(body)
+        renamed_away |= {old for old, _ in renames}
+        created = {(kind.lower(), name) for kind, name in SCHEMA_OBJECT_CREATE.findall(body)}
+        created |= {("table", new) for _, new in renames}
+        dropped = {(kind.lower(), name) for kind, name in SCHEMA_OBJECT_DROP.findall(body)}
+        for key in created:
+            reference.setdefault(key, src.name)
+        for key in dropped - created:
+            reference.pop(key, None)
+    for old in renamed_away:
+        reference.pop(("table", old), None)
+    return reference, schemas[-2].name, len(folded)
+
+
+def missing_schema_objects(db: pathlib.Path, reference: dict) -> set:
+    """Объекты эталона, которых нет в базе контура (вид и имя — как в sqlite_master)."""
+    con = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
+    try:
+        present = set(con.execute("SELECT type, name FROM sqlite_master"))
+    finally:
+        con.close()
+    return {key for key in reference if key not in present}
+
+
+def describe_objects(objects) -> str:
+    """Перечень объектов для строки случая: «table hint_seen, index idx_…» либо «ничего»."""
+    return ", ".join(f"{kind} {name}" for kind, name in sorted(objects)) if objects else "ничего"
 
 
 def main() -> int:
@@ -610,7 +715,7 @@ def main() -> int:
             n1_src = (pack_copy / "scripts" / "init-group.py").read_text(encoding="utf-8")
             n1_anchor = "Path(args.path).resolve()"
             if n1_src.count(n1_anchor) != 1:
-                sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: строка резолва --path не найдена дословно в "
+                stop_unrunnable("⛔ НЕ ЗАПУСТИЛАСЬ: строка резолва --path не найдена дословно в "
                          "init-group.py — испытуемое изменилось, поломка ⑬ бьёт мимо")
             n1_poisoned = pack_copy / "scripts" / "init-group-no-resolve.py"
             n1_poisoned.write_text(n1_src.replace(n1_anchor, "Path(args.path)"),
@@ -645,7 +750,7 @@ def main() -> int:
             reg_src = (pack_copy / "scripts" / "init-group.py").read_text(encoding="utf-8")
             reg_anchor = "        conn.execute(ROLE_REGISTRY_SQL, (role, reason))\n"
             if reg_src.count(reg_anchor) != 1:
-                sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: строка записи реестра ролей не найдена дословно в "
+                stop_unrunnable("⛔ НЕ ЗАПУСТИЛАСЬ: строка записи реестра ролей не найдена дословно в "
                          "init-group.py — испытуемое изменилось, поломка ④б бьёт мимо")
             reg_poisoned = pack_copy / "scripts" / "init-group-no-roles.py"
             reg_poisoned.write_text(
@@ -683,7 +788,7 @@ def main() -> int:
             # «НЕ ОПРЕДЕЛЁН ОДНОЗНАЧНО» — иначе случай ④в зеленел бы не от слова в причине.
             coord_anchor = '"координатор контура; заведена сборкой контура (--roles)"'
             if reg_src.count(coord_anchor) != 1:
-                sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: причина роли-координатора не найдена дословно в "
+                stop_unrunnable("⛔ НЕ ЗАПУСТИЛАСЬ: причина роли-координатора не найдена дословно в "
                          "init-group.py — испытуемое изменилось, поломка ④в бьёт мимо")
             coord_poisoned = pack_copy / "scripts" / "init-group-no-coordinator.py"
             coord_poisoned.write_text(
@@ -716,7 +821,7 @@ def main() -> int:
             # и сборка говорит «НЕ переключён» — иначе ⑳ зеленел бы не от строки сборки.
             wal_anchor = 'conn.execute("PRAGMA journal_mode=WAL")'
             if reg_src.count(wal_anchor) != 1:
-                sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: запрос режима WAL не найден дословно в init-group.py — "
+                stop_unrunnable("⛔ НЕ ЗАПУСТИЛАСЬ: запрос режима WAL не найден дословно в init-group.py — "
                          "испытуемое изменилось, поломка ⑳ бьёт мимо")
             wal_poisoned = pack_copy / "scripts" / "init-group-no-wal.py"
             wal_poisoned.write_text(reg_src.replace(wal_anchor, 'conn.execute("PRAGMA journal_mode")'),
@@ -746,7 +851,7 @@ def main() -> int:
             gate_src = (pack_soft / "scripts" / "init-group.py").read_text(encoding="utf-8")
             gate_anchor = "if soft_failures:"
             if gate_src.count(gate_anchor) != 1:
-                sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: строка условия «if soft_failures:» не найдена "
+                stop_unrunnable("⛔ НЕ ЗАПУСТИЛАСЬ: строка условия «if soft_failures:» не найдена "
                          "дословно в init-group.py — испытуемое изменилось, поломка ⑭ бьёт мимо")
             gate_poisoned = pack_soft / "scripts" / "init-group-no-gate.py"
             gate_poisoned.write_text(gate_src.replace(gate_anchor, "if False:"),
@@ -804,7 +909,7 @@ def main() -> int:
             na_idx = [i for i, ln in enumerate(na_lines)
                      if "опора правил пакета не записана — rules-from-pack.py" in ln]
             if len(na_idx) != 1:
-                sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: строка soft_failures.append (опора) не найдена "
+                stop_unrunnable("⛔ НЕ ЗАПУСТИЛАСЬ: строка soft_failures.append (опора) не найдена "
                          "дословно в init-group.py — испытуемое изменилось, поломка ⑮ бьёт мимо")
             na_i = na_idx[0]
             na_j = na_i
@@ -838,7 +943,7 @@ def main() -> int:
             poison_src = poisoned_init.read_text(encoding="utf-8")
             poison_anchor = '             "--record-base", "--apply", "--actor", "init-group.py"],\n'
             if poison_src.count(poison_anchor) != 1:
-                sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: строка вызова --record-base не найдена дословно "
+                stop_unrunnable("⛔ НЕ ЗАПУСТИЛАСЬ: строка вызова --record-base не найдена дословно "
                          "в init-group.py — испытуемое изменилось, поломка бьёт мимо")
             poisoned_init.write_text(poison_src.replace(poison_anchor, '             "--summary"],\n'),
                                      encoding="utf-8")
@@ -911,12 +1016,12 @@ def main() -> int:
             r"CREATE\s+(?:VIRTUAL\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[\"']?" + t + r"\b",
             base_text_633)}
         if not from_steps_633:
-            sys.exit(f"⛔ НЕ ЗАПУСТИЛАСЬ: все таблицы случая ⑯ уже лежат в {base_schema_633.name} — "
+            stop_unrunnable(f"⛔ НЕ ЗАПУСТИЛАСЬ: все таблицы случая ⑯ уже лежат в {base_schema_633.name} — "
                      "поломке «шаги не применяются» нечего отнять, случай ничего не различает")
         ig_src = (pack_633 / "scripts" / "init-group.py").read_text(encoding="utf-8")
         ig_anchor = "    considered = [s for s in schema_step_order.STEPS if s in on_disk]\n"
         if ig_src.count(ig_anchor) != 1:
-            sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: строка «considered = […]» не найдена дословно в "
+            stop_unrunnable("⛔ НЕ ЗАПУСТИЛАСЬ: строка «considered = […]» не найдена дословно в "
                      "init-group.py — испытуемое изменилось, поломка ⑯ бьёт мимо")
         ig_poisoned = pack_633 / "scripts" / "init-group-no-schema-steps.py"
         ig_poisoned.write_text(
@@ -964,7 +1069,7 @@ def main() -> int:
         step_640_src = step_640_path.read_text(encoding="utf-8")
         step_640_anchor = "    marks_to_seed = ATLAS_REBIRTH_MARKS if is_atlas else ()\n"
         if step_640_src.count(step_640_anchor) != 1:
-            sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: строка различителя контура не найдена дословно в "
+            stop_unrunnable("⛔ НЕ ЗАПУСТИЛАСЬ: строка различителя контура не найдена дословно в "
                      "20260905-phoenix-history-archive.py — испытуемое изменилось, поломка "
                      "⑰ бьёт мимо")
         step_640_poisoned = pack_640 / "scripts" / "migrations" / "20260905-phoenix-history-archive-no-guard.py"
@@ -1020,7 +1125,7 @@ def main() -> int:
             order_src21 = order_path21.read_text(encoding="utf-8")
             anchor21 = f'NOT_SCHEMA_STEPS = (\n    "{not_schema_step}",\n)\n'
             if order_src21.count(anchor21) != 1:
-                sys.exit(f"⛔ НЕ ЗАПУСТИЛАСЬ: перечень NOT_SCHEMA_STEPS с шагом «{not_schema_step}» "
+                stop_unrunnable(f"⛔ НЕ ЗАПУСТИЛАСЬ: перечень NOT_SCHEMA_STEPS с шагом «{not_schema_step}» "
                          "не найден дословно в schema_step_order.py — испытуемое изменилось, "
                          "поломка ㉑ бьёт мимо")
             order_path21.write_text(order_src21.replace(anchor21, "NOT_SCHEMA_STEPS = ()\n", 1),
@@ -1062,7 +1167,7 @@ def main() -> int:
         order_src = order_path.read_text(encoding="utf-8")
         order_anchor = '    "20260913-role-rights-revoked-by",\n'
         if order_src.count(order_anchor) != 1:
-            sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: строка «20260913-role-rights-revoked-by» не найдена "
+            stop_unrunnable("⛔ НЕ ЗАПУСТИЛАСЬ: строка «20260913-role-rights-revoked-by» не найдена "
                      "дословно в schema_step_order.py — испытуемое изменилось, поломка ⑱ бьёт мимо")
         order_path.write_text(order_src.replace(order_anchor, "", 1), encoding="utf-8")
         mez18p = tmp / ".mezosync-633-order-poison"
@@ -1171,7 +1276,7 @@ def main() -> int:
             '        (FOREIGN_NOTED_BY, FOREIGN_SOURCE_LIKE)).fetchall()\n'
         )
         if step_915_src.count(step_915_anchor) != 1:
-            sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: блок запроса candidates не найден дословно в "
+            stop_unrunnable("⛔ НЕ ЗАПУСТИЛАСЬ: блок запроса candidates не найден дословно в "
                      "20260915-foreign-rebirth-marks.py — испытуемое изменилось, поломка ⑲ "
                      "бьёт мимо")
         atlas_role_names = ("CHROME", "COORD", "CORE", "ING", "OPSSRE", "PROTO", "RCC", "STUD", "TAXO")
@@ -1232,7 +1337,7 @@ def main() -> int:
         step_696_update = '"WHERE rule_key=? AND skill_delivery IS NULL", (k,))\n'
         step_696_count = "        done += cur.rowcount\n"
         if step_696_src.count(step_696_update) != 1 or step_696_src.count(step_696_count) != 1:
-            sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: условие правки или счёт задетых строк не найдены дословно "
+            stop_unrunnable("⛔ НЕ ЗАПУСТИЛАСЬ: условие правки или счёт задетых строк не найдены дословно "
                      "в 20260904-rule-skill-delivery.py — испытуемое изменилось, поломки ㉒ бьют мимо")
         update_missing = '"WHERE rule_key=? AND skill_delivery IS NULL AND 0", (k,))  # ПОЛОМКА\n'
 
@@ -1278,6 +1383,63 @@ def main() -> int:
                   f"{'🎉 Группа' in out22b} (ждём False) — без сличения сборка верила коду 0",
                   differ=True)
         step_696_path.write_text(step_696_src, encoding="utf-8")
+
+        # ── ㉓ СТРУКТУРА СВЕЖЕГО КОНТУРА ПРОТИВ ЭТАЛОНА, НЕЗАВИСИМОГО ОТ ФАЙЛА БАЗОВОЙ СХЕМЫ
+        # (М2 и М3 — находка OPSSRE при приёмке карточки #696, записка #5840; Э6, карточка #680).
+        # С подъёмом базы до v6 таблицы и индексы шагов до отметки v6 лежат в mezosync_v6.sql
+        # статикой, а сами шаги сборка не применяет. Объект, выпавший из этого файла, сборка не
+        # замечала: код 0, «🎉», полный набор этой приёмки 37 из 37 (поломки М2 — из файла убрана
+        # hint_seen, М3 — убран idx_addressee_msg). Эталон — прежний файл схемы и шаги, вошедшие
+        # в базу (folded_schema_reference): каждый их объект обязан быть в контуре `mez`.
+        ref23, prev23, steps23 = folded_schema_reference(PACK)
+        if not ref23:
+            stop_unrunnable("⛔ НЕ ЗАПУСТИЛАСЬ: эталона ㉓ нет — у пакета меньше двух файлов схемы или разбор "
+                     "не нашёл ни одного объекта; случай ничего не различал бы")
+        miss23 = missing_schema_objects(mez / "mezosync.db", ref23)
+        ok &= case("㉓ свежий контур несёт каждую таблицу и индекс прежней базовой схемы и шагов, "
+                  "вошедших в базу (М2/М3, записка #5840)",
+                  not miss23,
+                  f"эталон: {prev23} и шагов {steps23} — имён {len(ref23)}; в контуре не хватает: "
+                  f"{describe_objects(miss23)} (ждём «ничего»)", differ=True)
+
+        # ── КОНТРОЛЬ ㉓ двумя нарочными поломками КОПИИ самого свежего файла схемы: из него
+        # убирается таблица (М2), затем индекс (М3). Эталон берётся из ТОЙ ЖЕ копии пакета, что
+        # собирала контур: прежний файл схемы и шаги в ней целы, поэтому пропажа видна.
+        pack_m23 = tmp / "pack-m23"
+        for name in ("rules", "schema", "scripts", "templates", "vnext"):
+            copy_pack_subdir(PACK, name, pack_m23)
+        base23_path = sorted((pack_m23 / "schema").glob("mezosync_v*.sql"), key=schema_file_number)[-1]
+        base23_src = base23_path.read_text(encoding="utf-8")
+        cuts23 = (
+            ("table", "hint_seen",
+             re.compile(r"CREATE TABLE IF NOT EXISTS hint_seen \(.*?\n\);\n", re.S)),
+            ("index", "idx_addressee_msg",
+             re.compile(r"CREATE INDEX IF NOT EXISTS idx_addressee_msg\b[^\n]*\n")),
+        )
+        for kind23, name23, cut23 in cuts23:
+            if len(cut23.findall(base23_src)) != 1 or (kind23, name23) not in ref23:
+                stop_unrunnable(f"⛔ НЕ ЗАПУСТИЛАСЬ: {kind23} {name23} не найден ровно один раз в "
+                         f"{base23_path.name} или его нет в эталоне ㉓ — испытуемое изменилось, "
+                         "поломки ㉓ бьют мимо")
+        for kind23, name23, cut23 in cuts23:
+            base23_path.write_text(cut23.sub("", base23_src, count=1), encoding="utf-8")
+            mez23p = tmp / f".mezosync-m23-{kind23}"
+            r23p = subprocess.run(
+                [sys.executable, str(pack_m23 / "scripts" / "init-group.py"), "--name",
+                 f"bitem23{kind23}", "--path", str(mez23p), "--roles", "coord"],
+                capture_output=True, text=True, encoding="utf-8", timeout=300, env=env)
+            ref23p, _, _ = folded_schema_reference(pack_m23)
+            miss23p = (missing_schema_objects(mez23p / "mezosync.db", ref23p)
+                       if (mez23p / "mezosync.db").exists() else None)
+            what23 = "таблица" if kind23 == "table" else "индекс"
+            ok &= case(f"㉓ ПОЛОМКА (из {base23_path.name} убран{'а' if kind23 == 'table' else ''} "
+                      f"{what23} {name23}) КРАСИТ случай ㉓ — недостача названа ровно этим именем",
+                      miss23p == {(kind23, name23)},
+                      f"код сборки {r23p.returncode} (сама сборка пропажи не замечает — затем случай и "
+                      f"нужен); в контуре не хватает: "
+                      f"{describe_objects(miss23p) if miss23p is not None else 'базы нет'} "
+                      f"(ждём ровно {kind23} {name23})", differ=True)
+        base23_path.write_text(base23_src, encoding="utf-8")
 
     finally:
         mezo_stand.release(tmp)  # уборка отложена до исхода прогона
