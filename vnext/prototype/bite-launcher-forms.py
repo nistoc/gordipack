@@ -72,6 +72,22 @@ LITERAL_PATCHES = [
 # «отказ засчитан»: признак «роли нет» выключен — отказ снова уходит в «отвечает»
 ABSENT_BRANCH_PATCH = ("        elif refused and (line := role_absent(",
                        "        elif False and (line := role_absent(")
+# Случаи ⑩-кватер…⑩-секст (возврат OPSSRE, записка #5935): граница признака «роли нет».
+# Шапка отчёта, которую прежний признак засчитывал отказом: имя CORE стоит ДО слова «роль», а «--role» — флаг.
+ROLE_HEADER_LINE = ("📋 guard-printed-forms.py --role CORE --full; роль взята: флаг --role) · "
+                    "НЕ запускались (нет argparse): 3")
+# Настоящие отказы — текстами самих скриптов пакета (read-messages · read-phoenix · rebirth-mark · role-rights)
+ROLE_REFUSALS = ("ERR: роли PROTO нет среди читателей (есть: RX-A).",
+                 "ERR: сохранённой памяти роли PROTO в базе нет. Есть: RX-A",
+                 "⛔ роли PROTO нет в реестре — отметку ставить некому (регистр ВЕРХНИЙ)",
+                 "роли PROTO в таблице ролей нет — пометку ставить некому.",
+                 "role PROTO not found")
+# поломка ⑩-квинт: имя снова ищется по всей строке
+WHOLE_LINE_PATCH = ("                 if any(named(m.group(0)) for m in ROLE_ABSENT.finditer(line))), None)",
+                    "                 if ROLE_ABSENT.search(line) and any(n in line for n in names)), None)")
+# поломка ⑩-секст: флаг «--role» снова считается словом «роль»
+FLAG_WORD_PATCH = ('ROLE_ABSENT = re.compile(r"(?<![-\\w])(рол[ьиейю]|role)',
+                   'ROLE_ABSENT = re.compile(r"(рол[ьиейю]|role)')
 
 
 def case(title, ok, detail, differ=False):
@@ -859,6 +875,54 @@ def main() -> int:
                    verdict10c == "ok",
                    f"исход формы под поломкой: {verdict10c} (ждём ok — прежняя беда карточки #686)",
                    differ=True)
+
+    # ═══ ⑩-кватер…⑩-секст: граница признака «роли нет» (возврат OPSSRE, записка #5935) ══════════
+    # Исход определяет только текст строки, поэтому функция проверки зовётся напрямую — из копии
+    # файла проверки (с поломкой или без), без прогона форм.
+    def role_absent_of(patches, tag):
+        text = TOOL.read_text(encoding="utf-8")
+        for old, new in patches:
+            if text.count(old) != 1:
+                return None, f"поломка не легла: «{old[:60]}» найдено {text.count(old)} раз"
+            text = text.replace(old, new)
+        tdir = stand10 / f"absent-{tag}"
+        tdir.mkdir(exist_ok=True)
+        path = tdir / TOOL.name
+        path.write_text(text, encoding="utf-8")
+        spec = importlib.util.spec_from_file_location(f"glf_absent_{tag}", path)
+        mod = importlib.util.module_from_spec(spec)
+        sys.path.insert(0, str(TOOL.parent))
+        try:
+            spec.loader.exec_module(mod)
+        finally:
+            sys.path.pop(0)
+        return mod.role_absent, ""
+
+    absent, why_absent = role_absent_of([], "as-is")
+    if absent is None:
+        ok &= case("⑩-кватер ВСТРЕЧНЫЙ: шапка отчёта с «--role ИМЯ … (нет …)» — не отказ «роли нет»",
+                   False, f"⛔ НЕ ЗАПУСТИЛАСЬ: {why_absent}", differ=True)
+    else:
+        caught = [t for t in ROLE_REFUSALS if absent(t, {"PROTO"})]
+        header = absent(ROLE_HEADER_LINE, {"CORE"})
+        ok &= case("⑩-кватер ВСТРЕЧНЫЙ: шапка отчёта с «--role ИМЯ … (нет …)» — не отказ «роли нет»; "
+                   "настоящие отказы скриптов пакета — отказ",
+                   header is None and len(caught) == len(ROLE_REFUSALS),
+                   f"шапка: {'не отказ' if header is None else 'ОТКАЗ'} (ждём «не отказ») · настоящих отказов "
+                   f"узнано {len(caught)} из {len(ROLE_REFUSALS)}", differ=True)
+    for mark, tag, patch, what in (
+            ("⑩-квинт", "whole-line", WHOLE_LINE_PATCH, "имя ищется по всей строке"),
+            ("⑩-секст", "flag-word", FLAG_WORD_PATCH, "флаг «--role» считается словом «роль»")):
+        broken, why_broken = role_absent_of([patch], tag)
+        if broken is None:
+            ok &= case(f"{mark} поломка «{what}»: шапка снова засчитана отказом", False,
+                       f"⛔ НЕ ЗАПУСТИЛАСЬ: {why_broken}", differ=True)
+            continue
+        ok &= case(f"{mark} поломка «{what}»: шапка отчёта снова засчитана отказом — значит, "
+                   f"⑩-кватер держит именно эту половину границы",
+                   broken(ROLE_HEADER_LINE, {"CORE"}) is not None,
+                   "исход под поломкой: " + ("ОТКАЗ (ждём отказ)" if broken(ROLE_HEADER_LINE, {"CORE"})
+                                             else "не отказ — поломка не различена"), differ=True)
 
     print()
     print(f"{'✅ ПРОВЕРКА ПРИНЯТА' if ok else '🔴 НЕ ПРИНЯТ'} — случаев {CASES}, различающих {DIFFER}"
