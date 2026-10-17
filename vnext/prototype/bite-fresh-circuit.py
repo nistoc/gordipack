@@ -109,6 +109,7 @@ import subprocess
 import pathlib
 import sqlite3
 import sys
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -266,6 +267,16 @@ def copy_pack_subdir(pack: pathlib.Path, name: str, dest_dir: pathlib.Path,
     return skipped
 
 
+# ⏱ ПРЕДЕЛ СБОРЩИКА БАЗЫ ПРАВИЛ — по замеру (записка #5905, записка #5909). Сборщик читает ВСЮ
+# историю git пакета (git log/show по каждому файлу правил на каждый commit): время растёт с
+# историей и плавает с нагрузкой машины. 17.10 отдельно, без приёмки: 469 с на чистом worktree,
+# 522 с с правкой в рабочем каталоге. Прежний предел 300 с за день трижды оборвал прогон
+# traceback'ом TimeoutExpired на ⑪ — до ㉓ не доходили; OPSSRE с пределом 900 с прошла 44 из 44.
+# Запас — больше двух замеренных максимумов. Время сборщика печатается строкой «ℹ️ сборщик…»:
+# по ней видно, когда запас кончается, раньше, чем прогон оборвётся.
+RULES_DB_BUILD_LIMIT = 1200
+
+
 def build_pack_copy_with_rules_db(dest: pathlib.Path) -> tuple[bool, str]:
     """Временная копия пакета (карточка #608, шаг 3) — С БАЗОЙ ПРАВИЛ, даже когда её нет
     в самом клоне (сейчас нет — её кладёт PROTO отдельным ходом; см. отчёт задачи).
@@ -279,6 +290,7 @@ def build_pack_copy_with_rules_db(dest: pathlib.Path) -> tuple[bool, str]:
 
     Возвращает (True, "") при успехе; (False, причина) — сборщик базы правил (в разработке
     параллельно, карточка #608) не смог собрать — это НЕ повод чинить его отсюда.
+    Не уложился в RULES_DB_BUILD_LIMIT — остановка с итогом дошедших случаев (stop_unrunnable).
     """
     builder = PACK / "vnext" / "tools" / "build-pack-rules-db.py"
     if not builder.exists():
@@ -292,10 +304,18 @@ def build_pack_copy_with_rules_db(dest: pathlib.Path) -> tuple[bool, str]:
         live_tool = live_scripts / tool_name
         if live_tool.exists():
             shutil.copy2(live_tool, dest / "scripts" / tool_name)
-    r = subprocess.run(
-        [sys.executable, str(builder), "--pack-root", str(PACK), "--out",
-         str(dest / "rules" / "pack-rules.db")],
-        capture_output=True, text=True, encoding="utf-8", timeout=300)
+    started = time.monotonic()
+    try:
+        r = subprocess.run(
+            [sys.executable, str(builder), "--pack-root", str(PACK), "--out",
+             str(dest / "rules" / "pack-rules.db")],
+            capture_output=True, text=True, encoding="utf-8", timeout=RULES_DB_BUILD_LIMIT)
+    except subprocess.TimeoutExpired:
+        # Обрыв по пределу — не «неприменим»: тот молча убрал бы из счёта ⑪ и всё после него.
+        stop_unrunnable(f"⛔ НЕ ДОШЛА ДО КОНЦА: сборщик базы правил {builder.name} не уложился в предел "
+                        f"{RULES_DB_BUILD_LIMIT} с — случай ⑪ и все после него не проверены. Время "
+                        f"сборщика отдельно: python {builder} --pack-root {PACK} --out <файл>")
+    print(f"ℹ️ сборщик базы правил: {time.monotonic() - started:.0f} с (предел {RULES_DB_BUILD_LIMIT} с)")
     if r.returncode != 0:
         reason = ((r.stderr or "") + (r.stdout or "")).strip().splitlines()
         return False, (reason[-1] if reason else f"код {r.returncode}, без сообщения")

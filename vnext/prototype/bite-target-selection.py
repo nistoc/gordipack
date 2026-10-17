@@ -11,7 +11,13 @@ r"""ПРИЁМКА выбора испытуемой копии в общем н
 набор обязан САМ печатать границу — сколько механизмов он реально испытывает.
 
 ⛔ Живого контура не касается: копии строятся во временном каталоге.
-⏱ Гоняет набор с --only на трёх приёмках, а не целиком: предмет здесь — выбор копии.
+⏱ Гоняет набор с --only на отдельных приёмках, а не целиком: предмет здесь — выбор копии.
+
+🪤 17.10 (записка #5902, карточка #680): раскладка копии кладёт в стенд и соседние проверки
+(<копия>/../vnext/prototype) — а случая на это не было. Опыт на копии ЖИВЫХ скриптов его бы
+и не дал: в живом каталоге лежит своя guard-shift-end.py, save-phoenix.py находит её рядом
+с собой, и прогон зелёный с соседями, без них и со сломанным соседом. Различает только копия,
+разложенная как клон пакета: скрипты отдельно, соседи — в vnext/prototype (случаи ⑪–⑬).
 """
 import os
 import shutil
@@ -32,6 +38,14 @@ ONLY_CONTOUR = "default-stamp"
 # ⚖️ Зелёное здесь — «держится 1», а не код 0: отказ испытуемого эта приёмка отдаёт кодом 2, набор
 # печатает его «не запустилась» и итог кодом 0 — на прежнем bite-all.py ⑧ «прошёл» бы по коду
 GREEN_ONE = "держится 1 · сломано 0 · НЕ ПРОВЕРЕНО 0"
+# приёмка, чьему испытуемому НУЖНЫ соседние проверки: save-phoenix.py ищет guard-shift-end.py
+# через vnext_tool() — четвёртое место <стенд>/vnext/prototype. Без соседей шесть её случаев
+# падают «файла нет» (замер 17.10: прошло 12 · провалилось 6)
+ONLY_NEIGHBOURS = "shift-end"
+NEIGHBOUR_BROKEN = "guard-shift-end.py"
+# скрипты пакета — соседи этого каталога: <пакет>/scripts рядом с <пакет>/vnext/prototype
+PACK_SCRIPTS = os.path.join(os.path.dirname(os.path.dirname(HERE)), "scripts")
+NEIGHBOURS_LINE = "соседние проверки — копия"
 
 CASES = 0
 DIFFERENTIATING = 0
@@ -78,6 +92,22 @@ def copy_flat(tmp, name, break_files=()):
     for f in break_files:
         with open(os.path.join(dst, f), "w", encoding="utf-8") as fh:
             fh.write("import sys\nsys.exit('НАРОЧНО СЛОМАН В КОПИИ')\n")
+    return dst
+
+
+def copy_pack_layout(tmp, name, neighbours=True, break_files=()):
+    # Копия «как клон пакета»: <name>/scripts — скрипты пакета, <name>/vnext/prototype — соседние
+    # проверки (копия этого каталога). Скрипты пакета, а не живые: в живом каталоге лежит своя
+    # guard-shift-end.py, и с ней отсутствие соседей не видно (опыт 17.10).
+    root = os.path.join(tmp, name)
+    dst = os.path.join(root, "scripts")
+    shutil.copytree(PACK_SCRIPTS, dst, ignore=shutil.ignore_patterns("__pycache__"))
+    if neighbours:
+        nb = os.path.join(root, "vnext", "prototype")
+        shutil.copytree(HERE, nb, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "local.paths"))
+        for f in break_files:
+            with open(os.path.join(nb, f), "w", encoding="utf-8") as fh:
+                fh.write("import sys\nsys.exit('НАРОЧНО СЛОМАН В КОПИИ')\n")
     return dst
 
 
@@ -177,6 +207,54 @@ def main() -> int:
     ok &= case("⑩ копия, лежащая контуром, не раскладывается (встречный к ⑧)",
                laid_stand(out_whole) is None and laid_stand(out_live) is None,
                "раскладка — только там, где своего контура нет", differ=True)
+
+    # ⑪ КОПИЯ КАК КЛОН ПАКЕТА — раскладка несёт и СОСЕДНИЕ проверки: save-phoenix.py в стенде
+    #    находит guard-shift-end.py в <стенд>/vnext/prototype. Без этого шесть случаев приёмки
+    #    падали «файла нет» (разбор 17.10, bite-all.py::lay_out_contour).
+    if not os.path.isdir(PACK_SCRIPTS):
+        ok &= case("⑪ копия как клон пакета — раскладка несёт соседние проверки",
+                   False, f"скриптов пакета рядом нет ({PACK_SCRIPTS}) — копию клона строить не из чего; "
+                   "приёмка живёт в пакете и запускается из него", differ=True)
+    else:
+        pack = copy_pack_layout(tmp, "pack")
+        pack_nb = os.path.join(os.path.dirname(pack), "vnext", "prototype")
+        out_pack, code_pack = run(pack, ONLY_NEIGHBOURS)
+        st_pack = laid_stand(out_pack)
+        ok &= case("⑪ копия как клон пакета — раскладка несёт соседние проверки: прогон зелёный, "
+                   "соседи названы, каталог убран",
+                   code_pack == 0 and GREEN_ONE in out_pack and st_pack is not None
+                   and f"{NEIGHBOURS_LINE} {pack_nb}" in out_pack and not os.path.exists(st_pack),
+                   f"код {code_pack}; разложена в {st_pack}; строка «{NEIGHBOURS_LINE} …» "
+                   f"{'есть' if NEIGHBOURS_LINE in out_pack else 'НЕТ'}", differ=True)
+
+        # ⑫ ВСТРЕЧНЫЙ к ⑪: те же скрипты БЕЗ соседнего каталога — прогон НЕ зелёный. Без него ⑪
+        #    зелёный мог бы оказаться по другой причине (так и вышло в опыте на живых скриптах).
+        bare = copy_pack_layout(tmp, "pack-bare", neighbours=False)
+        out_bare, code_bare = run(bare, ONLY_NEIGHBOURS)
+        st_bare = laid_stand(out_bare)
+        ok &= case("⑫ клон без соседнего каталога — прогон НЕ зелёный (встречный к ⑪)",
+                   GREEN_ONE not in out_bare and "СЛОМАНО" in out_bare and st_bare is not None
+                   and NEIGHBOURS_LINE not in out_bare,
+                   f"код {code_bare}; соседей нет — save-phoenix.py в стенде не находит "
+                   f"{NEIGHBOUR_BROKEN}: прогон {'НЕ прошёл, это видно' if GREEN_ONE not in out_bare else 'ПРОШЁЛ'}",
+                   differ=True)
+        if st_bare:
+            shutil.rmtree(st_bare, ignore_errors=True)   # сохранён набором для осмотра — здесь осматривать нечего
+
+        # ⑬ ВСТРЕЧНЫЙ к ⑪: соседи берутся ИЗ КОПИИ, а не откуда-то ещё. Сломанный в копии сосед
+        #    обязан провалить прогон — иначе стенд нашёл бы целую проверку в другом месте.
+        nb_bad = copy_pack_layout(tmp, "pack-nb-broken", break_files=(NEIGHBOUR_BROKEN,))
+        out_nb_bad, code_nb_bad = run(nb_bad, ONLY_NEIGHBOURS)
+        st_nb_bad = laid_stand(out_nb_bad)
+        ok &= case("⑬ сломанный сосед в копии — прогон НЕ зелёный (встречный к ⑪)",
+                   GREEN_ONE not in out_nb_bad and "СЛОМАНО" in out_nb_bad and st_nb_bad is not None
+                   and NEIGHBOURS_LINE in out_nb_bad,
+                   f"код {code_nb_bad}; строка «{NEIGHBOURS_LINE} …» "
+                   f"{'есть' if NEIGHBOURS_LINE in out_nb_bad else 'НЕТ'}; поломка {NEIGHBOUR_BROKEN} в "
+                   f"<копия>/vnext/prototype {'дошла' if GREEN_ONE not in out_nb_bad else 'НЕ дошла'} до испытуемого",
+                   differ=True)
+        if st_nb_bad:
+            shutil.rmtree(st_nb_bad, ignore_errors=True)
 
     print()
     print(f"✅ ВЫБОР КОПИИ ПРИНЯТ — случаев {CASES}, различающих {DIFFERENTIATING}, "
