@@ -24,6 +24,11 @@
   ⑯ нарочная поломка «вернуть литерал» (имена ролей Atlas) → проваливает ⑮ и ⑮-бис
   ⑰ таблицы ролей нет → приписка роли не судится, и это сказано вслух
   (⑮–⑰ — карточка #686: имена ролей проверка берёт из таблицы roles той же базы)
+  ⑮-тер ВСТРЕЧНЫЙ, обратная сторона ⑮-бис: контур с ролями COORD и ZETA, «рукой COORD-B»
+        (имя соседа, в контуре такой роли нет) → основанием НЕ считать
+  ⑱ нарочная поломка «дефис не часть имени» → проваливает ⑮-тер
+  (⑮-тер и ⑱ — записка #5913, поломка B3: ⑮-бис испытывал границу имени только в одну сторону —
+   в контуре COORD-A, в тексте COORD; правило, пришедшее от соседа с COORD-B, не охранялось)
 
 ⛔ Живой базы не касается: своя временная база в песочнице.
 """
@@ -52,6 +57,11 @@ LITERAL_ANCHOR = "    roles_re, roles_known = roles_pattern(con)\n"
 LITERAL_BROKEN = ('    roles_re, roles_known = '
                   r'r"(?:COORD|CORE|ING|STUD|TAXO|RCC|OPSSRE|PROTO|CHROME|владел[ье]\w*)", True'
                   "\n")
+# Контур, где есть COORD, а в тексте правила — имя соседа COORD-B (обратная сторона FOREIGN_ROLES).
+NEAR_ROLES = ("COORD", "ZETA")
+# Нарочная поломка «дефис не часть имени»: граница имени снова только по букве и цифре.
+HYPHEN_ANCHOR = 'alts = [rf"(?<![\\w-]){re.escape(n)}(?![\\w-])" for n in'
+HYPHEN_BROKEN = 'alts = [rf"(?<!\\w){re.escape(n)}(?!\\w)" for n in'
 
 
 def build(path: str, rules, roles=ATLAS_ROLES):
@@ -87,18 +97,24 @@ def run(path: str, extra=(), check=CHECK):
     return (r.stdout or "") + (r.stderr or ""), r.returncode
 
 
-def literal_copy(tmp: str):
-    """Копия проверки с нарочной поломкой «вернуть литерал»; не легла — (None, причина)."""
-    d = os.path.join(tmp, "check-copy")
+def broken_copy(tmp: str, sub: str, anchor: str, replacement: str):
+    """Копия проверки с нарочной поломкой в tmp/<sub>; не легла — (None, причина).
+    Своя папка на каждую поломку: в общей вторая копия затёрла бы первую."""
+    d = os.path.join(tmp, sub)
     os.makedirs(d, exist_ok=True)
     text = open(CHECK, encoding="utf-8").read()
-    if text.count(LITERAL_ANCHOR) != 1:
-        return None, f"поломка не легла: якорь найден {text.count(LITERAL_ANCHOR)} раз"
+    if text.count(anchor) != 1:
+        return None, f"поломка не легла: якорь найден {text.count(anchor)} раз"
     with open(os.path.join(d, "check-rule-basis.py"), "w", encoding="utf-8") as f:
-        f.write(text.replace(LITERAL_ANCHOR, LITERAL_BROKEN))
+        f.write(text.replace(anchor, replacement))
     with open(os.path.join(HERE, "mezo_paths.py"), encoding="utf-8") as src,             open(os.path.join(d, "mezo_paths.py"), "w", encoding="utf-8") as dst:
         dst.write(src.read())
     return os.path.join(d, "check-rule-basis.py"), ""
+
+
+def literal_copy(tmp: str):
+    """Копия проверки с нарочной поломкой «вернуть литерал»."""
+    return broken_copy(tmp, "check-copy", LITERAL_ANCHOR, LITERAL_BROKEN)
 
 
 def num(text: str, pattern: str):
@@ -301,7 +317,27 @@ def main() -> int:
                    f"под поломкой: ⑮ слепых {b15} (под верным кодом 1), ⑮-бис слепых {b15b} "
                    "(под верным кодом 2)", differ=True)
 
-    p17 = os.path.join(tmp, "q.db")
+    # ⑮-тер ⑱ обратная сторона ⑮-бис: в контуре COORD, в тексте — имя соседа COORD-B
+    near = ("приписано-coord-b", "Внесено рукой COORD-B 2026-10-05 10:00 UTC. Дальше текст "
+            "правила.", "coord")
+    p15c = os.path.join(tmp, "r.db")
+    build(p15c, [near, (BLIND[0], BLIND[1], "coord")], roles=NEAR_ROLES)
+    blind15c = num(run(p15c)[0], r"ОСНОВАНИЕ НЕ НАЙТИ ВОВСЕ \.+ (\d+)")
+    ok &= case("⑮-тер ВСТРЕЧНЫЙ: контур с ролями COORD и ZETA — «рукой COORD-B» (имя соседа) "
+               "основанием НЕ считается", blind15c == 2,
+               f"слепых найдено {blind15c}, ждали 2 (испытуемое и контрольное)", differ=True)
+
+    broken18, why18 = broken_copy(tmp, "check-copy-hyphen", HYPHEN_ANCHOR, HYPHEN_BROKEN)
+    if broken18 is None:
+        ok &= case("⑱ поломка «дефис не часть имени» проваливает ⑮-тер", False,
+                   f"⛔ НЕ ЗАПУСТИЛАСЬ: {why18}", differ=True)
+    else:
+        b15c = num(run(p15c, check=broken18)[0], r"ОСНОВАНИЕ НЕ НАЙТИ ВОВСЕ \.+ (\d+)")
+        ok &= case("⑱ поломка «дефис не часть имени» проваливает ⑮-тер", b15c == 1,
+                   f"под поломкой: ⑮-тер слепых {b15c} (под верным кодом 2) — COORD-B засчитан "
+                   "как COORD", differ=True)
+
+    p17 =os.path.join(tmp, "q.db")
     build(p17, [("замер-коллеги", "ОСНОВАНИЕ: замер @RCC, 2026-08-07 17:26 UTC. Внесено рукой "
                  "COORD.", "coord"), (BLIND[0], BLIND[1], "coord")], roles=None)
     out17, _ = run(p17)

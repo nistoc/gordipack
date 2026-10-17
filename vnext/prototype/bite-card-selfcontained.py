@@ -18,6 +18,14 @@
   ③ ВСТРЕЧНЫЙ: тот же контур — «@COORD» (такой роли в нём нет) не засчитан
   ④ нарочная поломка «вернуть литерал» (девять имён Atlas) проваливает ② и ③
   ⑤ таблицы ролей нет — «@COORD» не засчитан, и это сказано вслух
+  ③-бис ВСТРЕЧНЫЙ, обратная сторона ③: контур с ролями COORD и ZETA — «@COORD-B» (имя соседа,
+        в контуре такой роли нет) не засчитан
+  ⑥ нарочная поломка «дефис не часть имени» проваливает ③-бис
+
+🪤 ③-бис и ⑥ — записка #5913, поломка B4 (2026-10-17). Шапка zone_pattern обещает «COORD-A ≠ COORD»,
+а ③ испытывал это только в одну сторону: в контуре COORD-A, в карточке @COORD. Карточка, пришедшая
+от соседа с @COORD-B, в контуре с COORD не охранялась — без дефиса в запрете за именем она
+засчитывалась как рука COORD.
 
 ⛔ Живой базы не касается: свои временные базы в песочнице.
 """
@@ -48,6 +56,11 @@ LITERAL_ANCHOR = '    return re.compile("|".join([ZONE_WORDS] + alts), re.I), bo
 LITERAL_BROKEN = ('    return re.compile(ZONE_WORDS + '
                   r'r"|@(?:COORD|CORE|STUD|ING|TAXO|RCC|OPSSRE|PROTO|CHROME)", re.I), True'
                   "\n")
+# Контур, где есть COORD, а в карточке — имя соседа COORD-B (обратная сторона FOREIGN_ROLES).
+NEAR_ROLES = ("COORD", "ZETA")
+# Нарочная поломка «дефис не часть имени»: за именем снова запрещены только буква, цифра и «_».
+HYPHEN_ANCHOR = 'alts = [rf"@{re.escape(n)}(?![A-Za-z0-9_-])" for n in'
+HYPHEN_BROKEN = 'alts = [rf"@{re.escape(n)}(?![A-Za-z0-9_])" for n in'
 
 ROW = re.compile(r"^\s*#(\d+)\s+\S+\s+(.+?)\s+(\d+)\s+(\d+)\s*$")
 ZONE_COL = 4  # повод · числа · граница · проверка · ЗОНА · цена · срок
@@ -89,21 +102,27 @@ def zones(out: str) -> dict:
     return got
 
 
-def literal_copy(tmp: str):
-    """Копия замера с нарочной поломкой «вернуть литерал»; не легла — (None, причина)."""
-    d = os.path.join(tmp, "measure-copy")
+def broken_copy(tmp: str, sub: str, anchor: str, replacement: str):
+    """Копия замера с нарочной поломкой в tmp/<sub>; не легла — (None, причина).
+    Своя папка на каждую поломку: в общей вторая копия затёрла бы первую."""
+    d = os.path.join(tmp, sub)
     os.makedirs(d, exist_ok=True)
     text = open(MEASURE, encoding="utf-8").read()
-    if text.count(LITERAL_ANCHOR) != 1:
-        return None, f"поломка не легла: якорь найден {text.count(LITERAL_ANCHOR)} раз"
+    if text.count(anchor) != 1:
+        return None, f"поломка не легла: якорь найден {text.count(anchor)} раз"
     with open(os.path.join(d, os.path.basename(MEASURE)), "w", encoding="utf-8") as f:
-        f.write(text.replace(LITERAL_ANCHOR, LITERAL_BROKEN))
+        f.write(text.replace(anchor, replacement))
     # замер подключает соседей: разбор ссылок, пути машины и подсказки — копия без них не встанет
     for name in ("check-dangling-refs.py", "mezo_paths.py", "mezo_hints.py"):
         with open(os.path.join(HERE, name), encoding="utf-8") as src, \
                 open(os.path.join(d, name), "w", encoding="utf-8") as dst:
             dst.write(src.read())
     return os.path.join(d, os.path.basename(MEASURE)), ""
+
+
+def literal_copy(tmp: str):
+    """Копия замера с нарочной поломкой «вернуть литерал»."""
+    return broken_copy(tmp, "measure-copy", LITERAL_ANCHOR, LITERAL_BROKEN)
 
 
 CASES = 0
@@ -176,6 +195,23 @@ def main() -> int:
         ok &= case("④ поломка «вернуть литерал» (девять имён Atlas) проваливает ② и ③", caught,
                    f"под поломкой: «@ZETA» {'✅' if z2.get(1) else '·'} (под верным кодом ✅), "
                    f"«@COORD» {'✅' if z3.get(1) else '·'} (под верным кодом ·)", differ=True)
+
+    # ③-бис ⑥ обратная сторона ③: в контуре COORD, в карточке — имя соседа @COORD-B
+    p3b = os.path.join(tmp, "coord-near.db")
+    build(p3b, "Правку сделает @COORD-B. Дата 2026-10-17.", roles=NEAR_ROLES)
+    good, sign = judged(run(p3b)[0], False)
+    ok &= case("③-бис ВСТРЕЧНЫЙ: контур с ролями COORD и ZETA — «@COORD-B» (имя соседа) не засчитан",
+               good, sign, differ=True)
+
+    broken6, why6 = broken_copy(tmp, "measure-copy-hyphen", HYPHEN_ANCHOR, HYPHEN_BROKEN)
+    if broken6 is None:
+        ok &= case("⑥ поломка «дефис не часть имени» проваливает ③-бис", False,
+                   f"⛔ НЕ ЗАПУСТИЛАСЬ: {why6}", differ=True)
+    else:
+        z3b = zones(run(p3b, broken6)[0])
+        ok &= case("⑥ поломка «дефис не часть имени» проваливает ③-бис", z3b.get(1) is True,
+                   f"под поломкой: «@COORD-B» {'✅' if z3b.get(1) else '·'} (под верным кодом ·) — "
+                   "засчитан как рука COORD", differ=True)
 
     # ⑤ таблицы ролей нет
     p5 = os.path.join(tmp, "no-roles.db")

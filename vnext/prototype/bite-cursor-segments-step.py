@@ -16,11 +16,22 @@ UPGRADE-v4-to-v5.md велит запускать шаг и соседям — �
      выборки и запись в журнале есть, и это сказано словами
   ③ ВСТРЕЧНЫЙ: в meta нет group_name — так же, как ②, со своими словами
   ④ нарочная поломка «вернуть литерал» (контур всегда Atlas) проваливает ②
+  ⑤ ВСТРЕЧНЫЙ: --dry-run в контуре не Atlas — план говорит «не трогаем» у обеих ролей и
+     «меняем отрезков: 0 из 2», база не тронута
+  ⑥ нарочная поломка «план без проверки контура» (проверка «не Atlas» снята в plan_for, цикл
+     записи цел) проваливает ⑤
+
+🪤 ⑤ и ⑥ — записка #5913, поломка B2 (2026-10-17). Проверка «не Atlas» стоит в шаге ДВАЖДЫ:
+в plan_for и в цикле записи. ② судит только запись — и под поломкой плана проходил: запись
+не трогает ничего, а --dry-run обещает соседу разделить отрезок RCC и перевести ZETA
+в «прочитано» по слову владельца Atlas. Именно этот экран сосед видит первым:
+UPGRADE-v4-to-v5.md велит запускать шаг сначала с --dry-run.
 
 Испытуемый шаг берётся через mezo_target (MEZO_SCRIPTS_ROOT): из клона пакета —
 MEZO_SCRIPTS_ROOT=<клон>/scripts. ⛔ Живой базы не касается: свои временные базы в песочнице.
 """
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -37,6 +48,11 @@ RCC_READ_TO = 2204
 
 LITERAL_ANCHOR = "    is_atlas = group_name == ATLAS_GROUP_NAME\n"
 LITERAL_BROKEN = "    is_atlas = True\n"
+# Нарочная поломка «план без проверки контура»: из plan_for убрана ветка «не Atlas», цикл записи цел.
+PLAN_ANCHOR = ("        if not is_atlas:\n"
+               "            acts.append((role, f\"{a}..{b} declared\", \"не трогаем\", NOT_ATLAS_REASON))\n"
+               "            continue\n")
+PLAN_BROKEN = ""
 
 
 def build(path: str, group_name):
@@ -74,8 +90,8 @@ def build(path: str, group_name):
     con.close()
 
 
-def run(path: str, step=STEP):
-    r = subprocess.run([sys.executable, str(step), "--db", path],
+def run(path: str, step=STEP, extra=()):
+    r = subprocess.run([sys.executable, str(step), "--db", path, *extra],
                        capture_output=True, text=True, encoding="utf-8")
     return (r.stdout or "") + (r.stderr or ""), r.returncode
 
@@ -99,21 +115,40 @@ ATLAS_EXPECT = {"RCC": ((1, RCC_READ_TO, "read"), (RCC_READ_TO + 1, SEED_TO, "de
                 "ZETA": ((1, SEED_TO, "read"), (SEED_TO + 1, CURSOR, "read"))}
 OTHER_EXPECT = {"RCC": ((1, SEED_TO, "declared"), (SEED_TO + 1, CURSOR, "read")),
                 "ZETA": ((1, SEED_TO, "declared"), (SEED_TO + 1, CURSOR, "read"))}
+SEEDED = {"RCC": ((1, SEED_TO, "declared"),), "ZETA": ((1, SEED_TO, "declared"),)}
+
+
+def broken_copy(tmp: str, sub: str, anchor: str, replacement: str):
+    """Копия шага с нарочной поломкой в tmp/<sub>; не легла — (None, причина).
+    Раскладка копии — как у пакета: <копия>/scripts/migrations/<шаг> и schema_journal.py рядом.
+    Своя папка на каждую поломку: в общей вторая копия затёрла бы первую."""
+    text = STEP.read_text(encoding="utf-8")
+    if text.count(anchor) != 1:
+        return None, f"поломка не легла: якорь найден {text.count(anchor)} раз"
+    mig = os.path.join(tmp, sub, "scripts", "migrations")
+    os.makedirs(mig, exist_ok=True)
+    with open(os.path.join(mig, STEP_NAME), "w", encoding="utf-8") as f:
+        f.write(text.replace(anchor, replacement))
+    shutil.copy2(STEP.parent.parent / "schema_journal.py",
+                 os.path.join(tmp, sub, "scripts", "schema_journal.py"))
+    return os.path.join(mig, STEP_NAME), ""
 
 
 def literal_copy(tmp: str):
-    """Копия шага с нарочной поломкой «вернуть литерал»; не легла — (None, причина).
-    Раскладка копии — как у пакета: <копия>/scripts/migrations/<шаг> и schema_journal.py рядом."""
-    text = STEP.read_text(encoding="utf-8")
-    if text.count(LITERAL_ANCHOR) != 1:
-        return None, f"поломка не легла: якорь найден {text.count(LITERAL_ANCHOR)} раз"
-    mig = os.path.join(tmp, "step-copy", "scripts", "migrations")
-    os.makedirs(mig, exist_ok=True)
-    with open(os.path.join(mig, STEP_NAME), "w", encoding="utf-8") as f:
-        f.write(text.replace(LITERAL_ANCHOR, LITERAL_BROKEN))
-    shutil.copy2(STEP.parent.parent / "schema_journal.py",
-                 os.path.join(tmp, "step-copy", "scripts", "schema_journal.py"))
-    return os.path.join(mig, STEP_NAME), ""
+    """Копия шага с нарочной поломкой «вернуть литерал»."""
+    return broken_copy(tmp, "step-copy", LITERAL_ANCHOR, LITERAL_BROKEN)
+
+
+def dry_run_view(path: str, step=STEP):
+    """--dry-run шага: (вывод, код, строки плана, «меняем отрезков: N из M», база не тронута).
+    Строка плана начинается именем роли с первого знака; строки хвоста идут с отступом."""
+    out, code = run(path, step, ("--dry-run",))
+    segs, views, journal = segments(path)
+    rows = [line for line in out.splitlines() if line.startswith(("RCC ", "ZETA "))]
+    m = re.search(r"меняем отрезков: (\d+) из (\d+)", out)
+    touched = (int(m.group(1)), int(m.group(2))) if m else None
+    untouched = segs == SEEDED and not ({"cursor_truth", "cursor_gaps"} & views) and journal == 0
+    return out, code, rows, touched, untouched
 
 
 CASES = 0
@@ -192,6 +227,36 @@ def main() -> int:
                    code4 == 0 and segs4 == ATLAS_EXPECT,
                    f"под поломкой в контуре не Atlas: {shown(segs4)} — отрезок RCC разделён по "
                    "записке Atlas, как до карточки #686", differ=True)
+
+    # ⑤ --dry-run в контуре не Atlas: план обязан сказать то же, что сделает запись
+    p5 = os.path.join(tmp, "zeta-dry.db")
+    build(p5, "zeta-contour")
+    out5, code5, rows5, touched5, untouched5 = dry_run_view(p5)
+    kept5 = len(rows5) == 2 and all("не трогаем" in r for r in rows5)
+    good = (code5 == 0 and kept5 and touched5 == (0, 2) and untouched5
+            and "РАЗДЕЛИТЬ" not in out5 and "не Atlas" in out5)
+    ok &= case("⑤ ВСТРЕЧНЫЙ: --dry-run в контуре не Atlas — план «не трогаем» у обеих ролей, "
+               "«меняем отрезков: 0 из 2», база не тронута", good,
+               f"код {code5} · строк плана {len(rows5)}, «не трогаем» у "
+               f"{sum('не трогаем' in r for r in rows5)} · меняем {touched5} · база "
+               f"{'не тронута' if untouched5 else 'ТРОНУТА'}"
+               + ("" if good else f" · вывод: {out5.strip()[-300:]}"), differ=True)
+
+    # ⑥ нарочная поломка «план без проверки контура»
+    broken6, why6 = broken_copy(tmp, "step-copy-plan", PLAN_ANCHOR, PLAN_BROKEN)
+    if broken6 is None:
+        ok &= case("⑥ поломка «план без проверки контура» проваливает ⑤", False,
+                   f"⛔ НЕ ЗАПУСТИЛАСЬ: {why6}", differ=True)
+    else:
+        p6 = os.path.join(tmp, "zeta-dry-broken.db")
+        build(p6, "zeta-contour")
+        out6, code6, rows6, touched6, untouched6 = dry_run_view(p6, broken6)
+        ok &= case("⑥ поломка «план без проверки контура» (запись цела) проваливает ⑤",
+                   code6 == 0 and touched6 == (2, 2) and "РАЗДЕЛИТЬ" in out6 and untouched6,
+                   f"под поломкой в контуре не Atlas план обещает: меняем {touched6}, "
+                   f"{'РАЗДЕЛИТЬ у RCC' if 'РАЗДЕЛИТЬ' in out6 else 'RCC не делится'}; база "
+                   f"{'не тронута' if untouched6 else 'ТРОНУТА'} (под верным кодом: меняем (0, 2))",
+                   differ=True)
 
     print()
     print(f"✅ ПРОВЕРКА ПРИНЯТА — случаев {CASES}, различающих {DIFFERENTIATING}" if ok
