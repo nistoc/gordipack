@@ -29,6 +29,11 @@
   ⑱ нарочная поломка «дефис не часть имени» → проваливает ⑮-тер
   (⑮-тер и ⑱ — записка #5913, поломка B3: ⑮-бис испытывал границу имени только в одну сторону —
    в контуре COORD-A, в тексте COORD; правило, пришедшее от соседа с COORD-B, не охранялось)
+  ⑮-кватер ВСТРЕЧНЫЙ, дефис ПЕРЕД именем: контур с ролями COORD и ZETA, «рукой ZETA-COORD»
+        (составное имя, в контуре такой роли нет) → основанием НЕ считать
+  ⑲ нарочная поломка «дефис перед именем не часть имени» (lookahead цел) → проваливает ⑮-кватер
+  (⑮-кватер и ⑲ — записка #5922: замер PROTO — половину границы ПЕРЕД именем не различал ни один
+   случай из 20; ⑮-тер и ⑱ бьют по стороне ЗА именем)
 
 ⛔ Живой базы не касается: своя временная база в песочнице.
 """
@@ -62,6 +67,9 @@ NEAR_ROLES = ("COORD", "ZETA")
 # Нарочная поломка «дефис не часть имени»: граница имени снова только по букве и цифре.
 HYPHEN_ANCHOR = 'alts = [rf"(?<![\\w-]){re.escape(n)}(?![\\w-])" for n in'
 HYPHEN_BROKEN = 'alts = [rf"(?<!\\w){re.escape(n)}(?!\\w)" for n in'
+# Нарочная поломка «дефис перед именем не часть имени»: убран только из lookbehind, lookahead цел.
+LOOKBEHIND_ANCHOR = '(?<![\\w-]){re.escape(n)}'
+LOOKBEHIND_BROKEN = '(?<!\\w){re.escape(n)}'
 
 
 def build(path: str, rules, roles=ATLAS_ROLES):
@@ -326,6 +334,27 @@ def main() -> int:
     ok &= case("⑮-тер ВСТРЕЧНЫЙ: контур с ролями COORD и ZETA — «рукой COORD-B» (имя соседа) "
                "основанием НЕ считается", blind15c == 2,
                f"слепых найдено {blind15c}, ждали 2 (испытуемое и контрольное)", differ=True)
+
+    # ⑮-кватер ⑲ дефис ПЕРЕД именем: «ZETA-COORD» — не COORD и не ZETA
+    compound = ("приписано-zeta-coord", "Внесено рукой ZETA-COORD 2026-10-05 10:00 UTC. Дальше "
+                "текст правила.", "coord")
+    p15d = os.path.join(tmp, "s.db")
+    build(p15d, [compound, (BLIND[0], BLIND[1], "coord")], roles=NEAR_ROLES)
+    blind15d = num(run(p15d)[0], r"ОСНОВАНИЕ НЕ НАЙТИ ВОВСЕ \.+ (\d+)")
+    ok &= case("⑮-кватер ВСТРЕЧНЫЙ: контур с ролями COORD и ZETA — «рукой ZETA-COORD» (дефис перед "
+               "именем) основанием НЕ считается", blind15d == 2,
+               f"слепых найдено {blind15d}, ждали 2 (испытуемое и контрольное)", differ=True)
+
+    broken19, why19 = broken_copy(tmp, "check-copy-lookbehind", LOOKBEHIND_ANCHOR, LOOKBEHIND_BROKEN)
+    if broken19 is None:
+        ok &= case("⑲ поломка «дефис перед именем не часть имени» проваливает ⑮-кватер", False,
+                   f"⛔ НЕ ЗАПУСТИЛАСЬ: {why19}", differ=True)
+    else:
+        b15d = num(run(p15d, check=broken19)[0], r"ОСНОВАНИЕ НЕ НАЙТИ ВОВСЕ \.+ (\d+)")
+        ok &= case("⑲ поломка «дефис перед именем не часть имени» (lookahead цел) проваливает ⑮-кватер",
+                   b15d == 1,
+                   f"под поломкой: ⑮-кватер слепых {b15d} (под верным кодом 2) — ZETA-COORD засчитан "
+                   "как COORD", differ=True)
 
     broken18, why18 = broken_copy(tmp, "check-copy-hyphen", HYPHEN_ANCHOR, HYPHEN_BROKEN)
     if broken18 is None:
