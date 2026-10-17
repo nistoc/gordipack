@@ -83,10 +83,13 @@ def build(path: str, subject: str, roles=ATLAS_ROLES):
 
 
 def run(path: str, measure=MEASURE):
-    r = subprocess.run([sys.executable, measure, "--db", path, "--full", "--last", "10"],
-                       capture_output=True, text=True, encoding="utf-8",
-                       env={**os.environ, "MEZO_CONTAINER": os.environ.get(
-                           "MEZO_CONTAINER") or str(mezo_paths.container_root())})
+    # MEZO_CONTAINER — контейнер вызывающего, а не стенда, и это намеренно: замер открывает только
+    # копию базы по --db (read-only), а контейнер нужен лишь соседям копии замера при загрузке
+    r = subprocess.run(  # env: caller — замер читает только копию базы по --db, read-only
+        [sys.executable, measure, "--db", path, "--full", "--last", "10"],
+        capture_output=True, text=True, encoding="utf-8",
+        env={**os.environ, "MEZO_CONTAINER": os.environ.get(
+            "MEZO_CONTAINER") or str(mezo_paths.container_root())})
     return (r.stdout or "") + (r.stderr or ""), r.returncode
 
 

@@ -805,8 +805,9 @@ def main() -> int:
         r = subprocess.run([sys.executable, str(tool), "--scripts-root", str(scripts_), "--db", str(db_),
                             "--only", "read-messages"],
                            capture_output=True, text=True, encoding="utf-8", timeout=600,
-                           env={**os.environ, "MEZO_CONTAINER": str(stand),
-                                "MEZO_TEMPLATE": str(mezo_paths.template_root())})
+                           # среда стенда — через stand_env: по нему check-acceptance-env.py видит
+                           # закрепление (записка #5921); прежний словарь вручную давал то же, но проверке невидимо
+                           env=mezo_stand.stand_env(stand, MEZO_TEMPLATE=str(mezo_paths.template_root())))
         return (r.stdout or "") + (r.stderr or ""), r.returncode
 
     def seeded_form(out_):

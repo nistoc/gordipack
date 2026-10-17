@@ -366,7 +366,7 @@ def main() -> int:
                    f"под поломкой: ⑮-тер слепых {b15c} (под верным кодом 2) — COORD-B засчитан "
                    "как COORD", differ=True)
 
-    p17 =os.path.join(tmp, "q.db")
+    p17 = os.path.join(tmp, "q.db")
     build(p17, [("замер-коллеги", "ОСНОВАНИЕ: замер @RCC, 2026-08-07 17:26 UTC. Внесено рукой "
                  "COORD.", "coord"), (BLIND[0], BLIND[1], "coord")], roles=None)
     out17, _ = run(p17)
