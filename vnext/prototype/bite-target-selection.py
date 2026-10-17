@@ -232,11 +232,29 @@ def main() -> int:
         bare = copy_pack_layout(tmp, "pack-bare", neighbours=False)
         out_bare, code_bare = run(bare, ONLY_NEIGHBOURS)
         st_bare = laid_stand(out_bare)
+        # 🪤 Пояснение говорит то, что видно, а не то, что ждали (замечание PROTO, записка #5917):
+        #    прежнее «соседей нет» стояло и тогда, когда соседи легли в стенд из чужого места.
+        #    Смотрим в стенд, если он ещё лежит. После ЗЕЛЁНОГО прогона набор убирает его сам —
+        #    тогда смотреть некуда, и «соседей нет» было бы той же неправдой (поймано поломкой
+        #    PROTO 17.10 22:07 UTC: прогон прошёл, а пояснение сказало «в стенде соседей нет»).
+        green_bare = GREEN_ONE in out_bare
+        nb_bare = os.path.join(st_bare, "vnext", "prototype") if st_bare else None
+        if not st_bare:
+            seen = "стенда в выводе нет — смотреть соседей негде"
+        elif not os.path.isdir(st_bare):
+            seen = "стенд уже убран набором — заглянуть в него нельзя"
+        elif os.path.isdir(nb_bare):
+            seen = f"в стенде соседи ЕСТЬ ({nb_bare}) — взяты не из копии"
+        elif not green_bare:
+            seen = f"в стенде соседей нет — save-phoenix.py не находит {NEIGHBOUR_BROKEN}"
+        else:
+            seen = "в стенде соседей нет"
         ok &= case("⑫ клон без соседнего каталога — прогон НЕ зелёный (встречный к ⑪)",
-                   GREEN_ONE not in out_bare and "СЛОМАНО" in out_bare and st_bare is not None
+                   not green_bare and "СЛОМАНО" in out_bare and st_bare is not None
                    and NEIGHBOURS_LINE not in out_bare,
-                   f"код {code_bare}; соседей нет — save-phoenix.py в стенде не находит "
-                   f"{NEIGHBOUR_BROKEN}: прогон {'НЕ прошёл, это видно' if GREEN_ONE not in out_bare else 'ПРОШЁЛ'}",
+                   f"код {code_bare}; в копии соседнего каталога нет; {seen}"
+                   f"; строка «{NEIGHBOURS_LINE} …» {'есть' if NEIGHBOURS_LINE in out_bare else 'НЕТ'}"
+                   f": прогон {'ПРОШЁЛ — соседей в копии нет, значит, они взяты не из неё' if green_bare else 'НЕ прошёл, это видно'}",
                    differ=True)
         if st_bare:
             shutil.rmtree(st_bare, ignore_errors=True)   # сохранён набором для осмотра — здесь осматривать нечего
