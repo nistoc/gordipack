@@ -19,6 +19,11 @@
   ⑥ пустой свод правил                            → сказать «сверять нечего», а не «чисто»
   ⑦ основание — замер КОЛЛЕГИ, не слово владельца → не считать слепым
   ⑧ роль упомянута ПРОЦЕДУРНО, решение ей не приписано → основанием НЕ считать
+  ⑮ контур с ролями COORD-A и ZETA: решение, приписанное ZETA, → не считать слепым
+  ⑮-бис тот же контур: «рукой COORD» (такой роли в нём нет) → основанием НЕ считать
+  ⑯ нарочная поломка «вернуть литерал» (имена ролей Atlas) → проваливает ⑮ и ⑮-бис
+  ⑰ таблицы ролей нет → приписка роли не судится, и это сказано вслух
+  (⑮–⑰ — карточка #686: имена ролей проверка берёт из таблицы roles той же базы)
 
 ⛔ Живой базы не касается: своя временная база в песочнице.
 """
@@ -29,16 +34,33 @@ import subprocess
 import sys
 
 import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
+import mezo_paths  # noqa: E402 — контейнер для копии проверки под нарочной поломкой
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CHECK = os.path.join(HERE, "check-rule-basis.py")
 
 BLIND = ("контрольное слепое правило", "Просто текст правила без всякого основания.")
 
+# Карточка #686: проверка берёт имена ролей из таблицы roles той же базы — песочнице нужна эта
+# таблица. По умолчанию в ней роли Atlas, которыми написаны случаи ①–⑭ (подставные данные приёмки).
+ATLAS_ROLES = ("COORD", "CORE", "ING", "STUD", "TAXO", "RCC", "OPSSRE", "PROTO", "CHROME")
+# Контур, где имён Atlas нет: ZETA не начинается ни с одного из них (иначе прежний образец без
+# границы слова засчитал бы её по совпадению начала, как COORD-A по COORD).
+FOREIGN_ROLES = ("COORD-A", "ZETA")
+# Нарочная поломка «вернуть литерал»: образец снова из девяти имён Atlas, без границы слова.
+LITERAL_ANCHOR = "    roles_re, roles_known = roles_pattern(con)\n"
+LITERAL_BROKEN = ('    roles_re, roles_known = '
+                  r'r"(?:COORD|CORE|ING|STUD|TAXO|RCC|OPSSRE|PROTO|CHROME|владел[ье]\w*)", True'
+                  "\n")
 
-def build(path: str, rules):
-    """rules: (ключ, тело, замок) либо (ключ, тело, замок, {поля основания})."""
+
+def build(path: str, rules, roles=ATLAS_ROLES):
+    """rules: (ключ, тело, замок) либо (ключ, тело, замок, {поля основания}).
+    roles: имена таблицы roles; None — таблицы нет вовсе."""
     con = sqlite3.connect(path)
+    if roles is not None:
+        con.execute("CREATE TABLE roles (role TEXT PRIMARY KEY)")
+        con.executemany("INSERT INTO roles (role) VALUES (?)", [(r,) for r in roles])
     # Песочница обязана походить на живую базу СХЕМОЙ, а не только формой: 08.08 поля
     # основания завелись в живой базе, а проверка искала основание прозой — и назвала
     # слепыми четыре правила, у которых оно записано. Без этих колонок случай не воспроизвести.
@@ -57,10 +79,26 @@ def build(path: str, rules):
     con.close()
 
 
-def run(path: str, extra=()):
-    r = subprocess.run([sys.executable, CHECK, "--db", path, *extra],
-                       capture_output=True, text=True, encoding="utf-8")
+def run(path: str, extra=(), check=CHECK):
+    r = subprocess.run([sys.executable, check, "--db", path, *extra],
+                       capture_output=True, text=True, encoding="utf-8",
+                       env={**os.environ, "MEZO_CONTAINER": os.environ.get(
+                           "MEZO_CONTAINER") or str(mezo_paths.container_root())})
     return (r.stdout or "") + (r.stderr or ""), r.returncode
+
+
+def literal_copy(tmp: str):
+    """Копия проверки с нарочной поломкой «вернуть литерал»; не легла — (None, причина)."""
+    d = os.path.join(tmp, "check-copy")
+    os.makedirs(d, exist_ok=True)
+    text = open(CHECK, encoding="utf-8").read()
+    if text.count(LITERAL_ANCHOR) != 1:
+        return None, f"поломка не легла: якорь найден {text.count(LITERAL_ANCHOR)} раз"
+    with open(os.path.join(d, "check-rule-basis.py"), "w", encoding="utf-8") as f:
+        f.write(text.replace(LITERAL_ANCHOR, LITERAL_BROKEN))
+    with open(os.path.join(HERE, "mezo_paths.py"), encoding="utf-8") as src,             open(os.path.join(d, "mezo_paths.py"), "w", encoding="utf-8") as dst:
+        dst.write(src.read())
+    return os.path.join(d, "check-rule-basis.py"), ""
 
 
 def num(text: str, pattern: str):
@@ -232,6 +270,46 @@ def main() -> int:
                num(out, r"надгробий без основания отзыва \.+ (\d+)") == 1,
                "«отозвано» без указания кто и когда — это не основание, а объявление; "
                "молча прощать его нельзя", differ=True)
+
+    # ⑮ ⑮-бис ⑯ ⑰ КАРТОЧКА #686: имена ролей — из таблицы roles той же базы, а не литералы Atlas
+    zeta = ("приписано-zeta", "Внесено рукой ZETA 2026-10-05 10:00 UTC. Дальше текст правила.",
+            "coord")
+    coord = ("приписано-coord", "Внесено рукой COORD 2026-10-05 10:00 UTC. Дальше текст правила.",
+             "coord")
+    p15 = os.path.join(tmp, "o.db")
+    build(p15, [zeta, (BLIND[0], BLIND[1], "coord")], roles=FOREIGN_ROLES)
+    p15b = os.path.join(tmp, "p.db")
+    build(p15b, [coord, (BLIND[0], BLIND[1], "coord")], roles=FOREIGN_ROLES)
+    blind15 = num(run(p15)[0], r"ОСНОВАНИЕ НЕ НАЙТИ ВОВСЕ \.+ (\d+)")
+    blind15b = num(run(p15b)[0], r"ОСНОВАНИЕ НЕ НАЙТИ ВОВСЕ \.+ (\d+)")
+    ok &= case("⑮ ВСТРЕЧНЫЙ: контур с ролями COORD-A и ZETA — решение, приписанное ZETA, слепым "
+               "НЕ считается", blind15 == 1,
+               f"слепых найдено {blind15}, ждали 1 (только контрольное)", differ=True)
+    ok &= case("⑮-бис ВСТРЕЧНЫЙ: тот же контур — «рукой COORD» (такой роли в нём нет) основанием "
+               "НЕ считается", blind15b == 2,
+               f"слепых найдено {blind15b}, ждали 2 (испытуемое и контрольное)", differ=True)
+
+    broken, why = literal_copy(tmp)
+    if broken is None:
+        ok &= case("⑯ поломка «вернуть литерал» проваливает ⑮ и ⑮-бис", False,
+                   f"⛔ НЕ ЗАПУСТИЛАСЬ: {why}", differ=True)
+    else:
+        b15 = num(run(p15, check=broken)[0], r"ОСНОВАНИЕ НЕ НАЙТИ ВОВСЕ \.+ (\d+)")
+        b15b = num(run(p15b, check=broken)[0], r"ОСНОВАНИЕ НЕ НАЙТИ ВОВСЕ \.+ (\d+)")
+        ok &= case("⑯ поломка «вернуть литерал» (девять имён Atlas) проваливает ⑮ и ⑮-бис",
+                   b15 == 2 and b15b == 1,
+                   f"под поломкой: ⑮ слепых {b15} (под верным кодом 1), ⑮-бис слепых {b15b} "
+                   "(под верным кодом 2)", differ=True)
+
+    p17 = os.path.join(tmp, "q.db")
+    build(p17, [("замер-коллеги", "ОСНОВАНИЕ: замер @RCC, 2026-08-07 17:26 UTC. Внесено рукой "
+                 "COORD.", "coord"), (BLIND[0], BLIND[1], "coord")], roles=None)
+    out17, _ = run(p17)
+    ok &= case("⑰ таблицы ролей нет — приписка роли не судится, и это сказано вслух",
+               "таблицы ролей в базе нет" in out17
+               and num(out17, r"ОСНОВАНИЕ НЕ НАЙТИ ВОВСЕ \.+ (\d+)") == 2,
+               "без таблицы ролей имена Atlas не подставляются: «замер @RCC» основанием не "
+               "засчитан, предупреждение напечатано", differ=True)
 
     # ⑥ пустой свод
     path = os.path.join(tmp, "f.db")

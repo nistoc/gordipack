@@ -73,17 +73,67 @@ LONG_BY_NATURE = {"bite-all.py": "полный прогон всех приём�
 
 # ⚠️ ЗНАЧЕНИЯ ПОДСТАВЛЯЕМ СВОИ. В памяти на их месте заглушки (<РОЛЬ>, <нота.md>):
 # запуск с ними доказывал бы только то, что заглушка не является ролью.
+# 🩸 КАРТОЧКА #686 (2026-10-17): имена ролей здесь стояли литералами Atlas — --role PROTO ·
+# --to CORE · --cc COORD · --actor PROTO. В контуре без роли PROTO форма отказывала «роли нет»
+# (код 1, без трассировки), и разбор ниже засчитывал отказ как «✅ отвечает». Теперь имена
+# берутся из КОПИИ базы (roles_from_data), а отказ «роли нет» — отдельный провал (role_absent).
 def values(flag, ctx):
     return {
-        "--role": ["PROTO"], "--limit": ["1"], "--section": ["state"],
+        "--role": [ctx["role"]], "--limit": ["1"], "--section": ["state"],
         "--file": [ctx["file"]], "--body-file": [ctx["file"]], "--done-when-file": [ctx["file"]],
         "--save-state": [ctx["file"]], "--save-plan": [ctx["file"]],
-        "--key": ["rule8-destructive"], "--to": ["CORE"], "--cc": ["COORD"],
+        "--key": ["rule8-destructive"], "--to": [ctx["to"]], "--cc": [ctx["cc"]],
         "--root": [ctx["dir"]], "--poll": ["проверка формы вызова"],
-        "--actor": ["PROTO"], "--title": ["проверка формы"], "--id": ["1"],
+        "--actor": [ctx["role"]], "--title": ["проверка формы"], "--id": ["1"],
         "--tag": ["проба"], "--track": ["проба"], "--priority": ["normal"],
         "--why": ["проверка формы"], "--on": ["проверка формы"], "--remote": [],
     }.get(flag, [])
+
+
+def roles_from_data(db):
+    """Какие имена ролей подставлять — ИЗ КОПИИ БАЗЫ, а не литералами контура Atlas.
+
+    Годна роль, которую узнают механизмы: живая в roles, с отметкой прочитанного и с памятью.
+    Порядок — по числу записок в ленте (самые деятельные первыми), при равенстве — по имени.
+    --cc — координатор (mezo_paths.find_coordinator); --role и --actor — первая годная роль
+    не координатор; --to — следующая. Годных нет — None: подставить нечего, отказ словами.
+    """
+    con = sqlite3.connect(f"file:{Path(db).as_posix()}?mode=ro", uri=True)
+    try:
+        usable = [r for r, in con.execute(
+            "SELECT role FROM roles WHERE lifecycle='alive' "
+            "AND role IN (SELECT reader_role FROM read_cursors) "
+            "AND role IN (SELECT role FROM phoenix)")]
+        try:
+            notes = dict(con.execute("SELECT writer_role, count(*) FROM messages_all GROUP BY 1"))
+        except sqlite3.Error:
+            notes = {}
+        coordinator = mezo_paths.find_coordinator(con).name
+    finally:
+        con.close()
+    usable.sort(key=lambda r: (-notes.get(r, 0), r))
+    if not usable:
+        return None
+    others = [r for r in usable if r != coordinator] or usable
+    role = others[0]
+    to = next((r for r in others if r != role), coordinator or role)
+    return {"role": role, "to": to, "cc": coordinator or role, "coordinator": coordinator}
+
+
+# ⚖️ ОТКАЗ «РОЛИ НЕТ» — НЕ ОТВЕТ (карточка #686): механизм отказал не по форме, а потому, что
+# подставленной роли в контуре нет. Форма тогда не проверена по сути, и засчитывать её как
+# «отвечает» значит пройти проверку на отказе. Признак — строка вывода, где стоит подставленное
+# имя роли рядом со словами отсутствия. Имена — те, что РЕАЛЬНО подставлены в вызов (флаги
+# ROLE_FLAGS), а не те, что ждались: иначе литерал, вернувшийся в values(), обошёл бы признак.
+ROLE_FLAGS = ("--role", "--actor", "--to", "--cc")
+ROLE_ABSENT = re.compile(r"(рол[ьиейю]|role)\b.{0,60}?\b(нет|не найден\w*|незнаком\w*|"
+                         r"не заведен\w*|не существует|unknown|not found)", re.I)
+
+
+def role_absent(out, names):
+    """Строка вывода, где подставленное имя роли стоит рядом со словами отсутствия; нет — None."""
+    return next((line for line in out.splitlines()
+                 if ROLE_ABSENT.search(line) and any(n in line for n in names)), None)
 
 # запускать НЕЛЬЗЯ: последствие необратимо для роли или выходит за копию базы
 FORBIDDEN = {
@@ -242,13 +292,21 @@ def main() -> int:
     work = mezo_stand.new("forms-")
     db_copy = work / "copy.db"
     mezo_stand.snapshot_db(a.db, db_copy)  # карточка #505/#624: согласованная копия, не shutil.copy
-    ctx = {"file": str(work / "text.md"), "dir": str(work)}
+    named = roles_from_data(db_copy)
+    if named is None:
+        print("⛔ ПРОВЕРКА НЕ СОСТОЯЛАСЬ: в копии базы нет ни одной живой роли с отметкой "
+              "прочитанного и памятью — подставить в --role нечего (карточка #686). Проверить: "
+              "SELECT role, lifecycle FROM roles; SELECT reader_role FROM read_cursors")
+        return 2
+    ctx = {"file": str(work / "text.md"), "dir": str(work), **named}
     Path(ctx["file"]).write_text("проверка формы вызова\n", encoding="utf-8")
 
     print("=" * 84)
     print("ФОРМЫ ВЫЗОВА ИЗ ПАМЯТИ РОЛЕЙ — проверяются ЗАПУСКОМ, на копии базы")
     print(f"  каталог скриптов: {root}")
     print(f"  форм {len(forms)} · источников памяти {n_src}")
+    print(f"  роли из копии базы: --role/--actor {ctx['role']} · --to {ctx['to']} · --cc {ctx['cc']}"
+          + (" (координатор)" if ctx["coordinator"] else " (координатор не назван — взята та же роль)"))
     if mentions:
         only_talk = sorted(set(mentions) - {s for (s, _, _) in forms})
         print(f"  📎 УПОМЯНУТО, НО НЕ КОМАНДА: имён {len(mentions)}"
@@ -390,6 +448,12 @@ def main() -> int:
         elif refused and "the following arguments are required" in out:
             skip += 1
             skips.append((shown, "форма в памяти НЕПОЛНА: механизм требует ещё аргументы", where))
+        elif refused and (line := role_absent(
+                out, {v for f in flags if f in ROLE_FLAGS for v in values(f, ctx)})):
+            # карточка #686: отказ «роли нет» — не ответ формы, а отказ по подставленному имени
+            red += 1
+            reds.append((shown, f"🔴 ОТКАЗ «РОЛИ НЕТ» — форма не проверена по сути: "
+                                f"{line.strip()[:90]}", where))
         else:
             ok_n += 1
             mark = "" if how in ("по пути из памяти", "путь не назван, лежит рядом") else f"  ⚠️ {how}"

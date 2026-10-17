@@ -46,7 +46,22 @@ WORD = re.compile(r"слов[оаму]\w*\s+владельц\w*|по\s+слов�
 # и я едва не пошёл к владельцу спрашивать основание того, что уже записано.
 # ⇒ Роль ловим по основе, а не по одной словоформе. Четвёртый случай «красное на исправном»
 #   за двое суток, и все четыре — сужение образца, а не ошибка в замысле.
-ROLES = r"(?:COORD|CORE|ING|STUD|TAXO|RCC|OPSSRE|PROTO|CHROME|владел[ье]\w*)"
+# 🩸 КАРТОЧКА #686 (2026-10-17): здесь стоял образец из девяти имён ролей Atlas литералом. В чужом
+# контуре правило, решение которого приписано иначе названной роли, выходило «без основания», а
+# COORD-A совпадала по началу с COORD. Теперь имена — из таблицы roles той же базы (любое состояние
+# роли: автор старого правила мог уже уйти), каждое — целым словом: дефис — часть имени.
+OWNER_WORD = r"владел[ье]\w*"
+
+
+def roles_pattern(con):
+    """Образец «кому приписано решение»: имена ролей из базы и владелец.
+    Таблицы ролей нет или она пуста — только владелец, и это говорится вслух (второй ответ)."""
+    try:
+        names = [r for r, in con.execute("SELECT role FROM roles") if r]
+    except sqlite3.Error:
+        names = []
+    alts = [rf"(?<![\w-]){re.escape(n)}(?![\w-])" for n in sorted(names, key=len, reverse=True)]
+    return "(?:" + "|".join(alts + [OWNER_WORD]) + ")", bool(names)
 # Слово, которым решение ПРИПИСЫВАЮТ кому-то. Без него любое упоминание роли в тексте правила
 # засчиталось бы основанием — а роли упоминаются в правилах постоянно, по делу процедуры.
 ATTR = re.compile(r"(?:основани\w*|внесен\w*|внес\w*|внёс|по\s+замеру|замер\w*|предложил\w*"
@@ -74,19 +89,19 @@ WINDOW = 200          # окно, в котором дата считается 
 ATTR_WINDOW = 120     # окно, в котором «замер/внесено/рукой» относится к названной роли
 
 
-def who_anchors(body: str):
+def who_anchors(body: str, roles_re: str):
     """Места, где решение КОМУ-ТО ПРИПИСАНО. Владелец словом — или роль с приметой приписки."""
     spans = [(m.start(), m.end()) for m in WORD.finditer(body)]
-    for m in re.finditer(ROLES, body):
+    for m in re.finditer(roles_re, body):
         lo, hi = max(0, m.start() - ATTR_WINDOW), min(len(body), m.end() + ATTR_WINDOW)
         if ATTR.search(body[lo:hi]):
             spans.append((m.start(), m.end()))
     return spans
 
 
-def strong_when(body: str) -> bool:
+def strong_when(body: str, roles_re: str) -> bool:
     """Дата рядом с местом, где решение приписано, — а не любая дата в теле."""
-    for start, end in who_anchors(body):
+    for start, end in who_anchors(body, roles_re):
         lo, hi = max(0, start - WINDOW), min(len(body), end + WINDOW)
         if DATE.search(body[lo:hi]):
             return True
@@ -113,14 +128,15 @@ def audit(db: str):
     cols = [f for f in FIELDS if f in have]
     sel = ", ".join(["rule_key", "body", "locked_by", "version"] + cols)
     raw = con.execute(f"SELECT {sel} FROM rules ORDER BY rule_key").fetchall()
+    roles_re, roles_known = roles_pattern(con)
     con.close()
     rows = [dict(zip(["rule_key", "body", "locked_by", "version"] + cols, r)) for r in raw]
 
     out = []
     for r in rows:
         b = r.get("body") or ""
-        who = bool(who_anchors(b))
-        when = strong_when(b)
+        who = bool(who_anchors(b, roles_re))
+        when = strong_when(b, roles_re)
         where = bool(NOTE.search(b))
         fields = has_fields(r)
         out.append({"key": r["rule_key"], "lock": r.get("locked_by") or "—",
@@ -130,7 +146,7 @@ def audit(db: str):
                     # Поля — САМА СИЛЬНАЯ форма: их не надо вычитывать из прозы, и по ним
                     # можно СПРОСИТЬ базу. Проза остаётся годной, пока свод не переехал.
                     "traceable": fields or who or where})
-    return out
+    return out, roles_known
 
 
 def main() -> int:
@@ -141,7 +157,7 @@ def main() -> int:
                     help="вернуть 1 при находках. В обычной работе НЕ нужен: это замер, а не запрет")
     args = ap.parse_args()
 
-    rules = audit(args.db)
+    rules, roles_known = audit(args.db)
     if not rules:
         print("⛔ правил в базе нет — сверять нечего. Это НЕ «чисто».")
         return 1
@@ -171,6 +187,9 @@ def main() -> int:
     print("   — сильная форма: не надо вычитывать из прозы и не зависит от формулировки")
     print()
     print(f"названо КТО решил ......................... {sum(r['who'] for r in alive)}")
+    if not roles_known:
+        print("   ⚠️ таблицы ролей в базе нет или она пуста — приписка решения РОЛИ не судится,"
+              " «кто решил» засчитан только у слова владельца")
     print(f"названо КОГДА (дата рядом с припиской) .... {sum(r['when'] for r in alive)}")
     print(f"названо ГДЕ (ссылка на записку) ........... {sum(r['where'] for r in alive)}")
     print(f"названы все три ........................... {len(full)}")

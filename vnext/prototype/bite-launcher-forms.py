@@ -61,6 +61,18 @@ LIVE_DB = mezo_paths.live_db()
 CASES = DIFFER = 0
 SKIPPED: list[tuple[str, str]] = []
 
+# Карточка #686, случаи ⑩: роль чужого контура (имени Atlas нет) и порча копии проверки форм.
+FOREIGN_ROLE = "RX-A"
+# «вернуть литерал»: подставные имена ролей снова литералы контура Atlas
+LITERAL_PATCHES = [
+    ('"--role": [ctx["role"]]', '"--role": ["PROTO"]'),
+    ('"--to": [ctx["to"]], "--cc": [ctx["cc"]]', '"--to": ["CORE"], "--cc": ["COORD"]'),
+    ('"--actor": [ctx["role"]]', '"--actor": ["PROTO"]'),
+]
+# «отказ засчитан»: признак «роли нет» выключен — отказ снова уходит в «отвечает»
+ABSENT_BRANCH_PATCH = ("        elif refused and (line := role_absent(",
+                       "        elif False and (line := role_absent(")
+
 
 def case(title, ok, detail, differ=False):
     global CASES, DIFFER
@@ -175,7 +187,10 @@ def direct_answers(name, scripts_dir, db_path):
     """Ответы механизма на ЕГО формы из памяти, позванные напрямую. → {форма: примета}"""
     memory_forms, _, _ = _glf().collect(str(db_path))
     stand_dir = Path(scripts_dir).parent
-    ctx = {"file": str(stand_dir / "probe.md"), "dir": str(stand_dir)}
+    # имена ролей — той же функцией, что у проверки (карточка #686): иначе прямой прогон звал бы
+    # механизм не теми ролями, что проверка, и сравнивал бы не те ответы
+    ctx = {"file": str(stand_dir / "probe.md"), "dir": str(stand_dir),
+           **(_glf().roles_from_data(db_path) or {"role": "", "to": "", "cc": "", "coordinator": None})}
     Path(ctx["file"]).write_text("проба прямого прогона\n", encoding="utf-8")
     answers = {}
     for (script, sub, flags), info in sorted(memory_forms.items()):
@@ -740,6 +755,109 @@ def main() -> int:
     else:
         # предмета нет — это ТРЕТИЙ исход, и он не зелёный: печатаем вслух
         print("⚪ ⑨-бис не на чем прогнать: разряд «формы есть, но не запускаются» пуст")
+
+    # ═══ ⑩ КАРТОЧКА #686: имена ролей — из копии базы; отказ «роли нет» — провал, не ответ ══════
+    # Песочница, где имён Atlas нет вовсе: в таблицах ролей и отметок прочитанного копии остаётся
+    # одна FOREIGN_ROLE (с отметкой прочитанного и памятью). В память кладём форму
+    # read-messages.py --role --limit. Прежние литералы (--role PROTO …) подставили бы роль,
+    # которой механизм не знает: read-messages.py отказывает «роли … нет среди читателей» кодом 1,
+    # а прежний разбор засчитывал этот отказ как «✅ отвечает».
+    # ⚰️ Первая редакция (17.10) роли Atlas только ЗАКРЫВАЛА — строки оставались, и под поломкой
+    #    «вернуть литерал» read-messages.py --role PROTO законно отвечал кодом 0: ⑩-бис провалился,
+    #    а ⑩-тер прошёл по чужой причине. Закрытая роль — не отсутствующая; убираем строки.
+    #    Память (phoenix) не трогаем: форма подкладывается в PROTO/sources, а проверка форм читает
+    #    память без отбора по таблице ролей.
+    def foreign_roles_sandbox():
+        d_, scripts_, db_ = sandbox()
+        con = sqlite3.connect(db_)
+        con.execute("DELETE FROM read_cursors WHERE reader_role <> ?", (FOREIGN_ROLE,))
+        con.execute("DELETE FROM roles WHERE role <> ?", (FOREIGN_ROLE,))
+        con.execute("INSERT INTO roles (role, lifecycle, lifecycle_reason) VALUES (?, 'alive', ?) "
+                    "ON CONFLICT(role) DO UPDATE SET lifecycle='alive', "
+                    "lifecycle_reason=excluded.lifecycle_reason",
+                    (FOREIGN_ROLE, "рядовая роль чужого контура (проба приёмки)"))
+        con.execute("INSERT OR REPLACE INTO read_cursors (reader_role, last_read_id) VALUES (?, 0)",
+                    (FOREIGN_ROLE,))
+        con.execute("INSERT OR REPLACE INTO phoenix (role, section, body) VALUES (?, 'identity', ?)",
+                    (FOREIGN_ROLE, "проба приёмки bite-launcher-forms"))
+        con.commit()
+        con.close()
+        path_ = str(scripts_).replace("\\", "/")
+        seed_source(db_, chr(10) + "```" + chr(10) + f"python {path_}/read-messages.py "
+                    "--role <РОЛЬ> --limit 1" + chr(10) + "```" + chr(10))
+        return d_, scripts_, db_
+
+    def tool_copy(stand, patches):
+        """Копия проверки форм ВНУТРИ песочницы (её контейнер — песочница), с порчей patches."""
+        tdir = stand / "tool-copy"
+        tdir.mkdir(exist_ok=True)
+        for name in ("mezo_stand.py", "mezo_paths.py"):
+            shutil.copy2(TOOL.parent / name, tdir / name)
+        text = TOOL.read_text(encoding="utf-8")
+        for old, new in patches:
+            if text.count(old) != 1:
+                return None, f"поломка не легла: «{old[:60]}» найдено {text.count(old)} раз"
+            text = text.replace(old, new)
+        (tdir / TOOL.name).write_text(text, encoding="utf-8")
+        return tdir / TOOL.name, ""
+
+    def run_copy(tool, stand, scripts_, db_):
+        r = subprocess.run([sys.executable, str(tool), "--scripts-root", str(scripts_), "--db", str(db_),
+                            "--only", "read-messages"],
+                           capture_output=True, text=True, encoding="utf-8", timeout=600,
+                           env={**os.environ, "MEZO_CONTAINER": str(stand),
+                                "MEZO_TEMPLATE": str(mezo_paths.template_root())})
+        return (r.stdout or "") + (r.stderr or ""), r.returncode
+
+    def seeded_form(out_):
+        """Наша форма (read-messages.py --limit --role) в выводе: ('ok'|'red'|None, причина)."""
+        got = forms(out_, "read-messages.py")
+        lines = out_.splitlines()
+        for key in ("red", "ok"):
+            for shown in got[key]:
+                if "--limit --role" in shown:
+                    why = ""
+                    if key == "red":
+                        at = next((i for i, l in enumerate(lines) if l.startswith("🔴")
+                                   and l[1:].strip() == shown), None)
+                        why = lines[at + 1].strip() if at is not None and at + 1 < len(lines) else ""
+                    return key, why
+        return None, ""
+
+    stand10, scripts10, db10 = foreign_roles_sandbox()
+    out10, code10 = run(scripts10, db10, "--only", "read-messages")
+    picked = [l.strip() for l in out10.splitlines() if "роли из копии базы" in l]
+    verdict10, _ = seeded_form(out10)
+    ok &= case("⑩ ВСТРЕЧНЫЙ «роли без имён Atlas»: имена подставляются из копии базы — форма "
+               "read-messages.py --role --limit отвечает",
+               verdict10 == "ok" and f"--role/--actor {FOREIGN_ROLE}" in out10,
+               f"исход формы: {verdict10} (ждём ok) · код {code10} · {picked[0] if picked else 'строки о ролях нет'}",
+               differ=True)
+
+    literal, why_literal = tool_copy(stand10, LITERAL_PATCHES)
+    if literal is None:
+        ok &= case("⑩-бис поломка «вернуть литерал»: отказ «роли нет» — провал формы, не ответ",
+                   False, f"⛔ НЕ ЗАПУСТИЛАСЬ: {why_literal}", differ=True)
+    else:
+        out10b, _ = run_copy(literal, stand10, scripts10, db10)
+        verdict10b, why10b = seeded_form(out10b)
+        ok &= case("⑩-бис поломка «вернуть литерал» (--role PROTO …): форма, отказавшая «роли нет», "
+                   "проверку НЕ проходит",
+                   verdict10b == "red" and "РОЛИ НЕТ" in why10b,
+                   f"исход формы: {verdict10b} (ждём red) · причина: {why10b[:120]}", differ=True)
+
+    counted, why_counted = tool_copy(stand10, LITERAL_PATCHES + [ABSENT_BRANCH_PATCH])
+    if counted is None:
+        ok &= case("⑩-тер поломка «отказ засчитан»: без признака «роли нет» прежняя беда вернулась",
+                   False, f"⛔ НЕ ЗАПУСТИЛАСЬ: {why_counted}", differ=True)
+    else:
+        out10c, _ = run_copy(counted, stand10, scripts10, db10)
+        verdict10c, _ = seeded_form(out10c)
+        ok &= case("⑩-тер поломка «литерал + отказ засчитан» (признак «роли нет» выключен): форма "
+                   "снова «отвечает» — значит, ⑩-бис держит именно этот признак",
+                   verdict10c == "ok",
+                   f"исход формы под поломкой: {verdict10c} (ждём ok — прежняя беда карточки #686)",
+                   differ=True)
 
     print()
     print(f"{'✅ ПРОВЕРКА ПРИНЯТА' if ok else '🔴 НЕ ПРИНЯТ'} — случаев {CASES}, различающих {DIFFER}"

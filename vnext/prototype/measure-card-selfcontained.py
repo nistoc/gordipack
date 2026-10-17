@@ -30,14 +30,19 @@ import sqlite3
 import sys
 from pathlib import Path
 
-LIVE = mezo_paths.live_db()
+import mezo_paths  # пути машины выводятся, не впечатаны (#153)
+
+# ⚰️ Здесь стояло «LIVE = mezo_paths.live_db()» ВЫШЕ импорта mezo_paths: автозамена путей 09.08
+#    (commit 2417f72) поставила вызов раньше импорта, и с тех пор замер не запускался вовсе —
+#    NameError на первой строке, у копии в пакете и у установленной. Найдено 2026-10-17 при правке
+#    по карточке #686. Путь к живой базе теперь берётся в main(), когда --db не назван: копия базы,
+#    названная явно, не требует, чтобы рядом нашёлся контур.
 
 # 🪤 Поиск неразрешимых ссылок ЖИВЁТ В ОДНОМ МЕСТЕ и берётся оттуда, а не повторяется здесь.
 #    Здешняя копия однажды соврала: в список поясняющих слов попала сама решётка, и каждый
 #    голый «#3120» считался пояснённым сам собою — счёт печатал «0» ПРИ ЛЮБЫХ данных.
 #    Две копии одного правила расходятся молча, и разошедшись, обе выглядят исправными.
 import importlib.util  # noqa: E402
-import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 _spec = importlib.util.spec_from_file_location(
     "chk", Path(__file__).with_name("check-dangling-refs.py"))
 chk = importlib.util.module_from_spec(_spec)
@@ -55,9 +60,7 @@ CHECKS = [
      re.compile(r"⛔|не входит|вне предмета|не тр(?:огаем|огать)|только .{0,40}, и только"
                 r"|за границей|не автоматизир|не ловит|НЕ засчитыва", re.I)),
     ("проверка", "чем докажешь, что сделано (критерий приёмки)", None),   # особый: поле done_when
-    ("зона",    "чья рука вносит, кто принимает",
-     re.compile(r"\bрука\b|рук[ае] (?:твоя|моя|координатора)|зона \w+|вносит|принимает"
-                r"|@(?:COORD|CORE|STUD|ING|TAXO|RCC|OPSSRE|PROTO|CHROME)", re.I)),
+    ("зона",    "чья рука вносит, кто принимает", None),     # особый: имена ролей из базы
     ("цена",    "что сломается, если сделать неверно",
      re.compile(r"ломающ|сломает|цена ошибки|риск\b|опасн|обесцен|потеря|разруш", re.I)),
     ("срок",    "когда задача перестаёт быть нужной",
@@ -70,23 +73,46 @@ DANGLING = re.compile(r"см\.\s*выше|как (?:мы )?(?:обсуждали
                       r"|та сама[яй]|этот вопрос|как говорил|ранее обсужд|см\. переписк", re.I)
 BARE_REF = re.compile(r"(?<![\w#])#(\d{1,4})\b")
 
+# ── ГРАФА «ЗОНА»: слова о руке общие для любого контура, «@РОЛЬ» — только с именами из таблицы
+#    roles той же базы (карточка #686). Прежде здесь стояли девять имён Atlas: в контуре, где роли
+#    названы иначе, рука роли не засчитывалась, а «@COORD-A» засчитывалась по совпадению начала.
+ZONE_WORDS = r"\bрука\b|рук[ае] (?:твоя|моя|координатора)|зона \w+|вносит|принимает"
 
-def load(last: int):
-    con = sqlite3.connect(f"file:{LIVE.as_posix()}?mode=ro", uri=True)
+
+def zone_pattern(con):
+    """Образец графы «зона» и признак «имена ролей известны».
+
+    Имя роли — целым словом: за ним не идёт латинская буква, цифра или дефис (COORD-A ≠ COORD).
+    Русское окончание сразу после имени («@COORDу») засчитывается, как и при прежнем образце.
+    Таблицы ролей нет или она пуста — «@РОЛЬ» не засчитывается вовсе, и main() говорит это вслух.
+    """
+    try:
+        names = [r[0] for r in con.execute("SELECT role FROM roles") if r[0]]
+    except sqlite3.Error:
+        names = []
+    alts = [rf"@{re.escape(n)}(?![A-Za-z0-9_-])" for n in sorted(names, key=len, reverse=True)]
+    return re.compile("|".join([ZONE_WORDS] + alts), re.I), bool(names)
+
+
+def load(last: int, db: Path):
+    con = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
     con.execute("PRAGMA query_only=ON")
     con.row_factory = sqlite3.Row
     rows = con.execute("SELECT id, role, status, title, body_md, done_when, created_at "
                        "FROM backlog ORDER BY id DESC LIMIT ?", (last,)).fetchall()
+    zone_rx, roles_known = zone_pattern(con)
     con.close()
-    return list(reversed([dict(r) for r in rows]))
+    return list(reversed([dict(r) for r in rows])), zone_rx, roles_known
 
 
-def assess(card: dict) -> dict:
+def assess(card: dict, zone_rx) -> dict:
     text = f"{card['title']}\n{card['body_md'] or ''}"
     got = {}
     for name, _, rx in CHECKS:
         if name == "проверка":
             got[name] = bool((card["done_when"] or "").strip())
+        elif name == "зона":
+            got[name] = bool(zone_rx.search(text))
         else:
             got[name] = bool(rx.search(text))
     # голые номера: по замеру карточки #63 номера нот и карточек — одно пространство,
@@ -101,19 +127,28 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="самодостаточность карточек бэклога")
     ap.add_argument("--last", type=int, default=50, help="сколько последних карточек брать")
     ap.add_argument("--full", action="store_true", help="печатать все карточки, не только слабые")
+    ap.add_argument("--db", help="путь к базе для замера (по умолчанию — живая база контура); "
+                                 "открывается только для чтения")
     args = ap.parse_args()
 
-    cards = load(args.last)
+    db = Path(args.db) if args.db else mezo_paths.live_db()
+    if not db.is_file():
+        print(f"⛔ базы нет: {db.as_posix()}")
+        return 2
+    cards, zone_rx, roles_known = load(args.last, db)
     if not cards:
         print("⛔ карточек не нашлось")
         return 2
 
     names = [c[0] for c in CHECKS]
-    rows = [(c, assess(c)) for c in cards]
+    rows = [(c, assess(c, zone_rx)) for c in cards]
 
     print("ЗАМЕР: понятна ли карточка БЕЗ чата, в котором родилась")
     print(f"предмет ........ карточки #{cards[0]['id']}…#{cards[-1]['id']} ({len(cards)} шт.)")
     print("способ ......... признаки ТЕКСТА; память автора не участвует ни в одном условии\n")
+    if not roles_known:
+        print("⚠️ таблицы ролей в базе нет или она пуста — в графе «зона» приписка «@РОЛЬ» не "
+              "засчитывается, только слова о руке («рука», «вносит», «принимает»)\n")
 
     hdr = "  id   роль     " + " ".join(f"{n[:6]:>7}" for n in names) + "   ⚠ссылки  длина"
     print(hdr)

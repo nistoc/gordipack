@@ -13,6 +13,10 @@ r"""ПРИЁМКА прибора «бьётся ли ритм роли».
      допуск растёт, ложного «не бьётся» нет                               ВСТРЕЧНЫЙ
   ④ ВСТРЕЧНЫЙ к ②: последний промежуток КОРОЧЕ шага — основой не берётся  ВСТРЕЧНЫЙ
   ⑤ причина решения НАЗВАНА в выводе, а не подразумевается                РАЗЛИЧАЮЩИЙ
+  ⑭ ВСТРЕЧНЫЙ: база не прочиталась, токен «--роль COORD-A» — роль COORD-A, а не COORD
+                                                                          РАЗЛИЧАЮЩИЙ
+  ⑭-бис нарочная поломка «вернуть литерал» ([A-Z]{2,16}) проваливает ⑭    РАЗЛИЧАЮЩИЙ
+  (⑭ — карточка #686, место 5, 2026-10-17; прочие случаи ⑥–⑬ — ниже по коду)
 
 ⚖️ Живых записей разговоров не касается: каждый случай строит СВОЙ каталог с одним
    рукотворным файлом и зовёт прибор с --каталог и --на (час судится рукой).
@@ -110,11 +114,44 @@ def база_ролей() -> pathlib.Path:
     return _БАЗА_РОЛЕЙ
 
 
-def _зов(каталог: pathlib.Path, на: dt.datetime, ещё: list[str]) -> tuple[str, int]:
-    r = subprocess.run([sys.executable, str(ПРИБОР), *ещё, "--db", str(база_ролей()),
+def _зов(каталог: pathlib.Path, на: dt.datetime, ещё: list[str], db: pathlib.Path | None = None,
+         tool: pathlib.Path = ПРИБОР) -> tuple[str, int]:
+    r = subprocess.run([sys.executable, str(tool), *ещё, "--db", str(db or база_ролей()),
                         "--каталог", str(каталог), "--на", на.strftime("%Y-%m-%dT%H:%M:%S")],
                        capture_output=True, text=True, encoding="utf-8", timeout=300)
     return (r.stdout or "") + (r.stderr or ""), r.returncode
+
+
+# ⑭ Карточка #686, место 5: роль чужого контура с дефисом в имени, когда база не прочиталась.
+# Новые имена — по-английски (слово владельца 07.09); прежние русские имена файла не тронуты.
+FOREIGN_ROLE = "COORD-A"
+# Нарочная поломка «вернуть литерал»: прежний запасной образец, обрубавший имя на дефисе.
+PATTERN_FIXED = r'ОБР_ТОКЕН = re.compile(r"--(?:role|роль)\s+([A-Z][A-Z0-9_-]{1,15})(?![A-Za-z0-9_-])")' + "\n"
+PATTERN_OLD = r'ОБР_ТОКЕН = re.compile(r"--(?:role|роль)\s+([A-Z]{2,16})")' + "\n"
+
+
+def foreign_role_stand() -> pathlib.Path:
+    """Каталог с одним чатом роли COORD-A: ровный ряд 30 мин из пяти ударов."""
+    stand = mezo_stand.new("bite-rhythm-foreign-")
+    lines = [json.dumps({"type": "assistant", "message": {"content":
+             [{"type": "text", "text": f"python read-messages.py --роль {FOREIGN_ROLE}"}]}},
+                        ensure_ascii=False)]
+    for step in range(5):
+        lines.append(запись(НАЧАЛО + dt.timedelta(minutes=30 * step)))
+    (stand / "chat0001.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return stand
+
+
+def copy_with_old_pattern() -> tuple[pathlib.Path | None, str]:
+    """Копия прибора с нарочной поломкой «вернуть литерал»; не легла — (None, причина)."""
+    text = ПРИБОР.read_text(encoding="utf-8")
+    if text.count(PATTERN_FIXED) != 1:
+        return None, f"поломка не легла: верный образец найден {text.count(PATTERN_FIXED)} раз"
+    stand = mezo_stand.new("bite-rhythm-literal-")
+    (stand / ПРИБОР.name).write_text(text.replace(PATTERN_FIXED, PATTERN_OLD), encoding="utf-8")
+    (stand / "mezo_paths.py").write_text((ПРИБОР.parent / "mezo_paths.py").read_text(encoding="utf-8"),
+                                         encoding="utf-8")
+    return stand / ПРИБОР.name, ""
 
 
 def main() -> int:
@@ -268,6 +305,36 @@ def main() -> int:
                  code1 == 0 and code3 == 0 and code4 == 0,
                  f"коды {code1}/{code3}/{code4}; отказ, накрывающий всё, читать перестают",
                  различающий=True)
+
+    # ⑭ КАРТОЧКА #686, МЕСТО 5: база не прочиталась (её нет по пути) — имена берёт запасной
+    #    образец. Прежний ([A-Z]{2,16}) у «--роль COORD-A» брал «COORD»: роль чужого контура
+    #    судилась под чужим именем. Контроль — строка «взяты ОБРАЗЦОМ»: без неё случай мерил бы
+    #    путь через данные, где дефекта нет вовсе.
+    no_db = mezo_stand.new("bite-rhythm-no-db-") / "no-such-db.db"
+    stand14 = foreign_role_stand()
+    at14 = НАЧАЛО + dt.timedelta(hours=2, minutes=20)
+    out14, code14 = _зов(stand14, at14, [], db=no_db)
+    via_pattern = "взяты ОБРАЗЦОМ" in out14
+    named14 = f"━━ {FOREIGN_ROLE} · чат" in out14
+    ок &= случай("⑭ ВСТРЕЧНЫЙ: база не прочиталась, «--роль COORD-A» — роль COORD-A, а не COORD",
+                 via_pattern and named14 and "━━ COORD · чат" not in out14,
+                 f"код {code14}; запасной образец {'взят' if via_pattern else 'НЕ взят — случай не зачитывается'};"
+                 f" роль чата названа: {'COORD-A' if named14 else 'НЕ COORD-A'}",
+                 различающий=True)
+
+    broken, why = copy_with_old_pattern()
+    if broken is None:
+        ок &= случай("⑭-бис поломка «вернуть литерал» проваливает ⑭", False,
+                     f"⛔ НЕ ЗАПУСТИЛАСЬ: {why}", различающий=True)
+    else:
+        out14b, _ = _зов(stand14, at14, [], db=no_db, tool=broken)
+        cut = "━━ COORD · чат" in out14b
+        ок &= случай("⑭-бис поломка «вернуть литерал» ([A-Z]{2,16}) проваливает ⑭",
+                     cut and f"━━ {FOREIGN_ROLE} · чат" not in out14b,
+                     "под поломкой роль чата названа "
+                     + ("COORD — обрубок имени, как до карточки #686" if cut
+                        else "не COORD — поломка случаем НЕ поймана"),
+                     различающий=True)
 
     print()
     if ок:

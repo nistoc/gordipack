@@ -27,6 +27,15 @@
 🪤 ЧЕГО ЭТОТ ШАГ НЕ ДЕЛАЕТ: не трогает `read_cursors` (плоская отметка остаётся источником
    долга), не создаёт сторожа «курсор без сегментов» (он покраснел бы у всех невиновно,
    пока в сегментах нет свежих участков) и не выдумывает границ там, где их нет.
+
+🌐 В ДРУГОМ КОНТУРЕ (карточка #686, место 4, 2026-10-17; по образцу шага
+   20260905-phoenix-history-archive, карточка #640). Слово владельца 12.08 и граница чтения
+   RCC (записка #2898) — о ролях контура Atlas; UPGRADE-v4-to-v5.md велит запускать шаг и
+   соседям. Поэтому правка посевных отрезков идёт ТОЛЬКО там, где meta.group_name = 'atlas'.
+   В любом другом контуре (или без строки group_name) посевные отрезки не трогаются, отрезок
+   роли с именем RCC не делится, а таблицы-выборки cursor_truth и cursor_gaps, дописывание
+   хвоста до отметки прочитанного и запись в журнал схемы идут как обычно; печать говорит
+   об этом словами.
 """
 import argparse
 import io
@@ -51,6 +60,20 @@ RCC_BASIS = ("сводка COORD за 7 недель дормана вместо
 
 OWNER_WORD = ("решение владельца 2026-08-12 11:07 UTC «считать прочитанным, кроме RCC»: "
               "до 06.08 роли читали ленту и подтверждали прочтение")
+
+# Контур, ЧЬЁ слово владельца и ЧЬЯ граница чтения RCC записаны выше (карточка #686): имя
+# проверяется по meta.group_name базы, как у шага 20260905 (карточка #640).
+ATLAS_GROUP_NAME = "atlas"
+NOT_ATLAS_REASON = "слово владельца Atlas 12.08 — о ролях Atlas"
+
+
+def group_name_of(conn):
+    """Имя контура из meta.group_name — None, если таблицы meta нет или строки в ней нет."""
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if 'meta' not in tables:
+        return None
+    row = conn.execute("SELECT value FROM meta WHERE key='group_name'").fetchone()
+    return row[0] if row else None
 
 # ⚠️ СПИСКОМ, А НЕ ОДНОЙ СТРОКОЙ ДЛЯ executescript: он в sqlite3 делает НЕЯВНЫЙ COMMIT
 # перед выполнением, то есть закрывает мою транзакцию, и правка схемы уходит в автокоммит.
@@ -116,7 +139,7 @@ def gaps_after_seed(conn):
     return sorted(out)
 
 
-def plan_for(conn):
+def plan_for(conn, is_atlas):
     """Что станет с каждым засеянным отрезком. Возвращает список действий, а не делает их."""
     rows = conn.execute(
         "SELECT id, role, from_id, to_id, kind, basis FROM cursor_segments ORDER BY role, from_id"
@@ -125,6 +148,9 @@ def plan_for(conn):
     for sid, role, a, b, kind, basis in rows:
         if kind != 'declared' or not (basis or '').startswith('перенос плоского курсора'):
             acts.append((role, f"{a}..{b} {kind}", "не трогаем", "не посевной отрезок"))
+            continue
+        if not is_atlas:
+            acts.append((role, f"{a}..{b} declared", "не трогаем", NOT_ATLAS_REASON))
             continue
         if role == 'RCC':
             acts.append((role, f"{a}..{b} declared", f"РАЗДЕЛИТЬ: {a}..{RCC_READ_TO} read + "
@@ -155,7 +181,19 @@ def main():
     print(f'база: {a.db}')
     print('=' * 78)
 
-    rows, acts = plan_for(conn)
+    group_name = group_name_of(conn)
+    is_atlas = group_name == ATLAS_GROUP_NAME
+    if is_atlas:
+        print(f'контур «{group_name}» — это Atlas: посевные отрезки правятся по слову владельца 12.08')
+    elif group_name:
+        print(f'⚠️ контур «{group_name}» — не Atlas: посевные отрезки НЕ правятся и отрезок роли '
+              f'RCC не делится ({NOT_ATLAS_REASON}); выборки, хвост до отметки прочитанного и '
+              f'журнал схемы — как обычно')
+    else:
+        print('⚠️ в meta нет group_name — имя контура неизвестно: посевные отрезки НЕ правятся и '
+              'отрезок роли RCC не делится; выборки, хвост до отметки прочитанного и журнал '
+              'схемы — как обычно')
+    rows, acts = plan_for(conn, is_atlas)
     print(f'отрезков сейчас: {len(rows)}\n')
     print(f'{"РОЛЬ":9} {"БЫЛО":22} {"СТАНЕТ":38} ОСНОВАНИЕ')
     print('─' * 110)
@@ -189,6 +227,8 @@ def main():
     for sid, role, aa, bb, kind, basis in rows:
         if kind != 'declared' or not (basis or '').startswith('перенос плоского курсора'):
             continue
+        if not is_atlas:
+            continue
         if role == 'RCC':
             conn.execute("UPDATE cursor_segments SET to_id = ?, kind = 'read', basis = NULL,"
                          " authorized = NULL WHERE id = ?", (RCC_READ_TO, sid))
@@ -206,9 +246,13 @@ def main():
     for stmt in VIEWS:
         conn.execute(stmt)
     fp = record_step(conn, VERSION,
-                     "засеянные отрезки говорят правду (слово владельца 12.08: «считать "
-                     "прочитанным, кроме RCC») + витрины cursor_truth и cursor_gaps; "
-                     "gaps показывает ТОЛЬКО declared — 'born' исключён намеренно")
+                     ("засеянные отрезки говорят правду (слово владельца 12.08: «считать "
+                      "прочитанным, кроме RCC») + витрины cursor_truth и cursor_gaps; "
+                      "gaps показывает ТОЛЬКО declared — 'born' исключён намеренно")
+                     if is_atlas else
+                     (f"контур «{group_name or '?'}» — не Atlas: посевные отрезки не тронуты "
+                      f"({NOT_ATLAS_REASON}, карточка #686); выборки cursor_truth и cursor_gaps "
+                      "заведены, хвост до отметки прочитанного дописан"))
     conn.commit()
     print(f'\n✅ ВРЕЗАНО. отпечаток схемы: {fp}')
     ok, why = verify(conn)
