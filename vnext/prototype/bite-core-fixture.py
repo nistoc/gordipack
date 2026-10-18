@@ -32,6 +32,10 @@ bite-core-fixture.py — приёмка подставной базы приём
      (их меняет любая чужая запись, карточка #483)
   ⑮ (только --run) каждая переведённая приёмка: код, число ✅ и 🔴 — как «было» в списке
   ⑯ свои (own): копию живой базы не берут вовсе — ни snapshot_db с живой базой, ни backup()
+  ⑰ bite-all.py --set core на подложенном каталоге (четыре строки списка, пятая приёмка вне списка):
+     совпало 1 · разошлось 1 · не запустилось 2 (потолок времени, файла нет), код 1, приёмка вне
+     списка не запущена; неверная строка списка — отказ кодом 2 с её номером;
+     ОБРАТНЫЙ ХОД: копия bite-all.py без сверки с «было» — «разошлось 0», поломка видна
 
 «С живой базой» — первый аргумент snapshot_db, в тексте которого есть «live» (любой регистр) или
 это имя src. ⚖️ Граница: живая база под другим именем этой проверке не видна; snapshot_db со
@@ -328,6 +332,67 @@ own = [x for x in entries if x["state"] == "own"]
 own_bad = [x["name"] for x in own if any(calls(HERE / x["name"])[2:])]
 case("⑯ свои (own): копию живой базы не берут — ни snapshot_db с живой, ни backup()",
      not own_bad, f"своих {len(own)} · с копией живой: {own_bad or 'нет'}")
+
+# ── ⑰ bite-all.py --set core: строка на приёмку против «было» ─────────────────────────────
+RUNNER = HERE / "bite-all.py"
+planted = stand / "core-set"
+planted.mkdir()
+for name, body in (("bite-zz-one.py", 'print("✅ a")\nprint("✅ b")\n'),
+                   ("bite-zz-two.py", 'print("✅ a")\nprint("🔴 b")\nraise SystemExit(1)\n'),
+                   ("bite-zz-slow.py", 'import time\ntime.sleep(30)\n'),
+                   ("bite-zz-extra.py", 'print("✅ вне списка")\n')):
+    (planted / name).write_text(body, encoding="utf-8")
+(planted / "core-bites.txt").write_text(
+    "# подложенный список ⑰\n"
+    "bite-zz-one.py Г1 done 0 2 0\n"
+    "bite-zz-two.py Г1 done 0 2 0\n"
+    "bite-zz-slow.py Г1 done 0 1 0\n"
+    "bite-zz-gone.py Г1 done 0 1 0\n", encoding="utf-8")
+broken_dir = stand / "core-set-broken"
+broken_dir.mkdir()
+(broken_dir / "core-bites.txt").write_text("bite-zz-one.py Г1 done 0 2 0\nbite-zz-two.py Г9 done 0 2\n",
+                                           encoding="utf-8")
+set_env = {k: v for k, v in os.environ.items() if k != "MEZO_CONTAINER"}
+set_env["PYTHONIOENCODING"] = "utf-8"
+# полный вывод разошедшихся набор кладёт во временный каталог — пусть это будет стенд, а не общий %TEMP%
+for var in ("TMPDIR", "TEMP", "TMP"):
+    set_env[var] = str(stand)
+
+
+def run_set(runner, folder):
+    p = subprocess.run([sys.executable, str(runner), "--set", "core", "--dir", str(folder), "--timeout", "3"],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", env=set_env,
+                       cwd=str(HERE))
+    out = (p.stdout or "") + (p.stderr or "")
+    return p.returncode, out, {n: next((l for l in out.splitlines() if n in l), "")
+                               for n in ("bite-zz-one", "bite-zz-two", "bite-zz-slow", "bite-zz-gone")}
+
+
+real_code, real_out, real_lines = run_set(RUNNER, planted)
+total_ok = "совпало 1 · разошлось 1 · не запустилось 2" in real_out
+lines_ok = ("совпало" in real_lines["bite-zz-one"] and "РАЗОШЛОСЬ" in real_lines["bite-zz-two"]
+            and "стало 1 · 1 · 1" in real_lines["bite-zz-two"] and "потолок 3 с" in real_lines["bite-zz-slow"]
+            and "файла нет" in real_lines["bite-zz-gone"])
+extra_run = "вне списка" in real_out or "bite-zz-extra" in real_out
+br_code, br_out, _ = run_set(RUNNER, broken_dir)
+SAME_ANCHOR = "same = got == want"
+runner_text = RUNNER.read_text(encoding="utf-8")
+if SAME_ANCHOR not in runner_text:
+    raise SystemExit(f"ПРИЁМКА НЕ СОСТОЯЛАСЬ: в bite-all.py нет «{SAME_ANCHOR}» — обратный ход ⑰ не поставить")
+weak_runner = planted.parent / "bite-all-weak.py"
+weak_runner.write_text(runner_text.replace(SAME_ANCHOR, "same = True", 1), encoding="utf-8")
+# копия зовётся из стенда: mezo_paths и mezo_stand — из каталога приёмки
+set_env["PYTHONPATH"] = str(HERE) + os.pathsep + set_env.get("PYTHONPATH", "")
+weak_code, weak_out, _ = run_set(weak_runner, planted)
+del set_env["PYTHONPATH"]
+weak_caught = "разошлось 0" in weak_out and weak_code != 1
+case("⑰ bite-all.py --set core: совпало 1 · разошлось 1 · не запустилось 2, код 1, приёмка вне списка "
+     "не запущена; неверная строка — код 2 с номером; обратный ход: без сверки — «разошлось 0»",
+     real_code == 1 and total_ok and lines_ok and not extra_run
+     and br_code == 2 and "строка 2" in br_out and weak_caught,
+     f"код {real_code} · итог {'верен' if total_ok else 'НЕВЕРЕН'} · строки {'верны' if lines_ok else real_lines} · "
+     f"вне списка {'ЗАПУЩЕНА' if extra_run else 'не запущена'} · неверный список: код {br_code} · "
+     f"без сверки: код {weak_code}, {'«разошлось 0»' if 'разошлось 0' in weak_out else 'итог иной'}")
 
 # ── ⑮ --run: переведённые судят столько же, сколько до перевода ───────────────────────────
 if args.run:

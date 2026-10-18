@@ -16,6 +16,9 @@
 где не проверено ничего: это ложный ноль, самый дорогой сорт вранья механизма.
 
 ⛔ Живую базу приёмки открывают сами и по своим правилам; эта программа только зовёт их.
+
+--set core — не все приёмки, а набор ядра по списку core-bites.txt: строка на приёмку с числами
+прогона против чисел «было» из списка (этап Э6, карточка #680; разбор — у CORE_LIST ниже).
 """
 import argparse
 import os
@@ -174,10 +177,136 @@ def verdict(code: int, out: str):
     return ("✅", "свойство держится") if code == 0 else ("🔴", "СЛОМАНО")
 
 
+def save_failure(name: str, out: str) -> None:
+    # 🪤 ПОЛНЫЙ ВЫВОД УПАВШЕЙ ПРИЁМКИ СОХРАНЯЕТСЯ, А НЕ ОБРЕЗАЕТСЯ ДО ХВОСТА.
+    # Повод — карточка #150, замер 2026-08-09: общий набор даёт редкий отказ (1 из 7
+    # прогонов) на НЕИЗМЕННОМ коде, а в одиночку тот же укус зелёный 8 из 8.
+    # Хвоста в шесть строк хватает, чтобы УВИДЕТЬ отказ, и не хватает, чтобы РАЗОБРАТЬ:
+    # какое из свойств не выполнилось, видно только в теле вывода.
+    # ⇒ Редкое событие нельзя ловить руками: к моменту, когда оно случится, окно
+    #   вывода уже уедет. Механизм обязан его ЗАПОМНИТЬ — иначе разбор стоит ожидания.
+    try:
+        fail_dir = os.path.join(tempfile.gettempdir(), "bite-all-failures")
+        os.makedirs(fail_dir, exist_ok=True)
+        stamp = str(int(time.time()))
+        path = os.path.join(fail_dir, f"{name}.{stamp}.txt")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(out)
+        print(f"        📄 полный вывод сохранён: {path}")
+    except OSError as e:
+        # ⚖️ Отказ сохранения НЕ роняет прогон и НЕ молчит: молчащая страховка
+        #    неотличима от сработавшей.
+        print(f"        ⚠️ вывод сохранить не удалось: {e}")
+
+
+def print_tail(out: str) -> None:
+    tail = [l for l in out.strip().splitlines() if l.strip()][-6:]
+    for line in tail:
+        print(f"        {line}")
+
+
+def finish_stand(stand, keep: bool) -> None:
+    if not stand:
+        return
+    if keep:
+        print(f"📂 контур копии сохранён для осмотра: {stand} — уберёт срок хранения стендов")
+    else:
+        import shutil
+        shutil.rmtree(stand, ignore_errors=True)
+
+
+# ═══ НАБОР ЯДРА ПО СПИСКУ: --set core (этап Э6, карточка #680) ═══
+# 🪤 ПОВОД. Приёмки ядра переведены на подставную базу (mezo_stand.empty_db), чтобы итог не зависел от строк
+# контура: у Atlas, AIA и onto одна версия пакета обязана давать одни числа. Сличать их надо ОДНОЙ командой, а
+# --only отбирает по подстроке имени, не по списку, и не знает, что каждая приёмка печатала до перевода.
+# ⇒ --set core берёт список core-bites.txt из каталога приёмок, гонит каждую по одной и печатает строку:
+#   «было» из списка (код · ✅ · 🔴) · «стало» — те же три числа прогона · совпало или РАЗОШЛОСЬ.
+# Условия — те же, при которых сняты числа «было» (bite-core-fixture.py --run): вывод в utf-8, рабочий
+# каталог — каталог приёмок, ✅ и 🔴 считаются только в stdout.
+# ⚖️ Граница: строка несёт три числа прогона, а не «сколько случаев ловит нарочная поломка» — это прогоном
+# не меряется. И одинаковые числа у двух контуров не значат одинаковых строк вывода — только одинаковый счёт.
+CORE_LIST = "core-bites.txt"
+CORE_GROUPS = {"Г1", "Г2", "Г3", "Г2+Г3", "Г4"}
+CORE_STATES = {"done", "wait", "own"}
+# bite-memory-volume.py шла 24 мин (Р1, 18.10 UTC) — потолка 300 с хватило бы не всем
+CORE_TIMEOUT = 1800
+NORMAL_TIMEOUT = 300
+
+
+def core_set(where: str):
+    """Список приёмок ядра из <where>/core-bites.txt: ([(имя, состояние, было)], [неверные строки]).
+    Разбор — как у bite-core-fixture.py (⑫); есть ли файл, судит прогон: строкой «файла нет»."""
+    entries, broken = [], []
+    with open(os.path.join(where, CORE_LIST), encoding="utf-8") as fh:
+        lines = fh.read().splitlines()
+    for i, line in enumerate(lines, 1):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        parts = line.split()
+        if (len(parts) != 6 or parts[1] not in CORE_GROUPS or parts[2] not in CORE_STATES
+                or not all(re.fullmatch(r"-?\d+", p) for p in parts[3:])):
+            broken.append(f"строка {i}: {line.strip()[:80]}")
+            continue
+        entries.append((parts[0], parts[2], tuple(int(p) for p in parts[3:])))
+    return entries, broken
+
+
+def run_core_set(entries, where: str, env: dict, timeout: int, verbose: bool) -> int:
+    """Прогнать набор ядра по одной. Код: 0 — всё совпало · 1 — есть РАЗОШЛОСЬ · 2 — расхождений нет,
+    но не запустилась хоть одна (сверять не с чем: это не «совпало»)."""
+    env = dict(env)
+    env["PYTHONIOENCODING"] = "utf-8"
+    matched = diverged = stuck = 0
+    for name, _state, want in entries:
+        path = os.path.join(where, name)
+        head = f"{name:40} было {want[0]} · {want[1]} · {want[2]}"
+        if not os.path.isfile(path):
+            print(f"⚠️  {head} · не запустилась: файла нет")
+            stuck += 1
+            continue
+        started = time.monotonic()
+        try:
+            r = subprocess.run([sys.executable, path], capture_output=True, text=True, encoding="utf-8",
+                               errors="replace", timeout=timeout, env=env, cwd=where)
+        except subprocess.TimeoutExpired:
+            print(f"⚠️  {head} · не запустилась: потолок {timeout} с")
+            stuck += 1
+            continue
+        took = time.monotonic() - started
+        stdout = r.stdout or ""
+        out = stdout + (r.stderr or "")
+        got = (r.returncode, stdout.count("✅"), stdout.count("🔴"))
+        same = got == want
+        if same:
+            mark, word = "✅", "совпало"
+            matched += 1
+        elif verdict(r.returncode, out)[0] == "⚠️":
+            mark, word = "⚠️", "не запустилась"
+            stuck += 1
+        else:
+            mark, word = "🔴", "РАЗОШЛОСЬ"
+            diverged += 1
+        print(f"{mark}  {head} · стало {got[0]} · {got[1]} · {got[2]} · {word} · {took:.0f} с")
+        if verbose or not same:
+            print_tail(out)
+        if not same:
+            save_failure(name, out)
+    print("-" * 78)
+    print(f"совпало {matched} · разошлось {diverged} · не запустилось {stuck} — из {len(entries)} "
+          f"по списку {os.path.join(where, CORE_LIST)}")
+    if stuck:
+        print("⚠️  «не запустилось» — это НЕ «совпало»: числа этой приёмки сверить не с чем.")
+    return 1 if diverged else (2 if stuck else 0)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="прогнать все приёмки рядом с этим файлом")
     ap.add_argument("--only", default="", help="подстрока имени: прогнать лишь совпавшие")
-    ap.add_argument("--timeout", type=int, default=300, help="потолок на одну приёмку, сек")
+    ap.add_argument("--timeout", type=int, default=None,
+                    help=f"потолок на одну приёмку, сек ({NORMAL_TIMEOUT}; с --set core — {CORE_TIMEOUT})")
+    ap.add_argument("--set", choices=("core",), default="",
+                    help=f"набор по списку: core — приёмки ядра из {CORE_LIST} в каталоге приёмок; "
+                         "строка на приёмку — числа прогона против «было» из списка")
     ap.add_argument("--verbose", action="store_true", help="печатать вывод каждой приёмки целиком")
     ap.add_argument("--dir", default=HERE,
                     help="каталог с приёмками (по умолчанию — рядом с этим файлом). "
@@ -189,7 +318,25 @@ def main() -> int:
 
     where = os.path.abspath(args.dir)
     target = resolve_target(args.target)
-    names = bites(where, args.only)
+    timeout = args.timeout or (CORE_TIMEOUT if args.set else NORMAL_TIMEOUT)
+    entries = None
+    if args.set == "core":
+        try:
+            entries, broken = core_set(where)
+        except OSError as e:
+            print(f"⛔ НЕ ЗАПУСТИЛСЯ НАБОР: списка приёмок ядра нет — {e}\n"
+                  "   Проверять нечего. Это НЕ «всё зелено».")
+            return 2
+        if broken:
+            print(f"⛔ НЕ ЗАПУСТИЛСЯ НАБОР: список {os.path.join(where, CORE_LIST)} не читается — "
+                  f"неверных строк {len(broken)}:")
+            for b in broken:
+                print(f"   {b}")
+            return 2
+        entries = [x for x in entries if not args.only or args.only in x[0]]
+        names = [x[0] for x in entries]
+    else:
+        names = bites(where, args.only)
     if not names:
         print("⛔ приёмок не найдено — проверь каталог и --only")
         return 1
@@ -214,6 +361,8 @@ def main() -> int:
             return 2
     print("=" * 78)
     print(f"ПРИЁМКИ: {len(names)} шт. в {where}")
+    if entries is not None:
+        print(f"НАБОР ЯДРА — по списку {os.path.join(where, CORE_LIST)}, потолок {timeout} с на приёмку")
     print(f"ИСПЫТУЕМЫЕ МЕХАНИЗМЫ — {banner}")
     if stand:
         print(f"🧱 копия не лежит контуром — разложена во временном каталоге {stand}:")
@@ -223,15 +372,23 @@ def main() -> int:
         print("⛔ заём из живого контура ЗАПРЕЩЁН на этот прогон (MEZO_FORBID_LIVE=1)")
     print("=" * 78)
 
+    if entries is not None:
+        code = run_core_set(entries, where, env_for(target, laid_out=bool(stand)), timeout, args.verbose)
+        print(f"ИСПЫТАНО — {banner}")
+        if not live:
+            print("⚖️ И про живой контур этот прогон не говорит ничего.")
+        finish_stand(stand, keep=code != 0)
+        return code
+
     green = red = stuck = 0
     for name in names:
         try:
             r = subprocess.run([sys.executable, os.path.join(where, name)],
                                capture_output=True, text=True, encoding="utf-8",
-                               timeout=args.timeout, env=env_for(target, laid_out=bool(stand)))
+                               timeout=timeout, env=env_for(target, laid_out=bool(stand)))
             out, code = (r.stdout or "") + (r.stderr or ""), r.returncode
         except subprocess.TimeoutExpired:
-            out, code = f"потолок {args.timeout} с исчерпан", 1
+            out, code = f"потолок {timeout} с исчерпан", 1
             print(f"⚠️  {name:32} не запустилась — потолок времени")
             stuck += 1
             continue
@@ -239,29 +396,9 @@ def main() -> int:
         mark, word = verdict(code, out)
         print(f"{mark}  {name:32} {word}")
         if args.verbose or mark == "🔴":
-            tail = [l for l in out.strip().splitlines() if l.strip()][-6:]
-            for line in tail:
-                print(f"        {line}")
-        # 🪤 ПОЛНЫЙ ВЫВОД УПАВШЕЙ ПРИЁМКИ СОХРАНЯЕТСЯ, А НЕ ОБРЕЗАЕТСЯ ДО ХВОСТА.
-        # Повод — карточка #150, замер 2026-08-09: общий набор даёт редкий отказ (1 из 7
-        # прогонов) на НЕИЗМЕННОМ коде, а в одиночку тот же укус зелёный 8 из 8.
-        # Хвоста в шесть строк хватает, чтобы УВИДЕТЬ отказ, и не хватает, чтобы РАЗОБРАТЬ:
-        # какое из свойств не выполнилось, видно только в теле вывода.
-        # ⇒ Редкое событие нельзя ловить руками: к моменту, когда оно случится, окно
-        #   вывода уже уедет. Механизм обязан его ЗАПОМНИТЬ — иначе разбор стоит ожидания.
+            print_tail(out)
         if mark in ("🔴", "⚠️"):
-            try:
-                fail_dir = os.path.join(tempfile.gettempdir(), "bite-all-failures")
-                os.makedirs(fail_dir, exist_ok=True)
-                stamp = str(int(time.time()))
-                path = os.path.join(fail_dir, f"{name}.{stamp}.txt")
-                with open(path, "w", encoding="utf-8") as fh:
-                    fh.write(out)
-                print(f"        📄 полный вывод сохранён: {path}")
-            except OSError as e:
-                # ⚖️ Отказ сохранения НЕ роняет прогон и НЕ молчит: молчащая страховка
-                #    неотличима от сработавшей.
-                print(f"        ⚠️ вывод сохранить не удалось: {e}")
+            save_failure(name, out)
         green += mark == "✅"
         red += mark == "🔴"
         stuck += mark == "⚠️"
@@ -281,12 +418,7 @@ def main() -> int:
         print("⚖️ И про живой контур этот прогон не говорит ничего.")
     if stuck:
         print("⚠️  «не проверено» — это НЕ «в порядке». Пока такие есть, «всё чисто» сказать нельзя.")
-    if stand:
-        if red or stuck:
-            print(f"📂 контур копии сохранён для осмотра: {stand} — уберёт срок хранения стендов")
-        else:
-            import shutil
-            shutil.rmtree(stand, ignore_errors=True)
+    finish_stand(stand, keep=bool(red or stuck))
     return 1 if red else 0
 
 
