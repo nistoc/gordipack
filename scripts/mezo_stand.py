@@ -139,8 +139,8 @@ import tokenize
 from pathlib import Path
 
 __all__ = ["new", "release", "finish", "keep_reason", "copy_tool", "neighbours_of", "stand_env",
-           "snapshot_db", "crlf_twin", "expected_break", "known_prefixes", "prefixes_from_sources",
-           "tool_dirs", "stand_size", "max_age_hours"]
+           "snapshot_db", "empty_db", "seed_roles", "traces", "crlf_twin", "expected_break",
+           "known_prefixes", "prefixes_from_sources", "tool_dirs", "stand_size", "max_age_hours"]
 
 _stands: list[Path] = []
 _prefixes: set[str] = set()           # начала имён, которыми этот прогон заводил стенды
@@ -407,6 +407,203 @@ def snapshot_db(src, dst) -> Path:
         src_conn.close()
         dst_conn.close()
     return dst
+
+
+# внешнее содержимое таблицы полнотекстового поиска: content='имя' (content='' — без содержимого)
+_FTS_CONTENT_RE = re.compile(r"\bcontent\s*=\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)", re.IGNORECASE)
+
+
+def _q(name: str) -> str:
+    """Имя таблицы или столбца в двойных кавычках — для текста запроса."""
+    return '"' + str(name).replace('"', '""') + '"'
+
+
+def empty_db(src, dst, keep=()) -> Path:
+    """Подставная база: СХЕМА базы src без её строк — кроме таблиц из keep и журнала шагов схемы.
+
+    ЗАЧЕМ (этап Э6, карточка #680; план atlas.archs/.mezosync/goal-gordi-core/e6/plan-proto.md, §3).
+    Приёмки ядра брали копию живой базы (snapshot_db) и судили инструмент на ЖИВЫХ строках
+    контура. Проба 17–18.10 по 61 приёмке ядра: на копии без строк 48 дают тот же итог, а
+    остальные падают или — хуже — проходят, судя меньше случаев (13 → 12, 9 → 7). Итог приёмки
+    зависел от ленты, памяти и карточек именно этого контура: одна версия пакета давала бы у
+    трёх контуров разные итоги. Копия живой базы к тому же весит ≈96 МБ на стенд.
+
+    ЧТО ДЕЛАЕТ.
+      · CREATE-тексты берутся из sqlite_master базы src, открытой СТРОГО НА ЧТЕНИЕ: схема — та,
+        которой живёт ЭТОТ контур, а не файл схемы пакета (у потребителя его может не быть).
+        Служебные таблицы sqlite_* и внутренние таблицы полнотекстового поиска (в PRAGMA
+        table_list — shadow) не пишутся: их создаёт сама библиотека;
+      · строки копируются только у обычных таблиц из keep и ВСЕГДА у schema_migrations: журнал
+        шагов — не данные контура, а запись о том, какие шаги есть в этой схеме. Без него
+        контур с полной схемой выглядел бы контуром без единого шага. У скопированной таблицы
+        счётчик AUTOINCREMENT — как в src;
+      · индексы, виды и триггеры создаются ПОСЛЕ строк — копирование триггеров не запускает;
+        таблицу полнотекстового поиска, чьё внешнее содержимое скопировано, перестраивает
+        'rebuild' (иначе поиск по копии пуст при полной таблице);
+      · размер страницы, user_version, application_id и режим журнала — как у src;
+      · цель пишется тем же приёмом, что у snapshot_db (backup): существующая база SQLite
+        заменяется целиком; не база — отказ, файл не тронут.
+
+    ⛔ keep с именем, которого в src нет как ОБЫЧНОЙ таблицы (опечатка, вид, виртуальная
+    таблица), — отказ с именем: молча пустая таблица читалась бы как «строк нет», а не
+    как «не то имя».
+    ⚖️ Чего не делает: не сажает строки за приёмку (роли — seed_roles(), остальное — её код);
+    не проверяет, хватит ли приёмке пустой базы, — это показывает её прогон.
+    """
+    src = Path(src)
+    dst = Path(dst)
+    keep = tuple(dict.fromkeys(str(t) for t in keep))
+    src_conn = sqlite3.connect(f"file:{src.as_posix()}?mode=ro", uri=True)
+    mem = sqlite3.connect(":memory:")
+    dst_conn = None
+    try:
+        kinds = {row[1]: row[2] for row in src_conn.execute("PRAGMA main.table_list")}
+        plain = {n for n, t in kinds.items() if t == "table" and not n.startswith("sqlite_")}
+        wrong = [t for t in keep if t not in plain]
+        if wrong:
+            raise SystemExit(
+                f"ERR: empty_db: в keep не обычные таблицы базы {src}: {', '.join(wrong)}\n"
+                f"     строки копируются только у обычных таблиц; цель НЕ создана.")
+        pragmas = {p: src_conn.execute(f"PRAGMA {p}").fetchone()[0]
+                   for p in ("page_size", "user_version", "application_id", "journal_mode")}
+        mem.execute(f"PRAGMA page_size = {int(pragmas['page_size'])}")
+        later = []
+        for typ, name, sql in src_conn.execute(
+                "SELECT type, name, sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY rowid"):
+            if name.startswith("sqlite_") or kinds.get(name) == "shadow":
+                continue
+            if typ == "table":            # и виртуальная: её внутренние таблицы создаст библиотека
+                mem.execute(sql)
+            else:
+                later.append(sql)
+        copied = list(dict.fromkeys(
+            (["schema_migrations"] if "schema_migrations" in plain else []) + list(keep)))
+        for table in copied:
+            cols = [r[1] for r in src_conn.execute(f"PRAGMA table_xinfo({_q(table)})") if r[6] == 0]
+            names = ", ".join(_q(c) for c in cols)
+            marks = ", ".join("?" * len(cols))
+            mem.executemany(f"INSERT INTO {_q(table)} ({names}) VALUES ({marks})",
+                            src_conn.execute(f"SELECT {names} FROM {_q(table)}"))
+        # счётчик AUTOINCREMENT скопированной таблицы — как в src: иначе новый номер строки
+        # повторил бы номер удалённой, чего в живой базе не бывает
+        if "sqlite_sequence" in kinds:
+            for table, seq in src_conn.execute("SELECT name, seq FROM sqlite_sequence").fetchall():
+                if table in copied:
+                    mem.execute("DELETE FROM sqlite_sequence WHERE name = ?", (table,))
+                    mem.execute("INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)", (table, seq))
+        for sql in later:
+            mem.execute(sql)
+        for name, typ in kinds.items():
+            if typ != "virtual":
+                continue
+            sql = src_conn.execute("SELECT sql FROM sqlite_master WHERE name = ?",
+                                   (name,)).fetchone()[0] or ""
+            m = _FTS_CONTENT_RE.search(sql)
+            if "fts5" in sql.lower() and m and m.group(1) in copied:
+                mem.execute(f"INSERT INTO {_q(name)}({_q(name)}) VALUES ('rebuild')")
+        mem.execute(f"PRAGMA user_version = {int(pragmas['user_version'])}")
+        mem.execute(f"PRAGMA application_id = {int(pragmas['application_id'])}")
+        mem.commit()
+        dst_conn = sqlite3.connect(str(dst))
+        try:
+            with dst_conn:
+                mem.backup(dst_conn)
+        except sqlite3.DatabaseError as e:
+            raise SystemExit(
+                f"ERR: empty_db: цель существует, но не открывается как база SQLite: {dst}\n"
+                f"     {e}\n"
+                f"     Файл НЕ ТРОНУТ. Если он не нужен — убери его сам и повтори."
+            )
+        mode = str(pragmas["journal_mode"]).lower()
+        if mode in ("wal", "delete", "truncate", "persist"):   # memory и off у файла не ставим
+            dst_conn.execute(f"PRAGMA journal_mode = {mode}").fetchone()
+    finally:
+        src_conn.close()
+        mem.close()
+        if dst_conn is not None:
+            dst_conn.close()
+    return dst
+
+
+def seed_roles(db, names) -> list[str]:
+    """Посадить роли на подставную базу: реестр ролей (roles) и отметка прочитанного с нуля.
+
+    Та же посадка, что у сборки свежего контура (scripts/init-group.py, шаг 5): роль живая и
+    в составе. Нужна приёмкам на empty_db(): без строки в реестре write-message.py не знает
+    адресата, без отметки прочитанного read-messages.py отвечает «роли нет». До Э6 приёмки
+    брали роли из копии живой базы — то есть из состава ЭТОГО контура.
+    ⛔ Имя не в верхнем регистре или длиной не 2–16 знаков — отказ: в базе на это стоит
+    CHECK, а INSERT OR IGNORE пропустил бы такую строку МОЛЧА. По той же причине после
+    посадки роли пересчитываются. Уже посаженная роль не дублируется.
+    Вернуть список посаженных имён.
+    """
+    names = list(dict.fromkeys(str(n) for n in names))
+    bad = [n for n in names if n != n.upper() or not 2 <= len(n) <= 16]
+    if bad:
+        raise SystemExit(f"ERR: seed_roles: имя роли — верхний регистр, 2–16 знаков: {', '.join(bad)}")
+    if not names:
+        return names
+    conn = sqlite3.connect(str(db))
+    try:
+        with conn:
+            for role in names:
+                conn.execute(
+                    "INSERT OR IGNORE INTO roles (role, lifecycle, lifecycle_at, lifecycle_by, "
+                    "lifecycle_reason, in_roster) VALUES (?, 'alive', datetime('now'), "
+                    "'mezo_stand.seed_roles', 'посажена приёмкой на подставной базе', 1)", (role,))
+                conn.execute("INSERT OR IGNORE INTO read_cursors (reader_role, last_read_id) "
+                             "VALUES (?, 0)", (role,))
+        marks = ", ".join("?" * len(names))
+        in_roles = {r[0] for r in conn.execute(
+            f"SELECT role FROM roles WHERE role IN ({marks})", names)}
+        in_reads = {r[0] for r in conn.execute(
+            f"SELECT reader_role FROM read_cursors WHERE reader_role IN ({marks})", names)}
+    finally:
+        conn.close()
+    lost = [n for n in names if n not in in_roles or n not in in_reads]
+    if lost:
+        raise SystemExit(f"ERR: seed_roles: роли не легли в базу {db}: {', '.join(lost)}")
+    return names
+
+
+def traces(db, marks) -> dict:
+    """Сколько строк базы несут СВОИ СЛЕДЫ приёмки: значение столбца, РАВНОЕ одной из меток.
+
+    ЗАЧЕМ (карточка #483; проба Э6 18.10, plan-proto.md §2-бис). Случай «живая база прогоном
+    не изменилась» сличал размер и время правки файла живой базы до и после — и проваливался
+    от ЛЮБОЙ записи за время прогона: за 41 с её сменили две чужие роли (подтверждение чтения
+    ленты, сохранение памяти), сама приёмка не писала. Чужую запись приёмка запретить не может;
+    судить можно своё — роли ZZ*, пулы, метки, которые она сажает на стенд. Попали они в живую
+    базу — инструмент писал не туда.
+    КАК: база открыта СТРОГО НА ЧТЕНИЕ; обходятся все столбцы всех обычных таблиц; совпадение —
+    точное (значение = метка), не подстрока: в записках о приёмках имена ZZ-ролей стоят в
+    тексте, и подстрока находила бы их всегда. Вернуть {«таблица.столбец»: число строк} —
+    только где число не ноль.
+    Звать до и после прогона: следов не должно ПРИБАВИТЬСЯ (прежние — чужая история).
+    ⚖️ Граница: запись без единой метки (инструмент написал в живую базу строку без своих
+    имён) этим не ловится; ловится запись хотя бы с одной меткой в любом столбце.
+    """
+    marks = list(dict.fromkeys(str(m) for m in marks))
+    found: dict[str, int] = {}
+    if not marks:
+        return found
+    conn = sqlite3.connect(f"file:{Path(db).as_posix()}?mode=ro", uri=True)
+    try:
+        inlist = ", ".join("?" * len(marks))
+        for row in conn.execute("PRAGMA main.table_list").fetchall():
+            name, typ = row[1], row[2]
+            if typ != "table" or name.startswith("sqlite_"):
+                continue
+            for col in conn.execute(f"PRAGMA table_xinfo({_q(name)})").fetchall():
+                if col[6] != 0:
+                    continue
+                n = conn.execute(f"SELECT count(*) FROM {_q(name)} WHERE {_q(col[1])} IN ({inlist})",
+                                 marks).fetchone()[0]
+                if n:
+                    found[f"{name}.{col[1]}"] = n
+    finally:
+        conn.close()
+    return found
 
 
 def crlf_twin(text: str) -> str:
