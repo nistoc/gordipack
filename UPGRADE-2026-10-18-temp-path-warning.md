@@ -4,8 +4,9 @@
 > и строка «18.10, второй» в `UPGRADE.md`). Порядок действий общий для любого выпуска — [`UPGRADE.md`](UPGRADE.md), раздел 3.
 > Время — UTC. Номера карточек и записок — эталона (карточка #671, записка #6013, записка #6015).
 >
-> **Охват** — один commit `976540e`: `vnext/prototype/check-dangling-refs.py` и новая приёмка
-> `vnext/prototype/bite-temp-paths.py`. Документ и строка `UPGRADE.md` лежат в отдельном commit и инструментов не меняют.
+> **Охват** — commit кода `976540e` и поправка `c5b7654` (тестовые строки приёмки — без путей машины эталона):
+> `vnext/prototype/check-dangling-refs.py` и новая приёмка `vnext/prototype/bite-temp-paths.py`. Ставить по `c5b7654`.
+> Документ и строка `UPGRADE.md` лежат в отдельных commit и инструментов не меняют.
 >
 > **Шагов схемы в этом выпуске нет.** Рабочие скрипты (`scripts/`), свод правил пакета и проверки общего прогона не менялись.
 >
@@ -56,11 +57,11 @@ vnext/prototype/bite-temp-paths.py ....... новая приёмка (во вт�
 ```
 0 ... резервная копия — UPGRADE.md, раздел 3, шаг 0
 1 ... план:
-        python <КОНТУР>/.mezosync/scripts/update-tools.py --rev 976540e
+        python <КОНТУР>/.mezosync/scripts/update-tools.py --rev c5b7654
       ожидаемо «≠» только у check-dangling-refs.py; «✋» — вы правили его у себя: остановитесь и пришлите вывод
 2 ... запись, второй план — до «+ ≠ ≈» нет:
-        python <КОНТУР>/.mezosync/scripts/update-tools.py --rev 976540e --apply
-        python <КОНТУР>/.mezosync/scripts/update-tools.py --rev 976540e
+        python <КОНТУР>/.mezosync/scripts/update-tools.py --rev c5b7654 --apply
+        python <КОНТУР>/.mezosync/scripts/update-tools.py --rev c5b7654
 3 ... шагов схемы нет — шаг 2 раздела 3 UPGRADE.md пропустите
 4 ... проба: python <КОНТУР>/<каталог проверки>/check-dangling-refs.py --text "итог — %TEMP%/x/итог.txt"
       ожидаемо строка «путей во временную папку Windows — 1» и код 0
@@ -88,6 +89,9 @@ vnext/prototype/bite-temp-paths.py ....... новая приёмка (во вт�
                               check-dangling-refs.py --text — путь назван, код 0; write-message.py --dry-run — путь
                               назван при записи, встречная строка молчит; backlog.py comment — путь назван, пояснение
                               один раз на роль; bite-temp-paths.py из выгрузки — 8/8, код 0
+пути машины эталона ......... guard-machine-paths.py по публикуемому (git ls-files): на e70c983 — 13, на 976540e — 18
+                              (5 новых — тестовые строки bite-temp-paths.py с корнями машины эталона), на c5b7654 — 13,
+                              те же, что на e70c983; bite-temp-paths.py на c5b7654 — 8/8, код 0 (21:47 UTC)
 ```
 
 ## 5. Известно и в этом выпуске НЕ сделано
