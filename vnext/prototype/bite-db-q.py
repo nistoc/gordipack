@@ -25,7 +25,7 @@ import tempfile
 from pathlib import Path
 
 import mezo_paths
-import mezo_stand  # копия живой базы — ТОЛЬКО через snapshot_db (карточка #505/#659)
+import mezo_stand  # подставная база — ТОЛЬКО через empty_db (Э6, карточка #680; до него — snapshot_db, #505/#659)
 import mezo_target
 
 DBQ = mezo_target.script("db-q.py")
@@ -68,7 +68,7 @@ def main() -> int:
     CASES.clear()
     with tempfile.TemporaryDirectory() as tmp:
         db = Path(tmp) / "copy.db"
-        mezo_stand.snapshot_db(LIVE_DB, db)
+        mezo_stand.empty_db(LIVE_DB, db)
         seed(db)
         before = digest(db)
 

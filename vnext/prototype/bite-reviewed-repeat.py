@@ -74,7 +74,7 @@ def main() -> int:
     d = pathlib.Path(tempfile.mkdtemp(prefix="bite-reviewed-"))
     try:
         db = d / "sand.db"
-        mezo_stand.snapshot_db(LIVE_DB, db)
+        mezo_stand.empty_db(LIVE_DB, db)
         note_path = d / "нота.md"
 
         # ① повтор флага ×3.

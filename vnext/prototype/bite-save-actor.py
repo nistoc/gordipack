@@ -28,12 +28,12 @@ import tempfile
 from pathlib import Path
 
 import mezo_paths
-import mezo_stand  # копия живой базы — ТОЛЬКО через snapshot_db (карточка #505/#659)
+import mezo_stand  # подставная база — ТОЛЬКО через empty_db (Э6, карточка #680; до него — snapshot_db, #505/#659)
 import mezo_target
 
 SAVER = mezo_target.script("save-phoenix.py")
 LIVE_DB = mezo_paths.live_db()
-МЕТКА = "ЗОНД-АВТОРСТВА"
+MARK = "ЗОНД-АВТОРСТВА"
 
 CASES: list[tuple[str, bool, str]] = []
 
@@ -73,13 +73,13 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory() as tmp:
         db = Path(tmp) / "probe.db"
-        mezo_stand.snapshot_db(LIVE_DB, db)
+        mezo_stand.empty_db(LIVE_DB, db)
         f = Path(tmp) / "s.md"
 
         # ① ПРАВКА ЧУЖОЙ СЕКЦИИ С --actor: журнал называет ИСПОЛНИТЕЛЯ, цель — роль/секция.
         #    Главный случай: ради него карточка и заведена.
         prev = body_of(db, "CORE", "state")
-        f.write_text(prev + f"\n{МЕТКА} правка чужого ①", encoding="utf-8")
+        f.write_text(prev + f"\n{MARK} правка чужого ①", encoding="utf-8")
         code, out = run(db, "--role", "CORE", "--section", "state",
                         "--file", str(f), "--actor", "PROTO")
         actor, target, diff = last_audit(db)
@@ -91,7 +91,7 @@ def main() -> int:
         # ② КОНТРОЛЬНАЯ ПАРА: своя секция БЕЗ флага — прежнее поведение, журнал однозначен.
         #    Без неё приёмку прошёл бы инструмент, пишущий PROTO ВСЕГДА.
         prev = body_of(db, "TAXO", "state")
-        f.write_text(prev + f"\n{МЕТКА} своя секция ②", encoding="utf-8")
+        f.write_text(prev + f"\n{MARK} своя секция ②", encoding="utf-8")
         run(db, "--role", "TAXO", "--section", "state", "--file", str(f))
         actor, target, diff = last_audit(db)
         case("② своя секция без флага: журнал пишет владельца, пометки о чужом нет",
@@ -101,7 +101,7 @@ def main() -> int:
         # ③ РЕГИСТР ИСПОЛНИТЕЛЯ НОРМАЛИЗУЕТСЯ — иначе расщепление proto/PROTO, класс,
         #    оплаченный на курсорах (регистрозависимые save/read при аплкейсящем ридере).
         prev = body_of(db, "CORE", "state")
-        f.write_text(prev + f"\n{МЕТКА} регистр ③", encoding="utf-8")
+        f.write_text(prev + f"\n{MARK} регистр ③", encoding="utf-8")
         run(db, "--role", "CORE", "--section", "state", "--file", str(f), "--actor", "proto")
         actor, _, _ = last_audit(db)
         case("③ --actor proto нормализован к PROTO", actor == "PROTO", f"actor={actor}")
@@ -114,7 +114,7 @@ def main() -> int:
     # ⑤ ЖИВАЯ БАЗА ЦЕЛА.
     con = sqlite3.connect(f"file:{LIVE_DB}?mode=ro", uri=True)
     leaked = con.execute("SELECT COUNT(*) FROM phoenix WHERE body LIKE ?",
-                         (f"%{МЕТКА}%",)).fetchone()[0]
+                         (f"%{MARK}%",)).fetchone()[0]
     con.close()
     case("⑤ живая база не тронута", leaked == 0, f"следов зонда: {leaked}")
 

@@ -196,7 +196,7 @@ def main() -> int:
     ok = True
     root = mezo_stand.new("bite-sleep-")
     db = root / "sand.db"
-    mezo_stand.snapshot_db(LIVE_DB, db)
+    mezo_stand.empty_db(LIVE_DB, db)
     seed(db)
 
     # ① спящий назван поимённо

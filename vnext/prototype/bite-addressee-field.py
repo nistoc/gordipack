@@ -50,13 +50,13 @@ def case(title, ok, detail, differ=False):
 
 
 def prepare():
-    """Копия живой базы + миграция на ней. Инструмент ИЩЕТСЯ, а не предполагается."""
+    """Подставная база (схема живой без строк) + миграция на ней. Инструмент ИЩЕТСЯ, а не предполагается."""
     for p in (WRITE, MIGRATION, LIVE):
         if not os.path.exists(p):
             raise SystemExit(f"⛔ НЕ ЗАПУСТИЛАСЬ: не найден {p} — приёмке нечего испытывать.")
     tmp = mezo_stand.new("bite-addressee-")
     db = os.path.join(tmp, "copy.db")
-    mezo_stand.snapshot_db(LIVE, db)
+    mezo_stand.empty_db(LIVE, db)
     r = subprocess.run([sys.executable, MIGRATION, "--db", db],
                        capture_output=True, text=True, encoding="utf-8")
     if r.returncode != 0:
@@ -211,7 +211,7 @@ def main() -> int:
 
     print()
     print(f"{'✅ АДРЕСАТ ПОЛЕМ ПРИНЯТ' if ok else '🔴 НЕ ПРИНЯТ'} — случаев {CASES}, "
-          f"различающих {DIFFER}, испытан {mezo_target.label()} на копии живой базы")
+          f"различающих {DIFFER}, испытан {mezo_target.label()} на подставной базе (схема живой без строк)")
     return 0 if ok else 1
 
 

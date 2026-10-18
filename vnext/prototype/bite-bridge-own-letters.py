@@ -138,7 +138,7 @@ def judged_bridge_letters(container: Path) -> int | None:
 def seeded_bridge_run(stand: Path) -> str:
     """Прогон проверки на КОПИИ контура с подставными письмами (⑤ на пустом контуре).
 
-    Копия: инструменты контура + снимок его базы (mezo_stand.snapshot_db, живая база
+    Копия: инструменты контура + подставная база из его схемы (mezo_stand.empty_db, живая база
     только читается) + каталог обмена с двумя письмами — нашим (первая строка «контура
     Atlas», лежит в нашей исходящей «atlas-neigh») и соседа (в его папке «neigh-atlas»).
     Имя группы в копии назначает сама приёмка («atlas»): на новом контуре оно своё, и
@@ -148,7 +148,7 @@ def seeded_bridge_run(stand: Path) -> str:
     root = stand / "seeded"
     shutil.copytree(mezo_target.scripts_root(), root / ".mezosync" / "scripts",
                     ignore=shutil.ignore_patterns("__pycache__"))
-    db = mezo_stand.snapshot_db(live / "mezosync.db", root / ".mezosync" / "mezosync.db")
+    db = mezo_stand.empty_db(live / "mezosync.db", root / ".mezosync" / "mezosync.db")
     con = sqlite3.connect(db)
     con.execute("INSERT INTO meta (key, value) VALUES ('group_name', 'atlas') "
                 "ON CONFLICT(key) DO UPDATE SET value = 'atlas'")
@@ -227,7 +227,7 @@ def neighbor_old_names_run(stand: Path, tag: str, break_from: str = "", break_to
                            extra_letters: tuple = ()) -> tuple:
     """Прогон проверки целиком (--full) на КОПИИ контура «aia» с папками соседа «atlas» (㉔–㉖).
 
-    Копия — как в seeded_bridge_run: инструменты контура + снимок его базы (живая только
+    Копия — как в seeded_bridge_run: инструменты контура + подставная база из его схемы (живая только
     читается). В базе копии имя группы «aia» и ОДНА связь — с соседом «atlas», чей каталог лежит
     на стенде (nb/…); в настоящие соседние контуры проверка не ходит. Саму базу соседа проверка
     не открывает: из записи о нём берётся только каталог его контура, дальше читаются файлы
@@ -253,7 +253,7 @@ def neighbor_old_names_run(stand: Path, tag: str, break_from: str = "", break_to
             return False, ""
         copy_path.write_bytes(text.replace(break_from, break_to).encode("utf-8"))
     neighbor = stand / tag / "nb"
-    db = mezo_stand.snapshot_db(live / "mezosync.db", root / ".mezosync" / "mezosync.db")
+    db = mezo_stand.empty_db(live / "mezosync.db", root / ".mezosync" / "mezosync.db")
     con = sqlite3.connect(db)
     con.execute("INSERT INTO meta (key, value) VALUES ('group_name', 'aia') "
                 "ON CONFLICT(key) DO UPDATE SET value = 'aia'")

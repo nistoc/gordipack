@@ -103,7 +103,7 @@ tmp = mezo_stand.new("wiring-")
 
 # ── ① ПРАВИЛО ИСЧЕЗЛО: набор обязан доработать до конца и назвать отказ отказом
 db1 = tmp / "no-rule.db"
-mezo_stand.snapshot_db(LIVE, db1)
+mezo_stand.empty_db(LIVE, db1)
 seed_rule(db1, VERIFIED)             # своя запись: правило БЫЛО версии сверки — прежде чем исчезнуть
 seed_audit_trace(db1, RULE_KEY)      # и его исчезновение обязано иметь след, а не выглядеть «не было вовсе»
 c = sqlite3.connect(db1)
@@ -126,7 +126,7 @@ check("① вердиктов много — набор не оборвался"
 # ── ② ПРОГОН ПО КОПИИ ДОЛЖЕН МЕРИТЬ КОПИЮ. Правило переписываем ТОЛЬКО в копии:
 #    если признак читает живую базу, он этой подмены не заметит и промолчит.
 db2 = tmp / "bumped.db"
-mezo_stand.snapshot_db(LIVE, db2)
+mezo_stand.empty_db(LIVE, db2)
 seed_rule(db2, VERIFIED)             # базовая версия ДО правки — та же, что в RETIRED["версия_сверки"]
 c = sqlite3.connect(db2)
 c.execute("UPDATE rules SET version = version + 7 "
@@ -140,7 +140,7 @@ check("② прогон по КОПИИ мерит копию, а не живу�
 
 # ── ③ ВСТРЕЧНЫЙ к ②: на нетронутой копии — тихо. Без него ② зеленел бы от общей паники.
 db3 = tmp / "clean.db"
-mezo_stand.snapshot_db(LIVE, db3)
+mezo_stand.empty_db(LIVE, db3)
 out3, code3 = run_on(db3)
 check("③ на нетронутой копии признак ЗЕЛЁН (встречный к ②)",
       "источники не учат снятому" in out3 and "УСТАРЕЛ" not in out3,

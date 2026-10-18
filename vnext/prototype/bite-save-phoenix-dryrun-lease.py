@@ -13,7 +13,7 @@ lease._remember_wait успевала записать ожидание в tool_
 bite-phoenix-service-blocks.py прогнала --dry-run от имени STUD/BITE519 и оставила
 запись ожидания в ЖИВОЙ базе).
 
-ЧЕМ СУДИМ. Всё на СОГЛАСОВАННОЙ КОПИИ живой базы (mezo_stand.snapshot_db), с
+ЧЕМ СУДИМ. Всё на ПОДСТАВНОЙ базе (mezo_stand.empty_db: схема живой без строк; Э6), с
 MEZO_LEASE_TEST=1 (без него lease.check молчит на копии — карточка #204/#391, объявление
 действует только в живом контуре). Объявление берёт роль TAXO, холостой и настоящий
 прогон зовёт роль ZZTEST629 (не существующая в контуре — не спутать с настоящей ролью).
@@ -36,7 +36,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import mezo_paths  # noqa: E402
-import mezo_stand  # noqa: E402 — карточка #505/#624: согласованная копия живой базы
+import mezo_stand  # noqa: E402 — карточка #505/#624: подставная база из схемы живой (Э6, карточка #680)
 
 LEASE = mezo_paths.live_scripts() / "lease.py"
 SAVE_PHOENIX = mezo_paths.live_scripts() / "save-phoenix.py"
@@ -78,7 +78,7 @@ def run_save_phoenix(save_tool, db, stand_env, dry_run):
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--db", default=None, help="база-образец; по умолчанию живая (копируется)")
+    ap.add_argument("--db", default=None, help="база-образец; по умолчанию живая (берётся её схема)")
     ap.add_argument("--break", dest="break_name", choices=["no-readonly"], default=None,
                     help="нарочная поломка: no-readonly — вернуть отказ холостому прогону")
     a = ap.parse_args()
@@ -86,7 +86,7 @@ def main() -> int:
     src = Path(a.db) if a.db else mezo_paths.live_db()
     stand = mezo_stand.new("bite-dryrun-lease-")
     db = stand / "mezosync.db"
-    mezo_stand.snapshot_db(src, db)
+    mezo_stand.empty_db(src, db)
     # ⚡ КАРТОЧКА #613: испытуемые (lease.py, save-phoenix.py) зовём средой СТЕНДА,
     # не средой вызывающего — иначе MEZO_CONTAINER вызывающего доедет до них.
     stand_env = mezo_stand.stand_env(stand)

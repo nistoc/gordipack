@@ -76,7 +76,7 @@ r"""bite-local-dir.py — приёмка этапа Э5 (карточка #679):
   П16 копии двух каталогов ложатся в одно место          → О10б
   П17 сверка копии ослаблена до «файл есть»              → О11
 
-⛔ Живая база только читается (снимок через mezo_stand.snapshot_db). Пакет не трогается:
+⛔ Живая база только читается (берётся только схема: mezo_stand.empty_db). Пакет не трогается:
 источник для update-tools — синтетический каталог внутри стенда.
 
     MEZO_SCRIPTS_ROOT=<клон пакета>/scripts python <клон пакета>/vnext/prototype/bite-local-dir.py
@@ -344,7 +344,7 @@ case("Г10 main() зовёт run_local_checks(skip)", main_calls_local(GUARD_ALL
 p1 = broken_copy(GUARD_ALL, STAND / "break-p1", "    run_local_checks(skip)\n", "    pass\n")
 case("П1 поломка «вызов убран» роняет Г10", not main_calls_local(p1))
 
-# Г11 — общий прогон на КОПИИ контура: инструменты испытуемого + снимок живой базы.
+# Г11 — общий прогон на КОПИИ контура: инструменты испытуемого + подставная база из схемы живой.
 print("---- Г11: общий прогон на копии контура (около минуты) ----")
 live_mezo = mezo_paths.container_root(__file__) / ".mezosync"
 c_root = STAND / "contour"
@@ -352,7 +352,7 @@ shutil.copytree(GUARD_ALL.parent, c_root / ".mezosync" / "scripts",
                 ignore=shutil.ignore_patterns("__pycache__"))
 proto_src = Path(__file__).resolve().parent
 shutil.copytree(proto_src, c_root / "vnext-tools", ignore=shutil.ignore_patterns("__pycache__"))
-c_db = mezo_stand.snapshot_db(live_mezo / "mezosync.db", c_root / ".mezosync" / "mezosync.db")
+c_db = mezo_stand.empty_db(live_mezo / "mezosync.db", c_root / ".mezosync" / "mezosync.db")
 con = sqlite3.connect(str(c_db))
 con.execute("DELETE FROM cross_links")      # копия не ходит к настоящим соседям
 con.commit()
@@ -690,7 +690,7 @@ case("П17 поломка «сверка копии ослаблена до “�
 
 # ═══ ЧАСТЬ Б — backup-db.py: каталог местного в копии ════════════════════════════════════════
 
-print("---- часть Б: копия базы уносит каталог местного (снимок живой базы, до минуты) ----")
+print("---- часть Б: копия базы уносит каталог местного (подставная база из схемы живой, до минуты) ----")
 
 
 def backup(tool: Path, db: Path, out_file: Path, apply: bool) -> tuple[int, str]:
@@ -707,7 +707,7 @@ def backup_case(tool: Path, tag: str, stop_after: str = "b5") -> dict:
     root = STAND / f"b-{tag}" / ".mezosync"
     (root / "scripts").mkdir(parents=True)
     mezo_stand.copy_tool(tool, root / "scripts")
-    db = mezo_stand.snapshot_db(live_mezo / "mezosync.db", root / "mezosync.db")
+    db = mezo_stand.empty_db(live_mezo / "mezosync.db", root / "mezosync.db")
     local = root / "local"
     for rel, data in LOCAL_FILES.items():
         (local / rel).parent.mkdir(parents=True, exist_ok=True)

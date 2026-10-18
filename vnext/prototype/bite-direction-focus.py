@@ -85,7 +85,7 @@ def main() -> int:
     ok = True
     stand = mezo_stand.new("bite-focus-")
     db = stand / "copy.db"
-    mezo_stand.snapshot_db(LIVE_DB, db)
+    mezo_stand.empty_db(LIVE_DB, db)
     con = sqlite3.connect(db)
     # Прочие активные (если копия несла живые наборы) — на паузу: направление в копии
     # задают ТОЛЬКО подставные наборы, заведённые ниже.

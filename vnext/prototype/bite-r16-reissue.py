@@ -60,7 +60,7 @@ SEED_COUNT = 50     # сколько своих нот сеем поверх г�
 
 
 def prepare() -> int:
-    """Копия живой базы + курсор на известную точку. Живая база НЕ ТРОГАЕТСЯ ВОВСЕ.
+    """Подставная база (схема живой) + курсор на известную точку. Живая база НЕ ТРОГАЕТСЯ ВОВСЕ.
 
     Возвращает отметку прочитанного, на которую встал курсор.
 
@@ -73,7 +73,7 @@ def prepare() -> int:
     того, сколько чужих записок было до границы. Живой базы это не касается: пишем в копию.
     """
     SANDBOX.parent.mkdir(parents=True, exist_ok=True)
-    mezo_stand.snapshot_db(LIVE, SANDBOX)
+    mezo_stand.empty_db(LIVE, SANDBOX)
     con = sqlite3.connect(SANDBOX)
     boundary = con.execute("SELECT MAX(id) FROM messages").fetchone()[0] or 0
     for i in range(SEED_COUNT):

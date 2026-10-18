@@ -46,7 +46,7 @@ def run_with_snapshot(line, label):
     """Кладёт строку в тело КОПИИ базы (в свой подставной раздел памяти) и возвращает
     вывод гарда по этой копии."""
     tmp = Path(tempfile.gettempdir()) / f"bite-callform-{label}.db"
-    mezo_stand.snapshot_db(LIVE, tmp)
+    mezo_stand.empty_db(LIVE, tmp)
     c = sqlite3.connect(tmp)
     c.execute("INSERT INTO phoenix (role, section, body) VALUES (?, ?, ?) "
               "ON CONFLICT(role, section) DO UPDATE SET body = excluded.body",

@@ -186,13 +186,13 @@ def ok_line_from_end(text: str) -> int | None:
 def main() -> int:
     print("=" * 78)
     print("ПРИЁМКА КАРТОЧКИ #586 — mezo_hints: подсказка один раз, дальше строка-ссылка")
-    print("живая база (только чтение, копируется): " + str(LIVE_DB))
+    print("живая база (только чтение; берётся только её схема — подставная база): " + str(LIVE_DB))
     print("=" * 78)
 
     stand = mezo_stand.new("bite-tool-brevity-")
     db = stand / "copy.db"
     import shutil
-    mezo_stand.snapshot_db(LIVE_DB, db)
+    mezo_stand.empty_db(LIVE_DB, db)
 
     # ═══ ⓪ ГЕЙТ: таблица hint_seen в копии есть ═══════════════════════════════════
     conn0 = sqlite3.connect(str(db))

@@ -73,7 +73,7 @@ SHOWN_COL = "shown_max"
 
 
 def prepare() -> None:
-    """Копия живой базы. Живая НЕ ТРОГАЕТСЯ — у перископа и приёмок один закон.
+    """Подставная база (схема живой без строк). Живая НЕ ТРОГАЕТСЯ — у перископа и приёмок один закон.
 
     🩹 ДОГОН (пустой свежий контур пакета, карточка #667): впечатанная точка 3069 —
     координата ЖИВОЙ ленты на день находки; на пустом контуре (0 записок) курсор
@@ -82,7 +82,7 @@ def prepare() -> None:
     максимум id, курсор встаёт РОВНО на него, и уже ПОСЛЕ сеются SEED_COUNT своих нот.
     """
     SANDBOX.parent.mkdir(parents=True, exist_ok=True)
-    mezo_stand.snapshot_db(LIVE, SANDBOX)
+    mezo_stand.empty_db(LIVE, SANDBOX)
     con = sqlite3.connect(SANDBOX)
     boundary = con.execute("SELECT MAX(id) FROM messages").fetchone()[0] or 0
     for i in range(SEED_COUNT):

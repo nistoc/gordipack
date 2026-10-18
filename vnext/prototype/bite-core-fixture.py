@@ -26,11 +26,16 @@ bite-core-fixture.py — приёмка подставной базы приём
      регистре, короче 2 или длиннее 16 знаков — отказ, а не молчаливый пропуск
   ⑪ traces: своя метка в строке видна, та же метка внутри текста — нет (совпадение точное)
   ⑫ список core-bites.txt читается: у каждой строки имя существующего файла, группа, состояние
-  ⑬ переведённые (done): нет вызова snapshot_db, есть empty_db; ОБРАТНЫЙ ХОД: копия переведённой
-     приёмки с возвращённым snapshot_db — провал с её именем
+  ⑬ переведённые (done): нет ни snapshot_db с живой базой, ни копии backup(), есть empty_db;
+     ОБРАТНЫЙ ХОД: копия переведённой приёмки с возвращённым snapshot_db — провал с её именем
   ⑭ переведённые: случай «живая база не тронута» не сличает размер и время файла живой базы
      (их меняет любая чужая запись, карточка #483)
   ⑮ (только --run) каждая переведённая приёмка: код, число ✅ и 🔴 — как «было» в списке
+  ⑯ свои (own): копию живой базы не берут вовсе — ни snapshot_db с живой базой, ни backup()
+
+«С живой базой» — первый аргумент snapshot_db, в тексте которого есть «live» (любой регистр) или
+это имя src. ⚖️ Граница: живая база под другим именем этой проверке не видна; snapshot_db со
+своей базой (например, свежего контура) — законен и не считается.
 
 Флаги: --run — прогнать переведённые приёмки по одной (долго: минуты на каждую); --list ФАЙЛ —
 другой список (для проверки самой приёмки).
@@ -244,7 +249,7 @@ case("⑪ traces: своя метка в значении видна (1), вну
 # ── ⑫–⑭ список приёмок ядра ─────────────────────────────────────────────────────────────
 LIST = Path(args.list)
 GROUPS = {"Г1", "Г2", "Г3", "Г2+Г3", "Г4"}
-STATES = {"done", "wait"}
+STATES = {"done", "wait", "own"}
 entries, broken = [], []
 for i, line in enumerate(LIST.read_text(encoding="utf-8").splitlines(), 1):
     if not line.strip() or line.lstrip().startswith("#"):
@@ -265,10 +270,10 @@ case("⑫ список приёмок ядра читается: имя суще
 
 
 def calls(path):
-    """Имена вызываемых функций помощника в приёмке: snapshot_db / empty_db — и обращения X.stat()
-    к живой базе (имя, где есть «live», в любом регистре)."""
+    """Что приёмка зовёт: имена функций; сколько раз snapshot_db с живой базой (первый аргумент
+    с «live» или src); сколько копий backup(); обращения X.stat() к живой базе (имя с «live»)."""
     tree = ast.parse(Path(path).read_text(encoding="utf-8"))
-    names, live_stat = set(), 0
+    names, live_stat, live_snap, backups = set(), 0, 0, 0
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
             f = node.func
@@ -277,14 +282,20 @@ def calls(path):
             if (name == "stat" and isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name)
                     and "live" in f.value.id.lower()):
                 live_stat += 1
-    return names, live_stat
+            if name == "snapshot_db" and node.args:
+                arg = ast.unparse(node.args[0])
+                if "live" in arg.lower() or arg == "src":
+                    live_snap += 1
+            if name == "backup" and isinstance(f, ast.Attribute):
+                backups += 1
+    return names, live_stat, live_snap, backups
 
 
 def judge_done(items, folder):
     still, no_empty, by_stat = [], [], []
     for x in items:
-        names, live_stat = calls(folder / x["name"])
-        if "snapshot_db" in names:
+        names, live_stat, live_snap, backups = calls(folder / x["name"])
+        if live_snap or backups:
             still.append(x["name"])
         if "empty_db" not in names:
             no_empty.append(x["name"])
@@ -308,11 +319,15 @@ if done:
     b_still, _, _ = judge_done([done[0]], back)
     reverse_ok = b_still == [probe]
     reverse_detail = f"копия {probe} со snapshot_db → названа: {b_still}"
-case("⑬ переведённые: snapshot_db нет, empty_db есть; обратный ход — провал с именем приёмки",
+case("⑬ переведённые: копии живой базы нет, empty_db есть; обратный ход — провал с именем приёмки",
      bool(done) and not still and not no_empty and reverse_ok,
-     f"со snapshot_db: {still or 'нет'} · без empty_db: {no_empty or 'нет'} · {reverse_detail}")
+     f"с копией живой: {still or 'нет'} · без empty_db: {no_empty or 'нет'} · {reverse_detail}")
 case("⑭ переведённые: «живая база не тронута» не по размеру и времени файла (X.stat() у живой базы)",
      bool(done) and not by_stat, f"сличают файл живой базы: {by_stat or 'нет'}")
+own = [x for x in entries if x["state"] == "own"]
+own_bad = [x["name"] for x in own if any(calls(HERE / x["name"])[2:])]
+case("⑯ свои (own): копию живой базы не берут — ни snapshot_db с живой, ни backup()",
+     not own_bad, f"своих {len(own)} · с копией живой: {own_bad or 'нет'}")
 
 # ── ⑮ --run: переведённые судят столько же, сколько до перевода ───────────────────────────
 if args.run:
