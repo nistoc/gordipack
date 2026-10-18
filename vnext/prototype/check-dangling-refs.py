@@ -36,6 +36,12 @@ check-dangling-refs.py — ССЫЛКА, КОТОРУЮ НЕЛЬЗЯ РАЗРЕ�
        про ЗАПИСЬ ноты — а --file ничего не пишет и в путь записи не входит; сам
        путь записи (refs_check → write-message) код выхода не читает по построению.
        --scan-*: 0 всегда (замер — не проверка); --strict оставлен для совместимости.
+
+═══ ВТОРОЕ ПРЕДУПРЕЖДЕНИЕ: ПУТЬ ВО ВРЕМЕННУЮ ПАПКУ WINDOWS (карточка #671) ═══
+Тем же вызовом (--file, --text и путь записи refs_check → write-message.py, backlog.py) проверка
+называет пути во временную папку Windows: файл там может не дожить до читателя. Код выхода
+этим НЕ меняется — только предупреждение (выбор владельца 2026-10-10 08:33 UTC, чат PROTO).
+Разбор — у TEMP_ROOT ниже.
 """
 
 import argparse
@@ -195,6 +201,64 @@ def find(text: str) -> list:
     return out
 
 
+# ═══ ПУТЬ ВО ВРЕМЕННУЮ ПАПКУ WINDOWS (карточка #671) ═══════════════════════════════
+# 🪤 ПОВОД. Итоги проверок, на которые ссылаются карточки и записки, лежат во временной папке Windows:
+# черновые папки чатов, стенды приёмок. Оттуда их уносят уборка черновых папок (scratch-folders.py),
+# срок хранения стендов (mezo_stand.py) и сама Windows — автоочистка «Контроль памяти» на машине
+# эталона включена (замер 2026-10-03 15:54 UTC). После уборки ссылка ведёт в никуда, доказательство
+# приёмки пропадает. Замер 2026-10-03 16:00 UTC: открытых карточек со ссылкой туда 6 из 239,
+# записок за 30 суток — 31 из 811.
+# ⇒ Предупреждение, как у голого номера: строка, позиция, сам путь. Отказа нет — владелец выбрал
+#   «только предупреждение, без хранилища доказательств» (2026-10-10 08:33 UTC, чат PROTO).
+# ⚖️ ПУТЬ = корень временной папки и за ним хотя бы одна КОНКРЕТНАЯ часть («…/Temp/x/итог.txt»).
+#   Слова о самой папке («стенды лежат в %TEMP%», «AppData/Local/Temp», «%TEMP%/gordi/…»,
+#   «scratchpad/<папка>») никого никуда не шлют — предупреждения нет. Иначе оно зашумит на
+#   объяснениях вроде этого, и его перестанут читать.
+# Корни: полный путь (в нём и короткое имя каталога пользователя вида N1F27~1.TEM) · переменные
+# среды Windows, PowerShell и bash · /tmp Git Bash (это та же временная папка) · черновая папка чата.
+TEMP_ROOT = re.compile(
+    r"AppData[\\/]+Local[\\/]+Temp"
+    r"|%TE?MP%|\$env:TE?MP\b|\$\{?TMPDIR\}?|\$\{?TEMP\}?"
+    r"|(?<![\w.~:-])/tmp(?=[\\/])"
+    r"|\bscratchpad",
+    re.I)
+# Хвост пути: части через «/» или «\» до пробела, кавычки, скобки или знака перечня.
+PATH_TAIL = re.compile(r"(?:[\\/]+[^\s\\/«»\"'`<>|()\[\],;]+)+")
+PATH_EDGE = re.compile(r"[^\s«»\"'`<>|()\[\],;]*$")
+# Части, которые сами по себе не называют прогона: общий каталог стендов пакета, корень чатов
+# и сама черновая папка чата.
+GENERIC_SEGMENTS = {"gordi", "claude", "scratchpad"}
+# Каталог проекта под корнем чатов — путь проекта с заменой «:» и «\» на «-» (C--work--proj):
+# «%TEMP%\claude\C--work--proj» — слова о папке всех чатов проекта, а не о прогоне.
+# Замер 2026-10-18 18:23 UTC на последних 1000 записках эталона: из 57 найденных путей три кончались
+# корнем чатов проекта или самой черновой папкой («%TEMP%\claude\…\scratchpad»).
+PROJECT_DIR = re.compile(r"[a-z]--", re.I)
+
+
+def _concrete(segment: str) -> bool:
+    s = segment.rstrip(".:!?").lower()
+    return (bool(s) and s not in GENERIC_SEGMENTS and "…" not in s and s.strip(".*") != ""
+            and not PROJECT_DIR.match(s))
+
+
+def find_temp(text: str) -> list:
+    """[(строка, колонка, путь)] — пути во временную папку Windows с хотя бы одной конкретной частью."""
+    out, taken_to = [], 0
+    for m in TEMP_ROOT.finditer(text):
+        if m.start() < taken_to:
+            continue                      # корень внутри уже найденного пути (scratchpad в полном пути)
+        tail = PATH_TAIL.match(text, m.end())
+        if not tail or not any(_concrete(s) for s in re.split(r"[\\/]+", tail.group(0))[1:]):
+            continue
+        start = m.start() - len(PATH_EDGE.search(text[max(0, m.start() - 300):m.start()]).group(0))
+        path = text[start:tail.end()].rstrip(".:!?")
+        taken_to = tail.end()
+        line = text.count("\n", 0, start) + 1
+        col = start - (text.rfind("\n", 0, start) + 1) + 1
+        out.append((line, col, path))
+    return out
+
+
 # ═══ ХВОСТ ПОЯСНЕНИЙ — ЧЕРЕЗ ОБЩИЙ ПОМОЩНИК mezo_hints (карточка #586) ═══════════════
 # Прежде эти два блока печатались ЦЕЛИКОМ при КАЖДОЙ находке — той же роли, тем же
 # текстом. Теперь первый показ паре (роль, ключ) — целиком, дальше — строка-ссылка;
@@ -235,9 +299,31 @@ HINT_EXPLAINING_WORDS = (
 )
 
 
+# Текст ПОСТОЯННЫЙ — условие mezo_hints (см. выше): первый показ роли целиком, дальше строкой-ссылкой.
+HINT_TEMP = (
+    "\n   📌 Файлы во временной папке Windows уносят уборка черновых папок (scratch-folders.py),\n"
+    "      срок хранения стендов (mezo_stand.py) и автоочистка Windows — ссылка поведёт в никуда.\n"
+    "      Это ПРЕДУПРЕЖДЕНИЕ, а не отказ (выбор владельца 2026-10-10 08:33 UTC, карточка #671).\n"
+    "      То, что нужно читателю (числа, строки итога), перенеси в сам текст — файл может\n"
+    "      не дожить до чтения; путь оставь как след работы."
+)
+
+
+def report_temp(text: str, where: str, *, role: str | None = None, full: bool = False, conn=None) -> int:
+    """Напечатать пути во временную папку Windows. Вернуть их число — на код выхода оно не влияет."""
+    temp = find_temp(text)
+    if temp:
+        print(f"⚠️  {where}: путей во временную папку Windows — {len(temp)} (предупреждение, не отказ)")
+        for line, col, path in temp:
+            print(f"   строка {line}, позиция {col} — {path}")
+        mezo_hints.подсказка(conn, role, "refs-путь-во-временную-папку", HINT_TEMP, full=full)
+    return len(temp)
+
+
 def report(text: str, where: str, quiet: bool = False, *, role: str | None = None,
           full: bool = False, conn=None) -> int:
     hits = find(text)
+    report_temp(text, where, role=role, full=full, conn=conn)
     if not hits:
         if not quiet:
             print(f"✅ {where}: неразрешимых ссылок нет")
@@ -269,17 +355,21 @@ def scan(kind: str, last: int) -> int:
         what = "записках"
     con.close()
 
-    total, dirty, worst = 0, 0, []
+    total, dirty, worst, temp_total, temp_dirty = 0, 0, [], 0, 0
     for r in rows:
         n = len(find(r["t"] or ""))
         total += n
         if n:
             dirty += 1
             worst.append((n, r["id"], r["role"]))
+        t = len(find_temp(r["t"] or ""))
+        temp_total += t
+        temp_dirty += bool(t)
     print(f"ЗАМЕР: неразрешимые ссылки в {what}")
     print(f"  просмотрено ......... {len(rows)}")
     print(f"  с неразрешимыми ..... {dirty} ({round(dirty / max(1, len(rows)) * 100)}%)")
     print(f"  ссылок всего ........ {total}")
+    print(f"  с путём во временную папку Windows: {temp_dirty} · путей {temp_total} (карточка #671)")
     if worst:
         worst.sort(reverse=True)
         print("  худшие:")
