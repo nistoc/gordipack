@@ -74,8 +74,8 @@ def run(checker, *args):
 
 
 FOUND = [
-    ("итог: C:/Users/zz/AppData/Local/Temp/claude/C--x/abc/scratchpad/w12/r4.txt.", 1),
-    (r"см. C:\Users\N1F27~1.TEM\AppData\Local\Temp\bite-all-failures\bite-x.py.1.txt", 1),
+    ("итог: D:/Users/zz/AppData/Local/Temp/claude/C--x/abc/scratchpad/w12/r4.txt.", 1),
+    (r"см. D:\Users\ZZ0000~1.TEM\AppData\Local\Temp\bite-all-failures\bite-x.py.1.txt", 1),
     ("в %TEMP%/bite-all-failures/x.txt", 1),
     ("$env:TEMP\\gp\\a.log", 1),
     ("лежит в /tmp/run1/out.txt", 1),
@@ -83,7 +83,7 @@ FOUND = [
     ("две: %TEMP%/a/b.txt и scratchpad/w1/c.txt", 2),
 ]
 COUNTER = [
-    "C:/guts/.atlas/vnext-tools/check-dangling-refs.py",
+    "D:/work/.atlas/vnext-tools/check-dangling-refs.py",
     "C:/github/gordipack/vnext/prototype/bite-all.py",
     "C:/tmp/x.txt",
     "стенды лежат в %TEMP%, папка AppData/Local/Temp сама по себе",
@@ -105,10 +105,10 @@ case("② ВСТРЕЧНЫЙ: путь в контуре и клоне, C:/tmp, 
      all(n == 0 for _, n in counter), " · ".join(f"{n}" for _, n in counter))
 
 note = stand / "note.md"
-PATH_IN_NOTE = "C:/Users/zz/AppData/Local/Temp/zz-run/итог.txt"
+PATH_IN_NOTE = "D:/Users/zz/AppData/Local/Temp/zz-run/итог.txt"
 note.write_text(f"# заголовок\nитог прогона — {PATH_IN_NOTE}, карточка #671\n", encoding="utf-8")
 clean = stand / "clean.md"
-clean.write_text("итог прогона — C:/guts/.atlas/vnext-tools/итог.txt, карточка #671\n", encoding="utf-8")
+clean.write_text("итог прогона — D:/work/.atlas/vnext-tools/итог.txt, карточка #671\n", encoding="utf-8")
 both = stand / "both.md"
 both.write_text(f"итог — {PATH_IN_NOTE}, смотри #671\n", encoding="utf-8")
 
