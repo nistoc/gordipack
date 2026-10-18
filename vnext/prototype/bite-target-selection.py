@@ -123,7 +123,25 @@ def main() -> int:
     if not os.path.isdir(LIVE):
         print(f"⛔ НЕ ЗАПУСТИЛАСЬ: нет живого каталога {LIVE} — строить копии не из чего")
         return 1
+    # 🪤 Карточка #723: с первой редакции (09.08) временный каталог не убирался никогда —
+    #    ≈330 МБ на прогон, 17.10 их лежало 17 (5,4 ГБ). Убираем при ЛЮБОМ исходе: внутри только
+    #    копии скриптов и базы, их строит сам прогон заново, осматривать нечего; стенды набора
+    #    при провале приёмка убирает и так. Оставленный при провале копился бы до слова владельца.
     tmp = tempfile.mkdtemp(prefix="bite-target-sel-")
+    try:
+        ok = cases(tmp)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+        print()
+        print(f"🧹 временный каталог приёмки убран: {tmp}" if not os.path.exists(tmp)
+              else f"⚠️ временный каталог приёмки убрать не удалось: {tmp}")
+    print(f"✅ ВЫБОР КОПИИ ПРИНЯТ — случаев {CASES}, различающих {DIFFERENTIATING}, "
+          f"у каждого различающего встречный" if ok
+          else "🔴 ВЫБОР КОПИИ НЕ ПРИНЯТ — числа из прогона по образцу нести нельзя")
+    return 0 if ok else 1
+
+
+def cases(tmp) -> bool:
     ok = True
 
     # ① ЦЕЛАЯ КОПИЯ — зелёное. Контроль: набор вообще умеет проходить по копии.
@@ -237,21 +255,25 @@ def main() -> int:
         #    Смотрим в стенд, если он ещё лежит. После ЗЕЛЁНОГО прогона набор убирает его сам —
         #    тогда смотреть некуда, и «соседей нет» было бы той же неправдой (поймано поломкой
         #    PROTO 17.10 22:07 UTC: прогон прошёл, а пояснение сказало «в стенде соседей нет»).
+        #    🪤 Карточка #723 (поломка OPSSRE, записка #5951): набор молча клал в стенд СВОЙ каталог
+        #    без guard-shift-end.py — прогон падал по другой причине, и ⑫ проходил: подмену было видно
+        #    только в пояснении. Поэтому соседей в ещё лежащем стенде быть НЕ должно — это часть условия.
         green_bare = GREEN_ONE in out_bare
         nb_bare = os.path.join(st_bare, "vnext", "prototype") if st_bare else None
+        nb_in_stand = bool(nb_bare) and os.path.isdir(nb_bare)
         if not st_bare:
             seen = "стенда в выводе нет — смотреть соседей негде"
         elif not os.path.isdir(st_bare):
             seen = "стенд уже убран набором — заглянуть в него нельзя"
-        elif os.path.isdir(nb_bare):
+        elif nb_in_stand:
             seen = f"в стенде соседи ЕСТЬ ({nb_bare}) — взяты не из копии"
         elif not green_bare:
             seen = f"в стенде соседей нет — save-phoenix.py не находит {NEIGHBOUR_BROKEN}"
         else:
             seen = "в стенде соседей нет"
-        ok &= case("⑫ клон без соседнего каталога — прогон НЕ зелёный (встречный к ⑪)",
+        ok &= case("⑫ клон без соседнего каталога — прогон НЕ зелёный, соседей в стенде нет (встречный к ⑪)",
                    not green_bare and "СЛОМАНО" in out_bare and st_bare is not None
-                   and NEIGHBOURS_LINE not in out_bare,
+                   and NEIGHBOURS_LINE not in out_bare and not nb_in_stand,
                    f"код {code_bare}; в копии соседнего каталога нет; {seen}"
                    f"; строка «{NEIGHBOURS_LINE} …» {'есть' if NEIGHBOURS_LINE in out_bare else 'НЕТ'}"
                    f": прогон {'ПРОШЁЛ — соседей в копии нет, значит, они взяты не из неё' if green_bare else 'НЕ прошёл, это видно'}",
@@ -274,11 +296,7 @@ def main() -> int:
         if st_nb_bad:
             shutil.rmtree(st_nb_bad, ignore_errors=True)
 
-    print()
-    print(f"✅ ВЫБОР КОПИИ ПРИНЯТ — случаев {CASES}, различающих {DIFFERENTIATING}, "
-          f"у каждого различающего встречный" if ok
-          else "🔴 ВЫБОР КОПИИ НЕ ПРИНЯТ — числа из прогона по образцу нести нельзя")
-    return 0 if ok else 1
+    return ok
 
 
 if __name__ == "__main__":
