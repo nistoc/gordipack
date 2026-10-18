@@ -360,7 +360,7 @@ for var in ("TMPDIR", "TEMP", "TMP"):
 
 
 def run_set(runner, folder):
-    p = subprocess.run([sys.executable, str(runner), "--set", "core", "--dir", str(folder), "--timeout", "3"],
+    p = subprocess.run([sys.executable, str(runner), "--set", "core", "--dir", str(folder), "--timeout", "3"],  # env: caller — набор зовётся, как его зовёт человек: без MEZO_CONTAINER (документ выпуска, раздел 3, шаг 3); подложенные приёмки контура не читают
                        capture_output=True, text=True, encoding="utf-8", errors="replace", env=set_env,
                        cwd=str(HERE))
     out = (p.stdout or "") + (p.stderr or "")
@@ -399,7 +399,7 @@ if args.run:
     env = {k: v for k, v in os.environ.items() if k != "MEZO_CONTAINER"}
     env["PYTHONIOENCODING"] = "utf-8"
     for x in done:
-        p = subprocess.run([sys.executable, str(HERE / x["name"])], capture_output=True, text=True,
+        p = subprocess.run([sys.executable, str(HERE / x["name"])], capture_output=True, text=True,  # env: caller — ⑮ сличает с «было», снятым без MEZO_CONTAINER; свои стенды приёмка заводит сама
                            encoding="utf-8", errors="replace", env=env, cwd=str(HERE))
         got = (p.returncode, (p.stdout or "").count("✅"), (p.stdout or "").count("🔴"))
         case(f"⑮ {x['name']}: код, ✅, 🔴 — как «было»", got == x["was"],

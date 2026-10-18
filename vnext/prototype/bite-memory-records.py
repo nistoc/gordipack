@@ -53,7 +53,11 @@ sys.path.insert(0, str(HERE))
 import mezo_paths  # noqa: E402 — база контура выводится от расположения, не впечатана (перенос в образец 13.09)
 import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
-DB = mezo_paths.live_db(__file__)
+LIVE_DB = mezo_paths.live_db(__file__)
+# Подставная база — её ставит main() из ensure_subject(LIVE_DB) (Э6, карточка #680). До того DB нет:
+# пропадёт эта строка main — приёмка упадёт, а не тихо возьмёт копию живой базы (замечание COORD,
+# записка #6020: при общем имени DB проверка ⑬ bite-core-fixture.py такую подмену не видит).
+DB = None
 ROLE = "PROTO"
 SEED = 524
 
@@ -151,7 +155,9 @@ def ensure_subject(base_db: pathlib.Path) -> tuple[pathlib.Path, str, bool]:
     Всегда (Э6, карточка #680): подставная база со схемой base_db без строк, на ней подставная
     роль SEED_ROLE и чужая FOREIGN_ROLE — своим ходом, штатными инструментами. До Э6 при живых
     записях PROTO приёмка работала на живой базе и судила живую память."""
-    seed_dir = pathlib.Path(tempfile.mkdtemp(prefix="bite-memory-records-seed-"))
+    # каталог засева — стендом mezo_stand: убирается при успехе, сохраняется при провале (до Э6 —
+    # mkdtemp без уборки, а заводился он только без живых записей; с Э6 — на каждом прогоне, записка #6020)
+    seed_dir = mezo_stand.new("bite-memory-records-seed-")
     seeded_db = seed_dir / "mezosync.db"
     mezo_stand.empty_db(base_db, seeded_db)
     save_tool = mezo_paths.live_scripts(__file__) / "save-phoenix.py"
@@ -185,7 +191,7 @@ def ensure_subject(base_db: pathlib.Path) -> tuple[pathlib.Path, str, bool]:
                         "--revoke", str(revoke_id[0] if revoke_id else 0),
                         "--why", "снята приёмкой bite-memory-records: проба «чем снята»"],
                        capture_output=True, text=True, encoding="utf-8",
-                       env=dict(os.environ, MEZO_ROLE=SEED_ROLE, PYTHONIOENCODING="utf-8"))
+                       env=mezo_stand.stand_env(seed_dir, MEZO_ROLE=SEED_ROLE, PYTHONIOENCODING="utf-8"))
     if not revoke_id or r.returncode != 0:
         sys.exit(f"⛔ ПРИЁМКА НЕ СОСТОЯЛАСЬ: снять подставную запись не удалось (код {r.returncode}):\n"
                  f"{r.stdout}{r.stderr}")
@@ -216,7 +222,7 @@ def main() -> int:
     if not TOOL.is_file():
         sys.exit(f"⛔ инструмента нет рядом: {TOOL}")
 
-    DB, ROLE, seeded = ensure_subject(DB)
+    DB, ROLE, seeded = ensure_subject(LIVE_DB)
 
     print("=" * 88)
     print("ПРИЁМКА memory-records.py — карточка #524")
@@ -477,7 +483,7 @@ def main() -> int:
             record_case("⑲ ПОРЧА правила заголовка: образец не найден — ОПЫТ НЕ ПОСТАВЛЕН", False,
                    "порча не легла; прогон бессмыслен, а не зелён")
         else:
-            patched_copy = pathlib.Path(tempfile.mkdtemp()) / "memory-records.py"
+            patched_copy = mezo_stand.new("bite-memory-records-patch-") / "memory-records.py"
             patched_copy.write_text(corrupted, encoding="utf-8")
             # инструмент подгружает соседа (резак блоков) ИЗ СВОЕГО каталога — без него копия
             # не поднимется, и порча упадёт ДО суда: поймано первым прогоном 20:29 UTC
@@ -503,7 +509,7 @@ def main() -> int:
     print("   84; по чтению заголовков у @TAXO промахов было 4 из 14, осталось 1 (#257:")
     print("   «очередью ввода» ушло в «план»). Остаток — не ноль, и он назван числом.")
     print("   Судит здесь рука роли — ключом --поля.")
-    return 1 if failed else 0
+    return mezo_stand.finish(1 if failed else 0)
 
 
 if __name__ == "__main__":

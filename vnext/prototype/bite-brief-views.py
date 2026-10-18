@@ -404,8 +404,14 @@ def main() -> int:
                 return line.strip()
         return ""
 
+    # ⚡ Возраст письма соседа в конце строки моста («… — 1255 ч») считается от «сейчас» при КАЖДОМ
+    # вызове: краткий и полный вызов по разные стороны смены часа дали 1255 и 1256 ч, и ⑦ провалился
+    # без всякой разницы видов (набор ядра Р4, 2026-10-18 18:05 UTC, карточка #680). Число часов
+    # в конце строки сравнивается как «N ч»; остальной текст строки — дословно.
+    AGE_TAIL = re.compile(r"(— )\d+( ч)$")
+
     def set_with(output: str, *marks: str) -> set[str]:
-        return {line for line in output.splitlines() if any(m in line for m in marks)}
+        return {AGE_TAIL.sub(r"\1N\2", line) for line in output.splitlines() if any(m in line for m in marks)}
 
     def compare_failed(output_brief: str, output_full: str) -> tuple[bool, set[str], set[str]]:
         a, b = set_with(output_brief, "⛔"), set_with(output_full, "⛔")
