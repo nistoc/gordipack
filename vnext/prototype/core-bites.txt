@@ -13,36 +13,41 @@
 #                код выхода, число знаков ✅ и 🔴 в выводе. После перевода (bite-core-fixture.py --run)
 #                эти три числа обязаны совпасть — иначе приёмка судит теперь другое.
 #                Если «было» изменилось по делу (новый случай) — правится эта строка, с причиной в commit.
+#                Г4 — «было» снято ПОСЛЕ перевода: на копии живой базы обе приёмки не проходили — memory-search
+#                (1 6 5: живая память COORD ушла от набора запросов) и archive-move-look (2 29 9: случай ⑤ на живой
+#                ING/plan не ставился). Теперь обе на своих данных, и прежние числа сверять не с чем.
+#   own с Э6 ... bite-save-alongside.py — её ⑦ считает следы приёмки в живой базе (traces) вместо снимка её копии;
+#                bite-fresh-circuit.py — снимает копию только своего свежесобранного контура.
 bite-actor-role-hint.py                  Г1     own  0 30 0
-bite-addressee-dictionary.py             Г2     wait  0 12 0
+bite-addressee-dictionary.py             Г2     done  0 12 0
 bite-addressee-field.py                  Г1     done  0 10 0
-bite-archive-move-look.py                Г4     wait  2 29 9
+bite-archive-move-look.py                Г4     done  0 34 9
 bite-archive-move-records.py             Г1     done  0 23 0
 bite-bridge-own-letters.py               Г1     done  0 32 0
-bite-brief-views.py                      Г2     wait  0 17 0
+bite-brief-views.py                      Г2     done  0 17 0
 bite-call-form-counterexample.py         Г1     done  0 7 0
 bite-card-edit.py                        Г1     own  0 9 0
 bite-card-tags.py                        Г1     own  0 9 0
 bite-claim-second-hand.py                Г1     own  0 13 0
 bite-cursor-segment-fed.py               Г1     done  0 7 0
 bite-db-q.py                             Г1     done  0 8 0
-bite-default-stamp.py                    Г2     wait  0 4 0
+bite-default-stamp.py                    Г2     done  0 4 0
 bite-direction-focus.py                  Г1     done  0 14 0
 bite-drift-sanitize.py                   Г1     own  0 13 0
 bite-dropped-reason.py                   Г1     done  0 14 0
 bite-dryrun-tool-boundary.py             Г1     done  0 9 0
-bite-duplicate-note.py                   Г3     wait  0 8 1
-bite-empty-data-reasons.py               Г3     wait  0 10 0
-bite-fresh-circuit.py                    Г2     wait  0 45 1
+bite-duplicate-note.py                   Г3     done  0 8 1
+bite-empty-data-reasons.py               Г3     done  0 10 0
+bite-fresh-circuit.py                    Г2     own   0 45 1
 bite-guard-all-retired-wiring.py         Г1     done  0 7 0
-bite-guard-skip.py                       Г3     wait  0 31 0
+bite-guard-skip.py                       Г3     done  0 31 0
 bite-index-coverage.py                   Г1     done  0 8 1
 bite-interview-gates.py                  Г1     own  0 17 0
 bite-lease-read-subcommands.py           Г1     done  0 8 0
 bite-lease-release-tells-waiters.py      Г1     done  0 15 0
 bite-local-dir.py                        Г1     done  0 67 0
-bite-memory-records.py                   Г3     wait  0 23 0
-bite-memory-search.py                    Г4     wait  1 6 5
+bite-memory-records.py                   Г3     done  0 23 0
+bite-memory-search.py                    Г4     done  0 11 0
 bite-memory-volume.py                    Г1     done  0 47 4
 bite-messages-archive.py                 Г1     done  0 8 0
 bite-off-pool.py                         Г1     done  0 8 0
@@ -52,9 +57,9 @@ bite-phoenix-confirm.py                  Г1     done  0 12 0
 bite-phoenix-dry-run.py                  Г1     done  0 7 0
 bite-phoenix-invariant.py                Г1     done  0 7 0
 bite-phoenix-truncation-named.py         Г1     done  0 8 0
-bite-printed-forms-sources.py            Г2     wait  0 48 23
+bite-printed-forms-sources.py            Г2     done  0 48 23
 bite-r16-reissue.py                      Г1     done  0 3 0
-bite-read-phoenix-sections.py            Г2+Г3  wait  0 14 0
+bite-read-phoenix-sections.py            Г2+Г3  done  0 14 0
 bite-reader-empty-honesty.py             Г1     done  0 7 0
 bite-review-queue.py                     Г1     own  0 7 0
 bite-reviewed-repeat.py                  Г1     done  0 5 0
@@ -62,7 +67,7 @@ bite-reviewer-named.py                   Г1     done  0 10 0
 bite-rights-amend.py                     Г1     own  0 10 0
 bite-rules-from-pack.py                  Г1     done  0 111 0
 bite-save-actor.py                       Г1     done  0 6 0
-bite-save-alongside.py                   Г1     wait  0 8 0
+bite-save-alongside.py                   Г1     own   0 8 0
 bite-save-phoenix-dryrun-lease.py        Г1     done  0 7 0
 bite-set-rule-revoke.py                  Г1     done  0 26 0
 bite-shown-count.py                      Г1     done  0 9 1
@@ -73,4 +78,4 @@ bite-two-locks.py                        Г1     own  0 12 0
 bite-unreachable-addressee.py            Г1     done  0 9 0
 bite-update-tools-merge.py               Г1     own  0 39 0
 bite-update-tools-rev.py                 Г1     own  0 38 0
-bite-wake-brief.py                       Г3     wait  0 7 0
+bite-wake-brief.py                       Г3     done  0 7 0

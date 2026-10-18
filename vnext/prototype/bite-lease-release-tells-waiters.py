@@ -46,10 +46,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
 import mezo_target  # noqa: E402
 
-АРЕНДА = mezo_target.script("lease.py")
-КАРТОЧКИ = mezo_target.script("backlog.py")
-СВОДКА = mezo_target.script("role-brief.py")
-ЛЕНТА = mezo_target.script("read-messages.py")
+LEASE = mezo_target.script("lease.py")
+CARDS = mezo_target.script("backlog.py")
+BRIEF = mezo_target.script("role-brief.py")
+FEED = mezo_target.script("read-messages.py")
 print(f"⚖️ испытуется: {mezo_target.label()}")
 
 SCRIPTS = mezo_paths.live_scripts()
@@ -63,9 +63,9 @@ import mezo_stand  # noqa: E402
 sys.path.pop(0)
 
 OK = FAIL = 0
-ЖДУЩАЯ = "ZZW"          # упирается в чужое объявление
-ДРУГАЯ = "ZZX"          # упирается вторая, чтобы список был не из одного
-ХОЗЯИН = "ZZY"          # держит объявление
+WAITER = "ZZW"          # упирается в чужое объявление
+OTHER = "ZZX"          # упирается вторая, чтобы список был не из одного
+OWNER = "ZZY"          # держит объявление
 
 
 def case(name, cond, detail=""):
@@ -92,24 +92,24 @@ def run(cmd, role=None):
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 
-def взять(db, role, tools, minutes=60):
-    rc, out = run([sys.executable, str(АРЕНДА), "--db", str(db), "take", "--role", role,
+def take(db, role, tools, minutes=60):
+    rc, out = run([sys.executable, str(LEASE), "--db", str(db), "take", "--role", role,
                    "--tools", tools, "--reason", "проба приёмки карточки #488",
                    "--minutes", str(minutes)])
-    номер = None
-    for сл in out.split():
-        if сл.startswith("#") and сл[1:].isdigit():
-            номер = int(сл[1:])
+    number = None
+    for word in out.split():
+        if word.startswith("#") and word[1:].isdigit():
+            number = int(word[1:])
             break
-    return номер, out
+    return number, out
 
 
-def снять(db, role, ид, note="проба"):
-    return run([sys.executable, str(АРЕНДА), "--db", str(db), "release",
-                "--role", role, "--id", str(ид), "--note", note])
+def release(db, role, id1, note="проба"):
+    return run([sys.executable, str(LEASE), "--db", str(db), "release",
+                "--role", role, "--id", str(id1), "--note", note])
 
 
-def ожидания(db):
+def waits(db):
     con = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
     try:
         return con.execute(
@@ -129,83 +129,83 @@ con = sqlite3.connect(str(db))
 # от чужой работы, различает шум.
 con.execute("DELETE FROM tool_leases")
 con.execute("DELETE FROM tool_lease_waits")
-for r in (ЖДУЩАЯ, ДРУГАЯ, ХОЗЯИН):
+for r in (WAITER, OTHER, OWNER):
     con.execute("INSERT INTO roles (role, lifecycle, zone) "
                 "VALUES (?,'alive','проба ожиданий')", (r,))
 cur = con.execute(
     "INSERT INTO backlog (role, title, body_md, status, priority, tags, created_by, done_when)"
     " VALUES (?,?,'тело','open','normal','[]',?,'критерий')",
-    (ЖДУЩАЯ, "карточка ждущей роли", ЖДУЩАЯ))
-КАРТОЧКА = cur.lastrowid
+    (WAITER, "карточка ждущей роли", WAITER))
+CARD = cur.lastrowid
 con.commit()
 con.close()
 
 # ═══ ХОЗЯИН объявляет правку карточек и ленты
-ид, _ = взять(db, ХОЗЯИН, "backlog.py read-messages.py")
+id1, _ = take(db, OWNER, "backlog.py read-messages.py")
 
 # ═══ ① отказ пишущему записывает ожидание · ③ имя из --actor
-rc1, out1 = run([sys.executable, str(КАРТОЧКИ), "--db", str(db), "comment", str(КАРТОЧКА),
-                 "--actor", ЖДУЩАЯ, "--body", "проба"])
-следы = ожидания(db)
+rc1, out1 = run([sys.executable, str(CARDS), "--db", str(db), "comment", str(CARD),
+                 "--actor", WAITER, "--body", "проба"])
+traces_found = waits(db)
 case("① отказ пишущему САМ записывает ожидание — роль не делает ничего лишнего",
-     rc1 == 3 and len(следы) == 1, f"код {rc1} · записей {len(следы)}")
+     rc1 == 3 and len(traces_found) == 1, f"код {rc1} · записей {len(traces_found)}")
 case("③ имя роли взято из --actor, когда MEZO_ROLE не задан",
-     bool(следы) and следы[0][0] == ЖДУЩАЯ, f"в базе: {следы[0][0] if следы else '—'}")
+     bool(traces_found) and traces_found[0][0] == WAITER, f"в базе: {traces_found[0][0] if traces_found else '—'}")
 
 # ═══ ⑨ повторный отказ той же роли не плодит строк
-час_первого = следы[0][2] if следы else None
-run([sys.executable, str(КАРТОЧКИ), "--db", str(db), "comment", str(КАРТОЧКА),
-     "--actor", ЖДУЩАЯ, "--body", "проба два"])
-следы2 = ожидания(db)
+first_hour = traces_found[0][2] if traces_found else None
+run([sys.executable, str(CARDS), "--db", str(db), "comment", str(CARD),
+     "--actor", WAITER, "--body", "проба два"])
+traces_found2 = waits(db)
 case("⑨ повторный отказ не плодит строк: час ПЕРВОГО отказа сохранён",
-     len(следы2) == 1 and следы2[0][2] == час_первого,
-     f"записей {len(следы2)} · час {следы2[0][2] if следы2 else '—'}")
+     len(traces_found2) == 1 and traces_found2[0][2] == first_hour,
+     f"записей {len(traces_found2)} · час {traces_found2[0][2] if traces_found2 else '—'}")
 
 # ═══ ② ВСТРЕЧНЫЙ: читающему отказа нет ⇒ ожидание не пишется
 # ⚖️ Считаем ПРИРАЩЕНИЕ, а не итог. Первая редакция сверяла «записей ровно одна» — и при
 # поломке «отказ не пишет ожидание» этот случай краснел ВМЕСТЕ с ①, то есть не различал
 # ничего своего: ноль записей он читал как нарушение. Поймано нарочной поломкой A
 # (предсказала 6 красных, вышло 7). Признак, краснеющий от чужой поломки, не различает.
-было_до = len(ожидания(db))
-rc2, _ = run([sys.executable, str(ЛЕНТА), "--db", str(db), "--role", ДРУГАЯ, "--limit", "1"])
-стало_после = len(ожидания(db))
+was_before = len(waits(db))
+rc2, _ = run([sys.executable, str(FEED), "--db", str(db), "--role", OTHER, "--limit", "1"])
+became_after = len(waits(db))
 case("② ВСТРЕЧНЫЙ: читающему инструменту отказа нет ⇒ ожидание НЕ прибавилось",
-     стало_после == было_до, f"было {было_до} → стало {стало_после}")
+     became_after == was_before, f"было {was_before} → стало {became_after}")
 
 # ═══ ④ имя из MEZO_ROLE, когда он задан (довода --actor в вызове нет)
-run([sys.executable, str(КАРТОЧКИ), "--db", str(db), "status", str(КАРТОЧКА), "in_review",
-     "--actor", ДРУГАЯ], role=ДРУГАЯ)
-имена = {r[0] for r in ожидания(db)}
-case("④ имя роли взято из MEZO_ROLE, когда он задан", ДРУГАЯ in имена,
-     f"в базе: {sorted(имена)}")
+run([sys.executable, str(CARDS), "--db", str(db), "status", str(CARD), "in_review",
+     "--actor", OTHER], role=OTHER)
+names = {r[0] for r in waits(db)}
+case("④ имя роли взято из MEZO_ROLE, когда он задан", OTHER in names,
+     f"в базе: {sorted(names)}")
 
 # ═══ ⑤ безымянный вызов: имени нет ни в доводах, ни в окружении
 con = sqlite3.connect(str(db))
 con.execute("INSERT INTO tool_lease_waits (lease_id, role, tool) VALUES (?,NULL,'backlog.py')",
-            (ид,))
+            (id1,))
 con.commit()
 con.close()
-безымянных = sum(1 for r in ожидания(db) if r[0] == "∅")
-case("⑤ безымянное ожидание хранится БЕЗ имени, а не под выдуманным", безымянных == 1,
-     f"безымянных: {безымянных}")
+unnamed = sum(1 for r in waits(db) if r[0] == "∅")
+case("⑤ безымянное ожидание хранится БЕЗ имени, а не под выдуманным", unnamed == 1,
+     f"безымянных: {unnamed}")
 
 # ═══ ⑥ снятие называет ждущих · ⑧ снятие ПРОХОДИТ
-rc3, out3 = снять(db, ХОЗЯИН, ид, note="проба снятия")
+rc3, out3 = release(db, OWNER, id1, note="проба снятия")
 case("⑥ снятие называет ждущих поимённо, с часом отказа",
-     "ТЕБЯ ЖДАЛИ" in out3 and ЖДУЩАЯ in out3 and ДРУГАЯ in out3
+     "ТЕБЯ ЖДАЛИ" in out3 and WAITER in out3 and OTHER in out3
      and "ждёт с" in out3 and "безымянных" in out3)
 case("⑧ ВСТРЕЧНЫЙ (главный): снятие при ждущих ПРОХОДИТ — подсказка не стала запретом",
      rc3 == 0 and "СНЯТО ОБЪЯВЛЕНИЕ" in out3, f"код {rc3}")
 
 # ═══ ⑦ ВСТРЕЧНЫЙ: снятие без ждущих — пустого раздела НЕТ
-ид2, _ = взять(db, ХОЗЯИН, "write-message.py")
-rc4, out4 = снять(db, ХОЗЯИН, ид2, note="никто не ждал")
+id2, _ = take(db, OWNER, "write-message.py")
+rc4, out4 = release(db, OWNER, id2, note="никто не ждал")
 case("⑦ ВСТРЕЧНЫЙ: снятие БЕЗ ждущих не печатает пустого раздела",
      rc4 == 0 and "ТЕБЯ ЖДАЛИ" not in out4)
 
 # ═══ ⑩ ждущий видит освободившееся в СВОЕЙ сводке
-rc5, out5 = run([sys.executable, str(СВОДКА), "--role", ЖДУЩАЯ, "--db", str(db)])
-rc6, out6 = run([sys.executable, str(СВОДКА), "--role", ХОЗЯИН, "--db", str(db)])
+rc5, out5 = run([sys.executable, str(BRIEF), "--role", WAITER, "--db", str(db)])
+rc6, out6 = run([sys.executable, str(BRIEF), "--role", OWNER, "--db", str(db)])
 case("⑩ ждущий видит освободившееся в своей сводке, а не ждавший — не видит",
      rc5 == 0 and "ОСВОБОДИЛОСЬ" in out5 and "backlog.py" in out5
      and "ОСВОБОДИЛОСЬ" not in out6,
@@ -223,45 +223,45 @@ case("⑩ ждущий видит освободившееся в своей с�
 # (role-brief.py: l.released_at > datetime('now','-12 hours')), а не от часа отказа
 # ждущего. Рецепт говорит «час отказа» — поэтому старыми ставятся ОБА часа сразу:
 # иначе случай прошёл бы по причине, которой в механизме нет.
-СТАРЕЮЩАЯ = "ZZT"
-СТАРЫЙ_ИНСТРУМЕНТ = "zz-давно-снятый.py"
-СВЕЖИЙ_ИНСТРУМЕНТ = "zz-только-что-снятый.py"
+AGING = "ZZT"
+OLD_TOOL = "zz-давно-снятый.py"
+FRESH_TOOL = "zz-только-что-снятый.py"
 
 con = sqlite3.connect(str(db))
 con.execute("INSERT INTO roles (role, lifecycle, zone) VALUES (?,'alive','проба протухания')",
-            (СТАРЕЮЩАЯ,))
+            (AGING,))
 # ① объявление, снятое ЗА ПРЕДЕЛАМИ окна: 20 часов назад
 cur = con.execute(
     "INSERT INTO tool_leases (role, tools, reason, taken_at, until_utc, released_at, note) "
     "VALUES (?,?,'проба протухания', datetime('now','-21 hours'), datetime('now','-19 hours'), "
     "        datetime('now','-20 hours'), 'снято двадцать часов назад')",
-    (ХОЗЯИН, СТАРЫЙ_ИНСТРУМЕНТ))
-старое = cur.lastrowid
+    (OWNER, OLD_TOOL))
+old = cur.lastrowid
 con.execute("INSERT INTO tool_lease_waits (lease_id, role, tool, refused_at) "
             "VALUES (?,?,?, datetime('now','-21 hours'))",
-            (старое, СТАРЕЮЩАЯ, СТАРЫЙ_ИНСТРУМЕНТ))
+            (old, AGING, OLD_TOOL))
 # ② ВСТРЕЧНОЕ объявление ТОЙ ЖЕ роли, снятое ВНУТРИ окна
 cur = con.execute(
     "INSERT INTO tool_leases (role, tools, reason, taken_at, until_utc, released_at, note) "
     "VALUES (?,?,'проба свежего', datetime('now','-2 hours'), datetime('now','+1 hours'), "
     "        datetime('now','-1 hours'), 'снято час назад')",
-    (ХОЗЯИН, СВЕЖИЙ_ИНСТРУМЕНТ))
-свежее = cur.lastrowid
+    (OWNER, FRESH_TOOL))
+fresh = cur.lastrowid
 con.execute("INSERT INTO tool_lease_waits (lease_id, role, tool, refused_at) "
             "VALUES (?,?,?, datetime('now','-2 hours'))",
-            (свежее, СТАРЕЮЩАЯ, СВЕЖИЙ_ИНСТРУМЕНТ))
+            (fresh, AGING, FRESH_TOOL))
 con.commit()
 con.close()
 
-rc9, out9 = run([sys.executable, str(СВОДКА), "--role", СТАРЕЮЩАЯ, "--db", str(db)])
+rc9, out9 = run([sys.executable, str(BRIEF), "--role", AGING, "--db", str(db)])
 case("⑬ ТРЕТИЙ ИСХОД: ожидание СТАРШЕ окна протухло — сводка его НЕ показывает",
-     rc9 == 0 and СТАРЫЙ_ИНСТРУМЕНТ not in out9,
+     rc9 == 0 and OLD_TOOL not in out9,
      f"снято 20 ч назад при окне 12 ч · в сводке: "
-     f"{'ПОКАЗАН (порог не работает)' if СТАРЫЙ_ИНСТРУМЕНТ in out9 else 'нет, как и должно'}")
+     f"{'ПОКАЗАН (порог не работает)' if OLD_TOOL in out9 else 'нет, как и должно'}")
 case("⑭ ВСТРЕЧНЫЙ к ⑬: ожидание ВНУТРИ окна показано — порог отсекает старое, а не всё",
-     rc9 == 0 and СВЕЖИЙ_ИНСТРУМЕНТ in out9 and "ОСВОБОДИЛОСЬ" in out9,
+     rc9 == 0 and FRESH_TOOL in out9 and "ОСВОБОДИЛОСЬ" in out9,
      f"снято 1 ч назад · в сводке: "
-     f"{'показан' if СВЕЖИЙ_ИНСТРУМЕНТ in out9 else 'НЕТ — отсекается лишнее'}")
+     f"{'показан' if FRESH_TOOL in out9 else 'НЕТ — отсекается лишнее'}")
 
 # ═══ ⑪ ТРЕТИЙ ИСХОД: база без таблицы
 db_old = stand / "old.db"
@@ -269,27 +269,27 @@ shutil.copy(db, db_old)
 con = sqlite3.connect(str(db_old))
 con.execute("DROP TABLE tool_lease_waits")
 con.commit()
-проверка = con.execute(
+check = con.execute(
     "SELECT 1 FROM sqlite_master WHERE type='table' AND name='tool_lease_waits'").fetchone()
 con.close()
-assert проверка is None, "случай ⑪ ничего не различает: таблица осталась"
-ид3, _ = взять(db_old, ХОЗЯИН, "backlog.py")
-rc7, out7 = снять(db_old, ХОЗЯИН, ид3, note="без таблицы")
-rc8, out8 = run([sys.executable, str(СВОДКА), "--role", ЖДУЩАЯ, "--db", str(db_old)])
+assert check is None, "случай ⑪ ничего не различает: таблица осталась"
+id3, _ = take(db_old, OWNER, "backlog.py")
+rc7, out7 = release(db_old, OWNER, id3, note="без таблицы")
+rc8, out8 = run([sys.executable, str(BRIEF), "--role", WAITER, "--db", str(db_old)])
 case("⑪ ТРЕТИЙ ИСХОД: база БЕЗ таблицы — снятие и сводка живут, а не падают",
      rc7 == 0 and "СНЯТО ОБЪЯВЛЕНИЕ" in out7
      and rc8 == 0 and "ИСТОЧНИК НЕ ПРОЧИТАН" not in out8 and "ОСВОБОДИЛОСЬ" not in out8,
      f"снятие код {rc7} · сводка код {rc8}")
 
 # ═══ ⑫ контроль
-живой = sqlite3.connect(f"file:{LIVE_DB.as_posix()}?mode=ro", uri=True)
-следы_живые = живой.execute("SELECT COUNT(*) FROM roles WHERE role IN (?,?,?)",
-                            (ЖДУЩАЯ, ДРУГАЯ, ХОЗЯИН)).fetchone()[0]
-следы_живые += живой.execute("SELECT COUNT(*) FROM tool_leases WHERE role IN (?,?,?)",
-                             (ЖДУЩАЯ, ДРУГАЯ, ХОЗЯИН)).fetchone()[0]
-живой.close()
-case("⑫ контроль: своих следов в живой базе нет", следы_живые == 0,
-     f"следов: {следы_живые}")
+live = sqlite3.connect(f"file:{LIVE_DB.as_posix()}?mode=ro", uri=True)
+live_traces = live.execute("SELECT COUNT(*) FROM roles WHERE role IN (?,?,?)",
+                            (WAITER, OTHER, OWNER)).fetchone()[0]
+live_traces += live.execute("SELECT COUNT(*) FROM tool_leases WHERE role IN (?,?,?)",
+                             (WAITER, OTHER, OWNER)).fetchone()[0]
+live.close()
+case("⑫ контроль: своих следов в живой базе нет", live_traces == 0,
+     f"следов: {live_traces}")
 
 print(f"\n{'✅' if FAIL == 0 else '🔴'} ИТОГ: {OK} из {OK + FAIL}")
 sys.exit(mezo_stand.finish(0 if FAIL == 0 else 1))

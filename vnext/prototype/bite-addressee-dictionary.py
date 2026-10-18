@@ -6,8 +6,9 @@ r"""ПРИЁМКА словаря адресатов Э-Б (писатель-п�
 эти записки не показывает НИКОМУ из склеенных; 25 строк «ALL» — самодельный обход
 отсутствующего «всем», невидимый для --to-me. Молчащий отказ читался как успех.
 
-Песочница = КОПИЯ ЖИВОЙ базы (см. 08-addressee-dictionary.md Р4½: схема Э-В адресата
-не знает, прототип обязан жить в форме, в которой дефект существует).
+Песочница = ПОДСТАВНАЯ база: схема живой без строк (этап Э6, карточка #680). Форма, в которой
+дефект существует (см. 08-addressee-dictionary.md Р4½), — это СХЕМА; склейки и обе формы «всем»
+приёмка сеет сама (seed_rows), роли сажает сама (mezo_stand.seed_roles).
 
 Случаи (различающий = обязан ответить ИНАЧЕ, а не одинаково):
   ① «A B C» через ПРОБЕЛ → три строки поля, склейки нет                 РАЗЛИЧАЮЩИЙ
@@ -24,7 +25,7 @@ r"""ПРИЁМКА словаря адресатов Э-Б (писатель-п�
   ⑧ Э-Г (карточка #260): critical БЕЗ основания → отказ, записки НЕТ    РАЗЛИЧАЮЩИЙ
   ⑨ Э-Г: critical С основанием → записан, основание ПЕРВОЙ строкой      КОНТРОЛЬ
 
-⛔ Живой базы не пишет: всё — на копии.
+⛔ Живой базы не пишет: всё — на подставной базе.
 """
 from __future__ import annotations
 
@@ -114,6 +115,16 @@ def seed_rows(db):
     for mid, role in ((glued_note, "CORE STUD"), (all_, "ALL"), (vse_note, "ВСЕ")):
         con.execute("INSERT OR REPLACE INTO message_addressee(message_id, role, kind,"
                     " linked_by) VALUES(?,?,?,'field')", (mid, role, "to"))
+    # Подставная база (Э6, карточка #680): чужих строк адресата на ней нет вовсе, и «чужие строки
+    # не убыли» в ⑦а сравнивало бы 0 с 0. Сеем одну обычную строку на отдельной записке.
+    foreign = con.execute("SELECT COUNT(*) FROM message_addressee WHERE role NOT LIKE '% %'"
+                          " AND role NOT IN ('ALL','ВСЕ')").fetchone()[0]
+    if not foreign:
+        con.execute("INSERT INTO messages (writer_role, timestamp, body_md, tags, priority)"
+                    " VALUES ('PROTO', datetime('now'), ?, '[]', 'normal')",
+                    ("посев приёмки #258: чужая строка адресата (копия пуста)",))
+        con.execute("INSERT INTO message_addressee(message_id, role, kind, linked_by)"
+                    " VALUES(last_insert_rowid(), 'COORD', 'to', 'field')")
     con.commit()
     con.close()
     return {"glued": glued_note, "all": all_, "vse": vse_note}
@@ -149,19 +160,15 @@ def main() -> int:
     d = pathlib.Path(tempfile.mkdtemp(prefix="bite-addr-"))
     try:
         db = d / "sand.db"
-        mezo_stand.snapshot_db(LIVE_DB, db)
+        mezo_stand.empty_db(LIVE_DB, db)
         # 🩹 ДОГОН (пустой свежий контур пакета, карточка #667): словарь адресатов
-        # (write-message.py) отказывает имени, которого нет в таблице roles — а на
-        # свежей выгрузке там только COORD. Случаи ①②⑤ пишут CORE/STUD намеренно, как
-        # ЖИВЫЕ имена (это контроль ⑥⑧, а не предмет случая), и без них упали бы отказом
-        # словаря ДО того, как признак (разбор пробела/запятой) вообще начнёт работать.
-        # INSERT OR IGNORE — на живом контуре эти роли уже есть, трогать их незачем.
-        con_roles = sqlite3.connect(db)
-        for role in ("CORE", "STUD"):
-            con_roles.execute("INSERT OR IGNORE INTO roles (role, lifecycle) VALUES (?, 'alive')",
-                              (role,))
-        con_roles.commit()
-        con_roles.close()
+        # (write-message.py) отказывает имени, которого нет в таблице roles. Случаи ①②⑤ пишут
+        # CORE/STUD намеренно, как ЖИВЫЕ имена (это контроль ⑥⑧, а не предмет случая), и без
+        # них упали бы отказом словаря ДО того, как признак (разбор пробела/запятой) вообще
+        # начнёт работать.
+        # Подставная база (Э6, карточка #680): реестр ролей пуст вовсе — сажаем и пишущую роль
+        # PROTO, и адресата COORD; отметка прочитанного с нуля нужна читателю случая ⑤ (CORE).
+        mezo_stand.seed_roles(db, ["PROTO", "COORD", "CORE", "STUD"])
         # 🩸 ПОЧИНЕНО 2026-08-27 09:02 UTC (замер @COORD, записка #3926 §③⑥). Прежняя
         # редакция ⑦а НАДЕЯЛАСЬ на состояние живой базы: ждала «склеек до > 0» и
         # «всем ПОСЛЕ = числу нот ALL ДО». Оба ожидания были верны ровно до того часа,
@@ -206,7 +213,7 @@ def main() -> int:
         # держит: прежняя редакция ⑦а сошлась бы и с выключенной пометкой, потому что
         # сравнивала абсолют с абсолютом.
         db2 = d / "sand-reverse.db"
-        mezo_stand.snapshot_db(LIVE_DB, db2)
+        mezo_stand.empty_db(LIVE_DB, db2)
         seed_rows(db2)
         before2 = measure(db2)
         migration_text = MIGRATION.read_text(encoding="utf-8")

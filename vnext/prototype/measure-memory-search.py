@@ -86,7 +86,10 @@ import mezo_paths  # noqa: E402 — своя копия рядом (vnext-tools)
 
 # Абсолютные пути от расположения ЭТОГО файла, а не от текущего каталога (R15a) —
 # тот же класс, из-за которого относительный вызов инструментов контура запрещён.
-FIND_PHOENIX = HERE.parent / ".mezosync" / "scripts" / "find-phoenix.py"
+# Каталог инструментов — через mezo_paths, как у bite-memory-search.py (Э6, карточка #680): прежний
+# HERE.parent / ".mezosync" верен только в раскладке контура (vnext-tools рядом с .mezosync), а в
+# раскладке пакета (vnext/prototype) там каталога нет, и случай ④ приёмки падал кодом 1.
+FIND_PHOENIX = mezo_paths.live_scripts(__file__) / "find-phoenix.py"
 READ_PHOENIX = FIND_PHOENIX.parent / "read-phoenix.py"
 LIVE_DB = mezo_paths.live_db()   # дефолт --db, как у measure-context-cost.py
 

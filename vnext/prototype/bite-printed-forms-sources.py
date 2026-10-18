@@ -7,7 +7,8 @@ active) и наказы-файлы планировщика — с раскры�
 («команда разорвана переносом») и признаком G (относительная форма БЕЗ имени файла).
 
 СУД — ПО ПОДСАЖЕННОМУ КЛЮЧУ `zzprobe`, не по общему исходу (урок bite-launcher-forms
-27.08: краснота от чужих форм). Живая база только читается; подсадки — в копию.
+27.08: краснота от чужих форм). Живая база только читается; подсадки — в подставную базу
+(схема живой и строки ТОЛЬКО свода правил — этап Э6, карточка #680).
 
 Случаи (Р* — обратные ходы: ослабление РОВНО одной ветки в КОПИИ сторожа роняет ровно
 свой случай; якорь не нашёлся → SystemExit «ПРИЁМКА НЕ СОСТОЯЛАСЬ», не молчание):
@@ -29,7 +30,7 @@ active) и наказы-файлы планировщика — с раскры�
   ⑱ граница: грязь в столбце basis → НЕ обвиняется (судится только body)
   ⑲ база недоступна → «НЕ ПРОВЕРЕН» (None+err), канона нет → словаря нет (None)
   ⑲б наказ-файл: грязный SKILL.md → 🔴; каталога нет → None, не «чисто»
-  ⑳ контроль: живая база прогоном не изменилась (размер+mtime)
+  ⑳ контроль: в живой базе не прибавилось следов приёмки (ключи подсадок zzprobe-*, роль ZZ)
   Р1а раскрытие строк выключено → ③ краснеет, ①② как были, ⑧ красный
   Р1б голое раскрытие убрано → ⑧ гаснет, ③ зелёный, ⑥ красный
   Р2 снято ⑤-хвост → ⑩ получает находку     Р3 снято ④-голова(`\`) → ⑨б получает
@@ -48,8 +49,8 @@ active) и наказы-файлы планировщика — с раскры�
 ИСПЫТУЕМАЯ КОПИЯ. Каталог скриптов берётся через mezo_target (MEZO_SCRIPTS_ROOT, MEZO_FORBID_LIVE),
 а не из живого контура: имена инструментов для суда гарда и файлы случаев ㉓–㉗ — из копии. Файлы
 vnext (check-phoenix-invariant.py, memory-archive.py) — из каталога самой приёмки. Читаются из ЖИВОГО
-контура два источника, своей копии у которых нет: свод правил (копия базы, снятая только на чтение)
-и канон CLAUDE.md контейнера.
+контура два источника, своей копии у которых нет: свод правил (подставная база берёт из живой строки
+одной таблицы rules, открытой только на чтение) и канон CLAUDE.md контейнера.
 
 Нарочные поломки ㉓–㉗: `--break <имя>` (hint-set-rule · hint-guard-all · hint-phoenix-invariant ·
 hint-memory-archive · path-backlog-tail · all — все подряд). В КОПИИ одного файла на стенде в одно
@@ -79,7 +80,7 @@ LIVE_DB = mezo_paths.live_db()
 # Каталог скриптов — ИСПЫТУЕМАЯ КОПИЯ (mezo_target), а не живой каталог: имена инструментов для суда
 # гарда, образец абсолютной формы в случае ⑰ и места, откуда случаи ㉓–㉗ берут файлы. Без переменной
 # MEZO_SCRIPTS_ROOT это по-прежнему живой каталог (прежнее поведение). ⛔ Живыми остаются два ЧТЕНИЯ:
-# свод правил (копия живой базы, снятая только на чтение) и канон CLAUDE.md контейнера — своего свода
+# свод правил (строки таблицы rules в подставной базе) и канон CLAUDE.md контейнера — своего свода
 # и своего канона у копии нет.
 SCRIPTS_UNDER_TEST = mezo_target.scripts_root()
 mezo_target.script("read-messages.py")      # живой каталог при MEZO_FORBID_LIVE=1 или пустая копия — отказ, не заём
@@ -192,7 +193,20 @@ def wmod(stand, src_text, anchor, replacement, why):
     return load(p, f"gpf_weak{_seq[0]}")
 
 
+# Следы приёмки, по которым ⑳ судит живую базу (карточка #483; план Э6 §2-бис): ключи подсадок свода,
+# ключ случая ㉓ и роль ZZ стендов ㉕/㉖. Подсадка с ключом вне списка — отказ: её след ⑳ не увидел бы.
+TRACE_MARKS = ("zzprobe", "ZZ", "zzprobe-01-rel", "zzprobe-02-abs", "zzprobe-03-abbrev",
+               "zzprobe-06-backslash", "zzprobe-08-seam-dead", "zzprobe-08b-seam-alive",
+               "zzprobe-09-listing", "zzprobe-09b-continuation", "zzprobe-10-head-only",
+               "zzprobe-11-dash-m", "zzprobe-12-revoked", "zzprobe-14-tombstone", "zzprobe-15-tomb-below",
+               "zzprobe-16-no-name", "zzprobe-18-basis", "zzprobe-22-sign-prescribe",
+               "zzprobe-23-sign-bare", "zzprobe-24-word-tomb")
+
+
 def add_rule(db, key, body, status="active", basis=None):
+    if key not in TRACE_MARKS:
+        raise SystemExit(f"ПРИЁМКА НЕ СОСТОЯЛАСЬ: ключ подсадки {key!r} не внесён в TRACE_MARKS — "
+                         "след в живой базе случай ⑳ не увидел бы")
     con = sqlite3.connect(str(db))
     if status == "revoked":
         con.execute("INSERT INTO rules (rule_key, body, status, revoked_at, revoked_by, "
@@ -218,9 +232,9 @@ def zz(mod, db, known, scripts, defs):
 mod = load(GUARD, "gpf_live")
 guard_src = GUARD.read_text(encoding="utf-8")
 stand = mezo_stand.new("bite-pfs-")
-live_before = (LIVE_DB.stat().st_size, LIVE_DB.stat().st_mtime_ns)
+live_before = mezo_stand.traces(LIVE_DB, TRACE_MARKS)
 
-# ── песочница: свой инструмент, свой канон, копия живой базы ─────────────────────────
+# ── песочница: свой инструмент, свой канон, подставная база со строками свода ────────
 sb_scripts = stand / "scripts"
 sb_scripts.mkdir()
 (sb_scripts / "zzprobe-tool.py").write_text("# проба\n", encoding="utf-8")
@@ -228,7 +242,9 @@ ROOT = sb_scripts.as_posix()
 DEFS = {"s": ROOT}
 KNOWN = {"zzprobe-tool.py"}
 db = stand / "mezosync.db"
-mezo_stand.snapshot_db(LIVE_DB, db)
+# подставная база (Э6, карточка #680): схема живой без строк — кроме свода правил, который ⓪ сверяет
+# с живым, а ⑫/⑭ берут за «было»; лента, память и карточки контура приёмке не нужны
+mezo_stand.empty_db(LIVE_DB, db, keep=("rules",))
 
 # ⓪ нетронутая копия судится ровно как живой свод (тем же словарём и списком имён)
 real_known = {p.name for p in SCRIPTS_UNDER_TEST.glob("*.py")}
@@ -740,9 +756,13 @@ else:
           f"строка: {ast.get_source_segment(src27, calls27[0])} → {val27!r} (ждали {own_dir.as_posix()})"
           + ("; заглушка в коде файла: " + " · ".join(f":{ln} {t}" for ln, t in code27) if code27 else "")))
 
-# ⑳ живая база не тронута
-live_after = (LIVE_DB.stat().st_size, LIVE_DB.stat().st_mtime_ns)
-case("⑳ живая база прогоном не изменилась", live_before == live_after)
+# ⑳ живая база не тронута — судится по СВОИМ следам: чужую запись за время прогона (подтверждение
+# чтения ленты, сохранение памяти) приёмка запретить не может, и размер с часом правки файла
+# проваливали случай от неё (класс карточки #483)
+live_after = mezo_stand.traces(LIVE_DB, TRACE_MARKS)
+case("⑳ в живой базе не прибавилось следов приёмки", live_after == live_before,
+     f"следов до {sum(live_before.values())}, после {sum(live_after.values())}"
+     + ("" if live_after == live_before else f": {live_after}"))
 
 print(f"\nИТОГ: {OK}/{OK + FAIL}" + (f" · пропущено {len(SKIPPED)}" if SKIPPED else ""))
 if SKIPPED:

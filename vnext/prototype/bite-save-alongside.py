@@ -18,21 +18,24 @@
      save-phoenix, а не своей копией правила                        РАЗЛИЧАЮЩИЙ
   ⑥ подсказка об отставании молчит, когда память СВЕЖА              РАЗЛИЧАЮЩИЙ
      (признак, горящий всегда, перестаёт значить что-либо)
-  ⑦ MEZO_CONTAINER живого выставлен — живая база ПОБАЙТНО ТА ЖЕ     РАЗЛИЧАЮЩИЙ
+  ⑦ MEZO_CONTAINER живого выставлен — в живой базе НЕ ПРИБАВИЛОСЬ следов  РАЗЛИЧАЮЩИЙ
+     приёмки: её подставная роль ZZALONG и тело памяти (mezo_stand.traces,
+     совпадение точное); те же метки в песочнице видны — значит, утечку они бы
+     показали. Текст записки меткой не годится: write-message.py дописывает к нему
+     подпись с часом
      (карточка #613: subprocess внутри write() без env= отдавал испытуемому
      среду ВЫЗЫВАЮЩЕГО — теперь закреплена env=mezo_stand.stand_env(d))
 
-⛔ Живой базы не касается: своя песочница. Случай ⑦ живую базу тоже только ЧИТАЕТ —
-   отпечатком через согласованный снимок (mezo_stand.snapshot_db, тот же приём, что
-   у самого помощника: сырой хеш файла в режиме WAL даёт РВАНЫЙ снимок и ложное красное).
+⛔ Живой базы не касается: своя песочница. Случай ⑦ живую базу только ЧИТАЕТ (traces
+   открывает её mode=ro). До Э6 (карточка #680) он сличал побайтный отпечаток копии
+   живой базы — и проваливался бы от любой чужой записи за время прогона (карточка #483):
+   чужую запись приёмка запретить не может, судить можно только своё.
+   ⚖️ Граница traces: запись в живую базу без единой метки приёмки этим не ловится.
 """
-import hashlib
 import os
-import shutil
 import sqlite3
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -42,24 +45,19 @@ import mezo_stand  # noqa: E402 — временный каталог убира
 
 WRITE = str(mezo_target.script("write-message.py"))
 CASES = DIFFER = 0
+# Роль приёмки — подставная (Э6): в живой базе её нет, и её имя — метка следов случая ⑦ вместе
+# с телом памяти. До Э6 приёмка писала от PROTO — такой след в живой базе не отличить от настоящего.
+ROLE = "ZZALONG"
+NOTES = ("обычная записка без всяких ручек", "записка вместе с сохранением памяти",
+         "записка, у которой память НЕ сохранится", "записка сразу после сохранения — память СВЕЖА")
+STATE = "СОСТОЯНИЕ РОЛИ. Достаточно длинный текст, чтобы не сработала защита от обвала."
+TRACE_MARKS = (ROLE, STATE)
 
 
-def live_fingerprint() -> tuple[str, Path]:
-    """Отпечаток живой базы, которую видит ЭТОТ процесс, — согласованным снимком
-    (mezo_stand.snapshot_db, backup() библиотеки sqlite3 под mode=ro), а не сырым
-    хешем файла: живая база работает в WAL, и хеш ОДНОГО основного файла без журнала —
-    рваный снимок, который меняется от постороннего чтения журнала, а не от записи
-    (тот же класс дважды поймал контур — карточка #505, шапка mezo_stand.snapshot_db).
-    """
-    root = mezo_paths.container_root(__file__)
-    live = root / ".mezosync" / "mezosync.db"
-    tmp_dir = Path(tempfile.mkdtemp(prefix="bite-alongside-fp-"))
-    try:
-        snap = mezo_stand.snapshot_db(live, tmp_dir / "fp.db")
-        digest = hashlib.sha256(snap.read_bytes()).hexdigest()
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-    return digest, live
+def live_traces() -> tuple[dict, Path]:
+    """Следы приёмки (TRACE_MARKS) в живой базе, которую видит ЭТОТ процесс — только чтение."""
+    live = mezo_paths.container_root(__file__) / ".mezosync" / "mezosync.db"
+    return mezo_stand.traces(live, TRACE_MARKS), live
 
 
 def case(title, ok, detail, differ=False):
@@ -89,9 +87,9 @@ def build():
             linked_by TEXT DEFAULT 'field', PRIMARY KEY (message_id, role, kind));
         CREATE TABLE roles (role TEXT PRIMARY KEY, status TEXT);
         CREATE TABLE role_status (role TEXT PRIMARY KEY, status TEXT, updated_at TEXT);
-        INSERT INTO read_cursors VALUES ('PROTO', 0);
-        INSERT INTO roles VALUES ('PROTO', 'active');
     """)
+    con.execute("INSERT INTO read_cursors VALUES (?, 0)", (ROLE,))
+    con.execute("INSERT INTO roles VALUES (?, 'active')", (ROLE,))
     con.commit()
     con.close()
     return d, db
@@ -104,7 +102,7 @@ def write(db, d, body, extra=()):
     # env закреплён за стендом (карточка #613, записка #5096): без него MEZO_CONTAINER
     # ВЫЗЫВАЮЩЕГО доезжает до write-message.py и живой случай 14.09 (OPSSRE предупреждена
     # держать переменную снятой, записка #5202) перестаёт быть нужной осторожностью.
-    r = subprocess.run([sys.executable, WRITE, "--db", db, "--role", "PROTO", "--file", f, *extra],
+    r = subprocess.run([sys.executable, WRITE, "--db", db, "--role", ROLE, "--file", f, *extra],
                        capture_output=True, text=True, encoding="utf-8",
                        env=mezo_stand.stand_env(d))
     return (r.stdout or "") + (r.stderr or ""), r.returncode
@@ -113,7 +111,7 @@ def write(db, d, body, extra=()):
 def counts(db):
     con = sqlite3.connect(db)
     m = con.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
-    p = con.execute("SELECT body FROM phoenix WHERE role='PROTO' AND section='state'").fetchone()
+    p = con.execute("SELECT body FROM phoenix WHERE role=? AND section='state'", (ROLE,)).fetchone()
     con.close()
     return m, (p[0] if p else None)
 
@@ -123,10 +121,9 @@ def main() -> int:
         raise SystemExit(f"⛔ НЕ ЗАПУСТИЛАСЬ: {WRITE} не найден — приёмке нечего испытывать.")
     ok = True
     d, db = build()
-    STATE = "СОСТОЯНИЕ РОЛИ. Достаточно длинный текст, чтобы не сработала защита от обвала."
-    fp_before, live_path = live_fingerprint()
+    traces_before, live_path = live_traces()
 
-    out, code = write(db, d, "обычная записка без всяких ручек")
+    out, code = write(db, d, NOTES[0])
     m1, p1 = counts(db)
     ok &= case("① записка без ручек пишется как раньше (контроль)",
                code == 0 and m1 == 1 and p1 is None,
@@ -134,7 +131,7 @@ def main() -> int:
 
     sf = os.path.join(d, "state.md")
     open(sf, "w", encoding="utf-8").write(STATE)
-    out2, code2 = write(db, d, "записка вместе с сохранением памяти", ["--save-state", sf])
+    out2, code2 = write(db, d, NOTES[1], ["--save-state", sf])
     m2, p2 = counts(db)
     ok &= case("② --save-state тем же вызовом СОХРАНИЛ память",
                p2 == STATE,
@@ -145,7 +142,7 @@ def main() -> int:
 
     empty = os.path.join(d, "empty.md")
     open(empty, "w", encoding="utf-8").write("   \n ")
-    out3, code3 = write(db, d, "записка, у которой память НЕ сохранится", ["--save-state", empty])
+    out3, code3 = write(db, d, NOTES[2], ["--save-state", empty])
     m3, p3 = counts(db)
     ok &= case("④ ОТКАЗ сохранения НЕ отменяет записку",
                m3 == 3 and p3 == STATE,
@@ -155,16 +152,22 @@ def main() -> int:
                "вторая копия правила разошлась бы с первой — этот класс ловили шесть раз",
                differ=True)
 
-    out4, _ = write(db, d, "записка сразу после сохранения — память СВЕЖА")
+    out4, _ = write(db, d, NOTES[3])
     ok &= case("⑥ подсказка об отставании МОЛЧИТ, когда память свежа",
                "НЕ ПОДТВЕРЖДАЛАСЬ" not in out4,
                "признак, который горит всегда, перестаёт значить что-либо", differ=True)
 
-    fp_after, _ = live_fingerprint()
-    ok &= case("⑦ MEZO_CONTAINER живого выставлен — живая база ПОБАЙТНО ТА ЖЕ",
-               fp_after == fp_before,
-               f"живая база {live_path}: отпечаток "
-               + ("не изменился" if fp_after == fp_before else "ИЗМЕНИЛСЯ — испытуемый писал мимо своей песочницы"),
+    traces_after, _ = live_traces()
+    grown = {k: (traces_before.get(k, 0), n) for k, n in traces_after.items() if n > traces_before.get(k, 0)}
+    # Метки годные, только если в песочнице их видно: иначе ⑦ не различил бы и настоящую утечку.
+    seen = mezo_stand.traces(db, TRACE_MARKS)
+    marks_seen = seen.get("messages.writer_role") == len(NOTES) and seen.get("phoenix.body") == 1
+    ok &= case("⑦ MEZO_CONTAINER живого выставлен — в живой базе не прибавилось следов приёмки",
+               not grown and marks_seen,
+               f"живая база {live_path}: следов до {sum(traces_before.values())}, после "
+               f"{sum(traces_after.values())}"
+               + (f" — ПРИБАВИЛИСЬ {grown}: испытуемый писал мимо своей песочницы" if grown else "")
+               + f" · в песочнице метки видны: {seen or 'НЕТ'}",
                differ=True)
 
     print()

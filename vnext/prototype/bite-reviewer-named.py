@@ -35,8 +35,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
 import mezo_target  # noqa: E402
 
-ИСПЫТУЕМЫЙ = mezo_target.script("backlog.py")
-СВОДКА = mezo_target.script("role-brief.py")
+SUBJECT = mezo_target.script("backlog.py")
+BRIEF = mezo_target.script("role-brief.py")
 print(f"⚖️ испытуется: {mezo_target.label()}")
 
 SCRIPTS = mezo_paths.live_scripts()
@@ -50,8 +50,8 @@ import mezo_stand  # noqa: E402
 sys.path.pop(0)
 
 OK = FAIL = 0
-РОЛЬ = "ZZR"
-ЧУЖАЯ = "ZZS"
+ROLE = "ZZR"
+FOREIGN = "ZZS"
 
 
 def case(name, cond, detail=""):
@@ -67,8 +67,8 @@ def env():
                 MEZO_CONTAINER=str(mezo_paths.container_root()))
 
 
-def сдать(db, cid, actor, reviewer=None):
-    cmd = [sys.executable, str(ИСПЫТУЕМЫЙ), "--db", str(db), "status", str(cid),
+def submit(db, cid, actor, reviewer=None):
+    cmd = [sys.executable, str(SUBJECT), "--db", str(db), "status", str(cid),
            "in_review", "--actor", actor]
     if reviewer:
         cmd += ["--reviewer", reviewer]
@@ -77,14 +77,14 @@ def сдать(db, cid, actor, reviewer=None):
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 
-def сводка(db, role):
-    p = subprocess.run([sys.executable, str(СВОДКА), "--role", role, "--db", str(db)],
+def brief(db, role):
+    p = subprocess.run([sys.executable, str(BRIEF), "--role", role, "--db", str(db)],
                        capture_output=True, text=True, encoding="utf-8",
                        errors="replace", env=env())
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 
-def поле(db, cid):
+def field(db, cid):
     con = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
     r = con.execute("SELECT status, COALESCE(reviewer,'') FROM backlog WHERE id=?",
                     (cid,)).fetchone()
@@ -96,54 +96,54 @@ stand = mezo_stand.new("reviewer-named-")
 db = stand / "mezosync.db"
 mezo_stand.empty_db(LIVE_DB, db)
 con = sqlite3.connect(str(db))
-for r in (РОЛЬ, ЧУЖАЯ):
+for r in (ROLE, FOREIGN):
     con.execute("INSERT INTO roles (role, lifecycle, zone) VALUES (?,'alive','проба приёмщика')", (r,))
 ids = {}
-for имя, завёл in (("своя-без-приёмщика", РОЛЬ), ("своя-с-приёмщиком", РОЛЬ),
-                   ("своя-с-правилом", РОЛЬ), ("заведена-чужой", ЧУЖАЯ)):
+for card_title, created_by in (("своя-без-приёмщика", ROLE), ("своя-с-приёмщиком", ROLE),
+                   ("своя-с-правилом", ROLE), ("заведена-чужой", FOREIGN)):
     cur = con.execute(
         "INSERT INTO backlog (role, title, body_md, status, priority, tags, created_by, "
         "done_when) VALUES (?,?,'тело','in_progress','normal','[]',?,'критерий')",
-        (РОЛЬ, имя, завёл))
-    ids[имя] = cur.lastrowid
+        (ROLE, card_title, created_by))
+    ids[card_title] = cur.lastrowid
 con.commit()
 con.close()
 
 # ═══ ① сдача БЕЗ приёмщика — сказано вслух
-rc1, out1 = сдать(db, ids["своя-без-приёмщика"], РОЛЬ)
+rc1, out1 = submit(db, ids["своя-без-приёмщика"], ROLE)
 case("① сдача БЕЗ приёмщика: сказано ВСЛУХ, что рук не назначено",
      "ПРИЁМЩИК НЕ НАЗНАЧЕН" in out1)
 
 # ═══ ④ ГЛАВНЫЙ ВСТРЕЧНЫЙ: перевод всё равно прошёл
-st1 = поле(db, ids["своя-без-приёмщика"])
+st1 = field(db, ids["своя-без-приёмщика"])
 case("④ ВСТРЕЧНЫЙ (главный): сдача без приёмщика ПРОШЛА — подсказка не стала запретом",
      rc1 == 0 and st1[0] == "in_review",
      f"код {rc1} · статус {st1[0]}")
 
 # ═══ ② ВСТРЕЧНЫЙ: с приёмщиком подсказки НЕТ
-rc2, out2 = сдать(db, ids["своя-с-приёмщиком"], РОЛЬ, reviewer="TAXO")
+rc2, out2 = submit(db, ids["своя-с-приёмщиком"], ROLE, reviewer="TAXO")
 case("② ВСТРЕЧНЫЙ: сдача С приёмщиком — подсказки НЕТ (признак не горит всегда)",
      rc2 == 0 and "ПРИЁМЩИК НЕ НАЗНАЧЕН" not in out2 and "приёмщик: TAXO" in out2)
 
 # ═══ ③ поле записано и читается обратно
-st2 = поле(db, ids["своя-с-приёмщиком"])
+st2 = field(db, ids["своя-с-приёмщиком"])
 case("③ приёмщик записан ПОЛЕМ и читается обратно", st2[1] == "TAXO",
      f"в базе: {st2[1]!r}")
 
 # ═══ ⑤ приёмщиком законно ПРАВИЛО СЛОВАМИ
-правило = "любая, не писавшая правку"
-rc3, out3 = сдать(db, ids["своя-с-правилом"], РОЛЬ, reviewer=правило)
-st3 = поле(db, ids["своя-с-правилом"])
+rule = "любая, не писавшая правку"
+rc3, out3 = submit(db, ids["своя-с-правилом"], ROLE, reviewer=rule)
+st3 = field(db, ids["своя-с-правилом"])
 case("⑤ приёмщиком законно ПРАВИЛО СЛОВАМИ, не только имя роли",
-     rc3 == 0 and st3[1] == правило, f"в базе: {st3[1]!r}")
+     rc3 == 0 and st3[1] == rule, f"в базе: {st3[1]!r}")
 
 # ═══ ⑥ подсказка называет ЗАВЕДШУЮ роль
-rc4, out4 = сдать(db, ids["заведена-чужой"], РОЛЬ)
+rc4, out4 = submit(db, ids["заведена-чужой"], ROLE)
 case("⑥ подсказка называет ЗАВЕДШУЮ роль, когда карточку завёл другой",
-     f"карточку завела роль {ЧУЖАЯ}" in out4 and f"--reviewer {ЧУЖАЯ}" in out4)
+     f"карточку завела роль {FOREIGN}" in out4 and f"--reviewer {FOREIGN}" in out4)
 
 # ═══ ⑦ поле видно в сводке; «не назначен» сказано словом
-rc5, out5 = сводка(db, РОЛЬ)
+rc5, out5 = brief(db, ROLE)
 case("⑦ поле видно в стартовой сводке: и назначенный, и «НЕ НАЗНАЧЕН» словом",
      rc5 == 0 and "приёмщик: TAXO" in out5 and "приёмщик НЕ НАЗНАЧЕН" in out5
      and "БЕЗ НАЗНАЧЕННОГО ПРИЁМЩИКА" in out5)
@@ -155,31 +155,31 @@ con = sqlite3.connect(str(db_old))
 # ⚖️ Представления, опирающиеся на таблицу, снимаются и ВОЗВРАЩАЮТСЯ: иначе «база без
 # столбца» отличалась бы от настоящей старой копии ещё и отсутствием представлений,
 # и случай судил бы не то, что назван. Поймано падением при первом прогоне.
-виды = [(r[0], r[1]) for r in con.execute(
+kinds = [(r[0], r[1]) for r in con.execute(
     "SELECT name, sql FROM sqlite_master WHERE type='view' AND sql LIKE '%backlog%'")]
-for имя, _ in виды:
-    con.execute(f"DROP VIEW {имя}")
+for card_title, _ in kinds:
+    con.execute(f"DROP VIEW {card_title}")
 cols = [r[1] for r in con.execute("PRAGMA table_info(backlog)") if r[1] != "reviewer"]
 con.execute(f"CREATE TABLE backlog_old AS SELECT {','.join(cols)} FROM backlog")
 con.execute("DROP TABLE backlog")
 con.execute("ALTER TABLE backlog_old RENAME TO backlog")
-for _, sql in виды:
+for _, sql in kinds:
     con.execute(sql)
 con.commit()
-проверка = [r[1] for r in con.execute("PRAGMA table_info(backlog)")]
-assert "reviewer" not in проверка, "случай ⑧ ничего не различает: столбец остался"
+check = [r[1] for r in con.execute("PRAGMA table_info(backlog)")]
+assert "reviewer" not in check, "случай ⑧ ничего не различает: столбец остался"
 con.close()
-rc6, out6 = сводка(db_old, РОЛЬ)
+rc6, out6 = brief(db_old, ROLE)
 case("⑧ ТРЕТИЙ ИСХОД: база БЕЗ столбца — сводка читается и не падает",
      rc6 == 0 and "ИСТОЧНИК НЕ ПРОЧИТАН" not in out6 and "📤 ТЫ СДАЛ" in out6)
 
 # ═══ ⑨ контроль
-живой = sqlite3.connect(f"file:{LIVE_DB.as_posix()}?mode=ro", uri=True)
-следы = живой.execute("SELECT COUNT(*) FROM roles WHERE role IN (?,?)",
-                      (РОЛЬ, ЧУЖАЯ)).fetchone()[0]
-следы += живой.execute("SELECT COUNT(*) FROM backlog WHERE role=?", (РОЛЬ,)).fetchone()[0]
-живой.close()
-case("⑨ контроль: своих следов в живой базе нет", следы == 0, f"следов: {следы}")
+live = sqlite3.connect(f"file:{LIVE_DB.as_posix()}?mode=ro", uri=True)
+traces_found = live.execute("SELECT COUNT(*) FROM roles WHERE role IN (?,?)",
+                      (ROLE, FOREIGN)).fetchone()[0]
+traces_found += live.execute("SELECT COUNT(*) FROM backlog WHERE role=?", (ROLE,)).fetchone()[0]
+live.close()
+case("⑨ контроль: своих следов в живой базе нет", traces_found == 0, f"следов: {traces_found}")
 
 print(f"\n{'✅' if FAIL == 0 else '🔴'} ИТОГ: {OK} из {OK + FAIL}")
 sys.exit(mezo_stand.finish(0 if FAIL == 0 else 1))

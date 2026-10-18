@@ -33,7 +33,8 @@ bite-guard-skip.py — приёмка: guard-all.py --skip снимает ЛЮБ
   П7 «местная · перечень» снимается по --skip              → С9
   П8 у замера памяти нет печатного имени                  → С3б
 
-⛔ Живая база только читается (снимок через mezo_stand.snapshot_db).
+⛔ Живая база только читается: у копии контура подставная база (схема живой без строк — этап Э6,
+карточка #680); роли и их память, которых ждут замеры памяти общего прогона, приёмка сажает сама.
 
     MEZO_SCRIPTS_ROOT=<клон пакета>/scripts python <клон пакета>/vnext/prototype/bite-guard-skip.py
 """
@@ -164,10 +165,24 @@ shutil.copytree(GUARD_ALL.parent, c_root / ".mezosync" / "scripts",
                 ignore=shutil.ignore_patterns("__pycache__"))
 shutil.copytree(Path(__file__).resolve().parent, c_root / "vnext-tools",
                 ignore=shutil.ignore_patterns("__pycache__"))
-c_db = mezo_stand.snapshot_db(live_mezo / "mezosync.db", c_root / ".mezosync" / "mezosync.db")
+c_db = mezo_stand.empty_db(live_mezo / "mezosync.db", c_root / ".mezosync" / "mezosync.db")
+# Своя память ролей (Э6): три замера памяти и «память ПО РАЗДЕЛАМ» печатают строки, только когда
+# память есть, — а их отсутствие под --skip судят С3, С3б и С5. До Э6 память давала копия живой базы.
+# «память ПО РАЗДЕЛАМ» печатается, когда записка роли позже её разделов state/plan больше чем на 3 ч:
+# записка PROTO на 6 ч позже сохранения.
+STAND_ROLES = ("COORD", "PROTO")
+STAND_SECTIONS = ("identity", "state", "plan", "history")
+mezo_stand.seed_roles(c_db, STAND_ROLES)
 con = sqlite3.connect(str(c_db))
-con.execute("DELETE FROM cross_links")      # копия не ходит к настоящим соседям
-con.commit()
+with con:
+    con.execute("DELETE FROM cross_links")      # копия не ходит к настоящим соседям
+    for role in STAND_ROLES:
+        for section in STAND_SECTIONS:
+            con.execute("INSERT INTO phoenix (role, section, body, saved_at) VALUES (?, ?, ?, '2026-10-01 12:00:00')",
+                        (role, section, f"## {section} роли {role} на подставной базе приёмки #691\n"
+                                        "строка памяти для замеров общего прогона.\n"))
+    con.execute("INSERT INTO messages (writer_role, timestamp, body_md) VALUES ('PROTO', '2026-10-01 18:00:00', ?)",
+                ("записка подставной базы приёмки #691: раздел памяти от неё отстаёт",))
 con.close()
 # Каталога координации у копии нет и отказ НЕ объявлен — «замороженные md» провалена нарочно:
 # это встроенная проверка с прямым check(), на ней и мерится, снимает ли её --skip.

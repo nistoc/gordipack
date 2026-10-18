@@ -9,7 +9,7 @@
 класс не лечится — поэтому механизм.
 
     python <КОНТУР>/vnext-tools/bite-duplicate-note.py
-    python <КОНТУР>/vnext-tools/bite-duplicate-note.py --source-db <база>   # копия снимается с неё
+    python <КОНТУР>/vnext-tools/bite-duplicate-note.py --source-db <база>   # схема и объявления о правке — с неё
 
 ТРИ ИСХОДА (карточка #623): 0 — принято · 1 — не принято · 4 — НЕ СУЖУ: write-message.py
 в копии базы закрыт действующим объявлением о правке у ДРУГОЙ роли. Приёмка шлёт записки
@@ -17,6 +17,11 @@
 с живой базой, давало отказ «В РАБОТЕ» (код 3) — провал читался как «отказ от дублей
 сломан», а сломано не это: инструмент в руках у другой роли. Своё объявление (роль
 отправителя PROTO) механизм пропускает — оно судится как прежде.
+
+ПОДСТАВНАЯ БАЗА (этап Э6, карточка #680): схема живой без строк. Объявления о правке живого контура
+в неё больше не едут — чужая занятость write-message.py в контуре на исход не влияет, «не сужу»
+на обычном прогоне не наступает. Ветку «не сужу» держит случай ⑥: его дочерний прогон берёт
+схему И объявления о правке с подставной базы, куда объявление подложено (--source-db).
 """
 from __future__ import annotations
 
@@ -98,8 +103,9 @@ def run_self(source_db: pathlib.Path):
 
 def with_lease(src: pathlib.Path, dst: pathlib.Path, role: str) -> pathlib.Path:
     """Копия src с ОДНИМ действующим объявлением о правке write-message.py у роли role;
-    прочие действующие объявления в копии сняты — случай судит ровно подложенное."""
-    mezo_stand.snapshot_db(src, dst)
+    прочие действующие объявления в копии сняты — случай судит ровно подложенное.
+    Подставная база (Э6): схема src без строк, объявление — единственное."""
+    mezo_stand.empty_db(src, dst)
     con = sqlite3.connect(dst)
     con.execute("UPDATE tool_leases SET released_at = datetime('now') WHERE released_at IS NULL")
     con.execute("INSERT INTO tool_leases (role, tools, reason, until_utc) "
@@ -112,7 +118,8 @@ def with_lease(src: pathlib.Path, dst: pathlib.Path, role: str) -> pathlib.Path:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="приёмка отказа от одинаковых записок")
-    ap.add_argument("--source-db", help="база, с которой снимается копия (по умолчанию — живая)")
+    ap.add_argument("--source-db", help="база, с которой берутся схема и объявления о правке "
+                                        "(по умолчанию — схема живой без строк)")
     args = ap.parse_args(argv)
     ok = True
     # Каталог группы ищется ПОДЪЁМОМ ПО ПРИЗНАКУ, а не угадыванием глубины:
@@ -125,7 +132,8 @@ def main(argv=None) -> int:
         scripts = tmp / "scripts"
         shutil.copytree(live / "scripts", scripts)
         db = tmp / "mezosync.db"
-        mezo_stand.snapshot_db(source_db, db)
+        # подставная база (Э6, карточка #680); с --source-db (дочерний прогон ⑥) — и её объявления о правке
+        mezo_stand.empty_db(source_db, db, keep=("tool_leases",) if args.source_db else ())
 
         # ВОЗВРАТ ПО КАРТОЧКЕ #623: write-message.py в руках у другой роли — «не сужу»,
         # отдельным исходом, до первого случая. Судить чужую незаконченную правку значило бы

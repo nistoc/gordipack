@@ -37,7 +37,12 @@ r"""bite-brief-views.py — приёмка карточки #593, задание
   · конкурентную запись во временную копию базы (два процесса разом).
 
 ⛔ Живая база (<КОНТУР>/.mezosync/mezosync.db) НЕ изменяется: все прогоны — на
-КОПИИ (mezo_stand.new + shutil.copy2). Копия каталога инструментов для нарочных поломок —
+ПОДСТАВНОЙ базе (mezo_stand.empty_db: схема живой без строк — этап Э6, карточка #680); роль
+PROTO, два правила свода, от которых зависит форма хвостов role-brief.py, и набор задач для
+блока пула приёмка сажает сама (seed_stand). Соседей для сводки моста (⑩) guard-all.py берёт
+из таблицы cross_links — её строки подставная база guard-all.py берёт из живой (keep): письма
+соседей лежат на диске контура, подделать их дороже самого случая. ⚖️ Граница: на контуре без
+соседей ⑩ судит ветку «вопросов нет вовсе». Копия каталога инструментов для нарочных поломок —
 через mezo_stand.copy_tool (со всеми соседями по import), поломка (а) зовётся ВНЕ
 контейнера и потому с переменной среды MEZO_CONTAINER (тот же приём, что у случая ⑱-бис
 в bite-tool-brevity.py) — без неё модуль mezo_paths при запуске из копии не находит
@@ -73,13 +78,13 @@ BACKLOG = str(SCRIPTS / "backlog.py")
 GUARD_ALL = str(SCRIPTS / "guard-all.py")
 ROLE_BRIEF = str(SCRIPTS / "role-brief.py")
 
-итог: list[tuple[str, bool]] = []
+results: list[tuple[str, bool]] = []
 
 
-def случай(имя: str, ок: bool, слово: str) -> None:
-    итог.append((имя, ок))
-    print(f"{'✅' if ок else '🔴'} {имя}")
-    print(f"   {слово}")
+def case(name: str, ok: bool, word: str) -> None:
+    results.append((name, ok))
+    print(f"{'✅' if ok else '🔴'} {name}")
+    print(f"   {word}")
 
 
 def run(tool: str, db: Path, *args: str, timeout: int = 180) -> tuple[int, str]:
@@ -99,11 +104,11 @@ def run_env(tool: str, db: Path, env: dict, *args: str, timeout: int = 180) -> t
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 
-def id_карточки(вывод: str) -> str | None:
-    return вывод.split("backlog #")[1].split(" ")[0] if "backlog #" in вывод else None
+def card_id(output: str) -> str | None:
+    return output.split("backlog #")[1].split(" ")[0] if "backlog #" in output else None
 
 
-def забыть_ключи(db: Path, role: str, keys: list[str]) -> None:
+def forget_keys(db: Path, role: str, keys: list[str]) -> None:
     c = sqlite3.connect(str(db))
     for k in keys:
         c.execute("DELETE FROM hint_seen WHERE role=? AND hint_key=?", (role, k))
@@ -117,73 +122,103 @@ DIGEST_RE = re.compile(r"^\s+🎯 ")                   # срез критери
 REASON_RE = re.compile(r"^\s+(?:✗ причина:|🧊 )")     # причина dropped / условие frozen
 
 
-def найти_шапку(вывод: str) -> str | None:
-    return next((л for л in вывод.splitlines() if л.startswith("📋 backlog ")), None)
+def find_header(output: str) -> str | None:
+    return next((line for line in output.splitlines() if line.startswith("📋 backlog ")), None)
 
 
-def найти_карточки(вывод: str) -> list[str]:
-    return [л for л in вывод.splitlines() if CARD_RE.match(л)]
+def find_cards(output: str) -> list[str]:
+    return [line for line in output.splitlines() if CARD_RE.match(line)]
 
 
-def найти_срезы(вывод: str) -> list[str]:
-    return [л for л in вывод.splitlines() if DIGEST_RE.match(л)]
+def find_slices(output: str) -> list[str]:
+    return [line for line in output.splitlines() if DIGEST_RE.match(line)]
 
 
-def найти_причины(вывод: str) -> list[str]:
-    return [л for л in вывод.splitlines() if REASON_RE.match(л)]
+def find_reasons(output: str) -> list[str]:
+    return [line for line in output.splitlines() if REASON_RE.match(line)]
 
 
-def блок_пула(вывод: str) -> str | None:
-    строки = вывод.splitlines()
-    idx_карточка = next((i for i, л in enumerate(строки) if CARD_RE.match(л)), len(строки))
-    область = строки[:idx_карточка]
-    idx_пул = next((i for i, л in enumerate(область) if "пул" in л), None)
-    if idx_пул is None:
+def pool_block(output: str) -> str | None:
+    lines = output.splitlines()
+    idx_card = next((i for i, line in enumerate(lines) if CARD_RE.match(line)), len(lines))
+    scope = lines[:idx_card]
+    idx_pool = next((i for i, line in enumerate(scope) if "пул" in line), None)
+    if idx_pool is None:
         return None
-    return "\n".join(область[idx_пул:idx_карточка])
+    return "\n".join(scope[idx_pool:idx_card])
+
+
+# Правила свода, от которых зависит ФОРМА хвостов role-brief.py (случай ⑪): «ответы владельцу»
+# печатается под подсказкой, только если owner-reply-format действует; у «ритма» три формы по
+# состоянию sync-alarm-in-chat. До Э6 их брали из свода ЭТОГО контура; на подставной базе свода
+# нет вовсе, и ⑪ судил бы форму «правила нет» у обоих. Сажаем состояние живого свода на 18.10:
+# owner-reply-format действует, sync-alarm-in-chat снято (решение владельца 24.09, записка #5312).
+STAND_RULES = [
+    ("owner-reply-format", "форма ответа владельцу (посажено приёмкой #593.7 на подставную базу)",
+     "active", None, None, None),
+    ("sync-alarm-in-chat", "ритм сверок будильником в чате (посажено приёмкой #593.7 на подставную базу)",
+     "revoked", "2026-09-24 00:00:00", "PROTO", "посажено снятым: так стоит в живом своде (записка #5312)"),
+]
+
+
+# Набор задач (пул) для случая ⑤: до Э6 блок пула в выводе backlog.py list давали живые наборы
+# контура; на подставной базе наборов нет, и ⑤ судил бы ветку «пула нет». Один живой набор —
+# норма нового порядка; карточки приёмки идут с --track вне его и потому не замерзают (cmd_add).
+STAND_POOL = ("ZZPOOL-BRIEF", "набор подставной базы приёмки #593.7: блок пула для случая ⑤")
+
+
+def seed_stand(db: Path) -> None:
+    c = sqlite3.connect(str(db))
+    with c:
+        c.executemany("INSERT INTO rules (rule_key, body, status, revoked_at, revoked_by, revoked_reason)"
+                      " VALUES (?, ?, ?, ?, ?, ?)", STAND_RULES)
+        c.execute("INSERT INTO tracks (track_id, title, status) VALUES (?, ?, 'active')", STAND_POOL)
+    c.close()
 
 
 def main() -> int:
     print("=" * 78)
     print("ПРИЁМКА КАРТОЧКИ #593 ЗАДАНИЕ 7 — краткий/полный вид: backlog list · guard-all · role-brief")
-    print("живая база (только чтение, копируется): " + str(LIVE_DB))
+    print("живая база (только чтение, берётся схема): " + str(LIVE_DB))
     print("=" * 78)
 
-    стенд = mezo_stand.new("bite-brief-views-")
-    db = стенд / "copy.db"
-    mezo_stand.snapshot_db(LIVE_DB, db)
+    stand = mezo_stand.new("bite-brief-views-")
+    db = stand / "copy.db"
+    mezo_stand.empty_db(LIVE_DB, db)
+    mezo_stand.seed_roles(db, ["PROTO"])
+    seed_stand(db)
 
     # ═══ ПОДГОТОВКА: 3 стендовые карточки роли PROTO ═══════════════════════════════
-    # --track на заведомо НЕ-пуловое значение: если в копии живой базы окажется активный
+    # --track на заведомо НЕ-пуловое значение: если в базе окажется активный
     # пул, заведение БЕЗ --track увело бы новую карточку сразу в frozen (см. cmd_add) —
     # это сломало бы ожидание «одна карточка остаётся open». --track снимает эту
     # зависимость от текущего состояния живого пула целиком.
     TRACK = "bite-brief-views-stand"
 
-    def файл(имя: str, текст: str) -> str:
-        p = стенд / имя
-        p.write_text(текст, encoding="utf-8")
+    def file(name: str, note_text: str) -> str:
+        p = stand / name
+        p.write_text(note_text, encoding="utf-8")
         return str(p)
 
     _, out_o = run(BACKLOG, db, "add", "--role", "PROTO", "--actor", "PROTO", "--track", TRACK,
                    "--title", "приёмка 593.7: карточка открыта, с критерием",
-                   "--body-file", файл("open_body.md", "тело стендовой карточки — остаётся open, есть критерий"),
-                   "--done-when-file", файл("open_done.md", "стендовый критерий приёмки: сам не судится"))
-    bid_open = id_карточки(out_o)
+                   "--body-file", file("open_body.md", "тело стендовой карточки — остаётся open, есть критерий"),
+                   "--done-when-file", file("open_done.md", "стендовый критерий приёмки: сам не судится"))
+    bid_open = card_id(out_o)
 
     _, out_d = run(BACKLOG, db, "add", "--role", "PROTO", "--actor", "PROTO", "--track", TRACK,
                    "--title", "приёмка 593.7: карточка на dropped",
-                   "--body-file", файл("dropped_body.md", "тело стендовой карточки — уйдёт в dropped"),
-                   "--done-when-file", файл("dropped_done.md", "стендовый критерий приёмки: сам не судится"))
-    bid_dropped = id_карточки(out_d)
+                   "--body-file", file("dropped_body.md", "тело стендовой карточки — уйдёт в dropped"),
+                   "--done-when-file", file("dropped_done.md", "стендовый критерий приёмки: сам не судится"))
+    bid_dropped = card_id(out_d)
     rc_ds, out_ds = run(BACKLOG, db, "status", bid_dropped or "0", "dropped", "--actor", "PROTO",
                         "--note", "проба причины: стендовая отмена ради приёмки #593.7")
 
     _, out_f = run(BACKLOG, db, "add", "--role", "PROTO", "--actor", "PROTO", "--track", TRACK,
                    "--title", "приёмка 593.7: карточка на frozen",
-                   "--body-file", файл("frozen_body.md", "тело стендовой карточки — уйдёт в frozen"),
-                   "--done-when-file", файл("frozen_done.md", "стендовый критерий приёмки: сам не судится"))
-    bid_frozen = id_карточки(out_f)
+                   "--body-file", file("frozen_body.md", "тело стендовой карточки — уйдёт в frozen"),
+                   "--done-when-file", file("frozen_done.md", "стендовый критерий приёмки: сам не судится"))
+    bid_frozen = card_id(out_f)
     rc_fs, out_fs = run(BACKLOG, db, "status", bid_frozen or "0", "frozen", "--actor", "PROTO",
                         "--note", "разморозить: после закрытия стендовой приёмки #593.7")
 
@@ -197,7 +232,7 @@ def main() -> int:
     # --full там показывается ЦЕЛИКОМ — case ⑫ проверяет это отдельно, случаям ①-⑤ до
     # содержимого хвоста дела нет). --full вызов — ОН ЖЕ «полный» для случаев ①-⑤ И
     # третий вызов case ⑫.
-    забыть_ключи(db, "PROTO", ["backlog-list-full"])
+    forget_keys(db, "PROTO", ["backlog-list-full"])
     rc_b1, out_b1 = run(BACKLOG, db, "list", "--role", "PROTO", "--status", "all", "--actor", "PROTO")
     rc_b2, out_b2 = run(BACKLOG, db, "list", "--role", "PROTO", "--status", "all", "--actor", "PROTO")
     rc_bf, out_bf = run(BACKLOG, db, "list", "--role", "PROTO", "--status", "all", "--actor", "PROTO", "--full")
@@ -208,46 +243,46 @@ def main() -> int:
 
     out_brief, out_full = out_b1, out_bf   # общие ссылки для случаев ①-⑤
 
-    шапка_кратко, шапка_полно = найти_шапку(out_brief), найти_шапку(out_full)
-    случай("① строка шапки «📋 backlog …» дословно одна и та же",
-           шапка_кратко is not None and шапка_кратко == шапка_полно,
-           f"кратко={шапка_кратко!r} полно={шапка_полно!r}")
+    header_brief, header_full = find_header(out_brief), find_header(out_full)
+    case("① строка шапки «📋 backlog …» дословно одна и та же",
+           header_brief is not None and header_brief == header_full,
+           f"кратко={header_brief!r} полно={header_full!r}")
 
-    карточки_кратко, карточки_полно = найти_карточки(out_brief), найти_карточки(out_full)
-    случай("② число и текст первых строк карточек равны попарно",
-           len(карточки_кратко) > 0 and карточки_кратко == карточки_полно,
-           f"кратко {len(карточки_кратко)} шт, полно {len(карточки_полно)} шт"
-           + ("" if карточки_кратко == карточки_полно else "; тексты разошлись"))
+    cards_brief, cards_full = find_cards(out_brief), find_cards(out_full)
+    case("② число и текст первых строк карточек равны попарно",
+           len(cards_brief) > 0 and cards_brief == cards_full,
+           f"кратко {len(cards_brief)} шт, полно {len(cards_full)} шт"
+           + ("" if cards_brief == cards_full else "; тексты разошлись"))
 
-    срезы_кратко, срезы_полно = найти_срезы(out_brief), найти_срезы(out_full)
-    случай("③ срез критерия («🎯 …» второй строкой) отсутствует в кратком, есть в --full",
-           len(срезы_кратко) == 0 and len(срезы_полно) > 0,
-           f"кратко {len(срезы_кратко)} строк среза, полно {len(срезы_полно)} строк среза")
+    slices_brief, slices_full = find_slices(out_brief), find_slices(out_full)
+    case("③ срез критерия («🎯 …» второй строкой) отсутствует в кратком, есть в --full",
+           len(slices_brief) == 0 and len(slices_full) > 0,
+           f"кратко {len(slices_brief)} строк среза, полно {len(slices_full)} строк среза")
 
-    причины_кратко, причины_полно = найти_причины(out_brief), найти_причины(out_full)
-    случай("④ ВСТРЕЧНЫЙ: строки «✗ причина: …» / «🧊 …» дословно те же в обоих видах",
-           len(причины_кратко) >= 2 and причины_кратко == причины_полно,
-           f"кратко {причины_кратко!r} полно {причины_полно!r}")
+    reasons_brief, reasons_full = find_reasons(out_brief), find_reasons(out_full)
+    case("④ ВСТРЕЧНЫЙ: строки «✗ причина: …» / «🧊 …» дословно те же в обоих видах",
+           len(reasons_brief) >= 2 and reasons_brief == reasons_full,
+           f"кратко {reasons_brief!r} полно {reasons_full!r}")
 
-    пул_кратко, пул_полно = блок_пула(out_brief), блок_пула(out_full)
-    if пул_кратко is None and пул_полно is None:
-        случай("⑤ блок пула — пула в копии нет, проверено отсутствие строки в обоих видах",
+    pool_brief, pool_full = pool_block(out_brief), pool_block(out_full)
+    if pool_brief is None and pool_full is None:
+        case("⑤ блок пула — пула в копии нет, проверено отсутствие строки в обоих видах",
                True, "ни в кратком, ни в полном виде строки со словом «пул» нет")
     else:
-        случай("⑤ блок пула (от строки со словом «пул» до первой карточки) дословно тот же",
-               пул_кратко == пул_полно, f"кратко={пул_кратко!r} полно={пул_полно!r}")
+        case("⑤ блок пула (от строки со словом «пул» до первой карточки) дословно тот же",
+               pool_brief == pool_full, f"кратко={pool_brief!r} полно={pool_full!r}")
 
-    ПОЛНЫЙ_ХВОСТ_LIST = "ℹ️ срез критерия у карточек скрыт"
-    ССЫЛКА_LIST = "ℹ️ подсказка «backlog-list-full» показана"
-    полный_1, ссылка_1 = ПОЛНЫЙ_ХВОСТ_LIST in out_b1, ССЫЛКА_LIST in out_b1
-    полный_2, ссылка_2 = ПОЛНЫЙ_ХВОСТ_LIST in out_b2, ССЫЛКА_LIST in out_b2
-    полный_3, ссылка_3 = ПОЛНЫЙ_ХВОСТ_LIST in out_bf, ССЫЛКА_LIST in out_bf
-    случай("⑫ подсказка о --full: 1-й краткий вызов — текст целиком, 2-й — строка-ссылка, "
+    FULL_TAIL_LIST = "ℹ️ срез критерия у карточек скрыт"
+    LINK_LIST = "ℹ️ подсказка «backlog-list-full» показана"
+    full_1, link_1 = FULL_TAIL_LIST in out_b1, LINK_LIST in out_b1
+    full_2, link_2 = FULL_TAIL_LIST in out_b2, LINK_LIST in out_b2
+    full_3, link_3 = FULL_TAIL_LIST in out_bf, LINK_LIST in out_bf
+    case("⑫ подсказка о --full: 1-й краткий вызов — текст целиком, 2-й — строка-ссылка, "
            "--full — ни того ни другого",
-           полный_1 and not ссылка_1 and ссылка_2 and not полный_2
-           and not полный_3 and not ссылка_3,
-           f"1й: целиком={полный_1}/ссылка={ссылка_1}; 2й: целиком={полный_2}/ссылка={ссылка_2}; "
-           f"--full: целиком={полный_3}/ссылка={ссылка_3}")
+           full_1 and not link_1 and link_2 and not full_2
+           and not full_3 and not link_3,
+           f"1й: целиком={full_1}/ссылка={link_1}; 2й: целиком={full_2}/ссылка={link_2}; "
+           f"--full: целиком={full_3}/ссылка={link_3}")
 
     # ═══ ⑪ — role-brief.py: три вызова (кратко/кратко/--full), четыре постоянных хвоста ═
     # ⚡ ПРАВКА (карточка #659, приёмка отстала от продукта — не продукт сломан). «Ритм» —
@@ -261,19 +296,19 @@ def main() -> int:
     # это не потеря хвоста, а другая, тоже проверяемая форма. Три формы взаимно исключают
     # друг друга — какая из них в силе, эта приёмка узнаёт по ФАКТИЧЕСКОМУ тексту 1-го
     # вызова (то же самое видит и живой владелец), а не гадает по имени правила в базе.
-    ХВОСТ_КЛЮЧИ = ["role-brief-порядок-пробуждения", "role-brief-ритм",
+    TAIL_KEYS = ["role-brief-порядок-пробуждения", "role-brief-ритм",
                    "role-brief-свод-целиком", "role-brief-ответы-владельцу"]
-    ПОСТОЯННЫЕ_ЯКОРЯ = {
+    STANDING_ANCHORS = {
         "role-brief-порядок-пробуждения": "порядок пробуждения: гарды → наказ → память → лента → ПЕРВЫЙ",
         "role-brief-свод-целиком": "в стартовую сводку не режется (граница в шапке)",
         "role-brief-ответы-владельцу": "ОТВЕТЫ ВЛАДЕЛЬЦУ: перед КАЖДЫМ ответом владельцу перечитай правило",
     }
-    РИТМ_АКТИВЕН = "РИТМ (слово владельца 29.08): будильник ВНУТРИ чата"
-    РИТМ_СНЯТО = "будильника сверок нет — правило sync-alarm-in-chat снято"
-    РИТМ_НЕТ_В_СВОДЕ = "правила sync-alarm-in-chat в своде НЕТ"
-    РИТМ_ТЕКСТЫ = (РИТМ_АКТИВЕН, РИТМ_СНЯТО, РИТМ_НЕТ_В_СВОДЕ)
+    RHYTHM_ACTIVE = "РИТМ (слово владельца 29.08): будильник ВНУТРИ чата"
+    RHYTHM_REVOKED = "будильника сверок нет — правило sync-alarm-in-chat снято"
+    RHYTHM_NOT_IN_RULES = "правила sync-alarm-in-chat в своде НЕТ"
+    RHYTHM_TEXTS = (RHYTHM_ACTIVE, RHYTHM_REVOKED, RHYTHM_NOT_IN_RULES)
 
-    забыть_ключи(db, "PROTO", ХВОСТ_КЛЮЧИ)
+    forget_keys(db, "PROTO", TAIL_KEYS)
     rc_r1, out_r1 = run(ROLE_BRIEF, db, "--role", "PROTO", "--actor", "PROTO")
     rc_r2, out_r2 = run(ROLE_BRIEF, db, "--role", "PROTO", "--actor", "PROTO")
     rc_r3, out_r3 = run(ROLE_BRIEF, db, "--role", "PROTO", "--actor", "PROTO", "--full")
@@ -281,72 +316,74 @@ def main() -> int:
         raise SystemExit(f"ПРИЁМКА НЕ СОСТОЯЛАСЬ: role-brief.py вернул код ≠0 — "
                          f"{rc_r1}/{rc_r2}/{rc_r3}")
 
-    def хвостовые_ключи(вывод: str) -> list[str]:
-        return re.findall(r"ℹ️ подсказка «([^»]+)» показана", вывод)
+    def tail_keys(output: str) -> list[str]:
+        return re.findall(r"ℹ️ подсказка «([^»]+)» показана", output)
 
-    полны_1 = {k: a in out_r1 for k, a in ПОСТОЯННЫЕ_ЯКОРЯ.items()}
-    полны_2 = {k: a in out_r2 for k, a in ПОСТОЯННЫЕ_ЯКОРЯ.items()}
-    полны_3 = {k: a in out_r3 for k, a in ПОСТОЯННЫЕ_ЯКОРЯ.items()}
-    ссылки_1, ссылки_2, ссылки_3 = хвостовые_ключи(out_r1), хвостовые_ключи(out_r2), хвостовые_ключи(out_r3)
-    ссылки_обычные_1 = set(ссылки_1) & set(ПОСТОЯННЫЕ_ЯКОРЯ)
-    ссылки_обычные_2 = set(ссылки_2) & set(ПОСТОЯННЫЕ_ЯКОРЯ)
-    ссылки_обычные_3 = set(ссылки_3) & set(ПОСТОЯННЫЕ_ЯКОРЯ)
+    are_full_1 = {k: a in out_r1 for k, a in STANDING_ANCHORS.items()}
+    are_full_2 = {k: a in out_r2 for k, a in STANDING_ANCHORS.items()}
+    are_full_3 = {k: a in out_r3 for k, a in STANDING_ANCHORS.items()}
+    links_1, links_2, links_3 = tail_keys(out_r1), tail_keys(out_r2), tail_keys(out_r3)
+    plain_links_1 = set(links_1) & set(STANDING_ANCHORS)
+    plain_links_2 = set(links_2) & set(STANDING_ANCHORS)
+    plain_links_3 = set(links_3) & set(STANDING_ANCHORS)
 
-    текст_ритма_1 = next((т for т in РИТМ_ТЕКСТЫ if т in out_r1), None)
-    if текст_ритма_1 == РИТМ_АКТИВЕН:
+    rhythm_text_1 = next((text_item for text_item in RHYTHM_TEXTS if text_item in out_r1), None)
+    if rhythm_text_1 == RHYTHM_ACTIVE:
         # старое поведение: тот же hint-цикл, что и у трёх других постоянных хвостов
-        ритм_ок = (РИТМ_АКТИВЕН in out_r1 and "role-brief-ритм" not in ссылки_1
-                   and РИТМ_АКТИВЕН not in out_r2 and "role-brief-ритм" in ссылки_2
-                   and РИТМ_АКТИВЕН in out_r3 and "role-brief-ритм" not in ссылки_3)
-        ожидание_ссылки_2 = {"role-brief-ритм"}
-        ритм_слово = "ритм: правило активно — хвост под hint, как и три других"
-    elif текст_ритма_1 in (РИТМ_СНЯТО, РИТМ_НЕТ_В_СВОДЕ):
+        rhythm_ok = (RHYTHM_ACTIVE in out_r1 and "role-brief-ритм" not in links_1
+                   and RHYTHM_ACTIVE not in out_r2 and "role-brief-ритм" in links_2
+                   and RHYTHM_ACTIVE in out_r3 and "role-brief-ритм" not in links_3)
+        expect_link_2 = {"role-brief-ритм"}
+        rhythm_word = "ритм: правило активно — хвост под hint, как и три других"
+    elif rhythm_text_1 in (RHYTHM_REVOKED, RHYTHM_NOT_IN_RULES):
         # ⚖️ У этой формы hint не заводится СОВСЕМ — строка обязана быть ОДИНАКОВОЙ во
         # ВСЕХ трёх вызовах и НИКОГДА не сжиматься в ссылку: сжатие того, что сжиматься
         # не должно, было бы равносильно «съеданием причины» (граница из шапки приёмки).
-        ритм_ок = (текст_ритма_1 in out_r1 and текст_ритма_1 in out_r2 and текст_ритма_1 in out_r3
-                   and "role-brief-ритм" not in ссылки_1
-                   and "role-brief-ритм" not in ссылки_2
-                   and "role-brief-ритм" not in ссылки_3)
-        ожидание_ссылки_2 = set()
-        ритм_слово = (f"ритм: правило {'снято' if текст_ритма_1 == РИТМ_СНЯТО else 'не в своде'} — "
+        rhythm_ok = (rhythm_text_1 in out_r1 and rhythm_text_1 in out_r2 and rhythm_text_1 in out_r3
+                   and "role-brief-ритм" not in links_1
+                   and "role-brief-ритм" not in links_2
+                   and "role-brief-ритм" not in links_3)
+        expect_link_2 = set()
+        rhythm_word = (f"ритм: правило {'снято' if rhythm_text_1 == RHYTHM_REVOKED else 'не в своде'} — "
                       "строка прямая, без hint, обязана быть в КАЖДОМ из трёх вызовов")
     else:
-        ритм_ок = False
-        ожидание_ссылки_2 = set()
-        ритм_слово = ("⛔ ни одна из трёх известных форм раздела «ритм» не найдена в 1-м "
+        rhythm_ok = False
+        expect_link_2 = set()
+        rhythm_word = ("⛔ ни одна из трёх известных форм раздела «ритм» не найдена в 1-м "
                       "вызове — role-brief.py менялся, правь приёмку")
 
-    def без_хвостов(вывод: str) -> list[str]:
+    def without_tails(output: str) -> list[str]:
         """Строки БЕЗ четырёх хвостов (целиком или ссылкой) — для построчного сравнения
         1-го и 2-го вызовов (остальное у них обязано совпасть дословно)."""
-        исключить = lambda л: (any(a in л for a in ПОСТОЯННЫЕ_ЯКОРЯ.values())
-                               or any(т in л for т in РИТМ_ТЕКСТЫ)
-                               or "ℹ️ подсказка «" in л)
-        return [л for л in вывод.splitlines() if not исключить(л)]
+        exclude = lambda line: (any(a in line for a in STANDING_ANCHORS.values())
+                               or any(text_item in line for text_item in RHYTHM_TEXTS)
+                               or "ℹ️ подсказка «" in line)
+        return [line for line in output.splitlines() if not exclude(line)]
 
-    остальное_совпадает = без_хвостов(out_r1) == без_хвостов(out_r2)
-    случай("⑪ role-brief: 1-й вызов — постоянные хвосты целиком, 2-й — строками-ссылками "
+    rest_matches = without_tails(out_r1) == without_tails(out_r2)
+    case("⑪ role-brief: 1-й вызов — постоянные хвосты целиком, 2-й — строками-ссылками "
            "(кроме «ритм», если его правило снято — тогда он прямой во всех трёх), "
            "3-й (--full) — снова целиком; остальной вывод 1-го и 2-го совпадает построчно",
-           all(полны_1.values()) and not ссылки_обычные_1
-           and not any(полны_2.values()) and ссылки_обычные_2 == set(ПОСТОЯННЫЕ_ЯКОРЯ)
-           and all(полны_3.values()) and not ссылки_обычные_3
-           and ритм_ок and остальное_совпадает
-           and (set(ссылки_2) & {"role-brief-ритм"}) == ожидание_ссылки_2,
-           f"1й целиком: {sum(полны_1.values())}/3 (+ритм: {текст_ритма_1 == РИТМ_АКТИВЕН}), "
-           f"ссылок обычных: {len(ссылки_обычные_1)}; "
-           f"2й целиком: {sum(полны_2.values())}/3, ссылок обычных: {sorted(ссылки_обычные_2)}; "
-           f"3й (--full) целиком: {sum(полны_3.values())}/3, ссылок обычных: {len(ссылки_обычные_3)}; "
-           f"{ритм_слово}; остальной вывод совпадает: {остальное_совпадает}")
+           all(are_full_1.values()) and not plain_links_1
+           and not any(are_full_2.values()) and plain_links_2 == set(STANDING_ANCHORS)
+           and all(are_full_3.values()) and not plain_links_3
+           and rhythm_ok and rest_matches
+           and (set(links_2) & {"role-brief-ритм"}) == expect_link_2,
+           f"1й целиком: {sum(are_full_1.values())}/3 (+ритм: {rhythm_text_1 == RHYTHM_ACTIVE}), "
+           f"ссылок обычных: {len(plain_links_1)}; "
+           f"2й целиком: {sum(are_full_2.values())}/3, ссылок обычных: {sorted(plain_links_2)}; "
+           f"3й (--full) целиком: {sum(are_full_3.values())}/3, ссылок обычных: {len(plain_links_3)}; "
+           f"{rhythm_word}; остальной вывод совпадает: {rest_matches}")
 
     # ═══ ⑥⑦⑧⑨⑩ — guard-all.py: кратко/полно с ЖИВОГО каталога <s>, на копии базы ═════
     # guard-all.py открывает базу mode=ro (см. его же --db в справке) — даже случайное
     # указание на живую базу не привело бы к записи, но копия здесь и не нужна как
     # предохранитель, а нужна как СТАБИЛЬНОЕ состояние: между кратким и полным вызовом
     # база не должна сама измениться (в живой она меняется постоянно).
-    db_guard = стенд / "guard.db"
-    mezo_stand.snapshot_db(LIVE_DB, db_guard)
+    db_guard = stand / "guard.db"
+    mezo_stand.empty_db(LIVE_DB, db_guard, keep=("cross_links",))
+    mezo_stand.seed_roles(db_guard, ["PROTO"])
+    seed_stand(db_guard)
 
     def run_guard(tool: str, db_: Path, full: bool, env: dict | None = None) -> tuple[int, str]:
         args = ["--db", str(db_)] + (["--full"] if full else [])
@@ -361,95 +398,95 @@ def main() -> int:
         raise SystemExit(f"ПРИЁМКА НЕ СОСТОЯЛАСЬ: guard-all.py вернул неожиданный код — "
                          f"{rc_g1}/{rc_g2}")
 
-    def последняя_строка(вывод: str) -> str:
-        for л in reversed(вывод.splitlines()):
-            if л.strip():
-                return л.strip()
+    def last_line(output: str) -> str:
+        for line in reversed(output.splitlines()):
+            if line.strip():
+                return line.strip()
         return ""
 
-    def множество_с(вывод: str, *marks: str) -> set[str]:
-        return {л for л in вывод.splitlines() if any(m in л for m in marks)}
+    def set_with(output: str, *marks: str) -> set[str]:
+        return {line for line in output.splitlines() if any(m in line for m in marks)}
 
-    def сравнить_красные(вывод_кратко: str, вывод_полно: str) -> tuple[bool, set[str], set[str]]:
-        a, b = множество_с(вывод_кратко, "⛔"), множество_с(вывод_полно, "⛔")
+    def compare_failed(output_brief: str, output_full: str) -> tuple[bool, set[str], set[str]]:
+        a, b = set_with(output_brief, "⛔"), set_with(output_full, "⛔")
         return a == b, a, b
 
-    посл_кратко, посл_полно = последняя_строка(out_g_brief), последняя_строка(out_g_full)
-    m1 = re.search(r"\((\d+) проверок\)", посл_кратко)
-    m2 = re.search(r"\((\d+) проверок\)", посл_полно)
-    случай("⑥ последняя строка итога дословно одна и та же, с тем же «(N проверок)»",
-           bool(посл_кратко) and посл_кратко == посл_полно and bool(m1) and bool(m2)
+    last_brief, last_full = last_line(out_g_brief), last_line(out_g_full)
+    m1 = re.search(r"\((\d+) проверок\)", last_brief)
+    m2 = re.search(r"\((\d+) проверок\)", last_full)
+    case("⑥ последняя строка итога дословно одна и та же, с тем же «(N проверок)»",
+           bool(last_brief) and last_brief == last_full and bool(m1) and bool(m2)
            and m1.group(1) == m2.group(1),
-           f"кратко={посл_кратко!r} полно={посл_полно!r}")
+           f"кратко={last_brief!r} полно={last_full!r}")
 
-    совпало_7, красные_кратко, красные_полно = сравнить_красные(out_g_brief, out_g_full)
-    случай("⑦ множество строк с «⛔» одинаково между кратким и полным видом",
-           совпало_7,
-           f"кратко {len(красные_кратко)} строк, полно {len(красные_полно)} строк"
-           + ("" if совпало_7 else f"; разница {красные_кратко ^ красные_полно}"))
+    matched_7, failed_brief, failed_full = compare_failed(out_g_brief, out_g_full)
+    case("⑦ множество строк с «⛔» одинаково между кратким и полным видом",
+           matched_7,
+           f"кратко {len(failed_brief)} строк, полно {len(failed_full)} строк"
+           + ("" if matched_7 else f"; разница {failed_brief ^ failed_full}"))
 
-    предупр_кратко = множество_с(out_g_brief, "⚠️", "ℹ️")
-    предупр_полно = множество_с(out_g_full, "⚠️", "ℹ️")
-    случай("⑧ множество строк с «⚠️» или «ℹ️» одинаково между кратким и полным видом",
-           предупр_кратко == предупр_полно,
-           f"кратко {len(предупр_кратко)} строк, полно {len(предупр_полно)} строк"
-           + ("" if предупр_кратко == предупр_полно else f"; разница {предупр_кратко ^ предупр_полно}"))
+    warn_brief = set_with(out_g_brief, "⚠️", "ℹ️")
+    warn_full = set_with(out_g_full, "⚠️", "ℹ️")
+    case("⑧ множество строк с «⚠️» или «ℹ️» одинаково между кратким и полным видом",
+           warn_brief == warn_full,
+           f"кратко {len(warn_brief)} строк, полно {len(warn_full)} строк"
+           + ("" if warn_brief == warn_full else f"; разница {warn_brief ^ warn_full}"))
 
-    ПРОШЛИ_RE = re.compile(r"^✅ прошли (\d+): (.+)$")
+    PASSED_RE = re.compile(r"^✅ прошли (\d+): (.+)$")
 
-    def строка_прошли(вывод: str):
-        for л in вывод.splitlines():
-            m = ПРОШЛИ_RE.match(л.strip())
+    def passed_line(output: str):
+        for line in output.splitlines():
+            m = PASSED_RE.match(line.strip())
             if m:
-                return int(m.group(1)), [и.strip() for и in m.group(2).split(" · ")]
+                return int(m.group(1)), [item.strip() for item in m.group(2).split(" · ")]
         return None
 
-    def зелёные_сразу(вывод: str) -> list[str]:
-        имена = []
-        for л in вывод.splitlines():
-            if (л.startswith("✅ ") and not л.startswith("✅ мост соседей")
-                    and not л.startswith("✅ прошли") and not л.startswith("✅ ВСЕ ГАРДЫ")):
-                имена.append(л[2:].strip())
-        return имена
+    def passed_at_once(output: str) -> list[str]:
+        names = []
+        for line in output.splitlines():
+            if (line.startswith("✅ ") and not line.startswith("✅ мост соседей")
+                    and not line.startswith("✅ прошли") and not line.startswith("✅ ВСЕ ГАРДЫ")):
+                names.append(line[2:].strip())
+        return names
 
-    прошли = строка_прошли(out_g_brief)
-    сразу_кратко = зелёные_сразу(out_g_brief)
-    сразу_полно = зелёные_сразу(out_g_full)
-    объединение = (set(прошли[1]) if прошли else set()) | set(сразу_кратко)
-    N_прошли = прошли[0] if прошли else None
-    случай("⑨ «✅ прошли N: …» ∪ имена сразу-зелёных строк (кратко, без строк моста) = "
+    passed = passed_line(out_g_brief)
+    at_once_brief = passed_at_once(out_g_brief)
+    at_once_full = passed_at_once(out_g_full)
+    union = (set(passed[1]) if passed else set()) | set(at_once_brief)
+    n_passed = passed[0] if passed else None
+    case("⑨ «✅ прошли N: …» ∪ имена сразу-зелёных строк (кратко, без строк моста) = "
            "имена сразу-зелёных строк (полно, без строк моста); N = числу имён",
-           прошли is not None and N_прошли == len(прошли[1])
-           and объединение == set(сразу_полно),
-           f"строка «прошли» есть: {прошли is not None}"
-           + (f", N={N_прошли}, имён в ней {len(прошли[1]) if прошли else 0}" if прошли else "")
-           + f"; объединение (кратко) {len(объединение)} имён, сразу-зелёных (полно) {len(сразу_полно)} имён"
-           + ("" if объединение == set(сразу_полно) else f"; разница {объединение ^ set(сразу_полно)}"))
+           passed is not None and n_passed == len(passed[1])
+           and union == set(at_once_full),
+           f"строка «прошли» есть: {passed is not None}"
+           + (f", N={n_passed}, имён в ней {len(passed[1]) if passed else 0}" if passed else "")
+           + f"; объединение (кратко) {len(union)} имён, сразу-зелёных (полно) {len(at_once_full)} имён"
+           + ("" if union == set(at_once_full) else f"; разница {union ^ set(at_once_full)}"))
 
-    МОСТ_СВОДКА_RE = re.compile(r"^✅ мост соседей: (\d+) вопросов отвечены \(соседей (\d+)\)$")
+    BRIDGE_SUMMARY_RE = re.compile(r"^✅ мост соседей: (\d+) вопросов отвечены \(соседей (\d+)\)$")
 
-    def мост_сводка(вывод: str):
-        for л in вывод.splitlines():
-            m = МОСТ_СВОДКА_RE.match(л.strip())
+    def bridge_summary(output: str):
+        for line in output.splitlines():
+            m = BRIDGE_SUMMARY_RE.match(line.strip())
             if m:
                 return int(m.group(1)), int(m.group(2))
         return None
 
-    def мост_отвечено_строк(вывод: str) -> int:
-        return sum(1 for л in вывод.splitlines() if "отвечен НАШИМ ответом" in л)
+    def bridge_answered_lines(output: str) -> int:
+        return sum(1 for line in output.splitlines() if "отвечен НАШИМ ответом" in line)
 
-    сводка10 = мост_сводка(out_g_brief)
-    отвечено_полно10 = мост_отвечено_строк(out_g_full)
-    if сводка10 is None and отвечено_полно10 == 0:
-        случай("⑩ мост соседей — вопросов нет вовсе, равенство «нет в обоих видах»",
+    summary10 = bridge_summary(out_g_brief)
+    answered_full10 = bridge_answered_lines(out_g_full)
+    if summary10 is None and answered_full10 == 0:
+        case("⑩ мост соседей — вопросов нет вовсе, равенство «нет в обоих видах»",
                True, "ни сводной строки в кратком, ни строк «отвечен НАШИМ ответом» в полном")
     else:
-        N10 = сводка10[0] if сводка10 else None
-        случай("⑩ «✅ мост соседей: N вопросов отвечены» — N равно числу строк «отвечен "
+        N10 = summary10[0] if summary10 else None
+        case("⑩ «✅ мост соседей: N вопросов отвечены» — N равно числу строк «отвечен "
                "НАШИМ ответом» в --full",
-               сводка10 is not None and N10 == отвечено_полно10,
-               f"N в кратком={N10 if сводка10 else 'строки нет'}, строк «отвечен» в полном="
-               f"{отвечено_полно10}")
+               summary10 is not None and N10 == answered_full10,
+               f"N в кратком={N10 if summary10 else 'строки нет'}, строк «отвечен» в полном="
+               f"{answered_full10}")
 
     # ═══ ПОЛОМКА (а) — guard-all.py: check() без учёта `ok` в кратком виде ═════════════
     # Копия ЖИВЁТ ВНЕ КОНТЕЙНЕРА (%TEMP%), а `SCRIPTS = Path(__file__).resolve().parent`
@@ -460,32 +497,32 @@ def main() -> int:
     # (mezo_paths.container_root/default_db резолвятся по нему, а не подъёмом по дереву,
     # которого от копии в %TEMP% и быть не может) — без него сама копия падает на
     # импорте раньше первой проверки.
-    сломанный_стенд_a = mezo_stand.new("bite-brief-views-broken-guard-")
-    сломанный_a = mezo_stand.copy_tool(Path(GUARD_ALL), сломанный_стенд_a)
-    текст_a = сломанный_a.read_text(encoding="utf-8")
-    АНКОР_A = "    if ok and not FULL and not force_print:"
-    if АНКОР_A not in текст_a:
+    broken_stand_a = mezo_stand.new("bite-brief-views-broken-guard-")
+    broken_a = mezo_stand.copy_tool(Path(GUARD_ALL), broken_stand_a)
+    text_a = broken_a.read_text(encoding="utf-8")
+    ANCHOR_A = "    if ok and not FULL and not force_print:"
+    if ANCHOR_A not in text_a:
         raise SystemExit("ПРИЁМКА НЕ СОСТОЯЛАСЬ: якорь строки check() не найден в "
                          "guard-all.py — поломку (а) ставить не на чем")
-    испорченный_a = текст_a.replace(АНКОР_A, "    if not FULL and not force_print:", 1)
-    if испорченный_a == текст_a:
+    spoiled_a = text_a.replace(ANCHOR_A, "    if not FULL and not force_print:", 1)
+    if spoiled_a == text_a:
         raise SystemExit("ПРИЁМКА НЕ СОСТОЯЛАСЬ: замена (а) не сработала — обратный ход "
                          "не поставлен, зелёное было бы ложным")
-    сломанный_a.write_text(испорченный_a, encoding="utf-8")
+    broken_a.write_text(spoiled_a, encoding="utf-8")
 
     env_a = os.environ.copy()
     env_a["MEZO_CONTAINER"] = str(CONTAINER)
-    rc_a1, out_a_brief = run_guard(str(сломанный_a), db_guard, full=False, env=env_a)
-    rc_a2, out_a_full = run_guard(str(сломанный_a), db_guard, full=True, env=env_a)
-    совпало_a, набор_a1, набор_a2 = сравнить_красные(out_a_brief, out_a_full)
-    покрасила_a = not совпало_a
-    случай("поломка (а): check() без учёта ok в кратком виде → случай ⑦ на этой копии "
+    rc_a1, out_a_brief = run_guard(str(broken_a), db_guard, full=False, env=env_a)
+    rc_a2, out_a_full = run_guard(str(broken_a), db_guard, full=True, env=env_a)
+    matched_a, set_a1, set_a2 = compare_failed(out_a_brief, out_a_full)
+    flagged_a = not matched_a
+    case("поломка (а): check() без учёта ok в кратком виде → случай ⑦ на этой копии "
            "ОБЯЗАН покраснеть",
-           покрасила_a,
-           ("поломка (а) покрасила: да — " if покрасила_a else
+           flagged_a,
+           ("поломка (а) покрасила: да — " if flagged_a else
             "🔴 поломка (а) покрасила: нет — приёмка не ловит эту беду; ")
-           + f"кратко {len(набор_a1)} красных строк, полно {len(набор_a2)}")
-    mezo_stand.release(сломанный_стенд_a)
+           + f"кратко {len(set_a1)} красных строк, полно {len(set_a2)}")
+    mezo_stand.release(broken_stand_a)
 
     # ═══ ПОЛОМКА (б) — backlog.py: cmd_list пропускает frozen-карточку в кратком виде ═══
     # 🪤 ПЕРЕМЕРЕНО ПЕРЕД ПРАВКОЙ, А НЕ ДОГАДКОЙ: --db у нас АБСОЛЮТНЫЙ, и resolve_db
@@ -497,54 +534,54 @@ def main() -> int:
     # подтвердил: копия backlog.py list БЕЗ MEZO_CONTAINER падает на «контейнер группы
     # НЕ НАЙДЕН» ДО первой печатаемой строки — картотека карточек тут ни при чём, и без
     # починки поломка (б) была бы неотличима от «инструмент вообще не запустился».
-    сломанный_стенд_b = mezo_stand.new("bite-brief-views-broken-backlog-")
-    сломанный_b = mezo_stand.copy_tool(Path(BACKLOG), сломанный_стенд_b)
-    текст_b = сломанный_b.read_text(encoding="utf-8")
-    АНКОР_B = '        print(f"  {pool_mark}#{bid} {icon.get(status,\'?\')} {pr}{mark} {title}{shared}  {tg}")'
-    if АНКОР_B not in текст_b:
+    broken_stand_b = mezo_stand.new("bite-brief-views-broken-backlog-")
+    broken_b = mezo_stand.copy_tool(Path(BACKLOG), broken_stand_b)
+    text_b = broken_b.read_text(encoding="utf-8")
+    ANCHOR_B = '        print(f"  {pool_mark}#{bid} {icon.get(status,\'?\')} {pr}{mark} {title}{shared}  {tg}")'
+    if ANCHOR_B not in text_b:
         raise SystemExit("ПРИЁМКА НЕ СОСТОЯЛАСЬ: якорь строки печати карточки не найден в "
                          "backlog.py — поломку (б) ставить не на чем")
-    испорченный_b = текст_b.replace(
-        АНКОР_B,
-        '        if not a.full and status == "frozen":\n            continue\n' + АНКОР_B, 1)
-    if испорченный_b == текст_b:
+    spoiled_b = text_b.replace(
+        ANCHOR_B,
+        '        if not a.full and status == "frozen":\n            continue\n' + ANCHOR_B, 1)
+    if spoiled_b == text_b:
         raise SystemExit("ПРИЁМКА НЕ СОСТОЯЛАСЬ: замена (б) не сработала — обратный ход "
                          "не поставлен, зелёное было бы ложным")
-    сломанный_b.write_text(испорченный_b, encoding="utf-8")
+    broken_b.write_text(spoiled_b, encoding="utf-8")
 
     env_b = os.environ.copy()
     env_b["MEZO_CONTAINER"] = str(CONTAINER)
-    rc_b_brief, out_b_brief_broken = run_env(str(сломанный_b), db, env_b, "list", "--role", "PROTO",
+    rc_b_brief, out_b_brief_broken = run_env(str(broken_b), db, env_b, "list", "--role", "PROTO",
                                              "--status", "all", "--actor", "PROTO")
-    rc_b_full, out_b_full_broken = run_env(str(сломанный_b), db, env_b, "list", "--role", "PROTO",
+    rc_b_full, out_b_full_broken = run_env(str(broken_b), db, env_b, "list", "--role", "PROTO",
                                            "--status", "all", "--actor", "PROTO", "--full")
-    карточки_b_кратко = найти_карточки(out_b_brief_broken)
-    карточки_b_полно = найти_карточки(out_b_full_broken)
-    if not карточки_b_кратко and not карточки_b_полно:
+    cards_b_brief = find_cards(out_b_brief_broken)
+    cards_b_full = find_cards(out_b_full_broken)
+    if not cards_b_brief and not cards_b_full:
         raise SystemExit(
             "ПРИЁМКА НЕ СОСТОЯЛАСЬ: копия backlog.py с поломкой (б) не напечатала НИ ОДНОЙ "
             "карточки ни в кратком, ни в полном виде — это отказ ЗАПУСКА (окружение/путь), "
             "а не сигнал поломки; исход неотличим от «не поймала». Вывод кратко: "
             f"{out_b_brief_broken[:300]!r}")
-    покрасила_b = карточки_b_кратко != карточки_b_полно
-    случай("поломка (б): cmd_list пропускает frozen-карточку в кратком виде → случай ② "
+    flagged_b = cards_b_brief != cards_b_full
+    case("поломка (б): cmd_list пропускает frozen-карточку в кратком виде → случай ② "
            "на этой копии ОБЯЗАН покраснеть",
-           покрасила_b,
-           ("поломка (б) покрасила: да — " if покрасила_b else
+           flagged_b,
+           ("поломка (б) покрасила: да — " if flagged_b else
             "🔴 поломка (б) покрасила: нет — приёмка не ловит эту беду; ")
-           + f"кратко {len(карточки_b_кратко)} карточек, полно {len(карточки_b_полно)}")
-    mezo_stand.release(сломанный_стенд_b)
+           + f"кратко {len(cards_b_brief)} карточек, полно {len(cards_b_full)}")
+    mezo_stand.release(broken_stand_b)
 
-    mezo_stand.release(стенд)
+    mezo_stand.release(stand)
 
     print("")
     print("=" * 78)
-    красных = [и for и, ок in итог if not ок]
-    print(f"РАЗЛИЧАЮЩИХ СЛУЧАЕВ {len(итог)} (①…⑫ + поломки (а) и (б))")
+    failed = [item for item, ok in results if not ok]
+    print(f"РАЗЛИЧАЮЩИХ СЛУЧАЕВ {len(results)} (①…⑫ + поломки (а) и (б))")
     print("⚖️ ГРАНИЦА: дословный текст подсказок mezo_hints, содержание отдельных гардов "
           "guard-all.py и динамические разделы role-brief.py этой приёмкой НЕ проверяются.")
-    if красных:
-        print(f"🔴 ПРОВАЛЕНО {len(красных)}: {' · '.join(красных)}")
+    if failed:
+        print(f"🔴 ПРОВАЛЕНО {len(failed)}: {' · '.join(failed)}")
         return 1
     print("✅ ВСЕ СЛУЧАИ ПРОЙДЕНЫ")
     return 0

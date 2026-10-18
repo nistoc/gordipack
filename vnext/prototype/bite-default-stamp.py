@@ -23,7 +23,8 @@ bite-default-stamp.py — приёмка на правку ① : умолчан�
                                                  заполнено чем-то», а не «заполнено верно»
     ③ новая записка С --to        → 'field'      РАЗЛИЧАЮЩИЙ: правка не должна съесть
                                                  работающую ветку
-Укус зовёт НАСТОЯЩИЙ write-message.py на КОПИИ живой базы. Живая база не касается вовсе.
+Укус зовёт НАСТОЯЩИЙ write-message.py на ПОДСТАВНОЙ базе (схема живой без строк; роли и «старые»
+записки сажает сам — этап Э6, карточка #680). Живая база не касается вовсе.
 
 Запуск:  python <абсолютный путь>/bite-default-stamp.py
 Выход:   0 — правка на месте и различает · 1 — правки ещё нет · 2 — правка есть, но ломает
@@ -44,11 +45,24 @@ LIVE = mezo_paths.live_db()
 SANDBOX = Path.home() / ".mezosync-sandbox" / "bite-stamp.db"
 WRITER = mezo_target.script("write-message.py")
 ROLE = "PROTO"
+# «Старые» записки подставной базы: до Э6 случай ② судил историю живой ленты; на пустой базе истории нет,
+# и ② сравнивал бы пустое с пустым. Каждая пометка происхождения — хотя бы раз, 'backfill' — несколько:
+# правка, прошедшая по всей таблице, меняет именно их.
+OLD_NOTES = [("COORD", "старая записка 1", "backfill"), ("PROTO", "старая записка 2", "backfill"),
+             ("COORD", "старая записка 3", "backfill"), ("PROTO", "старая записка 4", "field"),
+             ("COORD", "старая записка 5", "unset")]
 
 
 def prepare() -> None:
     SANDBOX.parent.mkdir(parents=True, exist_ok=True)
-    mezo_stand.snapshot_db(LIVE, SANDBOX)
+    # подставная база (Э6, карточка #680): схема живой без строк; реестр ролей нужен write-message.py
+    # (адресат --to и пишущая роль), старые записки — случаю ②
+    mezo_stand.empty_db(LIVE, SANDBOX)
+    mezo_stand.seed_roles(SANDBOX, [ROLE, "COORD"])
+    con = sqlite3.connect(str(SANDBOX))
+    with con:
+        con.executemany("INSERT INTO messages (writer_role, body_md, addressed_by) VALUES (?, ?, ?)", OLD_NOTES)
+    con.close()
 
 
 def write_note(body: str, *extra) -> int | None:
@@ -103,7 +117,7 @@ def max_id_now() -> int:
 
 def main() -> int:
     print("ПРИЁМКА ①: умолчание штампа происхождения")
-    print(f"копия базы ..... {SANDBOX}")
+    print(f"подставная база  {SANDBOX}")
     prepare()
 
     border = max_id_now()          # граница «старого» — ДО первого своего действия

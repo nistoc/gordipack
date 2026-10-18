@@ -64,7 +64,13 @@ SEED = 524
 # разбор на записи — ЭТИМ ЖЕ инструментом (--разобрать). Приёмка продолжает проверять
 # МЕХАНИЗМ разбора/сборки, а не слова живой памяти PROTO — живой контур не тронут:
 # подставная роль заводится на КОПИИ базы.
+# ⚡ Э6 (карточка #680): подставная роль — ЕДИНСТВЕННЫЙ путь, и база — подставная (схема живой без
+# строк). До Э6 на живом контуре приёмка судила живую память PROTO, и итог зависел от того, что
+# PROTO в ней сохранила. Чужая роль FOREIGN_ROLE сажается тем же штатным ходом — для случая ⑦.
 SEED_ROLE = "BITEMEMREC"
+FOREIGN_ROLE = "ZZFOREIGN"
+FOREIGN_BODY = ("## чужой раздел приёмки bite-memory-records\n"
+                "тело чужой подставной роли — его записи правит только она сама (случай ⑦).\n")
 
 # Заполнитель БЕЗ слова «право» — нужен числом знаков: случай ⑥ судит, что отбор
 # отвечает КОРОТКИМ списком, а не потоком тел (критерий «вывод < тела ÷ 3»), и это
@@ -142,25 +148,18 @@ def call_tool(tool: pathlib.Path, *args: str, db: pathlib.Path = None):
 def ensure_subject(base_db: pathlib.Path) -> tuple[pathlib.Path, str, bool]:
     """(база, роль, была_ли_заведена_подставная) — на которых приёмка измеряет.
 
-    У роли PROTO в этой базе уже есть разобранные записи (живой контур) → работаем
-    НА НЕЙ САМОЙ, ничего не меняя: прежнее поведение сохраняется знак в знак. Иначе
-    (пустой/свежесобранный контур) заводим подставную роль SEED_ROLE на КОПИИ базы —
-    своим ходом, штатными инструментами."""
-    probe = sqlite3.connect(f"file:{base_db}?mode=ro", uri=True)
-    has_records = probe.execute(
-        "SELECT 1 FROM phoenix_records WHERE role=? LIMIT 1", (ROLE,)).fetchone()
-    probe.close()
-    if has_records:
-        return base_db, ROLE, False
-
+    Всегда (Э6, карточка #680): подставная база со схемой base_db без строк, на ней подставная
+    роль SEED_ROLE и чужая FOREIGN_ROLE — своим ходом, штатными инструментами. До Э6 при живых
+    записях PROTO приёмка работала на живой базе и судила живую память."""
     seed_dir = pathlib.Path(tempfile.mkdtemp(prefix="bite-memory-records-seed-"))
     seeded_db = seed_dir / "mezosync.db"
-    mezo_stand.snapshot_db(base_db, seeded_db)
+    mezo_stand.empty_db(base_db, seeded_db)
     save_tool = mezo_paths.live_scripts(__file__) / "save-phoenix.py"
     if not save_tool.is_file():
         sys.exit(f"⛔ НЕ ЗАПУСТИЛАСЬ: инструмента save-phoenix.py нет: {save_tool}")
-    for section, body in SEED_FIXTURES.items():
-        body_file = seed_dir / f"{section}.md"
+    for role, section, body in ([(SEED_ROLE, s, b) for s, b in SEED_FIXTURES.items()]
+                                + [(FOREIGN_ROLE, "state", FOREIGN_BODY)]):
+        body_file = seed_dir / f"{role}-{section}.md"
         body_file.write_text(body, encoding="utf-8")
         # ⚡ save-phoenix.py САМА пересобирает phoenix_records ТЕМ ЖЕ ходом (хук
         # rebuild_records — карточка #525 часть А): первое сохранение раздела без
@@ -169,13 +168,27 @@ def ensure_subject(base_db: pathlib.Path) -> tuple[pathlib.Path, str, bool]:
         # на pcK).
         save_env = dict(os.environ, PYTHONIOENCODING="utf-8")
         r = subprocess.run([sys.executable, str(save_tool), "--db", str(seeded_db),
-                            "--role", SEED_ROLE, "--section", section,
-                            "--file", str(body_file), "--actor", SEED_ROLE],
+                            "--role", role, "--section", section,
+                            "--file", str(body_file), "--actor", role],
                            capture_output=True, text=True, encoding="utf-8", env=save_env)
         if r.returncode != 0:
             sys.exit("⛔ ПРИЁМКА НЕ СОСТОЯЛАСЬ: заведение подставного раздела "
-                     f"{section} (save-phoenix.py) отказало кодом {r.returncode}:\n"
+                     f"{role}/{section} (save-phoenix.py) отказало кодом {r.returncode}:\n"
                      f"{r.stdout}{r.stderr}")
+    # Одна СНЯТАЯ запись — штатным --revoke рукой самой роли: без неё случай ⑤ судил бы ветку
+    # «снятых 0» и проходил, не проверив «чем снята» (у живой памяти снятые есть)
+    con = sqlite3.connect(f"file:{seeded_db}?mode=ro", uri=True)
+    revoke_id = con.execute("SELECT id FROM phoenix_records WHERE role=? AND section='plan'"
+                            " ORDER BY ord DESC LIMIT 1", (SEED_ROLE,)).fetchone()
+    con.close()
+    r = subprocess.run([sys.executable, str(TOOL), "--role", SEED_ROLE, "--db", str(seeded_db),
+                        "--revoke", str(revoke_id[0] if revoke_id else 0),
+                        "--why", "снята приёмкой bite-memory-records: проба «чем снята»"],
+                       capture_output=True, text=True, encoding="utf-8",
+                       env=dict(os.environ, MEZO_ROLE=SEED_ROLE, PYTHONIOENCODING="utf-8"))
+    if not revoke_id or r.returncode != 0:
+        sys.exit(f"⛔ ПРИЁМКА НЕ СОСТОЯЛАСЬ: снять подставную запись не удалось (код {r.returncode}):\n"
+                 f"{r.stdout}{r.stderr}")
     return seeded_db, SEED_ROLE, True
 
 
@@ -210,10 +223,9 @@ def main() -> int:
     print(f"инструмент: {TOOL}")
     print(f"база:       {DB}")
     if seeded:
-        print(f"ℹ️ у роли PROTO в базе нет разобранных записей (пустой/свежий контур,"
-              f" карточка #667) — приёмка завела подставную роль {ROLE} НА КОПИИ:"
-              f" тело разделов записано save-phoenix.py, он же ТЕМ ЖЕ ходом (хук"
-              f" пересборки) разобрал его на записи")
+        print(f"ℹ️ подставная база (этап Э6, карточка #680): приёмка завела роль {ROLE} и чужую"
+              f" {FOREIGN_ROLE} — тело разделов записано save-phoenix.py, он же ТЕМ ЖЕ ходом (хук"
+              f" пересборки) разобрал его на записи; живая память ролей не судится")
     print("=" * 88)
 
     conn = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
@@ -323,7 +335,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         sandbox = pathlib.Path(tmp)
         db_copy = sandbox / "mezosync.db"
-        mezo_stand.snapshot_db(DB, db_copy)
+        mezo_stand.snapshot_db(DB, db_copy)  # DB — подставная база ensure_subject(), не живая (Э6)
         # инструмент и его сосед-резак кладутся РЯДОМ: инструмент импортирует резак
         # от своего расположения, значит в песочнице он возьмёт песочный.
         for filename in ("memory-records.py", "memory-archive.py", "mezo_paths.py"):
