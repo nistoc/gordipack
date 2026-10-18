@@ -47,7 +47,7 @@
   legacy-ignored ........ ключ annex_dir файла путей не читается        → ㉒
   legacy-literal ........ без ключа берётся каталог автора, как литерал   → ㉒б
 
-Живой базы не касается: копия базы (mezo_stand.snapshot_db), подставные правила zz-*,
+Живой базы не касается: подставная база (mezo_stand.empty_db), подставные правила zz-*,
 инструменты — копиями в стенде, среда — mezo_stand.stand_env.
 """
 import argparse
@@ -66,7 +66,12 @@ import mezo_target  # noqa: E402
 TARGET = mezo_target.script("set-rule.py")
 print(f"⚖️ испытуется: {mezo_target.label()}")
 sys.path.insert(0, str(mezo_paths.live_scripts()))
+# mezo_stand — из каталога самой приёмки, той же версии пакета (Э6: empty_db есть только с этой
+# версии; scripts/ живого контура до установки выпуска — прежней). Порядок поиска модулей для
+# испытуемых инструментов прежний: вставка снимается сразу после импорта.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_stand  # noqa: E402
+sys.path.pop(0)
 
 BREAKS = {
     "skip-audit": ([("    conn.execute(\n        \"INSERT INTO audit_log (actor_role, action, target, diff_md)"
@@ -142,13 +147,21 @@ def main() -> int:
     stand = mezo_stand.new("bite-set-rule-revoke-")
     container = stand / "container"
     (container / ".mezosync").mkdir(parents=True)
-    db = mezo_stand.snapshot_db(mezo_paths.live_db(), container / ".mezosync" / "mezosync.db")
+    db = mezo_stand.empty_db(mezo_paths.live_db(), container / ".mezosync" / "mezosync.db")
     con = sqlite3.connect(str(db))
     for key, (lock, body) in TEST_RULES.items():
         con.execute("DELETE FROM rules WHERE rule_key=?", (key,))
         con.execute("INSERT INTO rules (rule_key, body, locked_by, version, basis, authorized, "
                     "source_ref, expiry_kind, status) VALUES (?,?,?,1,?,?,?,?,'active')",
                     (key, body, lock, "проба приёмки", "coord", "приёмка", "forever"))
+    con.commit()
+    con.close()
+    # Рука правки: set-rule.py без --actor и MEZO_ROLE берёт координатора ИЗ ДАННЫХ (живая роль со словом
+    # «координатор» в причине). На копии живой базы это был COORD этого контура; на подставной реестр пуст —
+    # сажаем свою роль-координатора, чтобы испытывался тот же путь, а не отказ «не названа рука» (Э6, карточка #680).
+    mezo_stand.seed_roles(db, ["ZZK"])
+    con = sqlite3.connect(str(db))
+    con.execute("UPDATE roles SET lifecycle_reason='координатор подставной базы (приёмка)' WHERE role='ZZK'")
     con.commit()
     con.close()
 

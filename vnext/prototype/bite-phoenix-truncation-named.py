@@ -41,7 +41,12 @@ print(f"⚖️ испытуется: {mezo_target.label()}")
 SCRIPTS = mezo_paths.live_scripts()
 LIVE_DB = mezo_paths.live_db()
 sys.path.insert(0, str(SCRIPTS))
+# mezo_stand — из каталога самой приёмки, той же версии пакета (Э6: empty_db есть только с этой
+# версии; scripts/ живого контура до установки выпуска — прежней). Порядок поиска модулей для
+# испытуемых инструментов прежний: вставка снимается сразу после импорта.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_stand  # noqa: E402
+sys.path.pop(0)
 
 OK = FAIL = 0
 ROLE = "ZZP"
@@ -71,7 +76,7 @@ def save(db, body, path):
 
 stand = mezo_stand.new("phoenix-trunc-")
 db = stand / "mezosync.db"
-mezo_stand.snapshot_db(LIVE_DB, db)
+mezo_stand.empty_db(LIVE_DB, db)
 con = sqlite3.connect(str(db))
 con.execute("DELETE FROM tool_leases")            # чужая занятость приёмку не красит
 con.execute("INSERT INTO roles (role, lifecycle, zone) VALUES (?,'alive','проба обрезки')",

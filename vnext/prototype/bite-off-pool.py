@@ -3,7 +3,7 @@ r"""
 bite-off-pool.py — приёмка П① пула (план «Роли не забывают»): ворота «новое — в пул»
 и статус «заморожена» с обязательным условием разморозки.
 
-Случаи (на КОПИИ живой базы, mezo_stand; суд по подсаженным карточкам, живая база
+Случаи (на ПОДСТАВНОЙ базе, mezo_stand.empty_db; суд по подсаженным карточкам, живая база
 только читается):
   ① активный пул есть (ЕДИНСТВЕННЫЙ), карточка заводится БЕЗ --track → рождается
     ЗАМОРОЖЕННОЙ с условием разморозки (карточка #399 ступень ③ поглотила прежнее
@@ -14,7 +14,8 @@ bite-off-pool.py — приёмка П① пула (план «Роли не з�
   ⑤ frozen С условием → принят; в list --status frozen виден 🧊 и само условие
   ⑥ frozen НЕ в открытых: обычный list его не несёт
   ⑦ ОБРАТНЫЙ ХОД: ворота frozen сняты в копии инструмента → ④ проходит молча (краснеет)
-  ⑧ контроль: живая база прогоном не изменилась
+  ⑧ контроль: живая база прогоном не изменилась — по своим следам (роль ZZR, пул TRACK-ZZOFF),
+     а не по размеру и времени файла: те меняет любая чужая запись (карточка #483)
 """
 import os
 import sqlite3
@@ -28,7 +29,12 @@ import mezo_paths  # noqa: E402
 SCRIPTS = mezo_paths.live_scripts()
 LIVE_DB = mezo_paths.live_db()
 sys.path.insert(0, str(SCRIPTS))
+# mezo_stand — из каталога самой приёмки, той же версии пакета (Э6: empty_db есть только с этой
+# версии; scripts/ живого контура до установки выпуска — прежней). Порядок поиска модулей для
+# испытуемых инструментов прежний: вставка снимается сразу после импорта.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_stand  # noqa: E402
+sys.path.pop(0)
 
 OK = FAIL = 0
 
@@ -69,8 +75,11 @@ def run(script, *args, db):
 
 stand = mezo_stand.new("off-pool-")
 db = stand / "mezosync.db"
-live_before = (LIVE_DB.stat().st_size, LIVE_DB.stat().st_mtime_ns)
-mezo_stand.snapshot_db(LIVE_DB, db)
+# свои следы на стенде: по ним ⑧ судит, не попали ли записи в живую базу (карточка #483)
+MARKS = ['ZZR', 'TRACK-ZZOFF']
+live_before = mezo_stand.traces(LIVE_DB, MARKS)
+# подставная база (Э6, карточка #680): схема живой без строк, строки сажает приёмка
+mezo_stand.empty_db(LIVE_DB, db)
 con = sqlite3.connect(str(db))
 con.execute("UPDATE tracks SET status='paused' WHERE status='active'")
 con.execute("INSERT INTO tracks (track_id, title, status) VALUES "
@@ -158,8 +167,9 @@ rc7, out7 = run(copied_backlog, "status", str(zzid2), "frozen", "--actor", "ZZR"
 case("⑦ обратный ход: проверка условия снята → заморозка без условия ПРОХОДИТ (④ краснеет)",
      rc7 == 0 and "УСЛОВИЯ РАЗМОРОЗКИ" not in out7)
 
-live_after = (LIVE_DB.stat().st_size, LIVE_DB.stat().st_mtime_ns)
-case("⑧ живая база прогоном не изменилась", live_before == live_after)
+live_after = mezo_stand.traces(LIVE_DB, MARKS)
+case("⑧ живая база прогоном не изменилась (своих следов в ней не прибавилось)",
+     live_before == live_after, f"до {live_before or 'нет'} · после {live_after or 'нет'}")
 
 print(f"\nИТОГ: {OK}/{OK + FAIL}")
 raise SystemExit(mezo_stand.finish(0 if FAIL == 0 else 1))

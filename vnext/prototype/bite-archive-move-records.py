@@ -69,7 +69,12 @@ import mezo_paths  # noqa: E402 — импорт из vnext-tools (своя ко
 
 SCRIPTS = mezo_paths.live_scripts()
 sys.path.insert(0, str(SCRIPTS))
-import mezo_stand  # noqa: E402 — стенд из S (.mezosync/scripts), как велит карточка
+# mezo_stand — из каталога самой приёмки, той же версии пакета (Э6: empty_db есть только с этой
+# версии; scripts/ живого контура до установки выпуска — прежней). Порядок поиска модулей для
+# испытуемых инструментов прежний: вставка снимается сразу после импорта.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import mezo_stand  # noqa: E402 — из каталога приёмки (Э6; до него — из S, .mezosync/scripts)
+sys.path.pop(0)
 
 LIVE_DB = mezo_paths.live_db()
 CONTAINER_ROOT = mezo_paths.container_root(__file__)  # для find_env() — см. её докстринг
@@ -146,12 +151,12 @@ def stand_env(container: pathlib.Path) -> dict:
 
 
 def fresh_case_db(case_dir: pathlib.Path) -> pathlib.Path:
-    """Копия живой базы В ЭТОТ каталог случая — через sqlite3 backup API, источник
+    """Подставная база (схема живой без строк; Э6) В ЭТОТ каталог случая — через sqlite3 backup API, источник
     открыт ТОЛЬКО ДЛЯ ЧТЕНИЯ. Живого файла эта функция не пишет ни при каких путях."""
     mezosync_dir = case_dir / ".mezosync"
     mezosync_dir.mkdir(parents=True, exist_ok=True)
     db = mezosync_dir / "mezosync.db"
-    mezo_stand.snapshot_db(LIVE_DB, db)
+    mezo_stand.empty_db(LIVE_DB, db)
     return db
 
 

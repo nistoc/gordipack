@@ -41,7 +41,12 @@ import mezo_target  # noqa: E402
 TARGET = mezo_target.script("write-message.py")
 print(f"⚖️ испытуется: {mezo_target.label()}")
 sys.path.insert(0, str(mezo_paths.live_scripts()))
+# mezo_stand — из каталога самой приёмки, той же версии пакета (Э6: empty_db есть только с этой
+# версии; scripts/ живого контура до установки выпуска — прежней). Порядок поиска модулей для
+# испытуемых инструментов прежний: вставка снимается сразу после импорта.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_stand  # noqa: E402
+sys.path.pop(0)
 
 BREAKS = {
     "drop-archive-check": ([("        elif record.archived:\n", "        elif False:\n")], {"②"}),
@@ -88,7 +93,7 @@ def main() -> int:
     stand = mezo_stand.new("bite-unreachable-")
     container = stand / "container"
     (container / ".mezosync").mkdir(parents=True)
-    db = mezo_stand.snapshot_db(mezo_paths.live_db(), container / ".mezosync" / "mezosync.db")
+    db = mezo_stand.empty_db(mezo_paths.live_db(), container / ".mezosync" / "mezosync.db")
     con = sqlite3.connect(str(db))
     # Подставные роли: заводятся в реестре КОПИИ (иначе write-message откажет по словарю
     # адресатов) — приёмка не зависит от того, какие роли живут в испытуемом контуре.

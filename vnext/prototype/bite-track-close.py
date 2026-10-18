@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 r"""
 bite-track-close.py — приёмка П③/П④ пула: track.py (вид · план · вердикты · закрытие ·
-триаж). На КОПИИ живой базы (mezo_stand), суд по подсаженному пулу TRACK-ZZTC.
+триаж). На ПОДСТАВНОЙ базе (mezo_stand.empty_db; Э6), суд по подсаженному пулу TRACK-ZZTC.
 
 Случаи:
   ⓪ open: пул открыт, напечатан порядок пересоздания (П⑥)
@@ -14,7 +14,8 @@ bite-track-close.py — приёмка П③/П④ пула: track.py (вид ·
   ⑥ verdict documentation «обновить …» → РОЖДЕНА карточка тем же ходом
   ⑦ после полного набора вердиктов close проходит; process-проблемы названы сырьём issues
   ⑧ --no-verdicts без причины → отказ; с причиной → закрыт + след в журнале действий
-  ⑨ контроль: живая база прогоном не изменилась
+  ⑨ контроль: живая база прогоном не изменилась — по своим следам (пулы TRACK-ZZTC, TRACK-ZZTC2),
+     а не по размеру и времени файла: те меняет любая чужая запись (карточка #483)
 """
 import os
 import shutil
@@ -29,7 +30,12 @@ import mezo_paths  # noqa: E402
 SCRIPTS = mezo_paths.live_scripts()
 LIVE_DB = mezo_paths.live_db()
 sys.path.insert(0, str(SCRIPTS))
+# mezo_stand — из каталога самой приёмки, той же версии пакета (Э6: empty_db есть только с этой
+# версии; scripts/ живого контура до установки выпуска — прежней). Порядок поиска модулей для
+# испытуемых инструментов прежний: вставка снимается сразу после импорта.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_stand  # noqa: E402
+sys.path.pop(0)
 
 OK = FAIL = 0
 
@@ -52,8 +58,11 @@ def run(script, *args, db):
 
 stand = mezo_stand.new("track-close-")
 db = stand / "mezosync.db"
-live_before = (LIVE_DB.stat().st_size, LIVE_DB.stat().st_mtime_ns)
-mezo_stand.snapshot_db(LIVE_DB, db)
+# свои следы на стенде: по ним ⑨ судит, не попали ли записи в живую базу (карточка #483)
+MARKS = ['TRACK-ZZTC', 'TRACK-ZZTC2']
+live_before = mezo_stand.traces(LIVE_DB, MARKS)
+# подставная база (Э6, карточка #680): схема живой без строк, строки сажает приёмка
+mezo_stand.empty_db(LIVE_DB, db)
 con = sqlite3.connect(str(db))
 con.execute("UPDATE tracks SET status='paused' WHERE status='active'")
 try:
@@ -158,8 +167,9 @@ con.close()
 case("⑧ лазейка: без причины отказ; с причиной закрыт и след в журнале действий",
      rc_a != 0 and rc_b == 0 and trail is not None)
 
-live_after = (LIVE_DB.stat().st_size, LIVE_DB.stat().st_mtime_ns)
-case("⑨ живая база прогоном не изменилась", live_before == live_after)
+live_after = mezo_stand.traces(LIVE_DB, MARKS)
+case("⑨ живая база прогоном не изменилась (своих следов в ней не прибавилось)",
+     live_before == live_after, f"до {live_before or 'нет'} · после {live_after or 'нет'}")
 
 print(f"\nИТОГ: {OK}/{OK + FAIL}")
 raise SystemExit(mezo_stand.finish(0 if FAIL == 0 else 1))

@@ -26,7 +26,7 @@
   own-connection ... пересборка в холостом прогоне на своём соединении, как до #656 → ① ② ③ ⑤ ⑥
   dry-says-saved ... нет ветки холостого прогона, когда memory-records.py не найден  → ⑤
 
-Живой базы не касается: копия базы (mezo_stand.snapshot_db), инструменты — копиями в стенде,
+Живой базы не касается: подставная база (mezo_stand.empty_db), инструменты — копиями в стенде,
 среда — mezo_stand.stand_env. Объявления о правке в КОПИИ гасятся: чужое объявление о правке
 save-phoenix.py отказало бы настоящему прогону не по причине, которую здесь судят.
 ⚖️ Чего НЕ проверяет: ожидание занятой базы при снятии копии для предпросмотра (предел 10 с) —
@@ -48,7 +48,12 @@ TARGET = mezo_target.script("save-phoenix.py")
 print(f"⚖️ испытуется: {mezo_target.label()}")
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(mezo_paths.live_scripts()))
+# mezo_stand — из каталога самой приёмки, той же версии пакета (Э6: empty_db есть только с этой
+# версии; scripts/ живого контура до установки выпуска — прежней). Порядок поиска модулей для
+# испытуемых инструментов прежний: вставка снимается сразу после импорта.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_stand  # noqa: E402
+sys.path.pop(0)
 
 ROLE, SECTION = "BITE656", "state"
 RECORDS_LINE = "🧩 записи раздела"
@@ -135,7 +140,7 @@ def main() -> int:
     stand = mezo_stand.new("bite-phoenix-dry-run-")
     container = stand / "container"
     (container / ".mezosync").mkdir(parents=True)
-    db = mezo_stand.snapshot_db(mezo_paths.live_db(), container / ".mezosync" / "mezosync.db")
+    db = mezo_stand.empty_db(mezo_paths.live_db(), container / ".mezosync" / "mezosync.db")
 
     con = sqlite3.connect(str(db))
     for table in ("phoenix", "phoenix_records", "phoenix_history"):
