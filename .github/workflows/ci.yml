@@ -1,0 +1,88 @@
+# CI пакета: только проверки, которые проходят на чистом клоне уже сейчас.
+# Описание проверок и того, как запустить их у себя, — CLAUDE.md, раздел «Команды».
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.12 — нижняя граница: vnext/prototype/bite-signal-templates.py пишет f-строку PEP 701
+        python: ["3.12", "3.14"]
+    steps:
+      # Клон кладётся в pack/, а контур собирается рядом, в $GITHUB_WORKSPACE/.mezosync:
+      # инструменты и приёмки клона находят контур, поднимаясь от себя вверх до .mezosync/mezosync.db.
+      - uses: actions/checkout@v6
+        with:
+          path: pack
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Синтаксис всех .py (compileall, SyntaxWarning — ошибка)
+        working-directory: pack
+        run: python -W error::SyntaxWarning -m compileall -q .
+
+      - name: Литералы донора в файлах ядра (та же проверка, что .githooks/pre-commit)
+        working-directory: pack
+        run: python vnext/tools/guard-donor-literals.py
+
+      - name: База правил rules/pack-rules.db сходится с правилами HEAD
+        working-directory: pack
+        run: |
+          python vnext/tools/build-pack-rules-db.py --check
+          python vnext/tools/bite-pack-rules-db.py
+
+      - name: Свежий контур из пакета (init-group.py)
+        run: >-
+          python pack/scripts/init-group.py --name ci
+          --path "$GITHUB_WORKSPACE/.mezosync"
+          --domain data-platform --roles coord core stud taxo
+
+      - name: Все гарды свежего контура (guard-all.py)
+        run: python .mezosync/scripts/guard-all.py
+
+      - name: Приёмка сборки контура с нуля (bite-fresh-circuit.py)
+        run: python pack/vnext/prototype/bite-fresh-circuit.py
+
+      - name: Приёмка подставной базы приёмок ядра (bite-core-fixture.py)
+        run: python pack/vnext/prototype/bite-core-fixture.py
+
+  node:
+    name: Node (turn-status, srcclient)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          # vite 7 требует node ^20.19 || >=22.12
+          node-version: 22
+          cache: npm
+          cache-dependency-path: srcclient/package-lock.json
+
+      - name: Проверки расширения turn-status
+        run: node plugins/turn-status/test/run.js
+
+      - name: Клиент Перископа — установка и сборка (tsc --noEmit + vite build)
+        working-directory: srcclient
+        run: |
+          npm ci
+          npm run build
