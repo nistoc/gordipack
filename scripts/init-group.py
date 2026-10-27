@@ -279,11 +279,34 @@ def main():
     # ⇒ Беру ГОТОВУЮ функцию журнала, а не пишу вторую: две меры одного — две правды,
     # и расходятся они молча (ровно то, чем занята вся эта карточка).
     sys.path.insert(0, str(SCRIPT_DIR))
-    from schema_journal import fingerprint as _fp
+    from schema_journal import fingerprint as _fp, record_step as _record_step
+    import schema_step_order
     fp = _fp(conn)
     # версия берётся ИЗ ИМЕНИ ФАЙЛА схемы (mezosync_v3.sql → v3), а не пишется рядом;
     # VIEW schema_version ищет вехи по образцу 'v[0-9]*' — форма обязана совпасть
     milestone = "v" + "".join(ch for ch in SCHEMA_FILE.stem.split("_v")[-1] if ch.isdigit())
+    # 6а. СТРОКИ ШАГОВ, ВШИТЫХ В БАЗОВУЮ СХЕМУ (schema_step_order.BASE_STEPS), — ДО строки вехи:
+    # schema_version берёт версию по последней записи-вехе, а «сверх отметки» считает записи
+    # ПОСЛЕ неё. 🪤 Найдено 2026-10-27 (описание PR #45): контур из v6 нёс в журнале одну 'v6',
+    # а контур из v5, обновлённый теми же шагами, — 'v5', одиннадцать шагов и 'v6'; приёмка
+    # bite-messages-archive.py краснела случаем ⓪ на каждом новом контуре.
+    # ⚖️ Пишет ГОТОВАЯ функция журнала с backdated=True — пометкой «записано задним числом»:
+    # отпечаток снят при сборке, а не в час шага. Автор — сборщик, а не MEZO_ROLE вызывающего.
+    # ⛔ Список, который не кончается вехой ЭТОЙ схемы, не пишется вовсе: строки чужой базы
+    # хуже их отсутствия. Громкое предупреждение и «с отказами».
+    base_steps = tuple(getattr(schema_step_order, "BASE_STEPS", ()))
+    if base_steps and schema_step_order.journal_version(base_steps[-1]) == milestone:
+        for step in base_steps[:-1]:
+            _record_step(conn, schema_step_order.journal_version(step),
+                         f"шаг вшит в базовую схему {SCHEMA_FILE.name}: структура пришла файлом "
+                         "схемы при сборке контура, сам шаг здесь не запускался",
+                         backdated=True, by="tool:init-group.py")
+    else:
+        print(f"  ⚠️ schema_step_order.BASE_STEPS не кончается вехой {milestone} базовой схемы "
+              f"{SCHEMA_FILE.name} (последний: {base_steps[-1] if base_steps else 'список пуст'}) — "
+              "строки вшитых шагов в журнал НЕ записаны")
+        soft_failures.append(f"журнал вшитых в {SCHEMA_FILE.name} шагов не записан: "
+                             "schema_step_order.BASE_STEPS не кончается её вехой")
     conn.execute("INSERT OR IGNORE INTO schema_migrations (version, applied_at, note,"
                  " fingerprint) VALUES (?, datetime('now'), ?, ?)",
                  (milestone, f"сборка из шаблона gordipack ({SCHEMA_FILE.name})", fp))
@@ -291,7 +314,11 @@ def main():
     if not got or not got[0]:
         print("  ⛔ ЖУРНАЛ НЕ ПРИНЯЛ ВЕХУ: контур не знает своей версии — это НЕ «готово»")
         sys.exit(2)
-    print(f"  ✅ Журнал шагов: веха {got[0]} · отпечаток {fp} (спрошено У БАЗЫ, не по факту вставки)")
+    before_milestone = conn.execute(
+        "SELECT COUNT(*) FROM schema_migrations WHERE rowid < "
+        "(SELECT rowid FROM schema_migrations WHERE version=?)", (milestone,)).fetchone()[0]
+    print(f"  ✅ Журнал шагов: веха {got[0]} · отпечаток {fp} · строк до вехи (вшитое в схему) "
+          f"{before_milestone} (спрошено У БАЗЫ, не по факту вставки)")
 
     conn.commit()
     conn.close()
