@@ -22,14 +22,17 @@ jobs:
         # Скрипты и hooks пакета живут на Windows (hooks — PowerShell), поэтому Windows — обязательно.
         os: [ubuntu-latest, windows-latest]
     timeout-minutes: 20
+    env:
+      # Вывод pytest и скриптов — по-русски; без этого лог Windows-раннера печатает \uXXXX.
+      PYTHONUTF8: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
 
