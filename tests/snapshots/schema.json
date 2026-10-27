@@ -1,0 +1,433 @@
+{
+ "_comment": "Итоговая схема свежего контура: файл схемы + шаги STEPS. Обновить: python -m pytest tests/test_schema.py --update-snapshots",
+ "schema_file": "mezosync_v6.sql",
+ "steps": [
+  "20260913-role-sessions-session-id",
+  "20260913-role-rights-revoked-by",
+  "20260915-foreign-rebirth-marks",
+  "20260924-role-sessions-transcript-id"
+ ],
+ "tables": {
+  "audit_log": {
+   "action": "TEXT",
+   "actor_role": "TEXT",
+   "diff_md": "TEXT",
+   "id": "INTEGER",
+   "target": "TEXT",
+   "timestamp": "TEXT"
+  },
+  "backlog": {
+   "blocked_reason": "TEXT",
+   "body_md": "TEXT",
+   "created_at": "TEXT",
+   "created_by": "TEXT",
+   "done_when": "TEXT",
+   "id": "INTEGER",
+   "parent_id": "INTEGER",
+   "parent_track": "TEXT",
+   "priority": "TEXT",
+   "rank": "INTEGER",
+   "reviewer": "TEXT",
+   "role": "TEXT",
+   "status": "TEXT",
+   "tags": "TEXT",
+   "title": "TEXT",
+   "updated_at": "TEXT"
+  },
+  "backlog_events": {
+   "actor_role": "TEXT",
+   "at": "TEXT",
+   "backlog_id": "INTEGER",
+   "body_md": "TEXT",
+   "event_type": "TEXT",
+   "from_status": "TEXT",
+   "id": "INTEGER",
+   "to_status": "TEXT"
+  },
+  "backlog_tests": {
+   "backlog_id": "INTEGER",
+   "command": "TEXT",
+   "created_by": "TEXT",
+   "expected": "TEXT",
+   "id": "INTEGER",
+   "last_result_md": "TEXT",
+   "last_run_at": "TEXT",
+   "method": "TEXT",
+   "spec_md": "TEXT",
+   "status": "TEXT",
+   "title": "TEXT"
+  },
+  "bridge_reviewed": {
+   "at": "TEXT",
+   "file_name": "TEXT",
+   "note_id": "INTEGER",
+   "role": "TEXT"
+  },
+  "broadcast_acks": {
+   "acked_at": "TEXT",
+   "message_id": "INTEGER",
+   "role": "TEXT"
+  },
+  "cross_links": {
+   "description": "TEXT",
+   "id": "INTEGER",
+   "last_sync_at": "TEXT",
+   "source_group": "TEXT",
+   "target_db_path": "TEXT",
+   "target_group": "TEXT"
+  },
+  "cursor_segments": {
+   "at": "TEXT",
+   "authorized": "TEXT",
+   "basis": "TEXT",
+   "from_id": "INTEGER",
+   "id": "INTEGER",
+   "kind": "TEXT",
+   "note_id": "INTEGER",
+   "role": "TEXT",
+   "to_id": "INTEGER"
+  },
+  "hint_seen": {
+   "content_hash": "TEXT",
+   "hint_key": "TEXT",
+   "role": "TEXT",
+   "shown_at": "TEXT"
+  },
+  "invariants": {
+   "code": "TEXT",
+   "description": "TEXT",
+   "established_at": "TEXT",
+   "established_by": "TEXT"
+  },
+  "message_addressee": {
+   "kind": "TEXT",
+   "linked_by": "TEXT",
+   "message_id": "INTEGER",
+   "role": "TEXT"
+  },
+  "message_task": {
+   "linked_by": "TEXT",
+   "message_id": "INTEGER",
+   "task_id": "INTEGER"
+  },
+  "message_thread": {
+   "kind": "TEXT",
+   "linked_by": "TEXT",
+   "message_id": "INTEGER",
+   "reply_to": "INTEGER",
+   "thread_id": "INTEGER"
+  },
+  "messages": {
+   "addressed_by": "TEXT",
+   "body_md": "TEXT",
+   "broadcast": "INTEGER",
+   "id": "INTEGER",
+   "priority": "TEXT",
+   "resolved": "INTEGER",
+   "tags": "TEXT",
+   "timestamp": "TEXT",
+   "writer_role": "TEXT"
+  },
+  "messages_archive": {
+   "addressed_by": "TEXT",
+   "body_md": "TEXT",
+   "broadcast": "INTEGER",
+   "id": "INTEGER",
+   "moved_at": "TEXT",
+   "moved_by": "TEXT",
+   "priority": "TEXT",
+   "resolved": "INTEGER",
+   "rule": "TEXT",
+   "tags": "TEXT",
+   "timestamp": "TEXT",
+   "writer_role": "TEXT"
+  },
+  "messages_history": {
+   "body_md": "TEXT",
+   "id": "INTEGER",
+   "priority": "TEXT",
+   "resolved": "INTEGER",
+   "tags": "TEXT",
+   "timestamp": "TEXT",
+   "writer_role": "TEXT"
+  },
+  "meta": {
+   "key": "TEXT",
+   "value": "TEXT"
+  },
+  "phoenix": {
+   "body": "TEXT",
+   "confirmed_at": "TEXT",
+   "role": "TEXT",
+   "saved_at": "TEXT",
+   "section": "TEXT"
+  },
+  "phoenix_archive": {
+   "body": "TEXT",
+   "body_chars": "INTEGER",
+   "id": "INTEGER",
+   "moved_at": "TEXT",
+   "moved_by": "TEXT",
+   "origin_saved_at": "TEXT",
+   "role": "TEXT",
+   "section": "TEXT",
+   "topic": "TEXT"
+  },
+  "phoenix_history": {
+   "actor": "TEXT",
+   "body": "TEXT",
+   "body_chars": "INTEGER",
+   "id": "INTEGER",
+   "prev_chars": "INTEGER",
+   "reason": "TEXT",
+   "role": "TEXT",
+   "saved_at": "TEXT",
+   "section": "TEXT"
+  },
+  "phoenix_history_archive": {
+   "actor": "TEXT",
+   "body": "TEXT",
+   "body_chars": "INTEGER",
+   "id": "INTEGER",
+   "moved_at": "TEXT",
+   "moved_by": "TEXT",
+   "prev_chars": "INTEGER",
+   "reason": "TEXT",
+   "role": "TEXT",
+   "rule": "TEXT",
+   "saved_at": "TEXT",
+   "section": "TEXT"
+  },
+  "phoenix_records": {
+   "alive": "TEXT",
+   "body": "TEXT",
+   "body_chars": "INTEGER",
+   "created_at": "TEXT",
+   "created_by": "TEXT",
+   "expiry_cond": "TEXT",
+   "happened_at": "TEXT",
+   "id": "INTEGER",
+   "ord": "INTEGER",
+   "origin_chars": "INTEGER",
+   "revoked_at": "TEXT",
+   "revoked_note": "TEXT",
+   "role": "TEXT",
+   "section": "TEXT",
+   "source": "TEXT",
+   "subject": "TEXT"
+  },
+  "phoenix_records_fts": {
+   "body": "",
+   "subject": ""
+  },
+  "phoenix_records_fts_config": {
+   "k": "",
+   "v": ""
+  },
+  "phoenix_records_fts_data": {
+   "block": "BLOB",
+   "id": "INTEGER"
+  },
+  "phoenix_records_fts_docsize": {
+   "id": "INTEGER",
+   "sz": "BLOB"
+  },
+  "phoenix_records_fts_idx": {
+   "pgno": "",
+   "segid": "",
+   "term": ""
+  },
+  "read_batches": {
+   "acked_at": "TEXT",
+   "issued_at": "TEXT",
+   "last_id": "INTEGER",
+   "role": "TEXT",
+   "shown_max": "INTEGER",
+   "token": "TEXT"
+  },
+  "read_cursors": {
+   "last_read_id": "INTEGER",
+   "reader_role": "TEXT",
+   "updated_at": "TEXT"
+  },
+  "role_rebirths": {
+   "at": "TEXT",
+   "id": "INTEGER",
+   "noted_at": "TEXT",
+   "noted_by": "TEXT",
+   "role": "TEXT",
+   "source": "TEXT"
+  },
+  "role_rebirths_foreign": {
+   "at": "TEXT",
+   "id": "INTEGER",
+   "moved_at": "TEXT",
+   "moved_by": "TEXT",
+   "noted_at": "TEXT",
+   "noted_by": "TEXT",
+   "reason": "TEXT",
+   "role": "TEXT",
+   "source": "TEXT"
+  },
+  "role_rights": {
+   "authorized_by": "TEXT",
+   "declared_by": "TEXT",
+   "granted_at": "TEXT",
+   "id": "INTEGER",
+   "kind": "TEXT",
+   "note": "TEXT",
+   "revoked_at": "TEXT",
+   "revoked_by": "TEXT",
+   "revoked_why": "TEXT",
+   "right_key": "TEXT",
+   "role": "TEXT",
+   "scope": "TEXT",
+   "source_ref": "TEXT",
+   "spent_at": "TEXT"
+  },
+  "role_sessions": {
+   "address": "TEXT",
+   "note": "TEXT",
+   "noted_at": "TEXT",
+   "noted_by": "TEXT",
+   "role": "TEXT",
+   "session_id": "TEXT",
+   "source": "TEXT",
+   "transcript_id": "TEXT"
+  },
+  "role_sessions_history": {
+   "address": "TEXT",
+   "id": "INTEGER",
+   "note": "TEXT",
+   "noted_at": "TEXT",
+   "noted_by": "TEXT",
+   "role": "TEXT",
+   "session_id": "TEXT",
+   "source": "TEXT",
+   "superseded_at": "TEXT",
+   "superseded_by": "TEXT",
+   "transcript_id": "TEXT"
+  },
+  "role_skill": {
+   "created_at": "TEXT",
+   "evidence": "TEXT",
+   "expired_at": "TEXT",
+   "expired_why": "TEXT",
+   "id": "INTEGER",
+   "measured_at": "TEXT",
+   "role": "TEXT",
+   "skill": "TEXT",
+   "until_cond": "TEXT",
+   "written_by": "TEXT"
+  },
+  "role_status": {
+   "role": "TEXT",
+   "status": "TEXT",
+   "updated_at": "TEXT"
+  },
+  "roles": {
+   "created_at": "TEXT",
+   "in_roster": "INTEGER",
+   "lifecycle": "TEXT",
+   "lifecycle_at": "TEXT",
+   "lifecycle_by": "TEXT",
+   "lifecycle_reason": "TEXT",
+   "role": "TEXT",
+   "seen_in": "TEXT",
+   "zone": "TEXT"
+  },
+  "rules": {
+   "authorized": "TEXT",
+   "basis": "TEXT",
+   "body": "TEXT",
+   "created_at": "TEXT",
+   "expiry_cond": "TEXT",
+   "expiry_kind": "TEXT",
+   "id": "INTEGER",
+   "locked_by": "TEXT",
+   "revoked_at": "TEXT",
+   "revoked_by": "TEXT",
+   "revoked_reason": "TEXT",
+   "rule_key": "TEXT",
+   "skill_delivery": "TEXT",
+   "source_ref": "TEXT",
+   "status": "TEXT",
+   "superseded_by": "INTEGER",
+   "updated_at": "TEXT",
+   "version": "INTEGER"
+  },
+  "schema_migrations": {
+   "applied_at": "TEXT",
+   "applied_by": "TEXT",
+   "fingerprint": "TEXT",
+   "note": "TEXT",
+   "version": "TEXT"
+  },
+  "stats_log": {
+   "captured_at": "TEXT",
+   "id": "INTEGER",
+   "snapshot_json": "TEXT"
+  },
+  "sync_backoff": {
+   "last_bridge_mtime": "REAL",
+   "last_seen_id": "INTEGER",
+   "quiet_streak": "INTEGER",
+   "role": "TEXT",
+   "sleep_sec": "INTEGER",
+   "updated_at": "TEXT"
+  },
+  "templates": {
+   "capabilities": "TEXT",
+   "display_name": "TEXT",
+   "launcher_prompt": "TEXT",
+   "role_type": "TEXT",
+   "tools_needed": "TEXT",
+   "updated_at": "TEXT",
+   "version": "INTEGER"
+  },
+  "tool_lease_waits": {
+   "id": "INTEGER",
+   "lease_id": "INTEGER",
+   "refused_at": "TEXT",
+   "role": "TEXT",
+   "tool": "TEXT"
+  },
+  "tool_leases": {
+   "id": "INTEGER",
+   "note": "TEXT",
+   "reason": "TEXT",
+   "released_at": "TEXT",
+   "role": "TEXT",
+   "taken_at": "TEXT",
+   "tools": "TEXT",
+   "until_utc": "TEXT"
+  },
+  "track_verdicts": {
+   "body": "TEXT",
+   "created_at": "TEXT",
+   "id": "INTEGER",
+   "kind": "TEXT",
+   "role": "TEXT",
+   "track_id": "TEXT",
+   "verdict": "TEXT"
+  },
+  "tracks": {
+   "created_at": "TEXT",
+   "owner_decision": "TEXT",
+   "plan_md": "TEXT",
+   "skills": "TEXT",
+   "status": "TEXT",
+   "title": "TEXT",
+   "track_id": "TEXT",
+   "updated_at": "TEXT"
+  }
+ },
+ "views": [
+  "backlog_without_criterion",
+  "cursor_gaps",
+  "cursor_truth",
+  "messages_all",
+  "role_rights_live",
+  "schema_version"
+ ]
+}
