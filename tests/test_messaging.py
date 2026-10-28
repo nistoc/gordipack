@@ -305,7 +305,13 @@ def test_dry_run_writes_nothing(circuit):
         conn.close()
     res = write(circuit, "COORD", "dry run note", "--to", "CORE", "--dry-run")
     assert res.returncode == 0, res.explain()
-    dry_id = note_id(res)
+    # Карточка #726: холостой прогон не печатает строку записи «OK #N» — номер из копии в памяти
+    # называется словами «получила бы номер N», без решётки, чтобы его не приняли за записку.
+    assert not re.search(r"OK #\d+", res.stdout), "холостой прогон печатает строку записи:\n" + res.explain()
+    assert "НЕ записана" in res.stdout, res.explain()
+    m = re.search(r"получила бы номер (\d+)", res.stdout)
+    assert m, "в выводе холостого прогона нет номера, который получила бы запись:\n" + res.explain()
+    dry_id = int(m.group(1))
     conn = circuit.connect()
     try:
         assert row_counts(conn) == before
