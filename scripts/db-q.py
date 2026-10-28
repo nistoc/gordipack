@@ -63,7 +63,11 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=200, help="строк в выводе (обрезание называется вслух)")
     a = ap.parse_args()
 
-    head = (a.sql.strip().split(None, 1) or [""])[0].upper().rstrip("(")
+    # Голова — первые БУКВЫ запроса, а не слово до пробела: «SELECT*FROM roles», «VALUES(1),(2)» и
+    # «SELECT(1)» — чтения, а прежний разбор по пробелу давал голову «SELECT*FROM» и отказывал им как
+    # пишущим (находка тестов PR #44, tests/test_tools.py). Второй затвор — база только на чтение — прежний.
+    m_head = re.match(r"\s*([A-Za-z]+)", a.sql)
+    head = m_head.group(1).upper() if m_head else ""
     if head not in READONLY_HEADS:
         print(f"⛔ это ПИШУЩИЙ запрос ({head or 'пусто'}) — db-q только читает.\n"
               f"   Писать в базу — штатными инструментами (backlog.py, write-message.py, "

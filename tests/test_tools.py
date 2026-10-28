@@ -662,11 +662,7 @@ def test_dbq_unknown_column_refusal_hints_real_columns(circuit):
     assert "Traceback" not in res.out
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "scripts/db-q.py:66 — «голова» запроса берётся первым словом до пробела "
-    "(split(None, 1)[0].rstrip('(')), поэтому чтения без пробела после первого слова — "
-    "SELECT*FROM roles, VALUES(1),(2), SELECT(1) — отказаны как «ПИШУЩИЙ запрос» (код 2), "
-    "хотя это SELECT/VALUES; rstrip('(') рассчитан именно на такую форму, но не срабатывает."))
+# Было xfail до починки scripts/db-q.py (голова запроса — первые буквы, а не слово до пробела).
 @pytest.mark.parametrize("sql", ["SELECT*FROM roles", "VALUES(1),(2)", "SELECT(1)"])
 def test_dbq_reads_written_without_a_space_after_the_first_word(circuit, sql):
     res = _q(circuit, sql)
