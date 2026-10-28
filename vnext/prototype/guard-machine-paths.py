@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import functools
 import re
 import subprocess
 import sys
@@ -39,7 +40,7 @@ MACHINE_PATH_RE = re.compile(r"(?<![A-Za-z0-9_])(?:[A-Za-z]:[\\/]|/(?:home|Users
 
 # Уже обезличенное — не находка. Заполнитель честнее пустоты и его трогать нельзя.
 PLACEHOLDER_RE = re.compile(r"<[^>]+>|\.\.\.|…|path[\\/]to|ВАШ|PATH_TO|%\w+%|\$\w+|\{\w*\}",
-                         re.IGNORECASE)
+                            re.IGNORECASE)
 
 def this_machine_roots() -> list[str]:
     r"""Каталоги, существующие ИМЕННО ЗДЕСЬ. Выводятся, а не впечатываются.
@@ -61,10 +62,49 @@ def this_machine_roots() -> list[str]:
 ROOTS = this_machine_roots()
 
 
+# Верхний каталог пути: диск и первый каталог; у домашних (Users, home) — ещё имя пользователя.
+PATH_HEAD_RE = re.compile(r"^(?:([A-Za-z]:)[\\/]+((?:users)[\\/]+)?([^\\/]+)|/(home|Users)/+([^/]+))",
+                          re.IGNORECASE)
+# Каталоги, которые есть на ЛЮБОЙ машине Windows: путь в них — не раскладка одной машины
+# (SYSTEMROOT в окружении стенда и подобное), и красить его значило бы обвинять верный текст.
+SYSTEM_HEADS = {"windows", "program files", "program files (x86)", "programdata", "users",
+                "users\\public", "users\\default", "users\\all users"}
+
+
+@functools.lru_cache(maxsize=None)
+def head_exists(head: str) -> bool:
+    return Path(head).is_dir()
+
+
+def path_head(piece: str) -> str | None:
+    """Верхний каталог пути — диск и первый каталог (у домашних — и имя пользователя).
+    None — не путь диска либо системный каталог, общий для всех машин."""
+    m = PATH_HEAD_RE.match(piece.rstrip(".,;:»"))
+    if not m:
+        return None
+    if not m.group(1):
+        return f"/{m.group(4)}/{m.group(5)}"
+    tail = re.sub(r"[\\/]+", r"\\", (m.group(2) or "") + m.group(3))
+    if tail.lower() in SYSTEM_HEADS:
+        return None
+    return m.group(1) + "\\" + tail
+
+
+# 🪤 Карточка #731 (замер PROTO, записка #6102). Прежде путь вёл на эту машину, только если
+#    начинался с одного из ROOTS, а ROOTS выводятся из места, где лежит сама проверка: копия из
+#    выгрузки в черновой папке находила образцом себя, и путь в настоящий каталог образца читался
+#    придуманным — на одном дереве 13 живых против 20 у копии в образце. Существует ли каталог —
+#    свойство машины, а не места проверки: второе условие ниже.
+# 🪤 Там же: в исходнике Python путь пишется удвоенными слешами ("X:\\dir\\sub"), и сравнение
+#    с корнем без сведения разделителей не узнавало его ни из какого места. Сводим.
 def leads_to_this_machine(piece: str) -> bool:
-    """Путь начинается с одного из корней этой машины — с точностью до вида разделителя."""
-    norm = piece.replace("/", "\\").lower()
-    return any(norm.startswith(k) for k in ROOTS)
+    """Путь начинается с одного из корней этой машины (разделители сведены) либо его верхний
+    каталог здесь существует."""
+    norm = re.sub(r"[\\/]+", r"\\", piece).lower()
+    if any(norm.startswith(k) for k in ROOTS):
+        return True
+    head = path_head(piece)
+    return head is not None and head_exists(head)
 
 
 WATCHED_SUFFIXES = {".py", ".md", ".sql", ".json", ".ps1", ".sh", ".yml", ".yaml",
