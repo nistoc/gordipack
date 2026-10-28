@@ -129,7 +129,14 @@ def main():
 
     if db_path.exists():
         print(f"⚠️  БД уже существует: {db_path}")
-        resp = input("Перезаписать? (y/N): ").strip().lower()
+        # Без терминала (stdin закрыт: CI, вызов из другого скрипта или агента) input() бросает
+        # EOFError — прежде это был Traceback и код 1. Нет ответа — значит «нет»: базу не трогаем
+        # (находка тестов PR #44).
+        try:
+            resp = input("Перезаписать? (y/N): ").strip().lower()
+        except EOFError:
+            print()
+            resp = ""
         if resp != "y":
             print("Отмена.")
             sys.exit(0)
