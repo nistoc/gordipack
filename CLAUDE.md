@@ -53,7 +53,7 @@ python vnext/tools/bite-pack-rules-db.py
 
 ```bash
 python -m pip install -r tests/requirements.txt
-python -m pytest tests                                      # ≈3 мин на Linux, ≈5 мин на Windows; 9 xfail
+python -m pytest tests                                      # ≈3 мин на Linux, ≈5 мин на Windows
 python -m pytest tests/test_messaging.py -q                 # один файл
 python -m pytest tests/test_schema.py --update-snapshots    # схема изменена намеренно: обновить snapshot
 ```
@@ -126,8 +126,7 @@ Pre-commit hook включается в каждом клоне отдельно
   `rules-from-pack.py` без `--source` сам клонирует пак с GitHub, то есть ходит в сеть.
 - `bite-all.py --set core` на свежем контуре кончается кодом 1, поэтому в CI его нет. С «было» расходятся:
   `bite-brief-views.py` и `bite-two-locks.py` (exit 0, но число ✅ зависит от данных живого контура);
-  `bite-messages-archive.py` (exit 1: ждёт строку `20260905-messages-archive` в `schema_migrations`, а
-  контур на базовой схеме v6 её не несёт); `bite-printed-forms-sources.py` (exit 2: нет `<контейнер>/CLAUDE.md`).
+  `bite-printed-forms-sources.py` (exit 2: нет `<контейнер>/CLAUDE.md`).
 - Код писан под Windows: `winreg`, `ctypes.windll`, `_winapi`. Импорты ленивые, на Linux не мешают. Случаи
   про файл, занятый процессом (`bite-scratch-folders.py` ⑮, `bite-stand-keep-last.py` ㉑ ㊶), на Linux красные.
   Файлы `.githooks/*` — только с LF (`.gitattributes`).
