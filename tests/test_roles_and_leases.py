@@ -267,10 +267,7 @@ def test_refusal_names_waiter_from_environment_when_no_actor_flag(circuit):
     assert waits == [(lease_id, "STUD", LEASED)], "имя из MEZO_ROLE приводится к верхнему регистру"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "scripts/lease.py:82 — _who_is_calling ищет имя роли только в форме «--actor STUD» (отдельным "
-    "аргументом) и не узнаёт стандартную форму argparse «--actor=STUD»: отказанный вызов "
-    "записывается в tool_lease_waits безымянным (role=NULL), и снятие объявления не называет ждущего"))
+# Было xfail до починки scripts/lease.py (_who_is_calling узнаёт и форму «--actor=STUD»).
 def test_refusal_names_waiter_given_as_actor_equals_form(circuit):
     lease_id = lease_take(circuit)
     res = circuit.run(LEASED, "invariant", "--code", "INV-T", "--desc", "d", "--apply", "--actor=STUD")
