@@ -28,9 +28,17 @@
   ⑬ подсказка write-message.py (заявка называет и её): в --help нет безусловного «единственный
      источник правды», есть md-phase.py; отказ --md (холостой прогон) говорит, что на фазе 1–2
      md-половину пишет роль своей рукой, и называет md-phase.py
+  ⑭ показ md-phase.py берёт строки шапки у read-phoenix.py, а не держит свою копию: метка, вписанная
+     в блок «md ЗАМОРОЖЕНЫ» копии read-phoenix.py, видна в строке «шапка read-phoenix.py печатает»
+  ⑮ ВСТРЕЧНЫЙ: meta.md_phase = «abc» — показ md-phase.py даёт «👉 записать», как и шапка в том же
+     состоянии («ФАЗА НЕ ЗАПИСАНА» с командой записи)
+  🪤 ⑭ и ⑮ — по замечаниям приёмки PR 55 (2026-10-28): у показа был свой словарь строк шапки,
+     а «👉 записать» молчал на значении не из 1–4.
 
 Нарочные поломки (--break), каждая на своей копии read-phoenix.py, md-phase.py или write-message.py:
-  rule-presence-only ... фаза 4 при любом действующем правиле (прежнее поведение) → ② ③ ④ ⑤ ⑦ ⑪
+  rule-presence-only ... фаза 4 при любом действующем правиле (прежнее поведение) → ② ③ ④ ⑤ ⑦ ⑨ ⑪ ⑮
+                         (⑨ и ⑮: показ md-phase.py судит фазу тем же разбором, что шапка, — при
+                         «фаза 4 всегда» он команды записи не даёт)
   source-always-db ..... первая строка всегда «ИСТОЧНИК ПРАВДЫ БД»               → ③ ④
   trust-always-db ...... строка о расхождении всегда «ВЕРЬ БД»                     → ③ ④
   unknown-trusts-db .... при неизвестной фазе — «ВЕРЬ БД»                         → ② ⑦
@@ -42,6 +50,8 @@
   repeat-writes ........ повтор той же фазы пишет журнал заново                   → ⑩
   wm-sole-truth ........ в --help write-message.py прежнее «единственный источник правды» → ⑬
   wm-no-phase-hint ..... отказ --md без строки о фазе 1–2                          → ⑬
+  header-says-copy ..... показ md-phase.py печатает свою копию строк шапки        → ⑭
+  hint-on-value-only ... «👉 записать» — по самому значению, а не по разбору фазы  → ⑮
 
 Живой базы не касается: подставная база (схема живой без строк, mezo_stand.empty_db) и своя роль.
 Испытуемые read-phoenix.py и md-phase.py — по MEZO_SCRIPTS_ROOT (mezo_target), по умолчанию —
@@ -77,7 +87,7 @@ RULE_ACTIVE = '    if not row or (row[0] or "active") != "active":\n        retu
 BREAKS = {
     "rule-presence-only": (
         [("read-phoenix.py", RULE_ACTIVE, RULE_ACTIVE + '    return 4, ""\n')],
-        {"②", "③", "④", "⑤", "⑦", "⑪"}),
+        {"②", "③", "④", "⑤", "⑦", "⑨", "⑪", "⑮"}),
     "source-always-db": (
         [("read-phoenix.py", '"source": SOURCE_MD.replace("{n}", n)', '"source": SOURCE_DB')],
         {"③", "④"}),
@@ -124,7 +134,16 @@ BREAKS = {
           '.as_posix() + "\\n"\n',
           '')],
         {"⑬"}),
+    "header-says-copy": (
+        [("md-phase.py", '    parts = _read_phoenix.phase_parts(conn)\n',
+          '    parts = {"md": "⛔ md ЗАМОРОЖЕНЫ, фаза 4\\n", "trust": "⚠️ ВЕРЬ БД. "}\n')],
+        {"⑭"}),
+    "hint-on-value-only": (
+        [("md-phase.py", '    if state == "active" and phase == "unknown":\n',
+          '    if state == "active" and value in (None, False, ""):\n')],
+        {"⑮"}),
 }
+MARK = "ZZ-МЕТКА-ПРИЁМКИ-md-phase"
 
 OK = FAIL = 0
 RED = []
@@ -363,6 +382,39 @@ def main() -> int:
     case("⑬", "write-message.py: справка без безусловного «единственный источник правды», отказ --md "
          "называет фазу 1–2 и md-phase.py", help_ok and md_ok,
          f"справка: код {rc_help}, верно — {help_ok} · отказ --md: код {rc_md}, верно — {md_ok}")
+
+    # ⑭ ⑮ — показ md-phase.py против шапки read-phoenix.py
+    if writer is None:
+        case("⑭", "показ md-phase.py берёт строки шапки у read-phoenix.py", False, "md-phase.py нет")
+        case("⑮", "ВСТРЕЧНЫЙ: «abc» — показ md-phase.py даёт «👉 записать»", False, "md-phase.py нет")
+    else:
+        # ⑭ — своя пара копий: метка в шапке не должна задеть случаи выше. Берутся копии
+        # из tools — с поломкой, если она вложена
+        tools2 = stand / "tools-mark"
+        writer2 = mezo_stand.copy_tool(tools / "md-phase.py", tools2)
+        reader2 = mezo_stand.copy_tool(tools / "read-phoenix.py", tools2)
+        old = "НЕ читать, НЕ писать, НЕ править."
+        text = reader2.read_bytes().decode("utf-8")
+        marked = text.count(old) == 1
+        if marked:
+            reader2.write_bytes(text.replace(old, f"{old} {MARK}").encode("utf-8"))
+        set_rule("active")
+        set_value("4")
+        rc14, out14 = run(writer2)
+        shown = [ln for ln in out14.splitlines() if MARK in ln]
+        case("⑭", "показ md-phase.py берёт строки шапки у read-phoenix.py, а не держит свою копию",
+             marked and rc14 == 0 and bool(shown),
+             f"метка вписана — {marked} · код {rc14} · строк с меткой {len(shown)}")
+
+        # ⑮ — значение не из 1–4
+        set_value("abc")
+        rc15, out15 = run(writer)
+        # судит строку признака и «👉 записать», а не строку шапки: её судит ⑭
+        value_line = "признак meta.md_phase ... abc"
+        case("⑮", "ВСТРЕЧНЫЙ: meta.md_phase = «abc» — показ md-phase.py даёт «👉 записать»",
+             rc15 == 0 and value_line in out15 and "👉 записать" in out15,
+             f"код {rc15} · строка признака {'да' if value_line in out15 else 'нет'} · "
+             f"«👉 записать» {'да' if '👉 записать' in out15 else 'нет'}")
 
     print(f"\n{'✅' if FAIL == 0 else '🔴'} ИТОГ: {OK} из {OK + FAIL} · испытан {mezo_target.label()}")
     if a.break_name:

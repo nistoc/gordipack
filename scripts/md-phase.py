@@ -19,9 +19,11 @@ md-phase.py — фаза перехода md → база в ЭТОМ конту
 target meta.md_phase, diff «было → стало»). Рука — флаг --actor или MEZO_ROLE; умолчания нет:
 фаза меняет первый экран каждой роли, и запись без имени в журнале правок не объяснить.
 
-КОДЫ: 0 — показано или записано (в том числе «уже записано, менять нечего») · 2 — отказ
-словами, база не тронута: фаза не из 1–4 · правила перехода в базе нет или оно снято (фаза без
-правила шапке не нужна, и запись учила бы, что переход идёт) · рука не названа · нет таблицы meta.
+КОДЫ: 0 — показано или записано (в том числе «уже записано, менять нечего») · 1 — базы нет по
+пути (--db или рядом со скриптом): отказ общего разбора пути или открытия файла, файл не создаётся ·
+2 — отказ словами, база не тронута: фаза не из 1–4 · правила перехода в базе нет или оно снято
+(фаза без правила шапке не нужна, и запись учила бы, что переход идёт) · рука не названа · нет
+таблицы meta.
 """
 
 import argparse
@@ -45,15 +47,6 @@ _spec.loader.exec_module(_read_phoenix)
 MD_RULE = _read_phoenix.MD_RULE
 MD_PHASE_KEY = _read_phoenix.MD_PHASE_KEY
 PHASES = ("1", "2", "3", "4")
-
-# Что шапка read-phoenix.py напечатает при каждой фазе — одной строкой для человека.
-HEADER_SAYS = {
-    1: "фаза 1: md-файлы главные, база — второй экземпляр; при расхождении верь md",
-    2: "фаза 2: md-файлы главные, база — второй экземпляр; при расхождении верь md",
-    3: "фаза 3: база главная, md-файлы ещё пишутся вторым экземпляром; при расхождении верь БД",
-    4: "фаза 4: «md ЗАМОРОЖЕНЫ», база — единственный источник; при расхождении верь БД",
-    "unknown": "«ФАЗА НЕ ЗАПИСАНА» — сверься с правилом; кому верить при расхождении, шапка не говорит",
-}
 
 
 def refuse(text: str):
@@ -83,14 +76,26 @@ def stored_value(conn):
 
 
 def header_line(conn) -> str:
-    phase, why = _read_phoenix.md_phase(conn)
+    """Что шапка read-phoenix.py напечатает о md — её же строки из phase_parts(), а не пересказ.
+
+    🪤 Здесь стоял свой словарь «фаза → строка»: вторая копия текста шапки. Сегодня она была
+    верна, но правка блока в read-phoenix.py оставила бы показ прежним молча — ни один случай
+    приёмки их не связывал (замечание приёмки PR 55). Берутся две первые строки блока о md и
+    первая фраза строки о расхождении — ровно то, что роль увидит в шапке.
+    """
+    phase, _why = _read_phoenix.md_phase(conn)
     if phase is None:
         state = rule_state(conn)
         if state == "нет":
             return "строки про md нет: правила перехода в этой базе нет, фаза шапке не нужна"
         return f"строки про md нет: правило перехода снято (status = {state})"
-    text = HEADER_SAYS[phase]
-    return f"{text} ({why})" if why else text
+    parts = _read_phoenix.phase_parts(conn)
+    md = [ln.strip() for ln in parts["md"].replace("{s}", HERE.as_posix()).splitlines() if ln.strip()]
+    trust = " ".join(parts["trust"].split())
+    stops = [i for i in (trust.find(". "), trust.find(": ")) if i > 0]
+    if stops:
+        trust = trust[:min(stops)].rstrip(".:") + "."
+    return "\n      ".join(md[:2] + [trust])
 
 
 def pick_actor(flag) -> str:
@@ -115,8 +120,15 @@ def show(conn, db):
     print(f"   правило {MD_RULE} ... {rule_text}")
     print(f"   признак meta.{MD_PHASE_KEY} ... {value_text}")
     print(f"   шапка read-phoenix.py печатает: {header_line(conn)}")
-    if state == "active" and value in (None, False, ""):
-        print(f"   👉 записать: python {HERE.as_posix()}/md-phase.py --set <1–4> --actor <РОЛЬ>")
+    # 🪤 условие стояло на самом значении (нет строки · нет таблицы · пусто) и молчало при «abc»,
+    # хотя шапка в том же состоянии говорит «ФАЗА НЕ ЗАПИСАНА» и даёт команду записи (замечание
+    # приёмки PR 55). Судит тот же разбор, что и шапка: фаза не понята — значит, записать.
+    phase, _why = _read_phoenix.md_phase(conn)
+    if state == "active" and phase == "unknown":
+        if value is False:
+            print("   ⚠️ записать фазу некуда: таблицы meta в базе нет (база не по схеме пакета?)")
+        else:
+            print(f"   👉 записать: python {HERE.as_posix()}/md-phase.py --set <1–4> --actor <РОЛЬ>")
 
 
 def audit(conn, actor, action, diff):
