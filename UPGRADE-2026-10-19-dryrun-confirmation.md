@@ -4,8 +4,13 @@
 > и строка «18.10, третий» в `UPGRADE.md`). Порядок действий общий для любого выпуска — [`UPGRADE.md`](UPGRADE.md), раздел 3.
 > Время — UTC. Номера карточек и записок — эталона (карточка #726, записка #6028, записка #6029).
 >
-> **Охват** — commit кода `9f94b3b`: `scripts/write-message.py` и новая приёмка `vnext/prototype/bite-dryrun-confirmation.py`.
-> Ставить по `9f94b3b`. Документ и строка `UPGRADE.md` лежат в отдельном commit и инструментов не меняют.
+> **Охват** — commit кода `3c0d2af`: `scripts/write-message.py` и новая приёмка `vnext/prototype/bite-dryrun-confirmation.py`.
+> Ставить по `3c0d2af`. Документ, строка `UPGRADE.md` и тест PR #44 лежат в отдельных commit и инструментов не меняют.
+>
+> **Ветка перенесена 28.10 на `cc8d935`** (main после PR #45 и PR #44). Прежний номер кода — `9f94b3b`; оба файла охвата
+> в `3c0d2af` побайтно те же (одинаковые git blob). Тест PR #44 `tests/test_messaging.py::test_dry_run_writes_nothing`
+> ждал строку «OK #N» и в холостом прогоне — commit `d819634` сводит его с контрактом карточки: строки «OK #» нет,
+> «НЕ записана» есть, номер берётся из слов «получила бы номер N».
 >
 > **Шагов схемы в этом выпуске нет.** Свод правил пакета и проверки общего прогона не менялись.
 >
@@ -50,11 +55,11 @@ vnext/prototype/bite-dryrun-confirmation.py ..... новая приёмка (upd
 ```
 0 ... резервная копия — UPGRADE.md, раздел 3, шаг 0
 1 ... план:
-        python <КОНТУР>/.mezosync/scripts/update-tools.py --rev 9f94b3b
+        python <КОНТУР>/.mezosync/scripts/update-tools.py --rev 3c0d2af
       ожидаемо «≠» только у write-message.py; «✋» — вы правили его у себя: остановитесь и пришлите вывод
 2 ... запись, второй план — до «+ ≠ ≈» нет:
-        python <КОНТУР>/.mezosync/scripts/update-tools.py --rev 9f94b3b --apply
-        python <КОНТУР>/.mezosync/scripts/update-tools.py --rev 9f94b3b
+        python <КОНТУР>/.mezosync/scripts/update-tools.py --rev 3c0d2af --apply
+        python <КОНТУР>/.mezosync/scripts/update-tools.py --rev 3c0d2af
 3 ... шагов схемы нет — шаг 2 раздела 3 UPGRADE.md пропустите
 4 ... проба: python <КЛОН>/vnext/prototype/bite-dryrun-confirmation.py
       ожидаемо «ИТОГ: 8 из 8» и код 0
@@ -78,6 +83,15 @@ vnext/prototype/bite-dryrun-confirmation.py ..... новая приёмка (upd
 раскладка клона ................. копии scripts/ клона ищут файл путей в <КЛОН>/local/paths.json (не публикуется); без него
                                   приёмки, зовущие инструмент без --db, отказывают «контейнер группы НЕ НАЙДЕН» — у эталона
                                   первый прогон соседей разошёлся у 3 из 6 по этой причине, а не по правке
+
+перемер после переноса на cc8d935 (2026-10-28, вершина d819634):
+  bite-dryrun-confirmation.py ... копия scripts/ клона — 8 из 8, код 0; каждая из четырёх нарочных поломок провалила ровно
+                                  свои случаи; установленный c5b7654 — 4 из 8, провалились ① ② ③ ⑦ (10:14–10:15 UTC)
+  pytest tests .................. 575 passed, 2 skipped, 9 xfailed за 6 мин 24 с; 9 xfail — известные ошибки PR #44 в других
+                                  скриптах, этого выпуска не касаются; обратный прогон test_dry_run_writes_nothing на
+                                  write-message.py из cc8d935 провалился, как и должен
+  пути машины эталона ........... guard-machine-paths.py --verbose по выгрузке: на cc8d935 — 13 живых и 18 в прозе, на
+                                  d819634 — 13 и 18, списки совпали построчно (расхождений 0); файлов 547 → 549
 ```
 
 ## 5. Известно и в этом выпуске НЕ сделано
