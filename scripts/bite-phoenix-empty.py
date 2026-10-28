@@ -43,6 +43,20 @@
    Его первая поломка оставила в базе урезанное тело, и следующая проверка мерила уже
    РОСТ, а не потерю, — то есть зеленела, ничего не проверив.
 
+⬆️ СВЕДЕНО 2026-10-28 (issue #39 пакета, предложение «в» — применяла @PROTO).
+В пакете у этой приёмки было ДВЕ копии одного имени: scripts/ (17 случаев, испытуемый — сосед
+рядом) и vnext/prototype/ (6 случаев, испытуемый — по mezo_target, карточка #659). Контур,
+звавший приёмку из vnext-tools, проверял защиту шестью случаями из семнадцати и не знал об этом:
+обе копии печатали «ЗАЩИТА ПРИНЯТА». Теперь копия одна, байт в байт одинаковая в обоих каталогах;
+одинаковость сверяют vnext/tools/guard-pack-pairs.py в пакете и guard-scripts-drift.py («общие
+помощники двух рабочих каталогов») в контуре.
+  · испытуемый — mezo_target.script("save-phoenix.py"), если mezo_target лежит рядом (vnext-tools:
+    читается MEZO_SCRIPTS_ROOT); иначе (.mezosync/scripts, где mezo_target нет) — save-phoenix.py
+    рядом с приёмкой. Какая копия испытана, печатается первой строкой;
+  · write-message.py, набор .py подставного контура ⑭⑮ и соседи поломок ⑯⑰ (mezo_paths.py,
+    dryrun.py) берутся из каталога ИСПЫТУЕМОГО, а не из каталога приёмки: из vnext-tools случаи
+    ⑭⑮ иначе не нашли бы write-message.py, а поломки ⑯⑰ шли бы с соседями чужой версии.
+
 ⛔ Живой базы не касается: своя временная база в песочнице.
 """
 import os
@@ -51,16 +65,36 @@ import sqlite3
 import subprocess
 import sys
 
-import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
-
 HERE = os.path.dirname(os.path.abspath(__file__))
-# ⚠️ Путь ищется СНАЧАЛА рядом с приёмкой. Копия, положенная в другой каталог, целила
-# в несуществующий файл и давала код 2 на ВСЕХ случаях — «красное по ложной причине»,
-# зеркало того зелёного, за которое @PROTO поправил себя же сегодня в 16:40.
-SAVE = os.path.join(HERE, "save-phoenix.py")
-if not os.path.exists(SAVE):
-    SAVE = os.path.normpath(os.path.join(HERE, "..", "..", "scripts", "save-phoenix.py"))
-assert os.path.exists(SAVE), f"инструмент не найден: {SAVE} — приёмка НЕ выполнена"
+sys.path.insert(0, HERE)
+import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
+
+# 🪤 ИСПРАВЛЕНО (карточка #659, разбор группы D): копия в vnext/prototype искала save-phoenix.py
+# ОТНОСИТЕЛЬНО СЕБЯ, в обход общего выбора испытуемой копии, и не читала MEZO_SCRIPTS_ROOT
+# вовсе. У найденной копии не было предка с .mezosync/mezosync.db — mezo_paths.container_root()
+# падал громко и ОДИНАКОВО во всех случаях: не различение свойства, а один сбой запуска подряд.
+# ⇒ Где mezo_target есть, выбирает он — тот же помощник, что у соседних приёмок
+# (bite-phoenix-confirmed.py, bite-phoenix-dry-run.py): нет файла в испытуемом каталоге —
+# громкий отказ с названной причиной, не тихая замена на чужую копию.
+# ⚠️ Где mezo_target нет (.mezosync/scripts), путь ищется СНАЧАЛА рядом с приёмкой. Копия,
+# положенная в другой каталог, целила в несуществующий файл и давала код 2 на ВСЕХ случаях —
+# «красное по ложной причине», зеркало того зелёного, за которое @PROTO поправил себя же
+# 2026-08-24 в 16:40.
+try:
+    import mezo_target  # noqa: E402 — какую копию испытываем, решается ОДНИМ местом (карточка #146)
+except ImportError:
+    mezo_target = None
+if mezo_target is not None:
+    SAVE = str(mezo_target.script("save-phoenix.py"))
+    TESTED = mezo_target.label()
+else:
+    SAVE = os.path.join(HERE, "save-phoenix.py")
+    if not os.path.exists(SAVE):
+        SAVE = os.path.normpath(os.path.join(HERE, "..", "..", "scripts", "save-phoenix.py"))
+    assert os.path.exists(SAVE), f"инструмент не найден: {SAVE} — приёмка НЕ выполнена"
+    TESTED = f"соседняя копия {SAVE} (mezo_target рядом нет — MEZO_SCRIPTS_ROOT не читается)"
+# каталог испытуемого: оттуда же write-message.py и соседи для поломок, чтобы версия была одна
+TOOLS = os.path.dirname(os.path.abspath(SAVE))
 LONG = "живой слепок роли. " * 40          # ~800 знаков
 
 
@@ -171,6 +205,7 @@ def control_passes(path: str) -> bool:
 
 
 def main() -> int:
+    print(f"⚖️ испытуется: {TESTED}")
     tmp = str(mezo_stand.new("bite-phoenix-empty-"))
     ok = True
 
@@ -360,14 +395,14 @@ def main() -> int:
     #     и уходила, память при этом не сохранена.
     #     🔴 Новый порог делает отказы частыми (было 0 за 15 дней, стало ~0.9 в сутки) ⇒
     #     редкий невидимый дефект стал бы частым невидимым.
-    WM = os.path.join(HERE, "write-message.py")
+    WM = os.path.join(TOOLS, "write-message.py")
     if os.path.exists(WM):
         fake_container = os.path.join(tmp, "контур", ".mezosync")
         os.makedirs(os.path.join(fake_container, "scripts"), exist_ok=True)
         import shutil as _sh
-        for fname in os.listdir(HERE):
+        for fname in os.listdir(TOOLS):
             if fname.endswith(".py"):
-                _sh.copy(os.path.join(HERE, fname), os.path.join(fake_container, "scripts", fname))
+                _sh.copy(os.path.join(TOOLS, fname), os.path.join(fake_container, "scripts", fname))
         pdb = os.path.join(fake_container, "mezosync.db")
         build(pdb, [("RCC", "state", BIG)])
         con = sqlite3.connect(pdb)
@@ -421,7 +456,7 @@ def main() -> int:
             f.write(weakened)
         import shutil as _sh2
         for neighbor in ("mezo_paths.py", "dryrun.py"):
-            neighbor_src = os.path.join(HERE, neighbor)
+            neighbor_src = os.path.join(TOOLS, neighbor)
             if os.path.exists(neighbor_src):
                 _sh2.copy(neighbor_src, os.path.join(broken_dir, neighbor))
         p = os.path.join(tmp, "n.db")
@@ -450,7 +485,7 @@ def main() -> int:
             f.write(corruption)
         import shutil as _sh3
         for neighbor in ("mezo_paths.py", "dryrun.py"):
-            neighbor_src = os.path.join(HERE, neighbor)
+            neighbor_src = os.path.join(TOOLS, neighbor)
             if os.path.exists(neighbor_src):
                 _sh3.copy(neighbor_src, os.path.join(broken_cleanup_dir, neighbor))
         p = os.path.join(tmp, "o.db")

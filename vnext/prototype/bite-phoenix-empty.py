@@ -20,6 +20,43 @@
   ⑤ короткая секция впервые (launcher, 1 строка)  проходит — порога «не меньше 200» тут НЕТ
   ⑥ обычное сохранение .......................... проходит, печатает ДВА числа
 
+⬆️ ДОПИСАНО 2026-08-24 (заявка @OPSSRE, записки #3756 и #3776 — применяла @PROTO).
+Прежний затвор «сокращение в 4 раза» не срабатывал НИ РАЗУ за 15 дней зрелого периода,
+включая сам инцидент 21.08 (18808 → 7455 знаков, потеря 60.4 % — а требовалось 75 %).
+Порог откалиброван замером: 40 % даёт ~0.9 отказа в сутки; 30 % — 1.5, и защита,
+останавливающая роль по четыре раза в день, обучает обходить её не глядя.
+
+  ⑦ потеря 61 % ................................. ОТКАЗ, исчезающие блоки НАЗВАНЫ
+  ⑧ КОНТРОЛЬ к ⑦: потеря 18 % ................... проходит
+  ⑨ секция БЕЗ разметки, потеря 65 % ............ отчёт НЕ молчит и признаётся в этом
+  ⑩ прежнее тело легло в историю ................ ДОСЛОВНО
+  ⑪ возврат из истории .......................... тело побайтно, прежние версии целы
+  ⑫ чистка ...................................... 10 свежих ПЛЮС самая длинная
+  ⑬ база БЕЗ таблицы истории .................... проходит, но предупреждает и метит журнал
+  ⑭ второй путь вызова, отказ ................... код 4, а не «успех»
+  ⑮ ВСТРЕЧНЫЙ к ⑭: второй путь, законное ........ код 0
+  ⑯ ОБРАТНЫЙ ХОД: порог ослаблен ................ инцидент ПРОСКАКИВАЕТ
+  ⑰ ОБРАТНЫЙ ХОД: чистка без «самой длинной» .... длинная версия ТЕРЯЕТСЯ
+
+🎯 ⑯ и ⑰ — главные: без них зелень ⑦–⑫ означала бы «сегодня не болит», а не «работает».
+🩸 И урок @OPSSRE, оплаченный его же прогоном: КАЖДЫЙ случай строит СВОЁ состояние.
+   Его первая поломка оставила в базе урезанное тело, и следующая проверка мерила уже
+   РОСТ, а не потерю, — то есть зеленела, ничего не проверив.
+
+⬆️ СВЕДЕНО 2026-10-28 (issue #39 пакета, предложение «в» — применяла @PROTO).
+В пакете у этой приёмки было ДВЕ копии одного имени: scripts/ (17 случаев, испытуемый — сосед
+рядом) и vnext/prototype/ (6 случаев, испытуемый — по mezo_target, карточка #659). Контур,
+звавший приёмку из vnext-tools, проверял защиту шестью случаями из семнадцати и не знал об этом:
+обе копии печатали «ЗАЩИТА ПРИНЯТА». Теперь копия одна, байт в байт одинаковая в обоих каталогах;
+одинаковость сверяют vnext/tools/guard-pack-pairs.py в пакете и guard-scripts-drift.py («общие
+помощники двух рабочих каталогов») в контуре.
+  · испытуемый — mezo_target.script("save-phoenix.py"), если mezo_target лежит рядом (vnext-tools:
+    читается MEZO_SCRIPTS_ROOT); иначе (.mezosync/scripts, где mezo_target нет) — save-phoenix.py
+    рядом с приёмкой. Какая копия испытана, печатается первой строкой;
+  · write-message.py, набор .py подставного контура ⑭⑮ и соседи поломок ⑯⑰ (mezo_paths.py,
+    dryrun.py) берутся из каталога ИСПЫТУЕМОГО, а не из каталога приёмки: из vnext-tools случаи
+    ⑭⑮ иначе не нашли бы write-message.py, а поломки ⑯⑰ шли бы с соседями чужой версии.
+
 ⛔ Живой базы не касается: своя временная база в песочнице.
 """
 import os
@@ -27,50 +64,103 @@ import re
 import sqlite3
 import subprocess
 import sys
-import tempfile
-from pathlib import Path
 
-# 🪤 ИСПРАВЛЕНО (карточка #659, разбор группы D): здесь стоял свой find_save() — искал
-# save-phoenix.py ОТНОСИТЕЛЬНО СЕБЯ (../../scripts, ../scripts, .mezosync/scripts), в обход
-# общего выбора испытуемой копии. Он не читал --target (MEZO_SCRIPTS_ROOT) вовсе: приёмка
-# всегда брала save-phoenix.py из ../../scripts ПАКЕТА, какой бы --target ни был передан
-# bite-all.py. У найденной копии нет предка с .mezosync/mezosync.db — второй замок
-# mezo_paths.container_root() падает ГРОМКО («контейнер группы НЕ НАЙДЕН») на первом же
-# вызове, и падает ОДИНАКОВО во всех шести случаях: не различение свойства, а один и тот же
-# сбой запуска шесть раз подряд (доказано прогоном: прямой вызов save-phoenix.py с тем же
-# --db даёт то же сообщение слово в слово).
-# ⇒ Тот же общий помощник, что и у соседних приёмок (bite-phoenix-confirmed.py,
-# bite-phoenix-dry-run.py) — mezo_target.script(): он читает MEZO_SCRIPTS_ROOT/
-# MEZO_FORBID_LIVE, и найденная копия лежит там, где .mezosync/mezosync.db — её собственный
-# сосед по дереву, второй замок открывается без просьб.
-#
-# 🪤 ИСТОРИЯ (сохранена как урок). Первая редакция шла жёстким «../../scripts/save-phoenix.py».
-# У @COORD 2026-08-07 17:09 UTC этот путь указал в пустоту: Python не нашёл файл, вернул код 2,
-# и приёмка прочитала это как «инструмент отказал» — ВСЕ ШЕСТЬ СЛУЧАЕВ КРАСНЫЕ. Он едва не пошёл
-# чинить исправный перенос.
-# ⇒ Зеркало сегодняшнего зелёного по ложной причине, и оно опаснее: ложное зелёное усыпляет,
-# ложное красное посылает чинить исправное.
-# ⇒ Отсутствие инструмента обязано быть ТРЕТЬИМ исходом («не запустилась»), а не
-# маскироваться под результат — mezo_target.script() несёт то же самое: нет файла в
-# испытуемом каталоге — ГРОМКИЙ отказ с названной причиной, не тихая замена на чужую копию.
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import mezo_target  # noqa: E402 — какую копию испытываем, решается ОДНИМ местом (карточка #146)
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
 
-SAVE = str(mezo_target.script("save-phoenix.py"))
+# 🪤 ИСПРАВЛЕНО (карточка #659, разбор группы D): копия в vnext/prototype искала save-phoenix.py
+# ОТНОСИТЕЛЬНО СЕБЯ, в обход общего выбора испытуемой копии, и не читала MEZO_SCRIPTS_ROOT
+# вовсе. У найденной копии не было предка с .mezosync/mezosync.db — mezo_paths.container_root()
+# падал громко и ОДИНАКОВО во всех случаях: не различение свойства, а один сбой запуска подряд.
+# ⇒ Где mezo_target есть, выбирает он — тот же помощник, что у соседних приёмок
+# (bite-phoenix-confirmed.py, bite-phoenix-dry-run.py): нет файла в испытуемом каталоге —
+# громкий отказ с названной причиной, не тихая замена на чужую копию.
+# ⚠️ Где mezo_target нет (.mezosync/scripts), путь ищется СНАЧАЛА рядом с приёмкой. Копия,
+# положенная в другой каталог, целила в несуществующий файл и давала код 2 на ВСЕХ случаях —
+# «красное по ложной причине», зеркало того зелёного, за которое @PROTO поправил себя же
+# 2026-08-24 в 16:40.
+try:
+    import mezo_target  # noqa: E402 — какую копию испытываем, решается ОДНИМ местом (карточка #146)
+except ImportError:
+    mezo_target = None
+if mezo_target is not None:
+    SAVE = str(mezo_target.script("save-phoenix.py"))
+    TESTED = mezo_target.label()
+else:
+    SAVE = os.path.join(HERE, "save-phoenix.py")
+    if not os.path.exists(SAVE):
+        SAVE = os.path.normpath(os.path.join(HERE, "..", "..", "scripts", "save-phoenix.py"))
+    assert os.path.exists(SAVE), f"инструмент не найден: {SAVE} — приёмка НЕ выполнена"
+    TESTED = f"соседняя копия {SAVE} (mezo_target рядом нет — MEZO_SCRIPTS_ROOT не читается)"
+# каталог испытуемого: оттуда же write-message.py и соседи для поломок, чтобы версия была одна
+TOOLS = os.path.dirname(os.path.abspath(SAVE))
 LONG = "живой слепок роли. " * 40          # ~800 знаков
 
 
-def build(path: str, seed=()):
+def build(path: str, seed=(), with_history=True):
+    """⚡ ИСТОРИЯ ЗАВОДИТСЯ ПО УМОЛЧАНИЮ — как в живой базе после шага схемы.
+
+    🩸 Без неё стенд испытывал бы инструмент в режиме «истории нет», то есть ПОЛОВИНУ:
+    все шесть прежних случаев шли по ветке предупреждения и не касались ни записи версий,
+    ни чистки, ни возврата. Стенд, не воспроизводящий раскладку, проверяет не тот предмет —
+    класс, за который контур платил трижды.
+    ⚖️ Режим «истории нет» остаётся законным (база до шага схемы, свежий контур) и
+    проверяется отдельным случаем ⑬, а не молчаливо всеми.
+    """
     con = sqlite3.connect(path)
     con.execute("""CREATE TABLE phoenix (role TEXT, section TEXT, body TEXT, saved_at TEXT,
                    PRIMARY KEY (role, section))""")
     con.execute("""CREATE TABLE audit_log (id INTEGER PRIMARY KEY, timestamp TEXT
                    DEFAULT (datetime('now')), actor_role TEXT, action TEXT, target TEXT,
                    diff_md TEXT)""")
+    if with_history:
+        con.execute("""CREATE TABLE phoenix_history (id INTEGER PRIMARY KEY, role TEXT NOT NULL,
+                       section TEXT NOT NULL, body TEXT NOT NULL, body_chars INTEGER NOT NULL,
+                       saved_at TEXT NOT NULL, actor TEXT NOT NULL, reason TEXT NOT NULL,
+                       prev_chars INTEGER)""")
+        # 🩸 НАЙДЕНО ПРИ РАЗБОРЕ случаев ⑫/⑰ (задача PROTO, замер 2026-09-13): стенд заводил
+        # phoenix_history БЕЗ phoenix_history_archive, а save-phoenix.py с 05.09 чистит
+        # историю ТОЛЬКО когда архивная таблица есть (иначе печатает «ИСТОРИЯ НЕ ЧИСТИТСЯ» и
+        # ничего не удаляет — молчаливой потери здесь нет по конструкции, см. save-phoenix.py
+        # ~655-670). Стенд без архива проверял не чистку, а её ОТСУТСТВИЕ: ⑫ (10 свежих плюс
+        # самая длинная) и ⑰ (обратный ход по чистке — длинная обязана потеряться) не могли
+        # покраснеть НИ ПРИ КАКОЙ поломке, потому что чистка не запускалась вовсе.
+        # ⚖️ Определение — ДОСЛОВНО из миграции schema (единственный источник истины для
+        # формы этой таблицы): .mezosync/scripts/migrations/20260905-phoenix-history-archive.py
+        con.execute("""CREATE TABLE phoenix_history_archive (
+            id          INTEGER PRIMARY KEY,
+            role        TEXT NOT NULL,
+            section     TEXT NOT NULL,
+            body        TEXT NOT NULL,
+            body_chars  INTEGER NOT NULL,
+            saved_at    TEXT NOT NULL,
+            actor       TEXT NOT NULL,
+            reason      TEXT NOT NULL,
+            prev_chars  INTEGER,
+            moved_at    TEXT NOT NULL DEFAULT (datetime('now')),
+            moved_by    TEXT NOT NULL,
+            rule        TEXT NOT NULL
+        )""")
+        con.execute("CREATE INDEX idx_phoenix_history_archive_role "
+                    "ON phoenix_history_archive(role, section, saved_at)")
     for role, section, body in seed:
         con.execute("INSERT INTO phoenix VALUES (?,?,?,datetime('now'))", (role, section, body))
+        if with_history:
+            con.execute("""INSERT INTO phoenix_history (role, section, body, body_chars,
+                           saved_at, actor, reason, prev_chars)
+                           VALUES (?,?,?,?,datetime('now'),'migration','seed',NULL)""",
+                        (role, section, body, len(body)))
     con.commit()
     con.close()
+
+
+def versions(path: str, section: str = "state"):
+    con = sqlite3.connect(path)
+    rows = con.execute("SELECT id, body_chars, reason, body FROM phoenix_history "
+                         "WHERE role='RCC' AND section=? ORDER BY id", (section,)).fetchall()
+    con.close()
+    return rows
 
 
 def save(path: str, section: str, body: str, extra=()):
@@ -115,8 +205,30 @@ def control_passes(path: str) -> bool:
 
 
 def main() -> int:
-    tmp = tempfile.mkdtemp(prefix="bite-phoenix-empty-")
+    print(f"⚖️ испытуется: {TESTED}")
+    tmp = str(mezo_stand.new("bite-phoenix-empty-"))
     ok = True
+
+    # ⛔ «НЕ ЗАПУСТИЛАСЬ» — ОТДЕЛЬНЫЙ ИСХОД, А НЕ СЕМНАДЦАТЬ КРАСНЫХ.
+    # 🩸 Замер 2026-08-24 23:35 UTC: эта же приёмка, положенная в образец и позванная
+    # НА МЕСТЕ, дала 17 красных из 17 — не потому, что защита сломана, а потому, что
+    # образец не является контуром: инструмент ищет контейнер вверх по дереву и не находит.
+    # ⚖️ Разница не косметическая. Семнадцать красных читаются как «защита развалилась»
+    # и учат не верить красному вообще; «не запускалась» говорит правду — опыта не было.
+    # ⇒ Пробуем инструмент ОДИН раз на заведомо законном сохранении. Не работает —
+    #   выходим кодом 2, тем же, каким контур метит отказ мерить.
+    _probe_db = os.path.join(tmp, "проба-запуска.db")
+    build(_probe_db)
+    _output, _code = save(_probe_db, "launcher", "проба запуска инструмента")
+    if _code != 0:
+        print("⛔ ПРИЁМКА НЕ ЗАПУСТИЛАСЬ: инструмент не отвечает даже на заведомо законном")
+        print(f"   сохранении (код {_code}). Это НЕ провал защиты — опыта не было вовсе.")
+        for _s in (_output or "").strip().splitlines()[:4]:
+            print(f"   | {_s}")
+        print(f"   👉 Инструмент: {SAVE}")
+        print("   👉 Обычная причина: приёмку позвали В ОБРАЗЦЕ, а не в контуре. Образец")
+        print("      разворачивают (init-group.py), и там она работает — проверено прогоном.")
+        return 2
 
     # ① пустое тело
     p = fresh(tmp, "a")
@@ -170,6 +282,229 @@ def main() -> int:
                f"код {code} · два числа спорят сами: «10489 → 0» не прочитаешь как успех "
                f"{'' if two else '— НО ИХ НЕТ В ВЫВОДЕ'}")
 
+    # ═══════════════════════════════════════════════════════════════════════════
+    # ДОПИСАНО 2026-08-24 — порог по доле, отчёт содержимым, история версий
+    # ═══════════════════════════════════════════════════════════════════════════
+    BIG = "\n".join(f"## Раздел {i}\nсодержательная строка раздела {i}, довольно длинная\n"
+                        f"вторая содержательная строка раздела {i}, тоже длинная"
+                        for i in range(20))
+
+    # ⑦ ПОТЕРЯ 61 % — ОТКАЗ, и блоки названы ПОИМЁННО, а не числом.
+    p = os.path.join(tmp, "g.db")
+    build(p, [("RCC", "state", BIG), ("RCC", "plan", LONG)])
+    out, code = save(p, "state", BIG[:int(len(BIG) * 0.39)])
+    named = "ИСЧЕЗАЮТ БЛОКИ" in out and "Раздел 1" in out
+    ok &= case("⑦ потеря 61 % — ОТКАЗ, исчезающие блоки НАЗВАНЫ поимённо",
+               code != 0 and named and body_of(p, "state") == BIG and control_passes(p),
+               f"код {code} · блоки {'названы' if named else 'НЕ НАЗВАНЫ'} · "
+               "прежний затвор «в 4 раза» здесь молчал: требовалось 75 %", differ=True)
+
+    # ⑧ КОНТРОЛЬ к ⑦: потеря 18 % — законная правка, обязана пройти.
+    p = os.path.join(tmp, "h.db")
+    build(p, [("RCC", "state", BIG)])
+    out, code = save(p, "state", BIG[:int(len(BIG) * 0.82)])
+    ok &= case("⑧ КОНТРОЛЬ к ⑦: потеря 18 % — проходит",
+               code == 0,
+               f"код {code} · без этого случая ⑦ доказывал бы лишь то, что инструмент "
+               "умеет отказывать — а не то, что он РАЗЛИЧАЕТ", differ=True)
+
+    # ⑨ СЕКЦИЯ БЕЗ РАЗМЕТКИ. Замер по живой базе: у 16 секций из 63 заголовков «## » нет
+    #    вовсе. Отчёт «по блокам» молчал бы на четверти контура, и молчание читалось бы
+    #    как «ничего не исчезло».
+    # ⚠️ ПЕСОЧНИЦА ЗАДАЧИ G8 #616: якорь «исчезло дословно» сменился на «содержательных
+    # строк было» — save-phoenix.py теперь делит исчезнувшие строки на «изменена»/
+    # «пропала» (карточка #616 ②) и общий счётчик «исчезло дословно N (P%)» ушёл из
+    # печати. Предмет проверки не изменился: она подтверждает, что построчный разбор
+    # ПО-ПРЕЖНЕМУ работает, когда признак блоков бессилен — «содержательных строк было»
+    # печатается на КАЖДОМ прогоне loss_report(), молчания тут как не было, так и нет.
+    FLAT = "\n".join(f"строка номер {i}, достаточно длинная чтобы считаться содержательной"
+                        for i in range(60))
+    p = os.path.join(tmp, "i.db")
+    build(p, [("RCC", "state", FLAT)])
+    out, code = save(p, "state", FLAT[:int(len(FLAT) * 0.35)])
+    admitted = "НИЧЕГО НЕ ЛОВИТ" in out or "разметки нет" in out
+    ok &= case("⑨ секция БЕЗ разметки — отчёт НЕ молчит и признаётся, что признак бессилен",
+               code != 0 and admitted and "содержательных строк было" in out,
+               f"код {code} · {'признался' if admitted else 'СКАЗАЛ «блоки целы» — успокаивающая ложь'}"
+               " · «нечем сравнить» и «всё цело» не имеют права выглядеть одинаково",
+               differ=True)
+
+    # ⑩ ПРЕЖНЕЕ ТЕЛО В ИСТОРИИ — дословно, а не «примерно столько же знаков».
+    p = os.path.join(tmp, "j.db")
+    build(p, [("RCC", "state", BIG)])
+    out, code = save(p, "state", BIG + "\n## Раздел 20\nдописанное")
+    in_history = [v for v in versions(p) if v[3] == BIG]
+    ok &= case("⑩ прежнее тело легло в историю ДОСЛОВНО",
+               code == 0 and bool(in_history),
+               f"версий {len(versions(p))} · прежнее тело "
+               f"{'найдено дословно' if in_history else 'НЕ НАЙДЕНО'} · возврат обязан быть "
+               "копированием: сборка по частям добавляет шаг, на котором «не смог собрать» "
+               "превращается в «данных нет»", differ=True)
+
+    # ⑪ ВОЗВРАТ ИЗ ИСТОРИИ — побайтно, прежние версии целы, возврат ложится НОВОЙ версией.
+    p = os.path.join(tmp, "k.db")
+    build(p, [("RCC", "state", BIG)])
+    save(p, "state", BIG[:int(len(BIG) * 0.82)])
+    versions_before = len(versions(p))
+    target_id = versions(p)[0][0]
+    r = subprocess.run([sys.executable, SAVE, "--db", p, "--role", "RCC", "--section", "state",
+                        "--restore", str(target_id)], capture_output=True, text=True,
+                       encoding="utf-8")
+    restored = body_of(p, "state") == BIG
+    versions_after = len(versions(p))
+    ok &= case("⑪ возврат из истории — тело ПОБАЙТНО, прежние версии целы, лёг новой версией",
+               r.returncode == 0 and restored and versions_after == versions_before + 1,
+               f"код {r.returncode} · тело {'побайтно' if restored else 'РАЗОШЛОСЬ'} · "
+               f"версий {versions_before} → {versions_after} · откат отката тоже возможен",
+               differ=True)
+
+    # ⑫ ЧИСТКА: последние десять ПЛЮС самая длинная. Окно по свежести прогорает —
+    #    замер даёт до 15 сохранений одной секции в сутки.
+    p = os.path.join(tmp, "l.db")
+    build(p, [("RCC", "state", BIG)])
+    mid_text = BIG[:int(len(BIG) * 0.72)]
+    codes = []
+    for i in range(14):
+        _, c = save(p, "state", mid_text + f"\nправка {i}")
+        codes.append(c)
+    saved_versions = versions(p)
+    long_intact = any(v[1] == len(BIG) for v in saved_versions)
+    ok &= case("⑫ чистка: осталось 10 свежих ПЛЮС самая длинная",
+               set(codes) == {0} and len(saved_versions) == 11 and long_intact,
+               f"версий {len(saved_versions)} · самая длинная "
+               f"{'сбережена' if long_intact else 'ПОТЕРЯНА'} · по свежести она вылетела бы",
+               differ=True)
+
+    # ⑬ БАЗА БЕЗ ТАБЛИЦЫ ИСТОРИИ — сохранение НЕ запрещается, но отсутствие говорится
+    #    вслух И ложится в журнал. Один шаг схемы не вправе обездвижить память всех ролей;
+    #    тихая деградация была бы худшим исходом.
+    p = os.path.join(tmp, "m.db")
+    build(p, [("RCC", "state", LONG)], with_history=False)
+    out, code = save(p, "state", LONG + " дополнение")
+    con = sqlite3.connect(p)
+    mark = con.execute("SELECT diff_md FROM audit_log ORDER BY id DESC LIMIT 1").fetchone()
+    con.close()
+    in_journal = bool(mark) and "БЕЗ ИСТОРИИ" in (mark[0] or "")
+    ok &= case("⑬ база БЕЗ таблицы истории — проходит, но предупреждает И метит журнал",
+               code == 0 and "ИСТОРИИ НЕТ" in out and in_journal,
+               f"код {code} · пометка в журнале {'есть' if in_journal else 'ОТСУТСТВУЕТ'} · "
+               "иначе потеря снова стала бы необратимой, и никто бы не узнал", differ=True)
+
+    # ⑭⑮ ВТОРОЙ ПУТЬ ВЫЗОВА. Находка @OPSSRE (записка #3776): защита срабатывает верно,
+    #     а ИСХОД всей операции объявлялся успехом — роль в конце смены видела код 0
+    #     и уходила, память при этом не сохранена.
+    #     🔴 Новый порог делает отказы частыми (было 0 за 15 дней, стало ~0.9 в сутки) ⇒
+    #     редкий невидимый дефект стал бы частым невидимым.
+    WM = os.path.join(TOOLS, "write-message.py")
+    if os.path.exists(WM):
+        fake_container = os.path.join(tmp, "контур", ".mezosync")
+        os.makedirs(os.path.join(fake_container, "scripts"), exist_ok=True)
+        import shutil as _sh
+        for fname in os.listdir(TOOLS):
+            if fname.endswith(".py"):
+                _sh.copy(os.path.join(TOOLS, fname), os.path.join(fake_container, "scripts", fname))
+        pdb = os.path.join(fake_container, "mezosync.db")
+        build(pdb, [("RCC", "state", BIG)])
+        con = sqlite3.connect(pdb)
+        con.execute("""CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY,
+                       writer_role TEXT, timestamp TEXT, body_md TEXT, tags TEXT,
+                       priority TEXT, resolved INTEGER, broadcast INTEGER, addressed_by TEXT)""")
+        con.commit(); con.close()
+        file_path = os.path.join(tmp, "урезанное.md")
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(BIG[:int(len(BIG) * 0.39)])
+        r = subprocess.run([sys.executable, os.path.join(fake_container, "scripts", "write-message.py"),
+                            "--db", pdb, "--role", "RCC", "--body", "проба второго пути",
+                            "--save-state", file_path],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace")
+        combined_output = (r.stdout or "") + (r.stderr or "")
+        ok &= case("⑭ второй путь вызова, отказ памяти — код 4, а не «успех»",
+                   r.returncode == 4 and "ПОВТОРЯТЬ НЕ НАДО" in combined_output,
+                   f"код {r.returncode} · из «записку откатывать нельзя» не следует "
+                   "«операция удалась» · текст запрещает повтор явным словом, иначе "
+                   "красное читается как «не ушло» и рождается дубль", differ=True)
+
+        file_path2 = os.path.join(tmp, "законное.md")
+        with open(file_path2, "w", encoding="utf-8") as f:
+            f.write(BIG + "\n## Раздел 20\nдописанное")
+        r2 = subprocess.run([sys.executable, os.path.join(fake_container, "scripts", "write-message.py"),
+                             "--db", pdb, "--role", "RCC", "--body", "проба законного",
+                             "--save-state", file_path2],
+                            capture_output=True, text=True, encoding="utf-8", errors="replace")
+        ok &= case("⑮ ВСТРЕЧНЫЙ к ⑭: второй путь, законное сохранение — код 0",
+                   r2.returncode == 0,
+                   f"код {r2.returncode} · без встречного ⑭ доказывал бы лишь, что путь "
+                   "умеет краснеть", differ=True)
+    else:
+        ok &= case("⑭⑮ второй путь вызова", False,
+                   f"⛔ НЕ ЗАПУЩЕНЫ: не найден {WM}. Молча пропустить нельзя — "
+                   "это был бы зелёный без опыта")
+
+    # ⑯ ОБРАТНЫЙ ХОД ПО ПОРОГУ. Ослабляем порог и требуем, чтобы инцидент ПРОСКОЧИЛ.
+    #    Без этого случая ⑦ означал бы «сегодня отказало», а не «отказало из-за порога».
+    broken_dir = os.path.join(tmp, "порог-ослаблен")
+    os.makedirs(broken_dir, exist_ok=True)
+    source_text = open(SAVE, encoding="utf-8").read()
+    weakened = source_text.replace("SHRINK_HARD = 0.40", "SHRINK_HARD = 0.99", 1)
+    if weakened == source_text:
+        ok &= case("⑯ ОБРАТНЫЙ ХОД: порог ослаблен — инцидент ПРОСКАКИВАЕТ", False,
+                   "⛔ НЕ ЗАПУСТИЛСЯ: строки порога в инструменте нет — он менялся, "
+                   "правь приёмку. Зелёный без опыта здесь недопустим")
+    else:
+        broken_path = os.path.join(broken_dir, "save-phoenix.py")
+        with open(broken_path, "w", encoding="utf-8") as f:
+            f.write(weakened)
+        import shutil as _sh2
+        for neighbor in ("mezo_paths.py", "dryrun.py"):
+            neighbor_src = os.path.join(TOOLS, neighbor)
+            if os.path.exists(neighbor_src):
+                _sh2.copy(neighbor_src, os.path.join(broken_dir, neighbor))
+        p = os.path.join(tmp, "n.db")
+        build(p, [("RCC", "state", BIG)])
+        r = subprocess.run([sys.executable, broken_path, "--db", p, "--role", "RCC",
+                            "--section", "state", "--body", BIG[:int(len(BIG) * 0.39)]],
+                           capture_output=True, text=True, encoding="utf-8")
+        ok &= case("⑯ ОБРАТНЫЙ ХОД: порог ослаблен — инцидент ПРОСКАКИВАЕТ",
+                   r.returncode == 0,
+                   f"код ослабленного {r.returncode} против отказа у настоящего — "
+                   "разница и есть доказательство, что ловит именно порог", differ=True)
+
+    # ⑰ ОБРАТНЫЙ ХОД ПО ЧИСТКЕ. Меняем «самая длинная» на «самая короткая» — длинная
+    #    обязана потеряться. Поломка СИНТАКСИЧЕСКИ ВЕРНА: сломать сам запрос значило бы
+    #    испытывать падение, а не предмет (моя же ошибка при первом прогоне поломок).
+    broken_cleanup_dir = os.path.join(tmp, "чистка-сломана")
+    os.makedirs(broken_cleanup_dir, exist_ok=True)
+    corruption = source_text.replace("ORDER BY body_chars DESC, id DESC LIMIT 1",
+                             "ORDER BY body_chars ASC, id DESC LIMIT 1", 1)
+    if corruption == source_text:
+        ok &= case("⑰ ОБРАТНЫЙ ХОД: чистка без «самой длинной» — длинная ТЕРЯЕТСЯ", False,
+                   "⛔ НЕ ЗАПУСТИЛСЯ: места чистки в инструменте нет — правь приёмку")
+    else:
+        corruption_path = os.path.join(broken_cleanup_dir, "save-phoenix.py")
+        with open(corruption_path, "w", encoding="utf-8") as f:
+            f.write(corruption)
+        import shutil as _sh3
+        for neighbor in ("mezo_paths.py", "dryrun.py"):
+            neighbor_src = os.path.join(TOOLS, neighbor)
+            if os.path.exists(neighbor_src):
+                _sh3.copy(neighbor_src, os.path.join(broken_cleanup_dir, neighbor))
+        p = os.path.join(tmp, "o.db")
+        build(p, [("RCC", "state", BIG)])
+        codes2 = []
+        for i in range(13):
+            r = subprocess.run([sys.executable, corruption_path, "--db", p, "--role", "RCC",
+                                "--section", "state", "--body", mid_text + f"\nправка {i}"],
+                               capture_output=True, text=True, encoding="utf-8")
+            codes2.append(r.returncode)
+        remaining = versions(p)
+        long_intact2 = any(v[1] == len(BIG) for v in remaining)
+        ok &= case("⑰ ОБРАТНЫЙ ХОД: чистка без «самой длинной» — длинная ТЕРЯЕТСЯ",
+                   set(codes2) == {0} and not long_intact2,
+                   f"записи прошли: {set(codes2) == {0}} · длинная "
+                   f"{'ЦЕЛА — поломка не сработала' if long_intact2 else 'потеряна'} · "
+                   "поломка обязана быть синтаксически верной, иначе испытывается падение",
+                   differ=True)
+
     print()
     print(f"✅ ЗАЩИТА ПРИНЯТА — случаев {CASES}, различающих {DIFFERENTIATING}, "
           "у каждого различающего контроль" if ok
@@ -178,4 +513,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))
