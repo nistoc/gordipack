@@ -223,6 +223,12 @@ def check_shared_helpers() -> int:
     помощника (переименованная копия) не ловятся — их не с чем сравнить.
     """
     if not (RUNTIME.is_dir() and VNEXT_RUNTIME and VNEXT_RUNTIME.is_dir()):
+        # Строкой, а не молчанием (замечание COORD к PR 54, записка #6071): первая строка ветки
+        # без зеркала говорит «две другие пары сверяются», и тишина здесь читалась бы как
+        # «сверены, расхождений нет». ℹ️ — чтобы общий прогон показал её под «✅ drift».
+        missing = RUNTIME if not RUNTIME.is_dir() else VNEXT_RUNTIME
+        print(f"ℹ️ общие помощники двух рабочих каталогов НЕ сверялись: второго рабочего каталога "
+              f"нет ({missing.as_posix()})")
         return 0
     common = sorted({p.name for p in RUNTIME.glob("*.py")}
                     & {p.name for p in VNEXT_RUNTIME.glob("*.py")})

@@ -24,13 +24,17 @@ vnext-tools с одним файлом helper_common.py того же имени
   ⑤ КОНТРОЛЬ прежнего пути: зеркало есть и совпадает, помощник расходится — «СОВПАДАЕТ», код 1
   ⑥ файл путей не читается, помощник совпадает — код 1 («зеркало не определено»), и сверка
      помощников всё равно прошла
+  ⑦ второго рабочего каталога (vnext-tools) нет — код 0 и строка «общие помощники … НЕ сверялись:
+     второго рабочего каталога нет» под ℹ️: первая строка обещает «сверяются», и тишина читалась бы
+     как «сверены» (замечание COORD к PR 54, записка #6071)
 
 Нарочные поломки (--break), каждая на своей копии guard-scripts-drift.py:
-  early-exit-undeclared .... ветка «не объявлено» выходит, не сверяя пар            → ① ② ⑥
+  early-exit-undeclared .... ветка «не объявлено» выходит, не сверяя пар            → ① ② ⑥ ⑦
   early-exit-missing ....... ветка «каталога нет» выходит кодом 0, не сверяя пар    → ③ ④
   unreadable-first ......... «не читается» проверено раньше сверки, и она не идёт   → ⑥
   no-words ................. строка «не объявлено» без слов «НЕ сверялась»          → ①
   disclaimer-as-verdict .... оговорка «И этот инструмент НЕ отвечает…» под ⛔        → ① ③
+  helpers-silent ........... без второго каталога сверка помощников молчит          → ⑦
 
 Испытуемый guard-scripts-drift.py — по MEZO_SCRIPTS_ROOT (mezo_target), по умолчанию — установленный.
 Запуск:  python <каталог приёмок>/bite-drift-no-mirror.py [--break <имя>]
@@ -62,9 +66,11 @@ WORDS = ("\"ℹ️ зеркало не объявлено — сверка ко�
 
 DISCLAIMER = "        print(\"   ⚖️ И этот инструмент НЕ отвечает на вопрос «отстали ли мы от общего \"\n"
 DISCLAIMER_BROKEN = DISCLAIMER.replace("⚖️", "⛔")
+SILENT_WORDS = ("        print(f\"ℹ️ общие помощники двух рабочих каталогов НЕ сверялись: второго рабочего "
+                "каталога \"\n              f\"нет ({missing.as_posix()})\")\n")
 BREAKS = {
     "early-exit-undeclared": ([(UNDECLARED_EXIT, "        sys.exit(1 if unreadable else 0)\n")],
-                              {"①", "②", "⑥"}),
+                              {"①", "②", "⑥", "⑦"}),
     "early-exit-missing": ([(MISSING_EXIT, "        sys.exit(0)\n")], {"③", "④"}),
     "unreadable-first": ([(UNDECLARED_EXIT,
                            "        sys.exit(1 if (unreadable or check_against_template()) else 0)\n")],
@@ -77,6 +83,7 @@ BREAKS = {
                                ("«не объявлено» выше.\n" + DISCLAIMER,
                                 "«не объявлено» выше.\n" + DISCLAIMER_BROKEN)],
                               {"①", "③"}),
+    "helpers-silent": ([(SILENT_WORDS, "        pass\n")], {"⑦"}),
 }
 
 HELPER = "helper_common.py"
@@ -125,14 +132,16 @@ def main() -> int:
               f"{' '.join(sorted(BREAKS[a.break_name][1]))}")
 
     def contour(tag, helper_vnext, paths=None, raw_paths=None, mirror=False):
-        """Контур стенда: своя копия набора, помощник в обоих рабочих каталогах, файл путей."""
+        """Контур стенда: своя копия набора, помощник в обоих рабочих каталогах, файл путей.
+        helper_vnext=None — второго рабочего каталога нет вовсе."""
         c = stand / tag
         own = c / ".mezosync" / "scripts"
         shutil.copytree(tools, own)
         mezo_stand.empty_db(live_db, c / ".mezosync" / "mezosync.db")
         (own / HELPER).write_text(SAME, encoding="utf-8")
-        (c / "vnext-tools").mkdir(parents=True)
-        (c / "vnext-tools" / HELPER).write_text(helper_vnext, encoding="utf-8")
+        if helper_vnext is not None:
+            (c / "vnext-tools").mkdir(parents=True)
+            (c / "vnext-tools" / HELPER).write_text(helper_vnext, encoding="utf-8")
         if mirror:
             shutil.copytree(own, c / "mirror" / "scripts")
         if paths is not None or raw_paths is not None:
@@ -205,6 +214,15 @@ def main() -> int:
     rc, out = run(c, tool)
     case("⑥", "файл путей не читается — код 1, «зеркало не определено», помощники всё равно сверены",
          rc == 1 and "зеркало не определено" in out and helpers_same in out, f"код {rc} · {tail(out)}")
+
+    # ⑦ — второго рабочего каталога нет
+    c, tool = contour("c7", None)
+    rc, out = run(c, tool)
+    said = [l.strip() for l in out.splitlines() if "общие помощники двух рабочих каталогов" in l]
+    case("⑦", "второго рабочего каталога нет — код 0, «ℹ️ … НЕ сверялись: второго рабочего каталога нет»",
+         rc == 0 and any(l.startswith("ℹ️") and "НЕ сверялись: второго рабочего каталога нет" in l
+                         for l in said),
+         f"код {rc} · строки о помощниках: {said or 'нет'}")
 
     print(f"\n{'✅' if FAIL == 0 else '🔴'} ИТОГ: {OK} из {OK + FAIL} · испытан {mezo_target.label()}")
     if a.break_name:

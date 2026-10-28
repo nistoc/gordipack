@@ -57,6 +57,7 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -132,6 +133,27 @@ def git_stand(tag: str, files: dict, message: str) -> Path:
     git(tmp, "add", "-f", "scripts", "vnext")
     git(tmp, "commit", "-q", "-m", message)
     return tmp
+
+
+def _writable_and_retry(func, path, _exc):
+    """Windows не удаляет файл «только для чтения», а git так кладёт .git/objects: снять метку и повторить."""
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
+
+def remove(path: Path) -> bool:
+    """Убрать стенд вместе с подставным git; False — каталог остался (вызывающий печатает путь).
+
+    Прежде было rmtree(ignore_errors=True): на Windows .git/objects оставались, а отказ глушился —
+    три стенда на каждый прогон молча (замечание COORD к PR 54, записка #6071)."""
+    try:
+        if sys.version_info >= (3, 12):
+            shutil.rmtree(path, onexc=_writable_and_retry)
+        else:
+            shutil.rmtree(path, onerror=_writable_and_retry)
+    except OSError:
+        pass
+    return not Path(path).exists()
 
 
 def broken_copy(guard: Path, name: str):
@@ -282,12 +304,16 @@ def main() -> int:
               + (f" (не проверено {skipped})" if skipped else ""))
     # стенды прошедших случаев убираются; провалы — тоже, если поломка поймана ровно как записано
     kept = set() if exact else {t for _n, s, _d, t in results if s != "ok" and t is not None}
-    for t in sorted({t for *_x, t in results if t is not None} - kept):
-        shutil.rmtree(t, ignore_errors=True)
-    if a.break_name and exact:
-        shutil.rmtree(guard.parent, ignore_errors=True)
+    left = [t for t in sorted({t for *_x, t in results if t is not None} - kept) if not remove(t)]
+    if a.break_name:
+        if exact:
+            left += [] if remove(guard.parent) else [guard.parent]
+        else:
+            print(f"   📁 копия с поломкой оставлена для разбора: {guard.parent}")
     for t in sorted(kept):
         print(f"   📁 стенд оставлен для разбора: {t}")
+    for t in left:
+        print(f"   📁 стенд не убран (удалить не удалось): {t}")
     print(f"   ИТОГ: {len(results) - bad - skipped}/{len(results)}"
           + (f" · не проверено {skipped}" if skipped else ""))
     if a.break_name:
