@@ -1,5 +1,7 @@
 # CI пакета: только проверки, которые проходят на чистом клоне уже сейчас.
 # Описание проверок и того, как запустить их у себя, — CLAUDE.md, раздел «Команды».
+# Тесты контрактов pytest (tests/) — в job python и отдельным job на Windows:
+# скрипты и hooks пакета живут на Windows (hooks — PowerShell).
 name: CI
 
 on:
@@ -49,6 +51,13 @@ jobs:
           python vnext/tools/build-pack-rules-db.py --check
           python vnext/tools/bite-pack-rules-db.py
 
+      # До сборки контура в $GITHUB_WORKSPACE: тесты собирают свои контуры во временных папках.
+      - name: Тесты контрактов (pytest)
+        working-directory: pack
+        run: |
+          python -m pip install -r tests/requirements.txt
+          python -m pytest tests
+
       - name: Свежий контур из пакета (init-group.py)
         run: >-
           python pack/scripts/init-group.py --name ci
@@ -86,3 +95,29 @@ jobs:
         run: |
           npm ci
           npm run build
+
+  windows:
+    name: Windows (pytest, hooks, turn-status)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      # Вывод pytest и скриптов — по-русски; без этого лог Windows-раннера печатает \uXXXX.
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Тесты контрактов (pytest; hooks — в pwsh и Windows PowerShell 5.1)
+        run: |
+          python -m pip install -r tests/requirements.txt
+          python -m pytest tests
+
+      - name: Проверки расширения turn-status
+        run: node plugins/turn-status/test/run.js
