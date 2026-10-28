@@ -34,8 +34,9 @@
 
 ## Команды
 
-Проверено в Linux VM 2026-10-27 на Python 3.12, 3.13 и 3.14 и Node 22. Устанавливать для Python нечего.
-CI (`.github/workflows/ci.yml`) гоняет те же команды.
+Проверено в Linux VM 2026-10-27 на Python 3.12, 3.13 и 3.14 и Node 22. Инструментам пака зависимости не нужны
+(только stdlib); тестам `tests/` нужен pytest (`tests/requirements.txt`). CI (`.github/workflows/ci.yml`) гоняет
+те же команды на Linux, а тесты `tests/` и `turn-status` — ещё и на Windows.
 
 ```bash
 # синтаксис всех .py; SyntaxWarning — ошибка
@@ -45,6 +46,16 @@ python vnext/tools/guard-donor-literals.py
 # rules/pack-rules.db сходится с правилами HEAD; приёмка сборщика базы правил
 python vnext/tools/build-pack-rules-db.py --check
 python vnext/tools/bite-pack-rules-db.py
+```
+
+Тесты контрактов — pytest в `tests/`. Каждый тест собирает себе контур во временной папке: раскладка `<ws>/pack`,
+живой контур и сеть не нужны.
+
+```bash
+python -m pip install -r tests/requirements.txt
+python -m pytest tests                                      # ≈3 мин на Linux, ≈5 мин на Windows; 9 xfail
+python -m pytest tests/test_messaging.py -q                 # один файл
+python -m pytest tests/test_schema.py --update-snapshots    # схема изменена намеренно: обновить snapshot
 ```
 
 Свежий контур. Голый клон контуром не является (см. «Подвохи»). Поэтому клон кладут в `<ws>/pack`, а контур
@@ -88,7 +99,8 @@ Pre-commit hook включается в каждом клоне отдельно
 - Пишущий инструмент без флагов печатает план, пишет — с `--apply`. У шага схемы холостой прогон — `--dry-run`.
   Шаг идемпотентен: повтор отвечает «уже сведено». Автора шага в журнал пишет переменная `MEZO_ROLE`.
 - Новый шаг схемы — это файл в `scripts/migrations/` и имя в `STEPS` (`scripts/schema_step_order.py`) в порядке
-  применения, а не по алфавиту. Шаг, который схему не меняет, вносят в `NOT_SCHEMA_STEPS`.
+  применения, а не по алфавиту. Шаг, который схему не меняет, вносят в `NOT_SCHEMA_STEPS`. Шаг, который меняет
+  схему, обновляет и snapshot `tests/snapshots/schema.json` (`--update-snapshots`, см. «Команды»).
 - Новый `.py` в `scripts/` (кроме `bite-*.py` и `migrations/`) вносят строкой в `vnext/tools/core-files.txt`:
   в раздел `[ядро]` или в `[вне ядра]` с причиной. Иначе `guard-donor-literals.py` даёт находку.
 - Пути машины в код не впечатывают: базу и контейнер ищут через `mezo_paths` (`container_root()`, `live_db()`,
@@ -123,6 +135,10 @@ Pre-commit hook включается в каждом клоне отдельно
   уже сделанный commit: `python vnext/tools/guard-donor-literals.py --commit HEAD`.
 - `plugins/turn-status/test/run.js` краснеет, если в среде задана `CLAUDE_PROJECT_DIR` или `TURN_STATUS_DISABLE`
   (так бывает внутри сессии Claude Code). Запускайте с `env -u CLAUDE_PROJECT_DIR -u TURN_STATUS_DISABLE`.
+- В `tests/` найденные ошибки `scripts/` стоят как `xfail(strict=True)` с файлом и строкой в причине. Починил такую
+  ошибку — тест станет XPASS и уронит CI: сними пометку в том же commit.
+- `tests/test_hooks.py` запускает `hooks/*.json` в PowerShell. Без `pwsh` и `powershell` эти тесты пропускаются
+  (skip), в CI выполняются.
 - У `dashboard.py` `--db` по умолчанию относительный (`.mezosync/mezosync.db`). Вне контейнера передавайте его явно.
 - `vnext/prototype/guard-machine-paths.py` на клоне пака сейчас красный (exit 1): 72 пути одной машины в коде
   и примерах, ещё 25 — в прозе. Поэтому в CI его нет.
