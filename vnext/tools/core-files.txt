@@ -42,6 +42,7 @@ scripts/init-group.py
 scripts/lease.py
 scripts/local_time.py
 scripts/machine_layer.py
+scripts/md-phase.py
 scripts/messages-fold.py
 scripts/mezo_hints.py
 scripts/mezo_paths.py

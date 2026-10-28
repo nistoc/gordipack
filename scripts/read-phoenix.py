@@ -90,9 +90,17 @@ TITLES = {
 # md-to-sqlite-phased-cutover в посеве нет с 10.08. ⇒ Общая часть шапки — без фазы и без
 # чужих дат; блок про md-файлы ({md}) печатается ТОЛЬКО там, где это правило действует
 # (спрашивается у базы), уроки донора названы уроками донора, а не состоянием контура.
+# 🪤 ВТОРОЙ ОБОРОТ ТОГО ЖЕ КЛАССА (issue #37 пакета, 2026-10-28). Блок про md выбирался по
+# одному НАЛИЧИЮ правила md-to-sqlite-phased-cutover, а строки «источник правды — БД» и «при
+# расхождении верь БД» печатались всегда. Контур-потребитель с этим правилом на Фазе 1
+# (двойная запись, md главный, при расхождении верить md) получал в одном выводе состояние
+# Фазы 4 — противоположное своему — и вписывал обход в промпт подъёма каждой роли.
+# ⇒ Фаза — ЯВНЫЙ признак meta.md_phase (1…4), его пишет md-phase.py. Три места шапки ({source},
+# {md}, {trust}) выбираются по нему; правила нет или оно снято — прежний вид контура без md;
+# правило есть, а фаза не записана — «фаза неизвестна, сверься с правилом», а не Фаза 4.
 CANON = r"""
 ═══════════════════════════════════════════════════════════════════════════════
-📌 КАНОН — ИСТОЧНИК ПРАВДЫ БД: mezosync.db этого контура. В файлы механизм не пишет.
+{source}
 
   ⚠️ ЗОВИ АБСОЛЮТНЫМ ПУТЁМ (ниже он уже такой). Относительная форма запрещена: при уехавшем
      CWD она падает — или, хуже, МОЛЧА пишет в другую живую БД. В свою сохранённую память пиши
@@ -124,8 +132,7 @@ CANON = r"""
    незамеченной, и работа шла «куда-нибудь».
 ⏱ ВРЕМЯ — UTC ВЕЗДЕ, суффикс обязателен: «2026-07-16 17:48 UTC». Хуки дают ЛОКАЛЬНОЕ
    с явным offset ⇒ конвертируй сам: UTC = локальное − offset. Offset БРАТЬ ИЗ ХУКА.
-⚠️ При РАСХОЖДЕНИИ файла и БД — ВЕРЬ БД. sync.rules.md генерируется из неё (у донора
-   2026-07-16 он пять часов лгал, держа отозванное правило как приказ).
+{trust}
 🔍 ПРОВЕРЯЯ СВОЮ СОХРАНЁННУЮ ПАМЯТЬ — регексп по ВСЕМ секциям, БЕЗ своих фильтров.
    Глазами по одной секции НЕ ЛОВИТ (замер донора: четыре роли из четырёх нашли живые
    указатели только регекспом, через 13–19 минут после своего «чисто»). Фильтр по соседним
@@ -133,11 +140,46 @@ CANON = r"""
 ═══════════════════════════════════════════════════════════════════════════════
 """
 
-# Блок про md-файлы — ТОЛЬКО для контура, где правило о заморозке md действует (донор).
+# Блок про md-файлы — ТОЛЬКО для контура, где правило перехода md → база действует.
 # Свежему контуру из пакета сказать здесь нечего: файлов у него не было, и строка о них
 # учила бы искать то, чего нет.
+MD_RULE = "md-to-sqlite-phased-cutover"
+MD_PHASE_KEY = "md_phase"           # meta: 1 … 4; пишет md-phase.py
+
+SOURCE_DB = "📌 КАНОН — ИСТОЧНИК ПРАВДЫ БД: mezosync.db этого контура. В файлы механизм не пишет."
+SOURCE_MD = ("📌 КАНОН — инструменты пишут в БД mezosync.db этого контура, а ГЛАВНЫЙ источник "
+             "в фазе {n} — md-файлы\n   (строка 📝 ниже). В файлы механизм не пишет.")
+SOURCE_UNKNOWN = ("📌 КАНОН — инструменты пишут в БД mezosync.db этого контура; какой источник "
+                  "главный — по фазе\n   перехода md → база, а она не записана (строка ❓ ниже). "
+                  "В файлы механизм не пишет.")
+
+TRUST_DB = """⚠️ При РАСХОЖДЕНИИ файла и БД — ВЕРЬ БД. sync.rules.md генерируется из неё (у донора
+   2026-07-16 он пять часов лгал, держа отозванное правило как приказ)."""
+TRUST_MD = """⚠️ При РАСХОЖДЕНИИ md-файла и БД — ВЕРЬ md: в фазе {n} перехода он главный (признак
+   meta.md_phase; что фаза значит в этом контуре — в самом правиле)."""
+TRUST_UNKNOWN = """⚠️ Кому верить при РАСХОЖДЕНИИ файла и БД — зависит от фазы перехода md → база, а она
+   не записана: сверься с правилом (строка ❓ выше), а не с этой шапкой."""
+
+MD_DUAL_BLOCK = r"""
+📝 ПЕРЕХОД md → база, ФАЗА {n} (признак meta.md_phase; правило md-to-sqlite-phased-cutover):
+   двойная запись — md-файлы ГЛАВНЫЕ, база пишется вторым экземпляром. Читай md.
+   Что разрешено в этой фазе — в самом правиле: python {s}/set-rule.py --key
+   md-to-sqlite-phased-cutover --show"""
+
+MD_DB_MAIN_BLOCK = r"""
+📝 ПЕРЕХОД md → база, ФАЗА 3 (признак meta.md_phase; правило md-to-sqlite-phased-cutover):
+   база ГЛАВНАЯ, sync.*.md и phoenix.*.md ещё пишутся вторым экземпляром. Читай базу.
+   Что разрешено в этой фазе — в самом правиле: python {s}/set-rule.py --key
+   md-to-sqlite-phased-cutover --show"""
+
+MD_UNKNOWN_BLOCK = r"""
+❓ ПЕРЕХОД md → база: правило md-to-sqlite-phased-cutover действует, а ФАЗА НЕ ЗАПИСАНА
+   ({why}). Что главное — md-файлы или база — эта шапка не знает:
+   сверься с правилом — python {s}/set-rule.py --key md-to-sqlite-phased-cutover --show
+   Записать фазу (1–4): python {s}/md-phase.py --set <фаза> --actor <РОЛЬ>"""
+
 MD_FROZEN_BLOCK = r"""
-⛔ md ЗАМОРОЖЕНЫ (правило md-to-sqlite-phased-cutover действует в этом контуре):
+⛔ md ЗАМОРОЖЕНЫ (правило md-to-sqlite-phased-cutover действует в этом контуре, фаза 4):
    sync.*.md и phoenix.*.md несут пометку о снятии — НЕ читать, НЕ писать, НЕ править.
    Человекочитаемый ВИД — generated/sync.<роль>.md и sync.rules.md (генерируются из БД).
    История ленты — таблица messages_history + VIEW messages_all (сквозной поиск).
@@ -146,14 +188,46 @@ MD_FROZEN_BLOCK = r"""
    md-to-sqlite-phased-cutover --show)."""
 
 
-def md_frozen_rule_active(conn) -> bool:
-    """Действует ли в ЭТОМ контуре правило о заморозке md-файлов — спрашиваем базу, не помним."""
+def md_phase(conn):
+    """Фаза перехода md → база в ЭТОМ контуре — спрашиваем базу, не помним.
+
+    Возвращает (фаза, слова): фаза None — правила перехода нет или оно снято (шапка без md);
+    1 … 4 — из meta.md_phase; "unknown" — правило действует, а фаза не записана или не понята,
+    слова говорят, что именно. Наличие правила само по себе фазу НЕ определяет (issue #37).
+    """
     try:
-        row = conn.execute("SELECT status FROM rules WHERE rule_key = 'md-to-sqlite-phased-cutover'"
-                           ).fetchone()
+        row = conn.execute("SELECT status FROM rules WHERE rule_key = ?", (MD_RULE,)).fetchone()
     except sqlite3.OperationalError:
-        return False
-    return bool(row) and (row[0] or "active") == "active"
+        return None, ""
+    if not row or (row[0] or "active") != "active":
+        return None, ""
+    try:
+        got = conn.execute("SELECT value FROM meta WHERE key = ?", (MD_PHASE_KEY,)).fetchone()
+    except sqlite3.OperationalError:
+        return "unknown", "таблицы meta в базе нет"
+    value = (got[0] if got else "") or ""
+    if not str(value).strip():
+        return "unknown", f"признака meta.{MD_PHASE_KEY} в базе нет"
+    if str(value).strip() in {"1", "2", "3", "4"}:
+        return int(str(value).strip()), ""
+    return "unknown", f"meta.{MD_PHASE_KEY} = «{str(value).strip()[:20]}» не понято: ждут 1, 2, 3 или 4"
+
+
+def phase_parts(conn) -> dict:
+    """Три места шапки по фазе: {source} · {md} · {trust}. {s} внутри подставит вызывающий."""
+    phase, why = md_phase(conn)
+    if phase is None:
+        return {"source": SOURCE_DB, "md": "", "trust": TRUST_DB}
+    if phase == "unknown":
+        return {"source": SOURCE_UNKNOWN, "md": MD_UNKNOWN_BLOCK.replace("{why}", why),
+                "trust": TRUST_UNKNOWN}
+    if phase in (1, 2):
+        n = str(phase)
+        return {"source": SOURCE_MD.replace("{n}", n), "md": MD_DUAL_BLOCK.replace("{n}", n),
+                "trust": TRUST_MD.replace("{n}", n)}
+    if phase == 3:
+        return {"source": SOURCE_DB, "md": MD_DB_MAIN_BLOCK, "trust": TRUST_DB}
+    return {"source": SOURCE_DB, "md": MD_FROZEN_BLOCK, "trust": TRUST_DB}
 
 
 def _lines_are_ordered_subsequence(after_lines, before_lines) -> bool:
@@ -427,10 +501,12 @@ def main():
 
     print(f"🔥 PHOENIX — сохранённая память роли {role} (источник: mezosync.db, таблица phoenix)")
     if not args.section:
-        md_block = MD_FROZEN_BLOCK if md_frozen_rule_active(conn) else ""
+        parts = phase_parts(conn)
+        # {source} · {md} · {trust} — по фазе перехода (issue #37); {s} в них — после подстановки
+        canon = (CANON.replace("{source}", parts["source"]).replace("{md}", parts["md"])
+                      .replace("{trust}", parts["trust"]))
         mezo_hints.подсказка(conn, mezo_hints.кто_читает(args.actor, role), "read-phoenix-canon",
-                              CANON.replace("{role}", role).replace("{s}", str(SCRIPTS_DIR))
-                                   .replace("{md}", md_block),
+                              canon.replace("{role}", role).replace("{s}", str(SCRIPTS_DIR)),
                               ttl_hours=24, full=args.full)
 
     for s in wanted:
