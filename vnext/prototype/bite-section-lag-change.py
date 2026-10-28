@@ -25,6 +25,8 @@ guard-section-lag.py (что печатает и каким кодом). Каж�
   ⑪  строка hook (phoenix_lag.lag_line) на базе случая ② — молчит: ответ на опрос не отставание
   ⑫  тишина: записка с commit раньше сохранения, после — ни одной — код 0, ни 🔴, ни 🟡
      (три случая заявки — тишина ⑫, ответ «принято» ②, записка с commit ①)
+  ⑬  рядом с проверкой прежний phoenix_lag.py без section_lag, годного нет нигде — отказ кодом 2
+     с перечнем мест и словами «есть, но без section_lag», без трассировки (замечание приёмки PR 56)
 
 Нарочные поломки (--break), каждая на своей копии phoenix_lag.py или guard-section-lag.py:
   any-note-red .......... любая записка — смена состояния (прежнее поведение)  → ② ⑤ ⑥ ⑩ ⑪
@@ -33,6 +35,7 @@ guard-section-lag.py (что печатает и каким кодом). Каж�
   closure-report-counts . закрытие — любая форма «закры…», и пересказ тоже    → ⑤
   yellow-silent ......... строки 🟡 нет                                        → ② ⑩
   yellow-as-red ......... «не подтверждался» красится как отставание         → ② ⑤ ⑥ ⑩
+  first-found ........... берётся первый найденный phoenix_lag.py, годен ли  → ⑬
 
 Живой базы не касается. Испытуемая phoenix_lag.py — по MEZO_SCRIPTS_ROOT (mezo_target), по умолчанию —
 установленная; guard-section-lag.py — из того же каталога, если она там есть (собранный контур), иначе из
@@ -90,7 +93,15 @@ BREAKS = {
           'x[2]["change_lag_h"] is not None\n               and x[2]["change_lag_h"] > limit]',
           'x[2]["unconfirmed_h"] is not None\n               and x[2]["unconfirmed_h"] > limit]')],
         {"②", "⑤", "⑥", "⑩"}),
+    "first-found": (
+        [("guard-section-lag.py",
+          "        absent = [name for name in LAG_NAMES if not hasattr(module, name)]\n",
+          "        absent = []\n")],
+        {"⑬"}),
 }
+
+# Прежний phoenix_lag.py (до issue #38) — без section_lag: им проверяется ⑬
+OLD_LAG = "LAG_HOURS = 3\n\n\ndef memory_lag(con, role):\n    return None\n"
 
 OK = FAIL = 0
 RED = []
@@ -242,6 +253,18 @@ def main() -> int:
     rc, out = run(one_role("c12", "ZZLAGL", WORK, at="2026-10-20 09:00:00"))
     case("⑫", "тишина: записка с commit ДО сохранения, после — ни одной — код 0, ни 🔴, ни 🟡",
          rc == 0 and not red_part(out) and not yellow_part(out), f"код {rc}; {short(out)}")
+
+    # ⑬ копия проверки (с вложенной поломкой, если она есть) в своём каталоге рядом с прежним
+    #    phoenix_lag.py; контур стенда своего рабочего каталога не имеет — годного места нет
+    tools_old = stand / "tools-old"
+    guard_old = mezo_stand.copy_tool(guard, tools_old)
+    (tools_old / "phoenix_lag.py").write_bytes(OLD_LAG.encode("utf-8"))
+    r = subprocess.run([sys.executable, str(guard_old), "--db", str(db2)], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", env=env, timeout=120)
+    out = (r.stdout or "") + (r.stderr or "")
+    case("⑬", "прежний phoenix_lag.py без section_lag — отказ кодом 2 с перечнем мест, без трассировки",
+         r.returncode == 2 and "есть, но без section_lag" in out and "Traceback" not in out,
+         f"код {r.returncode}; {short(out)}")
 
     print(f"\n{'✅' if FAIL == 0 else '🔴'} ИТОГ: {OK} из {OK + FAIL} · испытан {mezo_target.label()}")
     if a.break_name:

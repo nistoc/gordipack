@@ -53,7 +53,9 @@
     python guard-section-lag.py --selftest
 """
 import argparse
+import contextlib
 import importlib.util
+import io
 import os
 import sqlite3
 import sys
@@ -64,14 +66,13 @@ DB = mezo_paths.live_db()
 FAST_SECTIONS = ("state", "plan")
 
 
-def _load_lag():
-    """Общая функция отставания — phoenix_lag.py рабочего каталога, а не своя копия разбора:
-    две копии признаков смены состояния разъехались бы при первой правке.
+# Без этих имён phoenix_lag.py — прежний (до issue #38): проверка упала бы трассировкой на первом вызове.
+LAG_NAMES = ("section_lag", "LAG_HOURS", "STATE_CHANGE_NAMES")
 
-    Где искать (первое найденное): MEZO_SCRIPTS_ROOT (испытуемая копия) · рядом с этим файлом
-    (собранный контур) · рабочий каталог контура · scripts/ пакета (vnext/prototype → ../../scripts).
-    → (модуль, путь) или (None, список осмотренных мест).
-    """
+
+def _lag_places():
+    """Где искать phoenix_lag.py, по порядку: MEZO_SCRIPTS_ROOT (испытуемая копия) · рядом с этим
+    файлом (собранный контур) · рабочий каталог контура · scripts/ пакета (vnext/prototype → ../../scripts)."""
     here = Path(__file__).resolve().parent
     places = []
     if os.environ.get("MEZO_SCRIPTS_ROOT"):
@@ -82,14 +83,38 @@ def _load_lag():
     except SystemExit:
         pass
     places.append(here.parent.parent / "scripts")
-    for place in places:
+    return places
+
+
+def _load_lag(places=None):
+    """Общая функция отставания — phoenix_lag.py рабочего каталога, а не своя копия разбора:
+    две копии признаков смены состояния разъехались бы при первой правке.
+
+    Берётся первое место, где phoenix_lag.py есть И несёт section_lag (LAG_NAMES). Прежний файл
+    без неё пропускается, а не берётся: так бывает, когда проверку из клона зовут против контура,
+    ещё не обновлённого, или когда установка не тронула phoenix_lag.py, помеченный «✋ правлен у тебя»
+    (замечание приёмки PR 56: раньше здесь была трассировка AttributeError с кодом 1).
+    → (модуль, путь, [(путь, почему пропущен)…]) или (None, None, [(место, что там)…]).
+    """
+    seen = []
+    for place in (_lag_places() if places is None else places):
         path = place / "phoenix_lag.py"
-        if path.exists():
+        if not path.exists():
+            seen.append((place, "нет файла"))
+            continue
+        try:
             spec = importlib.util.spec_from_file_location("phoenix_lag", path)
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
-            return module, path
-    return None, places
+        except Exception as error:   # чужая поломка файла — тоже «не годится», а не трассировка
+            seen.append((path, f"есть, но не загрузился: {type(error).__name__}"))
+            continue
+        absent = [name for name in LAG_NAMES if not hasattr(module, name)]
+        if absent:
+            seen.append((path, f"есть, но без {', '.join(absent)} (прежний)"))
+            continue
+        return module, path, seen
+    return None, None, seen
 
 
 def measure(con, lag, role=None):
@@ -116,17 +141,20 @@ def measure(con, lag, role=None):
     return out
 
 
-def run(role=None, db_path=DB):
+def run(role=None, db_path=DB, places=None):
     p = Path(db_path)
     if not p.exists():
         print(f"⛔ ОТКАЗ: базы нет — {p}")
         return 2
-    lag, where = _load_lag()
+    lag, where, seen = _load_lag(places)
     if lag is None:
-        print("⛔ ОТКАЗ: общей функции отставания phoenix_lag.py нет ни в одном из мест: "
-              + " · ".join(x.as_posix() for x in where)
+        print("⛔ ОТКАЗ: общей функции отставания (phoenix_lag.py с section_lag) нет ни в одном из мест: "
+              + " · ".join(f"{x.as_posix()} — {why}" for x, why in seen)
               + " — без неё отставание не посчитано, и это не «отставших нет»")
         return 2
+    for old, why in seen:
+        if why != "нет файла":
+            print(f"⚠️ phoenix_lag.py пропущен — {why}: {old.as_posix()} · считаю по {where.as_posix()}")
     limit = lag.LAG_HOURS
     con = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
     rows = measure(con, lag, role)
@@ -186,7 +214,7 @@ def run(role=None, db_path=DB):
     print("   отставшая на смену работы, воскресит роль в состояние, которого уже нет.")
     for r, sec, x in sorted(lagging, key=lambda y: -y[2]["change_lag_h"]):
         print(f"\n   [{r} · {sec}]  отставание {x['change_lag_h']:.0f} ч")
-        print(f"      секция сохранена или подтверждена: {x['saved']} UTC")
+        print(f"      раздел сохранён или подтверждён: {x['saved']} UTC")
         print(f"      последняя смена состояния: {x['last_change']} UTC · таких записок {x['changes']} "
               f"({', '.join(x['reasons'])})")
     print(f"\n   👉 правишь — сохрани: python {save} --role <РОЛЬ> --section <раздел> --file <файл>; "
@@ -298,6 +326,35 @@ def selftest():
         if run("X", p) != 0:
             print("🔴 честное «перечитал, правок нет» не погасило отставание"); ok = False
 
+        # ⑧ (замечание приёмки PR 56): прежний phoenix_lag.py без section_lag стоит ПЕРВЫМ —
+        #    место пропускается с названной причиной, счёт идёт по следующему, трассировки нет
+        old = Path(tmp) / "old-scripts"
+        old.mkdir()
+        (old / "phoenix_lag.py").write_text("LAG_HOURS = 3\n\n\ndef memory_lag(con, role):\n"
+                                            "    return None\n", encoding="utf-8")
+        print("── ⑧ прежний phoenix_lag.py первым — пропущен, счёт по следующему ─")
+        cases += 1
+        p = db_with(tmp, "i.db",
+                    [("X", "state", "2026-08-06 16:00:00"), ("X", "plan", "2026-08-06 16:10:00")],
+                    [("X", "2026-08-06 16:30:00")])
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = run("X", p, [old] + _lag_places())
+        print(buf.getvalue(), end="")
+        if rc != 0 or "без section_lag" not in buf.getvalue() or "пропущен" not in buf.getvalue():
+            print(f"🔴 прежний файл не пропущен с причиной (код {rc})"); ok = False
+
+        # ⑨ РАЗЛИЧАЮЩИЙ: годного phoenix_lag.py нет ни в одном месте — отказ кодом 2 с перечнем
+        #    мест и словами «есть, но без section_lag», а не AttributeError с кодом 1
+        print("── ⑨ годного phoenix_lag.py нет нигде — отказ кодом 2 с перечнем ─")
+        cases += 1
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = run("X", p, [old, Path(tmp) / "no-such-place"])
+        print(buf.getvalue(), end="")
+        if rc != 2 or "есть, но без section_lag" not in buf.getvalue() or "нет файла" not in buf.getvalue():
+            print(f"🔴 без годной общей функции нет отказа кодом 2 с перечнем (код {rc})"); ok = False
+
     if cases == 0:
         print("\n⛔ ОТКАЗ: ни одного случая не выполнено — это не «чисто»")
         return 2
@@ -306,7 +363,8 @@ def selftest():
     print("   краснеет на отставшей секции · молчит на свежих · СВЕЖАЯ НЕ ГАСИТ ОТСТАВШУЮ · "
           "не будит дормант · на пустом контуре (ни памяти, ни ленты) — ⚪, не отказ · "
           "на пропаже памяти при непустой ленте — отказывает по-прежнему · "
-          "ответ без признаков смены состояния не красит · подтверждение гасит")
+          "ответ без признаков смены состояния не красит · подтверждение гасит · "
+          "прежний phoenix_lag.py пропускает · без годного — отказ кодом 2")
     return 0 if ok else 1
 
 
