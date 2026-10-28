@@ -1058,11 +1058,7 @@ def test_update_tools_fresh_circuit_has_no_diverged_tools(circuit, tmp_path):
     assert not found, f"отличающиеся/правленые файлы у свежего контура: {found}\n" + res.explain()
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "scripts/update-tools.py:953,1018 — план для свежесобранного контура из того же пакета "
-    "предлагает «+ init-group.py … появится»: обход scripts/ источника не исключает сборщика, "
-    "а scripts/init-group.py:309 нарочно НЕ кладёт его в контур («сборщик живёт в шаблоне, "
-    "а не в контуре»; так же UPGRADE-2026-10-05). Ожидали «забирать нечего»."))
+# Было xfail до починки scripts/update-tools.py (сборщик init-group.py не предлагается контуру).
 def test_update_tools_fresh_circuit_has_nothing_to_install(circuit, tmp_path):
     res = _update(circuit, tmp_path)
     assert res.returncode == 0, res.explain()

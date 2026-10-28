@@ -89,6 +89,12 @@ GORDI_ISSUE_PY = HERE / "gordi-issue.py"
 NEWLINE = chr(10)
 UNKNOWN_VERSION = "версия неизвестна"   # заглушка fetch(), когда у источника нет HEAD вовсе
 
+# Файлы scripts/ пакета, которые сборка НЕ кладёт в контур: сборщик живёт в шаблоне, а не в контуре.
+# ⚖️ БЛИЗНЕЦ init-group.py, шаг 7 (BUILDER_ONLY там же) — меняешь список в одном месте, правь
+# и другой. Без этого план свежего контура предлагал «+ init-group.py … появится» (находка тестов
+# PR #44). Где файл уже стоит (контур-эталон, собранный не сборщиком), он обновляется как прежде.
+BUILDER_ONLY = ("init-group.py",)
+
 # ВОЗВРАТ PROTO (третий возврат, карточка #609): именованные байт-константы для стиля
 # концов строк — та же причина, что у MERGE_LABEL_*: одна константа вместо байт-литерала,
 # повторённого в нескольких местах (line_ending_style/to_lf/from_lf/cmd_merge ниже).
@@ -952,6 +958,8 @@ def main() -> int:
         git_rel_of = {}         # rel -> путь ВНУТРИ git-репозитория источника (для истории, ③)
         for f in sorted(src_tools.rglob("*.py")):
             rel = f.relative_to(src_tools)
+            if rel.as_posix() in BUILDER_ONLY and not (tools / rel).exists():
+                continue                        # сборщик: у кого его нет, тому не предлагаем
             src_index[rel] = f
             git_rel_of[rel] = "scripts/" + rel.as_posix()
         schema_step_names = {p.name for p in src_tools.glob("migrations/*.py")}

@@ -312,8 +312,11 @@ def main():
     tools_dir = mezosync_dir / "scripts"
     tools_dir.mkdir(exist_ok=True)
     copied = 0
+    # ⚖️ БЛИЗНЕЦ update-tools.py BUILDER_ONLY — меняешь список в одном месте, правь и другой:
+    # иначе план обновления снова предложит контуру то, что сборка нарочно не кладёт.
+    BUILDER_ONLY = ("init-group.py",)
     for src in sorted(SCRIPT_DIR.glob("*.py")):
-        if src.name == "init-group.py":       # сборщик живёт в шаблоне, а не в контуре
+        if src.name in BUILDER_ONLY:          # сборщик живёт в шаблоне, а не в контуре
             continue
         (tools_dir / src.name).write_bytes(src.read_bytes())
         copied += 1
