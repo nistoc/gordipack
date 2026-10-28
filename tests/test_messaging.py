@@ -855,11 +855,7 @@ def test_broadcast_missing_required_is_argparse_error(circuit, argv, missing):
     assert count(circuit, "messages") == 0
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "scripts/broadcast.py:60 — writer_role пишется как набрано (--role coord → 'coord'), "
-    "а write-message.py и read-messages.py нормализуют роль в верхний регистр на входе "
-    "(«--role core молча завёл бы ДЕВЯТОГО писателя»). Нижний регистр в messages.writer_role "
-    "ломает группировки по писателю; читатели broadcast-ов спасаются .upper() каждый на себе."))
+# Было xfail до починки scripts/broadcast.py (имя роли — верхним регистром на входе).
 def test_broadcast_role_case_is_normalised(circuit):
     broadcast(circuit, "coord", "lowercase author")
     assert circuit.scalar("SELECT writer_role FROM messages") == "COORD"

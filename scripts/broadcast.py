@@ -36,6 +36,9 @@ def main():
     p.add_argument("--cta", action="store_true",
                    help="Call-to-action: priority=high + тег CTA (ждёт ACK ролей)")
     args = p.parse_args()
+    # Имя роли — ВЕРХНИМ регистром на входе, как у write-message.py и read-messages.py: «--role coord»
+    # писало writer_role = 'coord', и группировки по писателю расходились (находка тестов PR #44).
+    args.role = args.role.strip().upper()
     args.db = str(resolve_db(args.db, __file__))   # R15a: от расположения скрипта
 
     db_path = Path(args.db)
