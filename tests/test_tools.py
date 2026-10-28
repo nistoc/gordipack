@@ -662,11 +662,7 @@ def test_dbq_unknown_column_refusal_hints_real_columns(circuit):
     assert "Traceback" not in res.out
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "scripts/db-q.py:66 — «голова» запроса берётся первым словом до пробела "
-    "(split(None, 1)[0].rstrip('(')), поэтому чтения без пробела после первого слова — "
-    "SELECT*FROM roles, VALUES(1),(2), SELECT(1) — отказаны как «ПИШУЩИЙ запрос» (код 2), "
-    "хотя это SELECT/VALUES; rstrip('(') рассчитан именно на такую форму, но не срабатывает."))
+# Было xfail до починки scripts/db-q.py (голова запроса — первые буквы, а не слово до пробела).
 @pytest.mark.parametrize("sql", ["SELECT*FROM roles", "VALUES(1),(2)", "SELECT(1)"])
 def test_dbq_reads_written_without_a_space_after_the_first_word(circuit, sql):
     res = _q(circuit, sql)
@@ -1062,11 +1058,7 @@ def test_update_tools_fresh_circuit_has_no_diverged_tools(circuit, tmp_path):
     assert not found, f"отличающиеся/правленые файлы у свежего контура: {found}\n" + res.explain()
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "scripts/update-tools.py:953,1018 — план для свежесобранного контура из того же пакета "
-    "предлагает «+ init-group.py … появится»: обход scripts/ источника не исключает сборщика, "
-    "а scripts/init-group.py:309 нарочно НЕ кладёт его в контур («сборщик живёт в шаблоне, "
-    "а не в контуре»; так же UPGRADE-2026-10-05). Ожидали «забирать нечего»."))
+# Было xfail до починки scripts/update-tools.py (сборщик init-group.py не предлагается контуру).
 def test_update_tools_fresh_circuit_has_nothing_to_install(circuit, tmp_path):
     res = _update(circuit, tmp_path)
     assert res.returncode == 0, res.explain()

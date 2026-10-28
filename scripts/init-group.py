@@ -129,7 +129,14 @@ def main():
 
     if db_path.exists():
         print(f"⚠️  БД уже существует: {db_path}")
-        resp = input("Перезаписать? (y/N): ").strip().lower()
+        # Без терминала (stdin закрыт: CI, вызов из другого скрипта или агента) input() бросает
+        # EOFError — прежде это был Traceback и код 1. Нет ответа — значит «нет»: базу не трогаем
+        # (находка тестов PR #44).
+        try:
+            resp = input("Перезаписать? (y/N): ").strip().lower()
+        except EOFError:
+            print()
+            resp = ""
         if resp != "y":
             print("Отмена.")
             sys.exit(0)
@@ -332,8 +339,11 @@ def main():
     tools_dir = mezosync_dir / "scripts"
     tools_dir.mkdir(exist_ok=True)
     copied = 0
+    # ⚖️ БЛИЗНЕЦ update-tools.py BUILDER_ONLY — меняешь список в одном месте, правь и другой:
+    # иначе план обновления снова предложит контуру то, что сборка нарочно не кладёт.
+    BUILDER_ONLY = ("init-group.py",)
     for src in sorted(SCRIPT_DIR.glob("*.py")):
-        if src.name == "init-group.py":       # сборщик живёт в шаблоне, а не в контуре
+        if src.name in BUILDER_ONLY:          # сборщик живёт в шаблоне, а не в контуре
             continue
         (tools_dir / src.name).write_bytes(src.read_bytes())
         copied += 1

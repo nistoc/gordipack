@@ -85,6 +85,13 @@ def _who_is_calling() -> str | None:
                 caller_name = sys.argv[i].strip().upper()
                 if caller_name and not caller_name.startswith("-"):
                     return caller_name
+        # Стандартная форма argparse «--actor=STUD» — один аргумент. Прежде её не узнавали, и отказ
+        # записывался безымянным (находка тестов PR #44, tests/test_roles_and_leases.py).
+        for arg in sys.argv[1:]:
+            if arg.startswith(flag + "="):
+                caller_name = arg[len(flag) + 1:].strip().upper()
+                if caller_name and not caller_name.startswith("-"):
+                    return caller_name
     return None
 
 

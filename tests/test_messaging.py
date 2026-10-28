@@ -712,11 +712,7 @@ def test_tag_filter_shows_only_tagged_notes(circuit):
     assert "tagged-note" in res.stdout and "untagged-note" not in res.stdout
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "scripts/read-messages.py:731 — токен выдаётся и для выборки --tag (подмножество ленты), "
-    "и --ack двигает отметку на верх ПОКАЗАННОГО: непоказанная ранняя нота без тега "
-    "молча выпадает из непрочитанных, а cursor_segments записывает отрезок как «read». "
-    "Для --to-me это закрыто (issue = ... and not args.to_me), для --tag — нет."))
+# Было xfail до починки scripts/read-messages.py (подтверждение — только до первой непоказанной записки).
 def test_ack_of_tag_filtered_batch_must_not_swallow_unshown_notes(circuit):
     skipped = seed(circuit, "COORD", "untagged-early-note")
     seed(circuit, "COORD", "tagged-note", tags=["TRACK-X"])
@@ -861,11 +857,7 @@ def test_broadcast_missing_required_is_argparse_error(circuit, argv, missing):
     assert count(circuit, "messages") == 0
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "scripts/broadcast.py:60 — writer_role пишется как набрано (--role coord → 'coord'), "
-    "а write-message.py и read-messages.py нормализуют роль в верхний регистр на входе "
-    "(«--role core молча завёл бы ДЕВЯТОГО писателя»). Нижний регистр в messages.writer_role "
-    "ломает группировки по писателю; читатели broadcast-ов спасаются .upper() каждый на себе."))
+# Было xfail до починки scripts/broadcast.py (имя роли — верхним регистром на входе).
 def test_broadcast_role_case_is_normalised(circuit):
     broadcast(circuit, "coord", "lowercase author")
     assert circuit.scalar("SELECT writer_role FROM messages") == "COORD"
@@ -950,11 +942,7 @@ def test_ack_role_is_stored_in_upper_case(circuit):
     assert circuit.query("SELECT role FROM broadcast_acks") == [("CORE",)]
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "scripts/read-broadcasts.py:124 — инбокс сверяет ACK по роли КАК НАБРАНО, а --ack пишет "
-    "role.upper() (строка 167): подтвердив как --role core, роль в этом же регистре снова видит "
-    "то же объявление непрочитанным, хотя в broadcast_acks лежит 'CORE'. --status при этом "
-    "нормализует регистр, и два отчёта расходятся."))
+# Было xfail до починки scripts/read-broadcasts.py (имя роли — верхним регистром на входе).
 def test_inbox_after_ack_with_lowercase_role_is_empty(circuit):
     bid = broadcast(circuit, "COORD", "announcement")
     assert circuit.run("read-broadcasts.py", "--role", "core", "--ack", str(bid)).returncode == 0

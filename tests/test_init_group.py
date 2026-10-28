@@ -342,11 +342,7 @@ def test_rerun_answer_yes_rebuilds(existing, tmp_path):
     assert len(journal) == len(set(journal)), "после пересборки журнал шагов задвоился"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="scripts/init-group.py:132 — input() без обработки EOFError: повторный запуск "
-           "без терминала (stdin закрыт: CI, вызов из другого скрипта или агента) падает "
-           "с Traceback и кодом 1 вместо «Отмена.» и кода 0")
+# Было xfail до починки scripts/init-group.py (нет ответа без терминала — «Отмена.» и код 0).
 def test_rerun_without_terminal_cancels_cleanly(existing, tmp_path):
     res = run_init_group(existing, name="second", cwd=tmp_path, input="",
                          home=tmp_path / "home")
