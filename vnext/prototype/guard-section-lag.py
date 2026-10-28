@@ -33,27 +33,67 @@
        лента НЕ пуста, а сверить нечего ....... прежний отказ ДОСЛОВНО — это пропажа
                                                 памяти, а не рождение контура, код 2
 
+🪤 МЕРИЛ РИТУАЛ, А НАЗЫВАЛ РЕЗУЛЬТАТ (issue #38 пакета, 2026-10-28). Отставание считалось от
+   ЛЮБОЙ записки роли и от saved_at. Контур-потребитель после шести дней тишины получил пять
+   провалов: три роли ответили на опрос координатора — и только. Содержание разделов проверка
+   не смотрит, а называла это «секция отстала от того, что роль успела сделать». Красное гасило
+   пересохранение неизменного текста, а честное «перечитал, правок нет» (--confirm) — не гасило.
+   ⇒ Теперь две меры, обе из общей функции phoenix_lag.section_lag() рабочего каталога:
+       🔴 раздел отстал от СМЕНЫ СОСТОЯНИЯ — записки с commit (или sha), «словом владельца»,
+          закрытием карточки своей рукой, числами замера позже сохранения или подтверждения
+          раздела. Только это даёт код 1
+       🟡 раздел не подтверждался после записки — записки без этих признаков. Код не меняет;
+          строка несёт путь «перечитал, правок нет»: save-phoenix.py --confirm
+   Обе меры считаются от COALESCE(confirmed_at, saved_at): подтверждение — честный взгляд.
+   🟡 печатается не со знаком ⚠️ нарочно: общий прогон пробрасывает строки ⚠️ и ℹ️, а у него
+   есть своя строка-предупреждение «память ПО РАЗДЕЛАМ» о том же — дважды одно и то же было бы шумом.
+
     python guard-section-lag.py                 # весь контур
     python guard-section-lag.py --role PROTO
     python guard-section-lag.py --selftest
 """
 import argparse
+import importlib.util
+import os
 import sqlite3
 import sys
 from pathlib import Path
 import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
 DB = mezo_paths.live_db()
-
-# Порог взят у существующего гарда свежести (3 ч, обоснование его автора: роль пишет ноты чаще,
-# чем сохраняется, и это нормально). Не изобретаю свой — два разных порога на один предмет
-# разойдутся, и объяснять расхождение будет нечем.
-LAG_HOURS = 3
 FAST_SECTIONS = ("state", "plan")
 
 
-def measure(con, role=None):
-    """Возвращает список (роль, секция, saved_at, последняя нота, отставание в часах).
+def _load_lag():
+    """Общая функция отставания — phoenix_lag.py рабочего каталога, а не своя копия разбора:
+    две копии признаков смены состояния разъехались бы при первой правке.
+
+    Где искать (первое найденное): MEZO_SCRIPTS_ROOT (испытуемая копия) · рядом с этим файлом
+    (собранный контур) · рабочий каталог контура · scripts/ пакета (vnext/prototype → ../../scripts).
+    → (модуль, путь) или (None, список осмотренных мест).
+    """
+    here = Path(__file__).resolve().parent
+    places = []
+    if os.environ.get("MEZO_SCRIPTS_ROOT"):
+        places.append(Path(os.environ["MEZO_SCRIPTS_ROOT"]))
+    places.append(here)
+    try:
+        places.append(mezo_paths.live_scripts())
+    except SystemExit:
+        pass
+    places.append(here.parent.parent / "scripts")
+    for place in places:
+        path = place / "phoenix_lag.py"
+        if path.exists():
+            spec = importlib.util.spec_from_file_location("phoenix_lag", path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module, path
+    return None, places
+
+
+def measure(con, lag, role=None):
+    """Список (роль, секция, словарь lag.section_lag() или None — секции нет).
 
     Сравниваем с ПОСЛЕДНЕЙ НОТОЙ роли, а не с текущим временем: роль в дормане молчит
     по слову владельца, её слепок совпал с её работой и честен. Уснувшую роль будить нечем.
@@ -64,7 +104,7 @@ def measure(con, role=None):
         q += " WHERE UPPER(role) = UPPER(?)"
         args.append(role)
     out = []
-    for (r,) in con.execute(q, args):
+    for (r,) in con.execute(q, args).fetchall():
         note = con.execute(
             # ⚡ Вид: роль, писавшая давно, не должна выглядеть «никогда не писавшей» после переноса.
             "SELECT MAX(timestamp) FROM messages_all WHERE UPPER(writer_role) = UPPER(?)",
@@ -72,14 +112,7 @@ def measure(con, role=None):
         if not note:
             continue
         for sec in FAST_SECTIONS:
-            row = con.execute("SELECT saved_at FROM phoenix WHERE role = ? AND section = ?",
-                              (r, sec)).fetchone()
-            if not row or not row[0]:
-                out.append((r, sec, None, note, None))   # секции нет — отдельный случай
-                continue
-            lag = con.execute("SELECT (julianday(?) - julianday(?)) * 24",
-                              (note, row[0])).fetchone()[0]
-            out.append((r, sec, row[0], note, lag))
+            out.append((r, sec, lag.section_lag(con, r, sec)))
     return out
 
 
@@ -88,8 +121,15 @@ def run(role=None, db_path=DB):
     if not p.exists():
         print(f"⛔ ОТКАЗ: базы нет — {p}")
         return 2
+    lag, where = _load_lag()
+    if lag is None:
+        print("⛔ ОТКАЗ: общей функции отставания phoenix_lag.py нет ни в одном из мест: "
+              + " · ".join(x.as_posix() for x in where)
+              + " — без неё отставание не посчитано, и это не «отставших нет»")
+        return 2
+    limit = lag.LAG_HOURS
     con = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
-    rows = measure(con, role)
+    rows = measure(con, lag, role)
 
     if not rows:
         # ⚪ Различаем ПРИЧИНУ пустоты, а не гадаем «новорождённость» (карточка #606).
@@ -109,32 +149,48 @@ def run(role=None, db_path=DB):
     con.close()
 
     missing = [x for x in rows if x[2] is None]
-    lagging = [x for x in rows if x[4] is not None and x[4] > LAG_HOURS]
+    lagging = [x for x in rows if x[2] and x[2]["change_lag_h"] is not None
+               and x[2]["change_lag_h"] > limit]
+    unconfirmed = [x for x in rows if x[2] and x not in lagging and x[2]["unconfirmed_h"] is not None
+                   and x[2]["unconfirmed_h"] > limit]
 
     print(f"📏 охват: проверено {len(rows)} секций "
-          f"({', '.join(FAST_SECTIONS)}) у {len(set(x[0] for x in rows))} ролей · порог {LAG_HOURS} ч")
+          f"({', '.join(FAST_SECTIONS)}) у {len(set(x[0] for x in rows))} ролей · порог {limit} ч")
     print(f"   ⚠️ НЕ проверяются: identity, history — медленные по природе; "
           f"rebirth, launcher — их протухание ловит guard-stale-commands")
-    print(f"   отставание считается от ПОСЛЕДНЕЙ НОТЫ роли, а не от текущего времени: "
-          f"роль в дормане молчит по слову владельца и её сохранённая память честна")
+    print(f"   отставание считается от сохранения или подтверждения раздела до записки роли со "
+          f"сменой состояния ({lag.STATE_CHANGE_NAMES}), а не от текущего времени и не от любой записки")
 
     if missing:
         print(f"\n🔴 {len(missing)}: секции НЕТ ВООБЩЕ")
-        for r, sec, _, _, _ in sorted(missing):
+        for r, sec, _ in sorted(missing):
             print(f"   {r} · {sec}")
 
+    save = (Path(lag.__file__).resolve().parent / "save-phoenix.py").as_posix()
+    if unconfirmed:
+        print(f"\n🟡 {len(unconfirmed)}: раздел не подтверждался после записки (записки без признаков "
+              f"смены состояния — это не отставание, код не меняется)")
+        for r, sec, x in sorted(unconfirmed, key=lambda y: -y[2]["unconfirmed_h"]):
+            print(f"   [{r} · {sec}] не подтверждался {x['unconfirmed_h']:.0f} ч после записки "
+                  f"(записок после {x['notes']}, последняя {x['last_note']} UTC)")
+        print(f"   👉 перечитал, правок нет: python {save} --role <РОЛЬ> --section <раздел> --confirm")
+
     if not lagging:
-        print(f"\n✅ секций, отставших от собственной работы роли, не найдено "
+        print(f"\n✅ секций, отставших от смены состояния роли, не найдено "
               f"(ВЫПОЛНЕНО {len(rows)} проверок)")
         return 1 if missing else 0
 
-    print(f"\n🔴 {len(lagging)}: секция отстала от того, что роль успела сделать")
-    print("   Это РЕЛЯЦИЯ, а не приговор: роль пишет ноты чаще, чем сохраняется. Но секция,")
+    print(f"\n🔴 {len(lagging)}: раздел отстал от смены состояния — записки роли с признаками "
+          f"({lag.STATE_CHANGE_NAMES}) позже его сохранения или подтверждения")
+    print("   Это РЕЛЯЦИЯ, а не приговор: признаки — образцы слов, а не понимание. Но секция,")
     print("   отставшая на смену работы, воскресит роль в состояние, которого уже нет.")
-    for r, sec, saved, note, lag in sorted(lagging, key=lambda x: -x[4]):
-        print(f"\n   [{r} · {sec}]  отставание {lag:.0f} ч")
-        print(f"      секция сохранена: {saved} UTC")
-        print(f"      последняя работа: {note} UTC")
+    for r, sec, x in sorted(lagging, key=lambda y: -y[2]["change_lag_h"]):
+        print(f"\n   [{r} · {sec}]  отставание {x['change_lag_h']:.0f} ч")
+        print(f"      секция сохранена или подтверждена: {x['saved']} UTC")
+        print(f"      последняя смена состояния: {x['last_change']} UTC · таких записок {x['changes']} "
+              f"({', '.join(x['reasons'])})")
+    print(f"\n   👉 правишь — сохрани: python {save} --role <РОЛЬ> --section <раздел> --file <файл>; "
+          f"перечитал, правок нет — --confirm вместо --file")
     print(f"\nВЫПОЛНЕНО {len(rows)} проверок, красных {len(lagging) + len(missing)}")
     return 1
 
@@ -146,18 +202,24 @@ def selftest():
     не считается прогоном. Ноль случаев — красный, замаскированный под зелёный."""
     import tempfile
     ok, cases = True, 0
+    work = "commit a1b2c3d — правка инструмента"     # записка со сменой состояния
+    ack = "принято, прочитала"                       # записка без признаков
 
     def db_with(tmp, name, rows_phx, rows_msg):
+        """rows_phx: (роль, секция, saved_at[, confirmed_at]) · rows_msg: (роль, час[, тело])."""
         p = Path(tmp) / name
         con = sqlite3.connect(p)
-        con.execute("CREATE TABLE phoenix (role TEXT, section TEXT, body TEXT, saved_at TEXT)")
+        con.execute("CREATE TABLE phoenix (role TEXT, section TEXT, body TEXT, saved_at TEXT, "
+                    "confirmed_at TEXT)")
         # 🩸 таблица называется messages_all — так же, как ВИД, который читает measure()
         # (карточка #606: самопроверка раньше заводила «messages» и падала на своём же
         # запросе «no such table: messages_all» ДО первого случая — беда пре-существующая,
         # не от этой правки, но раз файл тронут, чинится тем же ходом).
         con.execute("CREATE TABLE messages_all (id INTEGER, writer_role TEXT, body_md TEXT, timestamp TEXT)")
-        con.executemany("INSERT INTO phoenix VALUES (?,?,'x',?)", rows_phx)
-        con.executemany("INSERT INTO messages_all VALUES (1,?,'x',?)", rows_msg)
+        con.executemany("INSERT INTO phoenix VALUES (?,?,'x',?,?)",
+                        [(x[0], x[1], x[2], x[3] if len(x) > 3 else None) for x in rows_phx])
+        con.executemany("INSERT INTO messages_all VALUES (1,?,?,?)",
+                        [(x[0], x[2] if len(x) > 2 else work, x[1]) for x in rows_msg])
         con.commit(); con.close()
         return p
 
@@ -217,6 +279,25 @@ def selftest():
         if run("НЕТ_ТАКОЙ", p) != 2:
             print("🔴 непустая лента при пустой выборке не отказала как раньше"); ok = False
 
+        # ⑥ РАЗЛИЧАЮЩИЙ (issue #38): после сохранения — только ответ «принято» — не провал
+        print("── ⑥ после сохранения только «принято» — предупреждение, не провал ─")
+        cases += 1
+        p = db_with(tmp, "g.db",
+                    [("X", "state", "2026-08-06 10:00:00"), ("X", "plan", "2026-08-06 10:00:00")],
+                    [("X", "2026-08-06 16:30:00", ack)])
+        if run("X", p) != 0:
+            print("🔴 ответ без признаков смены состояния покрасил раздел"); ok = False
+
+        # ⑦ РАЗЛИЧАЮЩИЙ: подтверждение (--confirm) позже записки гасит отставание
+        print("── ⑦ подтверждение позже записки — не отставание ──────────────")
+        cases += 1
+        p = db_with(tmp, "h.db",
+                    [("X", "state", "2026-08-06 10:00:00", "2026-08-06 17:00:00"),
+                     ("X", "plan", "2026-08-06 10:00:00", "2026-08-06 17:00:00")],
+                    [("X", "2026-08-06 16:30:00")])
+        if run("X", p) != 0:
+            print("🔴 честное «перечитал, правок нет» не погасило отставание"); ok = False
+
     if cases == 0:
         print("\n⛔ ОТКАЗ: ни одного случая не выполнено — это не «чисто»")
         return 2
@@ -224,12 +305,13 @@ def selftest():
           f"ВЫПОЛНЕНО {cases} случаев")
     print("   краснеет на отставшей секции · молчит на свежих · СВЕЖАЯ НЕ ГАСИТ ОТСТАВШУЮ · "
           "не будит дормант · на пустом контуре (ни памяти, ни ленты) — ⚪, не отказ · "
-          "на пропаже памяти при непустой ленте — отказывает по-прежнему")
+          "на пропаже памяти при непустой ленте — отказывает по-прежнему · "
+          "ответ без признаков смены состояния не красит · подтверждение гасит")
     return 0 if ok else 1
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description="раздел памяти отстал от работы роли")
+    ap = argparse.ArgumentParser(description="раздел памяти отстал от смены состояния роли")
     ap.add_argument("--role")
     ap.add_argument("--db", default=str(DB))
     ap.add_argument("--selftest", action="store_true")

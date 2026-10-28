@@ -21,6 +21,14 @@
   ⑦ таблицы памяти нет — строка о сбое, а не молчание                     РАЗЛИЧАЮЩИЙ
   ⑧ hook на стенде: сводка, под ней строка «память отстала», код 0        РАЗЛИЧАЮЩИЙ
   ⑨ hook без модуля функции: сводка на месте, строка о сбое, код 0        РАЗЛИЧАЮЩИЙ
+  ⑩ после сохранения только «принято» — строки нет (issue #38)           РАЗЛИЧАЮЩИЙ
+  ⑪ «слово владельца» — смена состояния, признак назван в строке         РАЗЛИЧАЮЩИЙ
+  ⑫ подтверждение (--confirm) позже записки гасит отставание             РАЗЛИЧАЮЩИЙ
+  ⑬ признаки смены состояния по тексту: sha против номера, закрытие
+     своей рукой против пересказа, числа замера, «принято»                РАЗЛИЧАЮЩИЙ
+
+🪤 Записки стенда несут текст со сменой состояния («commit a1b2c3d …»): с issue #38 пакета
+отставание двигают только такие записки, и записка с телом «тело» отставанием больше не считается.
 
 ⛔ Живой базы не касается: свои стенды во временном каталоге.
 """
@@ -74,9 +82,18 @@ def save(con, name, section, at):
     con.execute("INSERT OR REPLACE INTO phoenix VALUES (?, ?, 'тело', ?, ?)", (name, section, at, at))
 
 
-def note(con, name, at):
-    con.execute("INSERT INTO messages (writer_role, timestamp, body_md) VALUES (?, ?, 'тело')",
-                (name, at))
+WORK = "commit a1b2c3d — правка инструмента"   # записка со сменой состояния
+ACK = "принято, прочитала"                     # записка без признаков
+
+
+def note(con, name, at, body=WORK):
+    con.execute("INSERT INTO messages (writer_role, timestamp, body_md) VALUES (?, ?, ?)",
+                (name, at, body))
+
+
+def confirm(con, name, section, at):
+    """«Перечитал, правок нет» — то, что пишет save-phoenix.py --confirm: двигается только взгляд."""
+    con.execute("UPDATE phoenix SET confirmed_at=? WHERE role=? AND section=?", (at, name, section))
 
 
 def stand_db(tmp, name, phoenix=True):
@@ -120,8 +137,9 @@ def main() -> int:
     note(con, "COORD", "2026-09-26 11:00:00")
     note(con, "COORD", "2026-09-26 15:00:00")
     r2 = pl.lag_line(con) or ""
-    ok &= case("② работа 5 ч после сохранения state — роль, часы и число записок названы",
-               "COORD 5 ч, записок после 2" in r2 and "💾" in r2,
+    ok &= case("② работа 5 ч после сохранения state — роль, часы, число записок, признак и --confirm",
+               "COORD 5 ч, записок со сменой состояния после 2 (commit)" in r2 and "💾" in r2
+               and "--section state --confirm" in r2,
                r2.splitlines()[0][-80:] if r2 else "строки нет", differ=True)
 
     con = stand_db(tmp, "c3")
@@ -195,6 +213,49 @@ def main() -> int:
     ok &= case("⑨ hook без модуля функции: сводка на месте, строка о сбое, код 0",
                rc9 == 0 and out9.startswith("📬 MEZO непрочитано") and "НЕ посчитано" in out9,
                f"код {rc9}; " + out9.replace("\n", " ⏎ ")[:140], differ=True)
+
+    con = stand_db(tmp, "c10")
+    role(con, "STUD")
+    save(con, "STUD", "state", "2026-09-26 10:00:00")
+    note(con, "STUD", "2026-09-26 16:00:00", ACK)
+    r10 = pl.lag_line(con)
+    ok &= case("⑩ после сохранения только «принято» — строки нет",
+               r10 is None,
+               "ответ на опрос состояния роли не меняет; прежде это было «6 ч отставания»"
+               if r10 is None else r10.strip()[:90], differ=True)
+
+    con = stand_db(tmp, "c11")
+    role(con, "TAXO")
+    save(con, "TAXO", "state", "2026-09-26 10:00:00")
+    note(con, "TAXO", "2026-09-26 15:00:00", "по слову владельца 14:50 UTC беру заявку")
+    r11 = pl.lag_line(con) or ""
+    ok &= case("⑪ «слово владельца» — смена состояния, признак назван в строке",
+               "TAXO 5 ч" in r11 and "(слово владельца)" in r11,
+               r11.splitlines()[0][-80:] if r11 else "строки нет", differ=True)
+
+    con = stand_db(tmp, "c12")
+    role(con, "CORE")
+    save(con, "CORE", "state", "2026-09-26 10:00:00")
+    note(con, "CORE", "2026-09-26 15:00:00")
+    confirm(con, "CORE", "state", "2026-09-26 16:00:00")
+    r12 = pl.lag_line(con)
+    ok &= case("⑫ подтверждение (--confirm) позже записки гасит отставание",
+               r12 is None,
+               "честное «перечитал, правок нет» не требует пересохранять неизменный текст"
+               if r12 is None else r12.strip()[:90], differ=True)
+
+    texts = (("commit a1b2c3d", ["commit"]), ("номер 1234567", []), ("слово deadbeef", []),
+             ("по слову владельца", ["слово владельца"]), ("закрыла карточку #12", ["закрытие карточки"]),
+             ("карточка #12 уже закрыта", []), ("замер: 13 из 13", ["числа замера"]),
+             ("принято, прочитала", []))
+    # Функции может не быть (копия до issue #38) — тогда случай проваливается счётом, а не падением.
+    judge = getattr(pl, "state_change", None)
+    wrong = ([(t, judge(t), want) for t, want in texts if judge(t) != want] if judge
+             else ["функции state_change() в испытуемой копии нет"])
+    ok &= case("⑬ признаки смены состояния по тексту — восемь записок, каждая со своим ответом",
+               not wrong, f"расхождения: {wrong}" if wrong else
+               "sha с буквой и цифрой — да, номер без букв — нет · закрытие своей рукой — да, "
+               "пересказ — нет · замер с числом — да · «принято» — нет", differ=True)
 
     print()
     print(f"{'✅ ПАМЯТЬ ОТСТАЛА — ПРИНЯТО' if ok else '🔴 НЕ ПРИНЯТО'} — случаев {CASES}, "
