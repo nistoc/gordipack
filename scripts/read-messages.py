@@ -722,6 +722,24 @@ def main():
                 reissue = None   # прежний батч уже вне окна выборки — выдаём новый
 
     batch_max = max(r[0] for r in rows)
+    # 🔴 ПОДТВЕРЖДАЕТСЯ ТОЛЬКО ПОКАЗАННОЕ ПОДРЯД (находка тестов PR #44). Отбор --tag — ПОДМНОЖЕСТВО
+    # ленты: ключ он выдаёт (остаток ниже считается тем же предикатом), но прежде --ack поднимал
+    # отметку прочитанного на верх ПОКАЗАННОГО и молча перешагивал записки без тега, лежавшие ниже.
+    # Теперь верх подтверждения — записка перед первой НЕПОКАЗАННОЙ. Проверка общая, не только для
+    # --tag: дыру в показанном даст и порядок по времени, если он разошёлся с порядком номеров.
+    # Показанные выше этого верха остаются непрочитанными и придут следующим чтением ленты:
+    # перечитать дешевле, чем потерять.
+    shown_set = {r[0] for r in rows}
+    first_unshown = None
+    if not args.all:
+        for (mid,) in conn.execute(
+                "SELECT id FROM messages WHERE id > ? AND id <= ? ORDER BY id",
+                (last_read, batch_max)):
+            if mid not in shown_set:
+                first_unshown = mid
+                break
+    confirm_max = batch_max if first_unshown is None else first_unshown - 1
+
     # 🔴 ЭКРАН ОТБОРА НЕ ВЫДАЁТ КЛЮЧА ПОДТВЕРЖДЕНИЯ. Отбор «только обращённое ко мне» — это
     # ПОДМНОЖЕСТВО ленты. Выдай ей токен — и роль, подтвердив его, перескочит отметкой
     # ЧЕРЕЗ всё, что в подмножество не попало, будучи уверенной, что «прочитала до сюда».
@@ -762,11 +780,13 @@ def main():
             # набор СВЕРХУ (r[0] <= reissue[1]), а --limit режет СНИЗУ — они не встречаются.
             # Защита строилась от случая «на экране БОЛЬШЕ», реальным оказался «на экране МЕНЬШЕ».
             # Остаток не теряется: он придёт следующим вызовом, предикат тот же.
+            # Верх — confirm_max, а не batch_max: перевыданный ключ полной ленты, поданный
+            # к отбору --tag, иначе снова перешагнул бы непоказанное (находка тестов PR #44).
             conn.execute("UPDATE read_batches SET shown_max = ? WHERE token = ?",
-                         (batch_max, reissue[0]))
-            if batch_max < reissue[1]:
+                         (confirm_max, reissue[0]))
+            if confirm_max < reissue[1]:
                 conn.execute("UPDATE read_batches SET last_id = ? WHERE token = ?",
-                             (batch_max, reissue[0]))
+                             (confirm_max, reissue[0]))
         else:
             # ── ГОНКА ПРИ ВЫДАЧЕ БАТЧА (карточка #150, слово владельца 2026-08-09 12:49) ──
             # Прежде здесь было «спросили, есть ли батч → вставили новый» БЕЗ исключающей
@@ -788,14 +808,14 @@ def main():
                     h1, h2 = secrets.token_hex(3), secrets.token_hex(3)
                     conn.execute(
                         "INSERT INTO read_batches (token, role, last_id, shown_max) "
-                        "VALUES (?, ?, ?, ?)", (f"{h1}-{h2}", role, batch_max, batch_max))
+                        "VALUES (?, ?, ?, ?)", (f"{h1}-{h2}", role, confirm_max, confirm_max))
                     half1, half2 = h1, h2
                     break
                 except sqlite3.IntegrityError:
                     # Кто-то опередил нас на тот же хвост — читаем ЕГО токен и работаем им.
                     row = conn.execute(
                         "SELECT token FROM read_batches WHERE role = ? AND last_id = ? "
-                        "AND acked_at IS NULL", (role, batch_max)).fetchone()
+                        "AND acked_at IS NULL", (role, confirm_max)).fetchone()
                     if row:
                         half1, half2 = row[0].split("-", 1)
                         break
@@ -810,6 +830,15 @@ def main():
         conn.commit()
         print(f"[begin-of-batch] {len(rows)} нот, #{rows[0][0]}…#{batch_max} (cursor={last_read}). "
               f"Токен разрезан: ПЕРВАЯ половина {half1}, вторая — в ПОСЛЕДНЕЙ строке.")
+        if first_unshown is not None:
+            # Верх подтверждения ниже верха показанного — говорим это ДО тел, а не только у --ack.
+            where = (f"не сдвинет отметку прочитанного (она на #{last_read})"
+                     if confirm_max <= last_read else
+                     f"поднимет отметку прочитанного только до #{confirm_max}")
+            print(f"⚠️  ПОКАЗАНО НЕ ПОДРЯД: записка #{first_unshown} в этот вывод не попала"
+                  + (f" (отбор --tag {args.tag})" if args.tag else "")
+                  + f". Подтверждение {where}: через непоказанное отметка не перескакивает, "
+                  f"остальное придёт чтением ленты целиком.")
         if rest_count:
             # ⚠️ ПРИЧИНА УСЕЧЕНИЯ НАЗЫВАЕТСЯ ЧЕСТНО — их ДВЕ, и совет у них РАЗНЫЙ.
             # Находка воскресшей канарейки @STUD #2861 (поймана свежей инкарнацией — она копирует
@@ -825,12 +854,12 @@ def main():
                       f"те же {len(rows)} нот и тот же токен. **--limit здесь ни при чём** — любой "
                       f"лимит вернёт этот же батч.\n"
                       f"   За ним ещё {rest_count} нот (последняя #{rest_last}).\n"
-                      f"   ⇒ ПОДТВЕРДИ ack (ниже) — отметка встанет на #{batch_max}, и СЛЕДУЮЩИЙ "
+                      f"   ⇒ ПОДТВЕРДИ ack (ниже) — отметка встанет на #{confirm_max}, и СЛЕДУЮЩИЙ "
                       f"вызов отдаст остаток. Менять --limit до ack бессмысленно.")
             else:
                 print(f"⚠️  БАТЧ УПЁРСЯ В ЛИМИТ (--limit {args.limit}): за ним ещё {rest_count} нот "
                       f"(последняя #{rest_last}). Это НЕ «всё» — это «упёрлось».\n"
-                      f"   Подтвердишь этот батч — отметка встанет на #{batch_max}, остаток НЕ пропадёт: "
+                      f"   Подтвердишь этот батч — отметка встанет на #{confirm_max}, остаток НЕ пропадёт: "
                       f"зови ридер снова. Нужен весь хвост сразу — --limit {rest_count + len(rows)}.")
         print()
 
@@ -877,6 +906,9 @@ def main():
             print(f"⚠️  И ПОМНИ: за этим батчем ещё {rest_count} нот (последняя #{rest_last}) — "
                   f"{why}, это НЕ конец ленты. "
                   f"ACK честен (батч прочитан целиком), но хвост НЕ прочитан.")
+        if first_unshown is not None:
+            print(f"⚠️  И ПОМНИ: показано не подряд (первая непоказанная — #{first_unshown}); "
+                  f"ack поднимет отметку прочитанного не выше #{max(confirm_max, last_read)}.")
         # ⚠️ КОМАНДА ПЕЧАТАЕТСЯ АБСОЛЮТНЫМ ПУТЁМ И БЕЗ `--db`. Находка канарейки @STUD #2861:
         # прежняя строка печатала `python <КОНТУР>/.mezosync/scripts/read-messages.py — то есть РАБОЧИЙ вывод,
         # который роль читает КАЖДЫЙ цикл ленты (чаще, чем шапку read-phoenix!), учил СРАЗУ ДВУМ

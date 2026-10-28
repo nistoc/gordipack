@@ -706,11 +706,7 @@ def test_tag_filter_shows_only_tagged_notes(circuit):
     assert "tagged-note" in res.stdout and "untagged-note" not in res.stdout
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "scripts/read-messages.py:731 — токен выдаётся и для выборки --tag (подмножество ленты), "
-    "и --ack двигает отметку на верх ПОКАЗАННОГО: непоказанная ранняя нота без тега "
-    "молча выпадает из непрочитанных, а cursor_segments записывает отрезок как «read». "
-    "Для --to-me это закрыто (issue = ... and not args.to_me), для --tag — нет."))
+# Было xfail до починки scripts/read-messages.py (подтверждение — только до первой непоказанной записки).
 def test_ack_of_tag_filtered_batch_must_not_swallow_unshown_notes(circuit):
     skipped = seed(circuit, "COORD", "untagged-early-note")
     seed(circuit, "COORD", "tagged-note", tags=["TRACK-X"])
