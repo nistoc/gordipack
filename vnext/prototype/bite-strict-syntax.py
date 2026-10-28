@@ -54,12 +54,12 @@ def main() -> int:
     if not TOOL.exists():
         sys.exit(f"⛔ НЕ ЗАПУСТИЛАСЬ: проверки нет — {TOOL}")
     d = mezo_stand.new("bite-syntax-")
-    стенд = d / "tools"
-    стенд.mkdir()
-    (стенд / "чистый.py").write_text('print("проверок 24")\n', encoding="utf-8")
+    stand = d / "tools"
+    stand.mkdir()
+    (stand / "чистый.py").write_text('print("проверок 24")\n', encoding="utf-8")
 
     # ── ① чистый стенд ─────────────────────────────────────────────────────────
-    out, rc = run(TOOL, стенд)
+    out, rc = run(TOOL, stand)
     case("① чистый стенд → тихо, числа напечатаны",
          rc == 0 and "файлов 1" in out and " с" in out,
          f"код {rc} — без этого краснота дальше ничего не доказывает")
@@ -67,52 +67,52 @@ def main() -> int:
     # ── ② SyntaxWarning подсажен ───────────────────────────────────────────────
     # подсадка собирается через chr(92): голый обратный слеш обязан родиться
     # у ИСПЫТУЕМОГО файла, а не жить строкой в самой приёмке — её судит та же проверка
-    (стенд / "zzprobe_warn.py").write_text('s = "' + chr(92) + 'd"' + chr(10), encoding="utf-8")
-    out, rc = run(TOOL, стенд)
+    (stand / "zzprobe_warn.py").write_text('s = "' + chr(92) + 'd"' + chr(10), encoding="utf-8")
+    out, rc = run(TOOL, stand)
     case("② голый обратный слеш в строке → красный ПОИМЁННО",
          rc == 1 and "zzprobe_warn.py:1" in out and "SyntaxWarning" in out,
          "ровно класс карточки #363: прежде такой файл жил, пока кто-то не наткнётся глазами",
          differ=True)
 
     # ── ③ встречный: сырая форма ───────────────────────────────────────────────
-    (стенд / "zzprobe_warn.py").write_text('s = r"' + chr(92) + 'd"' + chr(10), encoding="utf-8")
-    out, rc = run(TOOL, стенд)
+    (stand / "zzprobe_warn.py").write_text('s = r"' + chr(92) + 'd"' + chr(10), encoding="utf-8")
+    out, rc = run(TOOL, stand)
     case("③ ВСТРЕЧНЫЙ: та же строка сырой формой r«…» → тихо",
          rc == 0 and "zzprobe_warn" not in out,
          "иначе проверка красила бы ЗАКОННУЮ запись образцов поиска по всему контуру",
          differ=True)
-    (стенд / "zzprobe_warn.py").unlink()
+    (stand / "zzprobe_warn.py").unlink()
 
     # ── ④ SyntaxError ──────────────────────────────────────────────────────────
-    (стенд / "zzprobe_err.py").write_text("def f(:\n", encoding="utf-8")
-    out, rc = run(TOOL, стенд)
+    (stand / "zzprobe_err.py").write_text("def f(:\n", encoding="utf-8")
+    out, rc = run(TOOL, stand)
     case("④ SyntaxError → красный: некомпилируемый инструмент хуже предупреждения",
          rc == 1 and "zzprobe_err.py" in out and "SyntaxError" in out,
          "молчание о нём значило бы «проверка синтаксиса пропускает сломанный синтаксис»",
          differ=True)
-    (стенд / "zzprobe_err.py").unlink()
+    (stand / "zzprobe_err.py").unlink()
 
     # ── ⑤ обратный ход: фильтр ослеплён ────────────────────────────────────────
-    слепая = d / "guard-blind.py"
+    blind = d / "guard-blind.py"
     src = TOOL.read_text(encoding="utf-8")
-    якорь = 'warnings.simplefilter("error", SyntaxWarning)'
-    if src.count(якорь) != 1:
-        sys.exit(f"⛔ ПРИЁМКА НЕ СОСТОЯЛАСЬ: якорь фильтра найден {src.count(якорь)} раз")
-    слепая.write_text(src.replace(якорь, 'warnings.simplefilter("ignore", SyntaxWarning)'),
+    anchor = 'warnings.simplefilter("error", SyntaxWarning)'
+    if src.count(anchor) != 1:
+        sys.exit(f"⛔ ПРИЁМКА НЕ СОСТОЯЛАСЬ: якорь фильтра найден {src.count(anchor)} раз")
+    blind.write_text(src.replace(anchor, 'warnings.simplefilter("ignore", SyntaxWarning)'),
                       encoding="utf-8")
-    (стенд / "zzprobe_warn.py").write_text('s = "' + chr(92) + 'd"' + chr(10), encoding="utf-8")
-    out_blind, rc_blind = run(слепая, стенд)
-    out_live, rc_live = run(TOOL, стенд)
+    (stand / "zzprobe_warn.py").write_text('s = "' + chr(92) + 'd"' + chr(10), encoding="utf-8")
+    out_blind, rc_blind = run(blind, stand)
+    out_live, rc_live = run(TOOL, stand)
     case("⑤ ОБРАТНЫЙ ХОД: фильтр ослеплён → та же подсадка перестаёт краснеть",
          rc_blind == 0 and rc_live == 1,
          f"слепая копия код {rc_blind}, живая {rc_live} — разница и есть строгий фильтр; "
          "сойдись они — случай ② краснел бы по другой причине", differ=True)
-    (стенд / "zzprobe_warn.py").unlink()
+    (stand / "zzprobe_warn.py").unlink()
 
     # ── ⑥ пустой стенд ─────────────────────────────────────────────────────────
-    пусто = d / "пусто"
-    пусто.mkdir()
-    out, rc = run(TOOL, пусто)
+    empty_dir = d / "пусто"
+    empty_dir.mkdir()
+    out, rc = run(TOOL, empty_dir)
     case("⑥ пустой каталог → «0 из 0» НЕ зелёный",
          rc == 1 and "НОЛЬ" in out,
          "зелёное на нуле файлов означало бы «проверено и чисто» там, где не проверено ничего",
@@ -128,46 +128,46 @@ def main() -> int:
 
     # ── карточка #439: слова отказа по ПРОИСХОЖДЕНИЮ находки ───────────────────
     # ⑧ ошибка сборки не зовётся предупреждением, совет — про сборку
-    (стенд / "zzprobe_err.py").write_text("def f(\n", encoding="utf-8")
-    out, rc = run(TOOL, стенд)
+    (stand / "zzprobe_err.py").write_text("def f(\n", encoding="utf-8")
+    out, rc = run(TOOL, stand)
     case("⑧ карточка #439: ошибка сборки → «НЕ СОБИРАЕТСЯ 1 · предупреждений 0», "
          "совет про сборку, совета про экранирование НЕТ (прогноз: 🔴 1)",
          rc == 1 and "НЕ СОБИРАЕТСЯ 1" in out and "предупреждений 0" in out
          and "не запускается вовсе" in out and "явной формой" not in out,
          "прежний текст звал это предупреждением и советовал экранирование — "
          "самый тяжёлый исход был одет в слова самого лёгкого", differ=True)
-    (стенд / "zzprobe_err.py").unlink()
+    (stand / "zzprobe_err.py").unlink()
 
     # ⑨ ВСТРЕЧНЫЙ (критерий ①): обычное предупреждение — прежний совет цел
-    (стенд / "zzprobe_warn.py").write_text('s = "' + chr(92) + 'd"' + chr(10), encoding="utf-8")
-    out, rc = run(TOOL, стенд)
+    (stand / "zzprobe_warn.py").write_text('s = "' + chr(92) + 'd"' + chr(10), encoding="utf-8")
+    out, rc = run(TOOL, stand)
     case("⑨ ВСТРЕЧНЫЙ: предупреждение → «предупреждений 1 · НЕ СОБИРАЕТСЯ 0», "
          "прежний совет про экранирование цел (прогноз: 🔴 1)",
          rc == 1 and "предупреждений 1" in out and "НЕ СОБИРАЕТСЯ 0" in out
          and "явной формой" in out and "не запускается вовсе" not in out,
          "лечение не смеет портить верный случай: совет для предупреждения был по делу")
-    (стенд / "zzprobe_warn.py").unlink()
+    (stand / "zzprobe_warn.py").unlink()
 
     # ⑩ обе находки разом — оба счёта и ОБА совета, каждый при своей
-    (стенд / "zzprobe_err.py").write_text("def f(\n", encoding="utf-8")
-    (стенд / "zzprobe_warn.py").write_text('s = "' + chr(92) + 'd"' + chr(10), encoding="utf-8")
-    out, rc = run(TOOL, стенд)
+    (stand / "zzprobe_err.py").write_text("def f(\n", encoding="utf-8")
+    (stand / "zzprobe_warn.py").write_text('s = "' + chr(92) + 'd"' + chr(10), encoding="utf-8")
+    out, rc = run(TOOL, stand)
     case("⑩ обе подсадки разом → «предупреждений 1 · НЕ СОБИРАЕТСЯ 1» и оба совета "
          "(прогноз: 🔴 2)",
          rc == 1 and "предупреждений 1" in out and "НЕ СОБИРАЕТСЯ 1" in out
          and "явной формой" in out and "не запускается вовсе" in out,
          "совет привязан к происхождению находок, а не к прогону целиком", differ=True)
-    (стенд / "zzprobe_warn.py").unlink()
+    (stand / "zzprobe_warn.py").unlink()
 
     # ⑪ ОБРАТНЫЙ ХОД: различение происхождения ослеплено — счёт «НЕ СОБИРАЕТСЯ» гаснет
-    слепая2 = d / "guard-blind-origin.py"
-    якорь2 = 'вид = "SyntaxError"'
+    blind2 = d / "guard-blind-origin.py"
+    anchor2 = 'kind = "SyntaxError"'
     src2 = TOOL.read_text(encoding="utf-8")
-    if src2.count(якорь2) != 1:
-        sys.exit(f"⛔ ПРИЁМКА НЕ СОСТОЯЛАСЬ: якорь происхождения найден {src2.count(якорь2)} раз")
-    слепая2.write_text(src2.replace(якорь2, 'вид = "SyntaxWarning"'), encoding="utf-8")
-    out_b, rc_b = run(слепая2, стенд)
-    out_l, rc_l = run(TOOL, стенд)
+    if src2.count(anchor2) != 1:
+        sys.exit(f"⛔ ПРИЁМКА НЕ СОСТОЯЛАСЬ: якорь происхождения найден {src2.count(anchor2)} раз")
+    blind2.write_text(src2.replace(anchor2, 'kind = "SyntaxWarning"'), encoding="utf-8")
+    out_b, rc_b = run(blind2, stand)
+    out_l, rc_l = run(TOOL, stand)
     case("⑪ ОБРАТНЫЙ ХОД: происхождение ослеплено → ошибка сборки прикинулась "
          "предупреждением; живая копия различает",
          rc_b == 1 and "НЕ СОБИРАЕТСЯ 0" in out_b and "явной формой" in out_b
@@ -175,7 +175,7 @@ def main() -> int:
          f"слепая: «НЕ СОБИРАЕТСЯ 0» и совет про экранирование при незакрытой скобке — "
          f"ровно беда карточки #439; различие даёт ИМЕННО повторная компиляция без строгости",
          differ=True)
-    (стенд / "zzprobe_err.py").unlink()
+    (stand / "zzprobe_err.py").unlink()
 
     print()
     print(f"{'✅ ПРИНЯТО' if ok else '🔴 НЕ ПРИНЯТО'} — случаев {CASES}, различающих {DIFFER}")

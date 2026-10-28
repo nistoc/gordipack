@@ -34,7 +34,7 @@ import mezo_paths  # noqa: E402 — пути машины выводятся, н
 import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
 
 TOOL = Path(__file__).resolve().parent / "guard-machine-paths.py"
-МОЙ = str(mezo_paths.container_root())          # путь ЭТОЙ машины — выводим, не впечатываем
+MINE = str(mezo_paths.container_root())          # путь ЭТОЙ машины — выводим, не впечатываем
 CASES = DIFFER = 0
 
 
@@ -53,12 +53,12 @@ def run(root: Path):
     return (r.stdout or "") + (r.stderr or ""), r.returncode
 
 
-def дерево(имя: str, файлы: dict[str, str]) -> Path:
-    d = mezo_stand.new(f"bite-mp-{имя}-")
-    for отн, текст in файлы.items():
-        p = d / отн
+def tree(name: str, files: dict[str, str]) -> Path:
+    d = mezo_stand.new(f"bite-mp-{name}-")
+    for rel, text in files.items():
+        p = d / rel
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(текст, encoding="utf-8")
+        p.write_text(text, encoding="utf-8")
     return d
 
 
@@ -68,41 +68,41 @@ def main() -> int:
         sys.exit(f"⛔ НЕ ЗАПУСТИЛАСЬ: проверки нет — {TOOL}")
 
     # ① КОНТРОЛЬ. Без него краснота дальше не значит ничего: молчать можно и от слепоты.
-    чистое = дерево("clean", {
+    clean = tree("clean", {
         "tool.py": 'ПУТЬ = "относительный/путь"\nprint("работаю")\n',
         "README.md": "# Заголовок\n\n```\npython tool.py --role PROTO\n```\n",
     })
-    out1, code1 = run(чистое)
+    out1, code1 = run(clean)
     ok &= case("① контроль: чистое дерево — молчит, и видно, что смотрела",
                code1 == 0 and "живых путей одной машины нет" in out1 and "файлов 2" in out1,
                f"код {code1}; «ничего не нашла» и «ничего не искала» обязаны выглядеть по-разному")
 
     # ② ПУТЬ В КОДЕ — механизм у чужого человека мёртв.
-    вкоде = дерево("code", {"tool.py": f'БАЗА = r"{МОЙ}\\.mezosync\\mezosync.db"\n'})
-    out2, code2 = run(вкоде)
+    in_code = tree("code", {"tool.py": f'БАЗА = r"{MINE}\\.mezosync\\mezosync.db"\n'})
+    out2, code2 = run(in_code)
     ok &= case("② путь этой машины В КОДЕ — красное",
                code2 == 1 and "в коде" in out2,
                "у читателя такого каталога нет, и механизм молча не работает", differ=True)
 
     # ③ ВСТРЕЧНЫЙ: тот же путь в комментарии — там он ПРЕДМЕТ УРОКА, а не приказ.
-    вкомм = дерево("comment", {
-        "tool.py": f'# 12.08 сломалось на пути {МОЙ}\\.mezosync — оттуда и правило\nX = 1\n'})
-    out3, code3 = run(вкомм)
+    in_comment = tree("comment", {
+        "tool.py": f'# 12.08 сломалось на пути {MINE}\\.mezosync — оттуда и правило\nX = 1\n'})
+    out3, code3 = run(in_comment)
     ok &= case("③ ВСТРЕЧНЫЙ: тот же путь в КОММЕНТАРИИ — не красное, но названо",
                code3 == 0 and "проза или комментарий" in out3,
                "стереть путь из урока значит стереть причину решения", differ=True)
 
     # ④ ПРИДУМАННЫЙ путь чужой раскладки — не долг: он никуда не ведёт и никого не обманывает.
-    чужой = дерево("foreign", {"tool.py": 'ПРИМЕР = r"C:\\projects\\app\\.mezosync"\n'})
-    out4, code4 = run(чужой)
+    foreign = tree("foreign", {"tool.py": 'ПРИМЕР = r"C:\\projects\\app\\.mezosync"\n'})
+    out4, code4 = run(foreign)
     ok &= case("④ придуманный путь чужой раскладки — не красится",
                code4 == 0,
                "судим по происхождению пути, а не по его виду: иначе форма вызова "
                "становится долгом", differ=True)
 
     # ⑤ ИСПОЛНИМЫЙ ПРИМЕР В ДОКЕ — читающий скопирует и получит отказ.
-    док = дерево("doc", {"README.md": f"# Как звать\n\n```\npython {МОЙ}/vnext-tools/x.py\n```\n"})
-    out5, code5 = run(док)
+    doc = tree("doc", {"README.md": f"# Как звать\n\n```\npython {MINE}/vnext-tools/x.py\n```\n"})
+    out5, code5 = run(doc)
     ok &= case("⑤ путь в исполнимом примере дока — красное",
                code5 == 1 and "исполнимый пример" in out5,
                "скопирует, получит отказ и решит, что сломан механизм", differ=True)
@@ -110,9 +110,9 @@ def main() -> int:
     # ⑥ ВСТРЕЧНЫЙ к ⑤: тот же блок, но это ВЫВОД замера, а не команда.
     #    🪤 Оплачено ошибкой: первая редакция красила блок целиком и обвинила таблицу
     #    «этот файл ЕСТЬ, этого НЕТ» — там путь и есть предмет записи.
-    вывод = дерево("output", {
-        "README.md": f"# Замер\n\n```\n{МОЙ}\\.mezosync\\schema   НЕТ\n```\n"})
-    out6, code6 = run(вывод)
+    output = tree("output", {
+        "README.md": f"# Замер\n\n```\n{MINE}\\.mezosync\\schema   НЕТ\n```\n"})
+    out6, code6 = run(output)
     ok &= case("⑥ ВСТРЕЧНЫЙ: тот же путь в блоке-ВЫВОДЕ — жёлтое, не обвинение",
                code6 == 0 and "проза или комментарий" in out6,
                "не всякая строка в блоке — команда; исполнять вывод замера никто не станет",
@@ -122,17 +122,17 @@ def main() -> int:
     # 🪤 ЗДЕСЬ ЛЕЖАТ ДАННЫЕ ОПЫТА, А НЕ ФОРМА ВЫЗОВА. 20.08 сплошная правка шапок заменила
     #    заполнитель настоящим путём — и случай стал ждать молчания там, где проверка
     #    ОБЯЗАНА краснеть. Слепая замена по файлу задевает подопытное наравне с показываемым.
-    заполн = дерево("placeholder", {
+    placeholder = tree("placeholder", {
         "README.md": "# Как звать\n\n```\npython <ваш контейнер>/vnext-tools/x.py\n```\n"})
-    out7, code7 = run(заполн)
+    out7, code7 = run(placeholder)
     ok &= case("⑦ обезличенный заполнитель — не красится",
                code7 == 0,
                "иначе починка выглядела бы такой же виной, как сам долг", differ=True)
 
     # ⑧ СЕТЕВОЙ АДРЕС — не путь на диске. Оплачено: первая редакция обвиняла «http://…».
-    сеть = дерево("net", {
+    net = tree("net", {
         "tool.py": 'CLIENT = "http://localhost:5173"\nMARK = "STUB-EXPECTED"\n'})
-    out8, code8 = run(сеть)
+    out8, code8 = run(net)
     ok &= case("⑧ сетевой адрес и двоеточие в строке — не путь машины",
                code8 == 0,
                "«http://localhost» и «try:\\n» ловились как диск: обвинение без разбора "

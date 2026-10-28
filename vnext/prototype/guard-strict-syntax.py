@@ -34,14 +34,14 @@ import warnings
 from pathlib import Path
 
 
-def судить(каталоги):
+def judge(dirs):
     """→ (files, находки[], сек). Компиляция строгая, находки поимённо."""
     t0 = time.perf_counter()
-    files, находки = 0, []
-    for d in каталоги:
+    files, findings = 0, []
+    for d in dirs:
         d = Path(d)
         if not d.is_dir():
-            находки.append((f"⛔ каталог не найден: {d} — это ОТКАЗ, не «чисто»", "отказ"))
+            findings.append((f"⛔ каталог не найден: {d} — это ОТКАЗ, не «чисто»", "отказ"))
             continue
         for p in sorted(d.glob("*.py")):
             files += 1
@@ -61,11 +61,11 @@ def судить(каталоги):
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore", SyntaxWarning)
                     compile(src, str(p), "exec")
-                вид = "SyntaxWarning"
+                kind = "SyntaxWarning"
             except SyntaxError:
-                вид = "SyntaxError"
-            находки.append((f"{p.name}:{lineno} {вид}: {msg}", вид))
-    return files, находки, time.perf_counter() - t0
+                kind = "SyntaxError"
+            findings.append((f"{p.name}:{lineno} {kind}: {msg}", kind))
+    return files, findings, time.perf_counter() - t0
 
 
 def main() -> int:
@@ -75,38 +75,38 @@ def main() -> int:
                     help="каталоги для суда (по умолчанию scripts и vnext-tools контура)")
     a = ap.parse_args()
     if a.dirs:
-        каталоги = [Path(d) for d in a.dirs]
+        dirs = [Path(d) for d in a.dirs]
     else:
         # mezo_paths тянется ЛЕНИВО: приёмка гоняет копию этой проверки в песочнице
         # с --dirs, и там помощника путей рядом нет — без ленивости копия мертва.
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         import mezo_paths
-        каталоги = [mezo_paths.live_scripts(), Path(__file__).resolve().parent]
-    files, находки, сек = судить(каталоги)
-    if находки:
+        dirs = [mezo_paths.live_scripts(), Path(__file__).resolve().parent]
+    files, findings, secs = judge(dirs)
+    if findings:
         # ═══ Карточка #439 (замер TAXO при приёмке карточки #418): прежний заголовок
         # звал ошибку сборки «предупреждением», а единый совет про экранирование при
         # незакрытой скобке отправлял читателя не туда — самый тяжёлый исход был одет
         # в слова самого лёгкого. Мерка одна (код 1 у обоих), слова — по происхождению.
-        предупр = sum(1 for _, вид in находки if вид == "SyntaxWarning")
-        несобир = sum(1 for _, вид in находки if вид == "SyntaxError")
-        отказы = len(находки) - предупр - несобир
-        шапка = f"🔴 СИНТАКСИС ИНСТРУМЕНТОВ: предупреждений {предупр} · НЕ СОБИРАЕТСЯ {несобир}"
-        if отказы:
-            шапка += f" · отказов чтения {отказы}"
-        print(шапка + f" (файлов смотрено {files}, {сек:.2f} с)")
-        for f, _ in находки[:12]:
+        warns = sum(1 for _, kind in findings if kind == "SyntaxWarning")
+        not_built = sum(1 for _, kind in findings if kind == "SyntaxError")
+        read_refusals = len(findings) - warns - not_built
+        header = f"🔴 СИНТАКСИС ИНСТРУМЕНТОВ: предупреждений {warns} · НЕ СОБИРАЕТСЯ {not_built}"
+        if read_refusals:
+            header += f" · отказов чтения {read_refusals}"
+        print(header + f" (файлов смотрено {files}, {secs:.2f} с)")
+        for f, _ in findings[:12]:
             print(f"   🔴 {f}")
-        if len(находки) > 12:
-            print(f"   … ещё {len(находки) - 12}")
-        if несобир:
+        if len(findings) > 12:
+            print(f"   … ещё {len(findings) - 12}")
+        if not_built:
             print("   👉 файл НЕ СОБИРАЕТСЯ — такой инструмент не запускается вовсе: "
                   "почини синтаксис по названной строке; это ошибка сборки, не предупреждение")
-        if предупр:
+        if warns:
             print("   👉 предупреждение читают один раз, потом читают МИМО — почини или "
                   "перепиши строку явной формой (r'…', явное экранирование)")
         return 1
-    print(f"✅ синтаксис инструментов чист: файлов {files}, предупреждений 0, {сек:.2f} с")
+    print(f"✅ синтаксис инструментов чист: файлов {files}, предупреждений 0, {secs:.2f} с")
     if files == 0:
         # «0 из 0» — не чистота: судить было нечего, и это красный, а не зелёный
         print("⛔ файлов НОЛЬ — судить было нечего, «0 из 0» не означает «чисто»")
