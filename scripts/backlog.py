@@ -817,12 +817,13 @@ def cmd_list(conn, a):
 def cmd_show(conn, a):
     row = conn.execute(
         "SELECT id, role, title, body_md, status, priority, tags, parent_id, parent_track, "
-        "blocked_reason, created_by, created_at, updated_at, done_when FROM backlog WHERE id = ?",
+        "blocked_reason, created_by, created_at, updated_at, done_when, reviewer FROM backlog WHERE id = ?",
         (a.id,)).fetchone()
     if not row:
         print(f"ERR: backlog #{a.id} не найден", file=sys.stderr)
         sys.exit(1)
-    (bid, role, title, body, status, prio, tags, parent, track, blocked, cby, cat, uat, done_when) = row
+    (bid, role, title, body, status, prio, tags, parent, track, blocked, cby, cat, uat, done_when,
+     reviewer) = row
     print(f"# backlog #{bid} — {title}")
     print(f"роль: {role} · статус: {status} · приоритет: {prio} · теги: {', '.join(json.loads(tags or '[]')) or '—'}")
     # Цепочка ПРЕДКОВ целиком, не только ближайший родитель (карточка #86 ⑤: «связи читаются
@@ -840,6 +841,11 @@ def cmd_show(conn, a):
         print("потомки: " + " ".join(f"#{c}" for c in children))
     if track: print(f"трек: {track}")
     if blocked: print(f"⛔ причина блокировки: {blocked}")
+    # Приёмщик печатается ВСЕГДА — имя или «не назначен» (issue #41). Поле `reviewer` пишет
+    # `status … --reviewer`, а читала его прежде только сама смена статуса: show молчал, и роль
+    # приняла молчание за «приёмщика нет», когда он был назначен, и позвала принять другую руку —
+    # работу едва не приняла не та рука.
+    print(f"🫱 приёмщик: {(reviewer or '').strip() or 'не назначен'}")
     # Критерий печатается ВСЕГДА — и когда он есть, и когда его нет. Молчание о пустом поле
     # неотличимо от «поля не существует»: ровно так поле `resolved` дожило до 1 записи из 1483.
     if done_when:
@@ -1010,12 +1016,23 @@ def cmd_status(conn, a):
     # причина стоянки хранится одинаково для «жду чужую работу», «жду слово» и «заморожена»
     blocked_reason = note if a.new_status in ("blocked", "awaiting_word", "frozen") else None
     reviewer_name = (getattr(a, "reviewer", None) or "").strip()
+    previous_reviewer = ""
     if reviewer_name:
+        previous_reviewer = (conn.execute("SELECT reviewer FROM backlog WHERE id = ?",
+                                          (a.id,)).fetchone()[0] or "").strip()
         conn.execute("UPDATE backlog SET reviewer = ? WHERE id = ?", (reviewer_name, a.id))
     conn.execute(
         "UPDATE backlog SET status = ?, blocked_reason = ?, updated_at = datetime('now') WHERE id = ?",
         (a.new_status, blocked_reason, a.id))
     _event(conn, a.id, a.actor, "status_change", note, old, a.new_status)
+    # Приёмщик — ОТДЕЛЬНЫМ событием истории (issue #41, предложение «в»). Поле `reviewer` хранит
+    # только последнее имя, а событие смены статуса несёт одно пояснение --note: кто был назначен
+    # прежде, история не знала. Тело события смены статуса НЕ меняется — его разбирают другие
+    # инструменты; событие нового типа они не выбирают. Тот же приёмщик повторно — без события.
+    if reviewer_name and reviewer_name != previous_reviewer:
+        _event(conn, a.id, a.actor, "reviewer_set",
+               f"приёмщик: {reviewer_name}"
+               + (f" (прежде: {previous_reviewer})" if previous_reviewer else ""))
     conn.commit()
     # Заголовок и владелец печатаются В ПОДТВЕРЖДЕНИИ, а не только в отказе: строка
     # «✅ backlog #92: open → done» одинаково выглядит для верной и для ошибочной карточки.
@@ -1162,7 +1179,8 @@ def cmd_queue(conn, a):
         " CASE WHEN instr(b.body_md, 'python ') > 0 OR EXISTS("
         "   SELECT 1 FROM backlog_events e2 WHERE e2.backlog_id = b.id"
         "    AND e2.event_type = 'comment' AND instr(e2.body_md, 'python ') > 0)"
-        "  THEN 1 ELSE 0 END"
+        "  THEN 1 ELSE 0 END,"
+        " b.reviewer"
         " FROM backlog b WHERE b.status = 'in_review' ORDER BY сдано").fetchall()
     # Строка с часом — КОПИРУЕМАЯ ЦЕЛИКОМ в записку (критерий ③).
     print(f"🧾 ОЧЕРЕДЬ ПРИЁМОК — замер {db_now} UTC · ролей просмотрено {alive_roles} (alive)")
@@ -1170,11 +1188,28 @@ def cmd_queue(conn, a):
         print("   очередь приёмок ПУСТА: карточек на приёмке (in_review) — 0")
         return
     age_text = lambda age_hours: f"{age_hours // 24} дн" if age_hours >= 48 else f"{age_hours} ч"   # noqa: E731
-    for bid, role, title, submitted_at, age_hours, recipe in rows:
+    # Свои приёмки — первыми (issue #41, предложение «б», вторая половина): спрашивающая роль
+    # (--role) видит наверху карточки, где приёмщик — она, и каждая помечена 👉. Сравнение — по
+    # имени роли ЦЕЛИКОМ без учёта регистра: приёмщик, записанный правилом словами («любая, не
+    # писавшая правку»), не принадлежит никому и остаётся на своём месте. Порядок внутри обеих
+    # частей — прежний, по часу сдачи.
+    asker = (getattr(a, "role", None) or "").strip().upper()
+
+    def is_mine(reviewer):
+        return bool(asker) and (reviewer or "").strip().upper() == asker
+
+    if asker:
+        rows = sorted(rows, key=lambda r: 0 if is_mine(r[6]) else 1)
+        print(f"   👉 первыми — где приёмщик ты ({asker}): "
+              f"{sum(1 for r in rows if is_mine(r[6]))}")
+    # Приёмщик — у КАЖДОЙ строки очереди (issue #41): очередь читают, чтобы взять приёмку,
+    # и без имени в ней берёт первая свободная рука, а не названная.
+    for bid, role, title, submitted_at, age_hours, recipe, reviewer in rows:
         new_mark = "🆕 " if (a.since and submitted_at and submitted_at > a.since) else ""
+        new_mark = ("👉 " if is_mine(reviewer) else "") + new_mark
         print(f"   {new_mark}карточка #{bid} [{role}] «{title[:64]}» — на приёмке "
-              f"{age_text(age_hours)} · рецепт (python-строка в теле/комментариях): "
-              f"{'есть' if recipe else 'НЕ ВИДНО'}")
+              f"{age_text(age_hours)} · приёмщик: {(reviewer or '').strip() or 'не назначен'} · "
+              f"рецепт (python-строка в теле/комментариях): {'есть' if recipe else 'НЕ ВИДНО'}")
     print(f"   итого {len(rows)} · сданное после твоего прошлого запроса помечает "
           f'--since "{db_now}"')
 
@@ -1466,7 +1501,10 @@ def main():
         help="показать очередь карточек на приёмке (in_review) по ВСЕМ ролям сразу",
         description="Показать очередь карточек на приёмке (состояние in_review) по всем ролям\n"
                     "одной командой; час замера печатает сама команда.\n"
-                    "Пример: backlog.py queue")
+                    "Пример: backlog.py queue --role <РОЛЬ>")
+    pq.add_argument("--role", default=None, metavar="РОЛЬ",
+                    help="роль, которая спрашивает: карточки, где приёмщик — она, идут первыми "
+                         "и помечены 👉")
     pq.add_argument("--since", default=None, metavar="ЧАС",
                     help="час прошлого запроса (скопируй из шапки прошлого вывода) — "
                          "сданное позже помечается 🆕")
