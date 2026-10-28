@@ -85,6 +85,10 @@ def main():
     p.add_argument("--status", action="store_true", help="Статус CTA: кто ACK'нул, кто нет")
     p.add_argument("--all", action="store_true", help="Показать все broadcast'ы, не только непрочитанные")
     args = p.parse_args()
+    # Имя роли — ВЕРХНИМ регистром на входе: --ack пишет role.upper(), а инбокс сверял ACK по роли
+    # как набрано — подтвердив как «--role core», роль снова видела объявление (находка тестов PR #44).
+    if args.role:
+        args.role = args.role.strip().upper()
     args.db = str(resolve_db(args.db, __file__))   # R15a: от расположения скрипта, не от CWD
 
     db_path = Path(args.db)

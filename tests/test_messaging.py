@@ -940,11 +940,7 @@ def test_ack_role_is_stored_in_upper_case(circuit):
     assert circuit.query("SELECT role FROM broadcast_acks") == [("CORE",)]
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "scripts/read-broadcasts.py:124 — инбокс сверяет ACK по роли КАК НАБРАНО, а --ack пишет "
-    "role.upper() (строка 167): подтвердив как --role core, роль в этом же регистре снова видит "
-    "то же объявление непрочитанным, хотя в broadcast_acks лежит 'CORE'. --status при этом "
-    "нормализует регистр, и два отчёта расходятся."))
+# Было xfail до починки scripts/read-broadcasts.py (имя роли — верхним регистром на входе).
 def test_inbox_after_ack_with_lowercase_role_is_empty(circuit):
     bid = broadcast(circuit, "COORD", "announcement")
     assert circuit.run("read-broadcasts.py", "--role", "core", "--ack", str(bid)).returncode == 0
