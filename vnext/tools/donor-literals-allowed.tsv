@@ -25,6 +25,9 @@
 #   · vnext/prototype/bite-rules-from-pack.py — подставные данные и подписи случаев приёмки после
 #     правок r3 (писатель gordi-issue.py теперь ZZK стенда, раскладки Atlas/AIA/«названы двое»).
 # Классы теперь: printed 41 · fixture 31 · provenance 2 · schema 2.
+#
+# 28.10 (PROTO, issue #38 пакета): снята запись scripts/guard-all.py · PROTO · shown — строка
+# «память ПО РАЗДЕЛАМ» переписана, литерала роли («@PROTO #3051») в ней больше нет; класс printed −1.
 file	name	kind	class	text	reason
 scripts/backlog.py	COORD	shown	printed	f"и о нём стоит сказать @COORD.", file=sys.stderr)	печатаемый текст «кому сообщить»: вне счёта, вариант «в» не выбран (e3-forks.md, слово владельца В1 б 2026-10-05 10:53 UTC)
 scripts/check-errors.py	COORD	shown	printed	help="Пометить сообщения как resolved (COORD подтвердил фикс)")	печатаемый текст, не подсказка-команда: вне счёта по слову владельца В1 б (2026-10-05 10:53 UTC)
@@ -34,7 +37,6 @@ scripts/export-channels.py	COORD	shown	printed	print(f"Дальше: COORD ко�
 scripts/export-rules.py	atlas	code	printed	HEADER = """# Sync RULES — протокол мезосинка Atlas (8 ролей)	шапка производного файла «мезосинка Atlas (8 ролей)»
 scripts/export-rules.py	COORD	code	printed	> 🔒`owner` — правило владельца: COORD НЕ правит его без **живого слова владельца в текущем чате**	шапка производного файла: COORD в пояснении
 scripts/gordi-issue.py	PROTO	shown	printed	print("   цикл: issue → карточка PROTO с тегом «gordi-issue #N» → починка → "	печатаемый текст, не подсказка-команда: вне счёта по слову владельца В1 б (2026-10-05 10:53 UTC)
-scripts/guard-all.py	PROTO	shown	printed	+ "\n   — состояние врёт о прошлом, ПЛАН ПРИКАЗЫВАЕТ В БУДУЩЕЕ (@PROTO #3051):"	печатаемый текст, не подсказка-команда: вне счёта по слову владельца В1 б (2026-10-05 10:53 UTC)
 scripts/guard-scripts-drift.py	PROTO	shown	printed	report_pair(VNEXT_RUNTIME, VNEXT_TEMPLATE, "vnext-tools", "образец", "@PROTO")	печатаемый текст «кому сообщить»: вне счёта, вариант «в» не выбран (e3-forks.md, слово владельца В1 б 2026-10-05 10:53 UTC)
 scripts/guard-scripts-drift.py	PROTO	shown	printed	"(замер @PROTO: каталоги совпали файл в файл, а прогоны дали разное). "	печатаемый текст, не подсказка-команда: вне счёта по слову владельца В1 б (2026-10-05 10:53 UTC)
 scripts/init-group.py	atlas	shown	printed	parser.add_argument("--name", required=True, help="Имя группы (например: atlas, webapp)")	печатаемый текст, не подсказка-команда: вне счёта по слову владельца В1 б (2026-10-05 10:53 UTC)
