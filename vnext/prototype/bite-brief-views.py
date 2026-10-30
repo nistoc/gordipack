@@ -13,19 +13,23 @@ r"""bite-brief-views.py — приёмка карточки #593, задание
   · краткий вид НЕ ВРЁТ ЧИСЛАМИ — сводная строка («прошли N: …», «мост соседей: N …»)
     называет ровно то число, что можно пересчитать по полному виду.
 
-═══ ЧТО ПРОВЕРЯЕТ (12 случаев + 2 нарочные поломки) ═══
+═══ ЧТО ПРОВЕРЯЕТ (12 случаев + 3 нарочные поломки) ═══
   ①…⑤, ⑫  backlog.py list --status all --actor PROTO: шапка, первые строки карточек,
            срез критерия («🎯 …», второй строкой) виден только под --full, причины
            dropped/frozen видны В ОБОИХ видах, блок пула дословно тот же, подсказка
            о --full показывается по правилам mezo_hints (карточка #586).
   ⑥…⑩      guard-all.py: последняя строка итога, множество красных («⛔»), множество
-           предупреждений («⚠️»/«ℹ️»), сводка «прошли N: …», сводка моста соседей.
+           предупреждений («⚠️»/«ℹ️»), сводка «прошли N: …», сводка моста соседей
+           (⑩: N в кратком = числу строк об отвеченных вопросах в --full, из них два —
+           от подставного соседа, этап Э6).
   ⑪        role-brief.py: четыре постоянных хвоста (порядок пробуждения, ритм, свод,
            ответы владельцу) — та же подсказка mezo_hints, три вызова подряд.
   (а)      НАРОЧНАЯ ПОЛОМКА guard-all.py: check() без учёта `ok` в кратком виде глотает
            КРАСНОЕ — случай ⑦ на такой копии обязан покраснеть.
   (б)      НАРОЧНАЯ ПОЛОМКА backlog.py: cmd_list пропускает замороженную карточку в
            кратком виде — случай ② на такой копии обязан покраснеть.
+  (в)      НАРОЧНАЯ ПОЛОМКА guard-all.py: ответ по полю reply-to не входит в краткий счёт
+           моста — случай ⑩ на такой копии обязан покраснеть (этап Э6, карточка #680).
 
 ═══ ГРАНИЦЫ — чего эта приёмка НЕ проверяет (сказано вслух, а не скрыто) ═══
   · дословный текст подсказок mezo_hints — эта приёмка проверена отдельно (bite-tool-
@@ -40,10 +44,12 @@ r"""bite-brief-views.py — приёмка карточки #593, задание
 ПОДСТАВНОЙ базе (mezo_stand.empty_db: схема живой без строк — этап Э6, карточка #680); роль
 PROTO, два правила свода, от которых зависит форма хвостов role-brief.py, и набор задач для
 блока пула приёмка сажает сама (seed_stand). Соседей для сводки моста (⑩) guard-all.py берёт
-из таблицы cross_links — её строки подставная база guard-all.py берёт из живой (keep): письма
-соседей лежат на диске контура, подделать их дороже самого случая. ⚖️ Граница: на контуре без
-соседей ⑩ судит ветку «вопросов нет вовсе». Копия каталога инструментов для нарочных поломок —
-через mezo_stand.copy_tool (со всеми соседями по import), поломка (а) зовётся ВНЕ
+из таблицы cross_links — её строки подставная база берёт из живой (keep), и сверх них приёмка
+сажает ПОДСТАВНОГО соседа zzbrief (seed_neighbour): два вопроса и два ответа по полю reply-to
+в рабочем каталоге стенда. ⚖️ Граница: до Э6 на контуре без соседей ⑩ судил ветку «вопросов
+нет вовсе» и давал другой итог приёмки; теперь итог один на любом контуре, а настоящие соседи
+только добавляют строк к обеим сторонам сравнения. Копия каталога инструментов для нарочных поломок —
+через mezo_stand.copy_tool (со всеми соседями по import), поломки (а) и (в) зовутся ВНЕ
 контейнера и потому с переменной среды MEZO_CONTAINER (тот же приём, что у случая ⑱-бис
 в bite-tool-brevity.py) — без неё модуль mezo_paths при запуске из копии не находит
 mezosync.db и падает на самом импорте, до первой же проверки.
@@ -61,6 +67,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 if "--keep" in sys.argv:
@@ -167,6 +174,15 @@ STAND_RULES = [
 STAND_POOL = ("ZZPOOL-BRIEF", "набор подставной базы приёмки #593.7: блок пула для случая ⑤")
 
 
+# Подставной сосед для случая ⑩ (Э6, карточка #680). До 30.10 соседей guard-all.py брал только из
+# строк cross_links ЖИВОЙ базы (keep), и на контуре без соседей (onto, свежий) ⑩ судил ветку
+# «вопросов нет вовсе» — с другим итогом приёмки. Теперь сосед сажается всегда: строка cross_links
+# в копии базы и его папка моста в стенде, в ней два вопроса к нам с годной шапкой и наши ответы
+# по полю reply-to. Строки живых соседей остаются (keep): у кого они есть, ⑩ судит и их.
+STAND_NEIGHBOUR = "zzbrief"
+STAND_ASKS = ("e6-brief-first", "e6-brief-second")
+
+
 def seed_stand(db: Path) -> None:
     c = sqlite3.connect(str(db))
     with c:
@@ -174,6 +190,56 @@ def seed_stand(db: Path) -> None:
                       " VALUES (?, ?, ?, ?, ?, ?)", STAND_RULES)
         c.execute("INSERT INTO tracks (track_id, title, status) VALUES (?, ?, 'active')", STAND_POOL)
     c.close()
+
+
+def seed_neighbour(db: Path, stand: Path) -> str:
+    """Посадить подставного соседа для ⑩; вернуть имя своей группы.
+
+    Имя своей группы guard-all.py берёт из ДВУХ мест: адресата вопроса сверяет с meta копии (--db),
+    автора нашего ответа — с meta ЖИВОЙ базы (_own_name). Поэтому имя читается из живой (только
+    чтение) и кладётся в копию: иначе вопрос окажется не к нам или ответ не от нас.
+    Письма собирает bridge_letter.py того же каталога скриптов, что и испытуемый guard-all.py, —
+    форма шапки у них одна.
+    """
+    if str(SCRIPTS) not in sys.path:
+        sys.path.append(str(SCRIPTS))                # в конец: mezo_paths берётся из каталога приёмки
+    import bridge_letter                             # noqa: PLC0415 — нужен только здесь
+    c = sqlite3.connect(f"file:{Path(LIVE_DB).as_posix()}?mode=ro", uri=True)
+    row = c.execute("SELECT value FROM meta WHERE key = 'group_name'").fetchone()
+    c.close()
+    own = bridge_letter.norm_contour((row[0] if row else "") or "")
+    if not own:
+        raise SystemExit("ПРИЁМКА НЕ СОСТОЯЛАСЬ: в живой базе нет meta.group_name — guard-all.py берёт "
+                         "оттуда имя своей группы, и ответ подставному соседу некому подписать")
+    root = stand / STAND_NEIGHBOUR
+    folder = f"{own}-{STAND_NEIGHBOUR}"
+    box = root / "bridges" / folder
+    box.mkdir(parents=True)
+    when = datetime(2026, 10, 30, 12, 0, tzinfo=timezone.utc)
+    for topic in STAND_ASKS:
+        ask_name = bridge_letter.letter_name("ask", own, topic, when)
+        ask_id = bridge_letter.place_id(STAND_NEIGHBOUR, folder, ask_name)
+        (box / ask_name).write_text(bridge_letter.compose(
+            when, ("COORD", STAND_NEIGHBOUR), [("PROTO", own)], "ask", ask_id,
+            body="Вопрос подставного соседа: приёмка bite-brief-views.py, случай ⑩."), encoding="utf-8")
+        answer_name = bridge_letter.letter_name("answer", STAND_NEIGHBOUR, topic, when)
+        (box / answer_name).write_text(bridge_letter.compose(
+            when, ("PROTO", own), [("COORD", STAND_NEIGHBOUR)], "answer",
+            bridge_letter.place_id(own, folder, answer_name), reply_to=ask_id,
+            body="Наш ответ подставному соседу."), encoding="utf-8")
+    con = sqlite3.connect(str(db))
+    with con:
+        con.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('group_name', ?)", (own,))
+        columns = {r[1] for r in con.execute("PRAGMA table_info(cross_links)")}
+        target_db = (root / ".mezosync" / "mezosync.db").as_posix()
+        if "source_group" in columns:
+            con.execute("INSERT INTO cross_links (source_group, target_group, target_db_path) VALUES (?, ?, ?)",
+                        (own, STAND_NEIGHBOUR, target_db))
+        else:                                        # таблица прежней схемы — без source_group
+            con.execute("INSERT INTO cross_links (target_group, target_db_path) VALUES (?, ?)",
+                        (STAND_NEIGHBOUR, target_db))
+    con.close()
+    return own
 
 
 def main() -> int:
@@ -384,6 +450,7 @@ def main() -> int:
     mezo_stand.empty_db(LIVE_DB, db_guard, keep=("cross_links",))
     mezo_stand.seed_roles(db_guard, ["PROTO"])
     seed_stand(db_guard)
+    own_group = seed_neighbour(db_guard, stand)
 
     def run_guard(tool: str, db_: Path, full: bool, env: dict | None = None) -> tuple[int, str]:
         args = ["--db", str(db_)] + (["--full"] if full else [])
@@ -478,21 +545,33 @@ def main() -> int:
                 return int(m.group(1)), int(m.group(2))
         return None
 
-    def bridge_answered_lines(output: str) -> int:
-        return sum(1 for line in output.splitlines() if "отвечен НАШИМ ответом" in line)
+    # ⚡ Э6 (карточка #680): ответ по полю reply-to guard-all.py печатает в --full СВОЕЙ строкой
+    # («отвечен по полю reply-to»), а в краткий счёт берёт так же, как ответ по имени темы. Прежде
+    # ⑩ считал только строки «отвечен НАШИМ ответом» и провалился бы на верном выводе у контура,
+    # где на вопрос ответили по полю. Теперь считаются обе строки.
+    ANSWERED_MARKS = ("отвечен НАШИМ ответом", "отвечен по полю reply-to")
 
-    summary10 = bridge_summary(out_g_brief)
-    answered_full10 = bridge_answered_lines(out_g_full)
-    if summary10 is None and answered_full10 == 0:
-        case("⑩ мост соседей — вопросов нет вовсе, равенство «нет в обоих видах»",
-               True, "ни сводной строки в кратком, ни строк «отвечен НАШИМ ответом» в полном")
-    else:
-        N10 = summary10[0] if summary10 else None
-        case("⑩ «✅ мост соседей: N вопросов отвечены» — N равно числу строк «отвечен "
-               "НАШИМ ответом» в --full",
-               summary10 is not None and N10 == answered_full10,
-               f"N в кратком={N10 if summary10 else 'строки нет'}, строк «отвечен» в полном="
-               f"{answered_full10}")
+    def bridge_answered_lines(output: str) -> int:
+        return sum(1 for line in output.splitlines() if any(m in line for m in ANSWERED_MARKS))
+
+    def stand_answered_lines(output: str) -> int:
+        return sum(1 for line in output.splitlines()
+                   if f"[{STAND_NEIGHBOUR}]" in line and "отвечен по полю reply-to" in line)
+
+    def bridge_verdict(output_brief: str, output_full: str) -> tuple[bool, str]:
+        summary = bridge_summary(output_brief)
+        answered = bridge_answered_lines(output_full)
+        from_stand = stand_answered_lines(output_full)
+        n = summary[0] if summary else None
+        return (summary is not None and n == answered and from_stand == len(STAND_ASKS),
+                f"N в кратком={n if summary else 'строки нет'}, строк «отвечен» в полном={answered}, "
+                f"из них подставного соседа «{STAND_NEIGHBOUR}» {from_stand} (ждали {len(STAND_ASKS)}); "
+                f"своя группа «{own_group}»")
+
+    ok10, word10 = bridge_verdict(out_g_brief, out_g_full)
+    case(f"⑩ «✅ мост соседей: N вопросов отвечены» — N равно числу строк об отвеченных вопросах "
+         f"в --full; подставной сосед даёт из них {len(STAND_ASKS)}",
+         ok10, word10)
 
     # ═══ ПОЛОМКА (а) — guard-all.py: check() без учёта `ok` в кратком виде ═════════════
     # Копия ЖИВЁТ ВНЕ КОНТЕЙНЕРА (%TEMP%), а `SCRIPTS = Path(__file__).resolve().parent`
@@ -529,6 +608,34 @@ def main() -> int:
             "🔴 поломка (а) покрасила: нет — приёмка не ловит эту беду; ")
            + f"кратко {len(set_a1)} красных строк, полно {len(set_a2)}")
     mezo_stand.release(broken_stand_a)
+
+    # ═══ ПОЛОМКА (в) — guard-all.py: ответ по полю reply-to не входит в краткий счёт моста ════
+    # Э6 (карточка #680): то, что судит ⑩ на подставном соседе, — краткий вид НЕ ВРЁТ ЧИСЛОМ. Копия
+    # guard-all.py, где у ответа по полю reply-to сняты две строки счёта, печатает его в --full, но в
+    # «✅ мост соседей: N …» не считает ⇒ ⑩ на такой копии обязан провалиться. Среда — как у (а).
+    broken_stand_c = mezo_stand.new("bite-brief-views-broken-bridge-")
+    broken_c = mezo_stand.copy_tool(Path(GUARD_ALL), broken_stand_c)
+    text_c = broken_c.read_text(encoding="utf-8")
+    ANCHOR_C = ("                        bridge_answered += 1\n"
+                "                        bridge_neighbors.add(group)\n"
+                "                        if FULL:\n")
+    if text_c.count(ANCHOR_C) != 1:
+        raise SystemExit("ПРИЁМКА НЕ СОСТОЯЛАСЬ: якорь счёта ответа по полю reply-to в guard-all.py "
+                         f"найден {text_c.count(ANCHOR_C)} раз (нужен ровно один) — поломку (в) ставить не на чем")
+    broken_c.write_text(text_c.replace(ANCHOR_C, "                        if FULL:\n", 1), encoding="utf-8")
+    rc_c1, out_c_brief = run_guard(str(broken_c), db_guard, full=False, env=env_a)
+    rc_c2, out_c_full = run_guard(str(broken_c), db_guard, full=True, env=env_a)
+    ok_c, word_c = bridge_verdict(out_c_brief, out_c_full)
+    if stand_answered_lines(out_c_full) != len(STAND_ASKS):
+        raise SystemExit("ПРИЁМКА НЕ СОСТОЯЛАСЬ: копия guard-all.py с поломкой (в) не напечатала в --full "
+                         "ответов подставного соседа — это отказ ЗАПУСКА копии, а не сигнал поломки. "
+                         f"{word_c}")
+    case("поломка (в): ответ по полю reply-to не входит в краткий счёт моста → случай ⑩ "
+         "на этой копии ОБЯЗАН покраснеть",
+         not ok_c,
+         ("поломка (в) покрасила: да — " if not ok_c else
+          "🔴 поломка (в) покрасила: нет — приёмка не ловит эту беду; ") + word_c)
+    mezo_stand.release(broken_stand_c)
 
     # ═══ ПОЛОМКА (б) — backlog.py: cmd_list пропускает frozen-карточку в кратком виде ═══
     # 🪤 ПЕРЕМЕРЕНО ПЕРЕД ПРАВКОЙ, А НЕ ДОГАДКОЙ: --db у нас АБСОЛЮТНЫЙ, и resolve_db
@@ -583,7 +690,7 @@ def main() -> int:
     print("")
     print("=" * 78)
     failed = [item for item, ok in results if not ok]
-    print(f"РАЗЛИЧАЮЩИХ СЛУЧАЕВ {len(results)} (①…⑫ + поломки (а) и (б))")
+    print(f"РАЗЛИЧАЮЩИХ СЛУЧАЕВ {len(results)} (①…⑫ + поломки (а), (б) и (в))")
     print("⚖️ ГРАНИЦА: дословный текст подсказок mezo_hints, содержание отдельных гардов "
           "guard-all.py и динамические разделы role-brief.py этой приёмкой НЕ проверяются.")
     if failed:
