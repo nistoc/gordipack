@@ -28,9 +28,9 @@ r"""СВЕРНУТЬ ИСТОРИЮ ВЕРСИЙ СВОЕЙ ПАМЯТИ: ста
 пересозданием» не хранится вовсе — инструмент говорит это вслух числом, а не молча.
 
 Зовут так:
-    MEZO_ROLE=PROTO python C:/guts/.atlas/vnext-tools/memory-history-fold.py --role PROTO --dry-run
-    MEZO_ROLE=PROTO python C:/guts/.atlas/vnext-tools/memory-history-fold.py --role PROTO
-    MEZO_ROLE=PROTO python C:/guts/.atlas/vnext-tools/memory-history-fold.py --role PROTO --unfold
+    MEZO_ROLE=PROTO python <КОНТУР>/vnext-tools/memory-history-fold.py --role PROTO --dry-run
+    MEZO_ROLE=PROTO python <КОНТУР>/vnext-tools/memory-history-fold.py --role PROTO
+    MEZO_ROLE=PROTO python <КОНТУР>/vnext-tools/memory-history-fold.py --role PROTO --unfold
 """
 from __future__ import annotations
 

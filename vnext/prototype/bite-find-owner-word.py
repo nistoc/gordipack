@@ -20,7 +20,7 @@ r"""ПРИЁМКА find-owner-word.py — карточка #521, различа�
     ⑧ ПОРЧА: убрать отсев служебных   → сводка обязана проехать (чувствительность ⑤)
 
 Зовут так:
-    python C:/guts/.atlas/vnext-tools/bite-find-owner-word.py
+    python <КОНТУР>/vnext-tools/bite-find-owner-word.py
 """
 from __future__ import annotations
 

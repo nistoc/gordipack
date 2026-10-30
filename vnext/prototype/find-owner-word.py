@@ -44,9 +44,9 @@ r"""НАЙТИ СЛОВО ВЛАДЕЛЬЦА В ЗАПИСЯХ РАЗГОВОР�
 был виден, а не подразумевался.
 
 Зовут так:
-    python C:/guts/.atlas/vnext-tools/find-owner-word.py --слово "ступенчато"
-    python C:/guts/.atlas/vnext-tools/find-owner-word.py --слово "пушить можно" --за 2026-08-08
-    python C:/guts/.atlas/vnext-tools/find-owner-word.py --слово "различать агентов" --подробно
+    python <КОНТУР>/vnext-tools/find-owner-word.py --слово "ступенчато"
+    python <КОНТУР>/vnext-tools/find-owner-word.py --слово "пушить можно" --за 2026-08-08
+    python <КОНТУР>/vnext-tools/find-owner-word.py --слово "различать агентов" --подробно
 """
 from __future__ import annotations
 

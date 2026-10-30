@@ -24,7 +24,7 @@ guard-relative-invocations.py — ПРОТОТИП гарда R15b: канон �
 
 Read-only: не пишет ни в БД, ни в файлы. Безопасен для живого контура.
 
-    python guard-relative-invocations.py --db <путь> [--canon C:\\guts\\.atlas\\CLAUDE.md] [--json]
+    python guard-relative-invocations.py --db <путь> [--canon <КОНТУР>\\CLAUDE.md] [--json]
 """
 import argparse
 import json

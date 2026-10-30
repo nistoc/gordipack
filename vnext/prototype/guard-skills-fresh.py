@@ -37,7 +37,7 @@ COORD завёл правило, пересобрал навыки, получи
 краснеет, — единственная форма, при которой забывчивость отличима от замысла.
 
 Зовут так:
-    python C:/guts/.atlas/vnext-tools/guard-skills-fresh.py
+    python <КОНТУР>/vnext-tools/guard-skills-fresh.py
 """
 from __future__ import annotations
 
