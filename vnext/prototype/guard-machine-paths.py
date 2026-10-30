@@ -183,10 +183,12 @@ def code_lines(src: str) -> tuple[set[int], set[int]]:
 
 # Начало исполнимой строки: то, что читающий скопирует и запустит. Перед командой может
 # стоять окружение «ИМЯ=значение» — так звали memory-history-fold.py (карточка #732), и без
-# этого строка-команда читалась прозой.
+# этого строка-команда читалась прозой. Имя запускающего — с номером версии или окна
+# (python3, python3.13, pythonw), а вызов PowerShell — через «& путь»: без них шапка с такой
+# командой читалась прозой, хотя до карточки #732 судилась как код (замечание PROTO, записка #6120).
 COMMAND_RE = re.compile(r"^\s*[$>]?\s*(?:[A-Za-z_]\w*=\S*\s+)*"
-                        r"(python|py|dotnet|npm|node|git|cd|powershell|pwsh|sh|bash"
-                        r"|sqlite3|terraform|gcloud|docker)\b")
+                        r"(?:&\s*\S|(?:python[\dw.]*|py|dotnet|npm|node|git|cd|powershell|pwsh|sh|bash"
+                        r"|sqlite3|terraform|gcloud|docker)\b)")
 
 
 def example_lines(src: str) -> set[int]:

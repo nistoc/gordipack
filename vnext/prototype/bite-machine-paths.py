@@ -30,14 +30,16 @@ r"""ПРИЁМКА проверки «в образце нет путей одн
      Шапку читают, а не исполняют (карточка #732)
   ⑭ строка-КОМАНДА в той же шапке → красное                         ВСТРЕЧНЫЙ к ⑬
   ⑮ команда с окружением впереди («ИМЯ=значение python …») → красное РАЗЛИЧАЮЩИЙ
+  ⑯ команды python3 · pythonw · «& путь» в шапке → красное каждая     РАЗЛИЧАЮЩИЙ
 
 Нарочные поломки (--break), каждая на своей копии guard-machine-paths.py в стенде:
   no-head ........... верхний каталог пути не проверяется на существование → ⑩
   no-collapse ....... разделители не сводятся перед сравнением с корнями   → ⑪
   no-system-heads ... системные каталоги Windows не исключаются            → ⑫ (только на Windows)
   doc-as-code ....... шапка снова судится как код целиком                  → ⑬
-  doc-all-prose ..... шапка судится прозой целиком, команды в ней тоже     → ⑭
+  doc-all-prose ..... шапка судится прозой целиком, команды в ней тоже     → ⑭ ⑯
   no-env-prefix ..... образец команды не понимает «ИМЯ=значение» впереди   → ⑮
+  no-cmd-variants ... образец знает только «python», без версии, окна и «&» → ⑯
 
 ⛔ Живого контура не касается: всё во временном каталоге.
 """
@@ -81,11 +83,16 @@ BREAKS = {
     "doc-all-prose": (
         [('            elif path.suffix == ".py" and n in docs and COMMAND_RE.match(line):\n',
           '            elif path.suffix == ".py" and n in docs and False:\n')],
-        {"⑭"}),
+        {"⑭", "⑯"}),
     "no-env-prefix": (
         [(r'COMMAND_RE = re.compile(r"^\s*[$>]?\s*(?:[A-Za-z_]\w*=\S*\s+)*"' + "\n",
           r'COMMAND_RE = re.compile(r"^\s*[$>]?\s*"' + "\n")],
         {"⑮"}),
+    "no-cmd-variants": (
+        [(r'                        r"(?:&\s*\S|(?:python[\dw.]*|py|dotnet|npm|node|git|cd|powershell|pwsh|sh|bash"'
+          + "\n",
+          r'                        r"(?:(?:python|py|dotnet|npm|node|git|cd|powershell|pwsh|sh|bash"' + "\n")],
+        {"⑯"}),
 }
 
 
@@ -288,6 +295,20 @@ def main() -> int:
     ok &= case("⑮ команда с окружением впереди — красное",
                code15 == 1 and "исполнимый пример" in out15,
                f"код {code15}; «ИМЯ=значение» перед командой — часть команды, а не проза", differ=True)
+
+    # ⑯ КАРТОЧКА #732, замечание PROTO (записка #6120): имя с версией или окном (python3, pythonw)
+    #    и вызов PowerShell через «&» — тоже команды. До карточки #732 шапка судилась как код целиком
+    #    и такие строки краснели; без этого случая правка ⑬ молча увела бы их в прозу.
+    doc_variants = tree("docvariants", {
+        "tool.py": (f'r"""Зовут так:\n    python3 {MINE}\\vnext-tools\\x.py\n'
+                    f'    pythonw {MINE}\\vnext-tools\\x.py\n'
+                    f'    & "{MINE}\\vnext-tools\\x.ps1"\n"""\nX = 1\n')})
+    out16, code16 = run(doc_variants)
+    lines16 = [n for n in (2, 3, 4) if f"🔴 tool.py:{n}" in out16]
+    ok &= case("⑯ python3 · pythonw · «& путь» в шапке — красное каждая",
+               code16 == 1 and lines16 == [2, 3, 4],
+               f"код {code16}; красных строк {len(lines16)} из 3 — каждая из трёх форм ловится сама, "
+               "а не за компанию с соседней", differ=True)
 
     print()
     print(f"{'✅ ПРОВЕРКА ПУТЕЙ ПРИНЯТА' if ok else '🔴 НЕ ПРИНЯТА'} — "
