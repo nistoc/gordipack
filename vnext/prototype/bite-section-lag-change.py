@@ -27,6 +27,8 @@ guard-section-lag.py (что печатает и каким кодом). Каж�
      (три случая заявки — тишина ⑫, ответ «принято» ②, записка с commit ①)
   ⑬  рядом с проверкой прежний phoenix_lag.py без section_lag, годного нет нигде — отказ кодом 2
      с перечнем мест и словами «есть, но без section_lag», без трассировки (замечание приёмки PR 56)
+  ⑭  то же место пришло ещё и через MEZO_SCRIPTS_ROOT другим написанием («x/..»; у собранного контура
+     так приходят полное имя и короткое 8.3) — в перечне отказа один раз (записка #6086)
 
 Нарочные поломки (--break), каждая на своей копии phoenix_lag.py или guard-section-lag.py:
   any-note-red .......... любая записка — смена состояния (прежнее поведение)  → ② ⑤ ⑥ ⑩ ⑪
@@ -35,7 +37,8 @@ guard-section-lag.py (что печатает и каким кодом). Каж�
   closure-report-counts . закрытие — любая форма «закры…», и пересказ тоже    → ⑤
   yellow-silent ......... строки 🟡 нет                                        → ② ⑩
   yellow-as-red ......... «не подтверждался» красится как отставание         → ② ⑤ ⑥ ⑩
-  first-found ........... берётся первый найденный phoenix_lag.py, годен ли  → ⑬
+  first-found ........... берётся первый найденный phoenix_lag.py, годен ли  → ⑬ ⑭
+  no-dedupe ............. места не сводятся по resolve()                      → ⑭
 
 Живой базы не касается. Испытуемая phoenix_lag.py — по MEZO_SCRIPTS_ROOT (mezo_target), по умолчанию —
 установленная; guard-section-lag.py — из того же каталога, если она там есть (собранный контур), иначе из
@@ -97,7 +100,10 @@ BREAKS = {
         [("guard-section-lag.py",
           "        absent = [name for name in LAG_NAMES if not hasattr(module, name)]\n",
           "        absent = []\n")],
-        {"⑬"}),
+        {"⑬", "⑭"}),
+    "no-dedupe": (
+        [("guard-section-lag.py", "        if key in tried:\n", "        if False:\n")],
+        {"⑭"}),
 }
 
 # Прежний phoenix_lag.py (до issue #38) — без section_lag: им проверяется ⑬
@@ -265,6 +271,18 @@ def main() -> int:
     case("⑬", "прежний phoenix_lag.py без section_lag — отказ кодом 2 с перечнем мест, без трассировки",
          r.returncode == 2 and "есть, но без section_lag" in out and "Traceback" not in out,
          f"код {r.returncode}; {short(out)}")
+
+    # ⑭ тот же каталог ещё раз — через MEZO_SCRIPTS_ROOT, другим написанием пути. Подкаталог x
+    #    заводится настоящим: «x/..» обязан существовать и на Linux, а не только в путях Windows
+    (tools_old / "x").mkdir()
+    env14 = dict(env, MEZO_SCRIPTS_ROOT=str(tools_old / "x" / ".."))
+    r = subprocess.run([sys.executable, str(guard_old), "--db", str(db2)], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", env=env14, timeout=120)
+    out = (r.stdout or "") + (r.stderr or "")
+    times = out.count("есть, но без section_lag")
+    case("⑭", "одно место двумя написаниями — в перечне отказа один раз",
+         r.returncode == 2 and times == 1 and "Traceback" not in out,
+         f"код {r.returncode}; «без section_lag» в перечне {times} раз")
 
     print(f"\n{'✅' if FAIL == 0 else '🔴'} ИТОГ: {OK} из {OK + FAIL} · испытан {mezo_target.label()}")
     if a.break_name:
