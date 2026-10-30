@@ -83,8 +83,10 @@ case("② пустой раздел → отказ ПОИМЁННО", rc != 0 an
      out2.split("пустые разделы:")[-1].split(".")[0])
 
 # ③ машинный путь — отказ
+# Диск Q: — путь придуманный. gordi-issue.py узнаёт путь машины по ВИДУ (X:\guts|github|Users\),
+# и проба судит именно вид; настоящий путь этой машины здесь был бы долгом образца (карточка #732).
 dirty = stand / "dirty.md"
-dirty.write_text("## ЗАМЕР\nупал на C:\\guts\\.atlas\\vnext-tools\\x.py\n## КЛАСС\nкл\n"
+dirty.write_text("## ЗАМЕР\nупал на Q:\\guts\\.atlas\\vnext-tools\\x.py\n## КЛАСС\nкл\n"
                  "## ПРЕДЛОЖЕНИЕ\nпр\n", encoding="utf-8")
 rc, out3 = run(GI, "create", "--role", "COORD", "--title", "проба",
                "--body-file", str(dirty), "--dry-run")

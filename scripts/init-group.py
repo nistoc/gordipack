@@ -2,7 +2,7 @@
 init-group.py — Создаёт новую группу агентов (mezosync.db) по шаблону.
 
 Использование (роли контура называет ВЫЗОВ — флаг --roles обязателен, умолчания нет):
-    python init-group.py --name "atlas" --path "C:\\guts\\.atlas\\.mezosync" --domain data-platform --roles <РОЛЬ1> <РОЛЬ2>
+    python init-group.py --name "atlas" --path "<КОНТУР>\\.mezosync" --domain data-platform --roles <РОЛЬ1> <РОЛЬ2>
     python init-group.py --name "webapp" --path "C:\\projects\\app\\.mezosync" --domain frontend-spa --roles <РОЛЬ1>
 Координатор контура — первая из --roles; другого называет флаг --coordinator <РОЛЬ> (она обязана быть среди --roles).
 """
