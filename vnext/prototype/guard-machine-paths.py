@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import functools
 import re
 import subprocess
 import sys
@@ -35,13 +36,13 @@ import mezo_paths  # noqa: E402 — пути машины выводятся, н
 
 # Абсолютный путь Windows или POSIX. Граница слева обязательна: без неё образец ловит
 # «http://localhost» и «try:\n» — совпадения, к дискам отношения не имеющие.
-МАШИННЫЙ = re.compile(r"(?<![A-Za-z0-9_])(?:[A-Za-z]:[\\/]|/(?:home|Users)/)[^\s\"'`)\]]*")
+MACHINE_PATH_RE = re.compile(r"(?<![A-Za-z0-9_])(?:[A-Za-z]:[\\/]|/(?:home|Users)/)[^\s\"'`)\]]*")
 
 # Уже обезличенное — не находка. Заполнитель честнее пустоты и его трогать нельзя.
-ЗАПОЛНИТЕЛЬ = re.compile(r"<[^>]+>|\.\.\.|…|path[\\/]to|ВАШ|PATH_TO|%\w+%|\$\w+|\{\w*\}",
-                         re.IGNORECASE)
+PLACEHOLDER_RE = re.compile(r"<[^>]+>|\.\.\.|…|path[\\/]to|ВАШ|PATH_TO|%\w+%|\$\w+|\{\w*\}",
+                            re.IGNORECASE)
 
-def корни_этой_машины() -> list[str]:
+def this_machine_roots() -> list[str]:
     r"""Каталоги, существующие ИМЕННО ЗДЕСЬ. Выводятся, а не впечатываются.
 
     ⚖️ Почему не «любой абсолютный путь»: в образце законно живут ПРИДУМАННЫЕ примеры
@@ -49,35 +50,74 @@ def корни_этой_машины() -> list[str]:
     форма вызова. Долг — путь, ведущий в МОЙ диск: он выглядит рабочим и у чужого
     человека молча не работает. Отличает их не вид строки, а происхождение.
     """
-    корни = []
+    roots = []
     for p in (mezo_paths.container_root(), mezo_paths.template_root(), Path.home()):
-        корни.append(str(p))
+        roots.append(str(p))
         if p.parent != p:
-            корни.append(str(p.parent))       # соседний контур на том же диске
-    return sorted({k.replace("/", "\\").rstrip("\\").lower() for k in корни},
+            roots.append(str(p.parent))       # соседний контур на том же диске
+    return sorted({k.replace("/", "\\").rstrip("\\").lower() for k in roots},
                   key=len, reverse=True)
 
 
-КОРНИ = корни_этой_машины()
+ROOTS = this_machine_roots()
 
 
-def ведёт_на_эту_машину(кусок: str) -> bool:
-    """Путь начинается с одного из корней этой машины — с точностью до вида разделителя."""
-    ровно = кусок.replace("/", "\\").lower()
-    return any(ровно.startswith(k) for k in КОРНИ)
+# Верхний каталог пути: диск и первый каталог; у домашних (Users, home) — ещё имя пользователя.
+PATH_HEAD_RE = re.compile(r"^(?:([A-Za-z]:)[\\/]+((?:users)[\\/]+)?([^\\/]+)|/(home|Users)/+([^/]+))",
+                          re.IGNORECASE)
+# Каталоги, которые есть на ЛЮБОЙ машине Windows: путь в них — не раскладка одной машины
+# (SYSTEMROOT в окружении стенда и подобное), и красить его значило бы обвинять верный текст.
+SYSTEM_HEADS = {"windows", "program files", "program files (x86)", "programdata", "users",
+                "users\\public", "users\\default", "users\\all users"}
 
 
-СМОТРИМ = {".py", ".md", ".sql", ".json", ".ps1", ".sh", ".yml", ".yaml",
+@functools.lru_cache(maxsize=None)
+def head_exists(head: str) -> bool:
+    return Path(head).is_dir()
+
+
+def path_head(piece: str) -> str | None:
+    """Верхний каталог пути — диск и первый каталог (у домашних — и имя пользователя).
+    None — не путь диска либо системный каталог, общий для всех машин."""
+    m = PATH_HEAD_RE.match(piece.rstrip(".,;:»"))
+    if not m:
+        return None
+    if not m.group(1):
+        return f"/{m.group(4)}/{m.group(5)}"
+    tail = re.sub(r"[\\/]+", r"\\", (m.group(2) or "") + m.group(3))
+    if tail.lower() in SYSTEM_HEADS:
+        return None
+    return m.group(1) + "\\" + tail
+
+
+# 🪤 Карточка #731 (замер PROTO, записка #6102). Прежде путь вёл на эту машину, только если
+#    начинался с одного из ROOTS, а ROOTS выводятся из места, где лежит сама проверка: копия из
+#    выгрузки в черновой папке находила образцом себя, и путь в настоящий каталог образца читался
+#    придуманным — на одном дереве 13 живых против 20 у копии в образце. Существует ли каталог —
+#    свойство машины, а не места проверки: второе условие ниже.
+# 🪤 Там же: в исходнике Python путь пишется удвоенными слешами ("X:\\dir\\sub"), и сравнение
+#    с корнем без сведения разделителей не узнавало его ни из какого места. Сводим.
+def leads_to_this_machine(piece: str) -> bool:
+    """Путь начинается с одного из корней этой машины (разделители сведены) либо его верхний
+    каталог здесь существует."""
+    norm = re.sub(r"[\\/]+", r"\\", piece).lower()
+    if any(norm.startswith(k) for k in ROOTS):
+        return True
+    head = path_head(piece)
+    return head is not None and head_exists(head)
+
+
+WATCHED_SUFFIXES = {".py", ".md", ".sql", ".json", ".ps1", ".sh", ".yml", ".yaml",
            ".paths", ".txt", ".cfg", ".ini", ".toml"}
-МИМО = {".git", "__pycache__", "node_modules", ".venv", "venv"}
+SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv"}
 # В git-режиме белого списка нет — есть чёрный: бинарное не читаем, ОСТАЛЬНОЕ судим всё.
-БИНАРНЫЕ = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".db", ".sqlite", ".pyc", ".exe",
+BINARY_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".db", ".sqlite", ".pyc", ".exe",
             ".dll", ".zip", ".gz", ".7z", ".woff", ".woff2", ".ttf", ".pdf", ".bak"}
 # Файл-КОНФИГ: путь в нём не проза и не пример — его ИСПОЛНЯЕТ механизм. Любая находка красная.
-КОНФИГ = {".paths", ".cfg", ".ini", ".toml", ".json", ".yml", ".yaml"}
+CONFIG_SUFFIXES = {".paths", ".cfg", ".ini", ".toml", ".json", ".yml", ".yaml"}
 
 
-def файлы_для_суда(root: Path):
+def files_to_judge(root: Path):
     """Что судим — и почему двумя ветвями (карточка #248: область у́же предмета).
 
     В git-репозитории судим ровно ПУБЛИКУЕМОЕ (`git ls-files`): local.paths и прочее
@@ -91,18 +131,18 @@ def файлы_для_суда(root: Path):
             out = subprocess.run(["git", "-C", str(root), "ls-files"],
                                  capture_output=True, text=True, encoding="utf-8",
                                  timeout=60, check=True).stdout
-            файлы = [root / f for f in out.splitlines()
-                     if (root / f).is_file() and (root / f).suffix.lower() not in БИНАРНЫЕ]
-            return файлы, "публикуемое: git ls-files минус бинарные"
+            files = [root / f for f in out.splitlines()
+                     if (root / f).is_file() and (root / f).suffix.lower() not in BINARY_SUFFIXES]
+            return files, "публикуемое: git ls-files минус бинарные"
         except (OSError, subprocess.SubprocessError) as e:
             print(f"⚠️ git ls-files не удался ({e}) — сужаюсь до обхода по расширениям")
-    файлы = [p for p in sorted(root.rglob("*"))
-             if p.is_file() and p.suffix.lower() in СМОТРИМ
-             and not any(часть in МИМО for часть in p.parts)]
-    return файлы, "обход диска по белому списку расширений"
+    files = [p for p in sorted(root.rglob("*"))
+             if p.is_file() and p.suffix.lower() in WATCHED_SUFFIXES
+             and not any(part in SKIP_DIRS for part in p.parts)]
+    return files, "обход диска по белому списку расширений"
 
 
-def строки_кода(src: str) -> set[int]:
+def code_lines(src: str) -> set[int]:
     """Номера строк, где путь стои́т ВНУТРИ строкового литерала — то есть в самом коде.
 
     Комментарии в разбор не попадают вовсе: их номеров здесь не будет, и это ровно
@@ -119,20 +159,20 @@ def строки_кода(src: str) -> set[int]:
             tree = ast.parse(src)
     except SyntaxError:
         return set()
-    из_кода: set[int] = set()
+    in_code: set[int] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            конец = getattr(node, "end_lineno", node.lineno) or node.lineno
-            из_кода.update(range(node.lineno, конец + 1))
-    return из_кода
+            end = getattr(node, "end_lineno", node.lineno) or node.lineno
+            in_code.update(range(node.lineno, end + 1))
+    return in_code
 
 
 # Начало исполнимой строки: то, что читающий скопирует и запустит.
-КОМАНДА = re.compile(r"^\s*[$>]?\s*(python|py|dotnet|npm|node|git|cd|powershell|pwsh|sh|bash"
+COMMAND_RE = re.compile(r"^\s*[$>]?\s*(python|py|dotnet|npm|node|git|cd|powershell|pwsh|sh|bash"
                      r"|sqlite3|terraform|gcloud|docker)\b")
 
 
-def строки_примеров(src: str) -> set[int]:
+def example_lines(src: str) -> set[int]:
     r"""Номера строк, которые читающий СКОПИРУЕТ И ЗАПУСТИТ.
 
     🪤 Не всякая строка в блоке — команда. Первая редакция красила блок целиком и
@@ -140,40 +180,40 @@ def строки_примеров(src: str) -> set[int]:
     записи, а исполнять его никто не собирается. Судим по началу строки: команда
     начинается с имени того, чем её запускают.
     """
-    внутри = False
-    примеры: set[int] = set()
+    inside = False
+    examples: set[int] = set()
     for i, line in enumerate(src.splitlines(), 1):
         if line.lstrip().startswith("```"):
-            внутри = not внутри
+            inside = not inside
             continue
-        if внутри and КОМАНДА.match(line):
-            примеры.add(i)
-    return примеры
+        if inside and COMMAND_RE.match(line):
+            examples.add(i)
+    return examples
 
 
-def разобрать(path: Path):
+def judge_file(path: Path):
     """(красные, жёлтые) — списки (строка, номер, текст, почему)."""
     src = path.read_text(encoding="utf-8", errors="ignore")
-    код = строки_кода(src) if path.suffix == ".py" else set()
-    примеры = строки_примеров(src) if path.suffix == ".md" else set()
-    красные, жёлтые = [], []
+    code = code_lines(src) if path.suffix == ".py" else set()
+    examples = example_lines(src) if path.suffix == ".md" else set()
+    reds, yellows = [], []
     for n, line in enumerate(src.splitlines(), 1):
-        for m in МАШИННЫЙ.finditer(line):
-            кусок = m.group(0)
-            if ЗАПОЛНИТЕЛЬ.search(кусок) or not ведёт_на_эту_машину(кусок):
+        for m in MACHINE_PATH_RE.finditer(line):
+            piece = m.group(0)
+            if PLACEHOLDER_RE.search(piece) or not leads_to_this_machine(piece):
                 continue
-            if path.suffix.lower() in КОНФИГ:
-                красные.append((n, line.strip()[:120],
+            if path.suffix.lower() in CONFIG_SUFFIXES:
+                reds.append((n, line.strip()[:120],
                                 "рабочий конфиг: путь исполняет механизм, не читатель"))
-            elif path.suffix == ".py" and n in код:
-                красные.append((n, line.strip()[:120], "в коде: у чужого механизм мёртв"))
-            elif path.suffix == ".md" and n in примеры:
-                красные.append((n, line.strip()[:120],
+            elif path.suffix == ".py" and n in code:
+                reds.append((n, line.strip()[:120], "в коде: у чужого механизм мёртв"))
+            elif path.suffix == ".md" and n in examples:
+                reds.append((n, line.strip()[:120],
                                 "исполнимый пример: скопируют и получат отказ"))
             else:
-                жёлтые.append((n, line.strip()[:120], "проза или комментарий — чаще урок"))
+                yellows.append((n, line.strip()[:120], "проза или комментарий — чаще урок"))
             break
-    return красные, жёлтые
+    return reds, yellows
 
 
 def main() -> int:
@@ -187,40 +227,40 @@ def main() -> int:
         print(f"⛔ НЕ ЗАПУСТИЛАСЬ: смотреть нечего — {root}")
         return 2
 
-    файлы, откуда = файлы_для_суда(root)
-    все_красные, все_жёлтые = [], []
-    for p in файлы:
-        к, ж = разобрать(p)
-        все_красные += [(p, *x) for x in к]
-        все_жёлтые += [(p, *x) for x in ж]
+    files, source_note = files_to_judge(root)
+    all_reds, all_yellows = [], []
+    for p in files:
+        reds_here, yellows_here = judge_file(p)
+        all_reds += [(p, *x) for x in reds_here]
+        all_yellows += [(p, *x) for x in yellows_here]
 
     print("=" * 84)
     print(f"ПУТИ ОДНОЙ МАШИНЫ В ОБРАЗЦЕ — смотрено: {root}")
-    print(f"  файлов {len(файлы)} ({откуда}) · 🔴 живых {len(все_красные)} "
-          f"· 🟡 в прозе {len(все_жёлтые)}")
+    print(f"  файлов {len(files)} ({source_note}) · 🔴 живых {len(all_reds)} "
+          f"· 🟡 в прозе {len(all_yellows)}")
     print("=" * 84)
 
-    for p, n, текст, почему in все_красные:
-        print(f"🔴 {p.relative_to(root)}:{n}  ({почему})")
-        print(f"     {текст}")
-    if все_жёлтые:
-        показ = все_жёлтые if a.verbose else все_жёлтые[:5]
-        for p, n, текст, почему in показ:
-            print(f"🟡 {p.relative_to(root)}:{n}  ({почему})")
-        если_ещё = len(все_жёлтые) - len(показ)
-        if если_ещё:
-            print(f"   …ещё {если_ещё} в прозе — смотреть с --verbose")
+    for p, n, text, reason in all_reds:
+        print(f"🔴 {p.relative_to(root)}:{n}  ({reason})")
+        print(f"     {text}")
+    if all_yellows:
+        shown = all_yellows if a.verbose else all_yellows[:5]
+        for p, n, text, reason in shown:
+            print(f"🟡 {p.relative_to(root)}:{n}  ({reason})")
+        more = len(all_yellows) - len(shown)
+        if more:
+            print(f"   …ещё {more} в прозе — смотреть с --verbose")
 
     print("-" * 84)
-    if все_красные:
-        print(f"⛔ ЖИВЫХ ПУТЕЙ ОДНОЙ МАШИНЫ: {len(все_красные)} — у чужого человека это "
+    if all_reds:
+        print(f"⛔ ЖИВЫХ ПУТЕЙ ОДНОЙ МАШИНЫ: {len(all_reds)} — у чужого человека это "
               "не заработает, и он решит, что сломан механизм.")
     else:
         print("✅ живых путей одной машины нет.")
-    if все_жёлтые:
-        print(f"🟡 В прозе и комментариях: {len(все_жёлтые)}. Это НЕ долг сам по себе — "
+    if all_yellows:
+        print(f"🟡 В прозе и комментариях: {len(all_yellows)}. Это НЕ долг сам по себе — "
               "в уроке путь и есть предмет. Разбирать поимённо, а не гуртом.")
-    return 1 if все_красные else 0
+    return 1 if all_reds else 0
 
 
 if __name__ == "__main__":
