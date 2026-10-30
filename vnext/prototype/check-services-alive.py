@@ -30,9 +30,9 @@ r"""ЖИВОСТЬ СЛУЖБ ATLAS — читает ТЕЛО ответа, а �
 Здесь у них разные слова и разный код возврата.
 
 Зовут так:
-    python C:/guts/.atlas/vnext-tools/check-services-alive.py                 # стенд
-    python C:/guts/.atlas/vnext-tools/check-services-alive.py --место облако
-    python C:/guts/.atlas/vnext-tools/check-services-alive.py --место всё
+    python <КОНТУР>/vnext-tools/check-services-alive.py                 # стенд
+    python <КОНТУР>/vnext-tools/check-services-alive.py --место облако
+    python <КОНТУР>/vnext-tools/check-services-alive.py --место всё
 """
 from __future__ import annotations
 
