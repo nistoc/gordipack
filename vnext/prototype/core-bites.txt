@@ -24,7 +24,7 @@ bite-addressee-field.py                  Г1     done  0 10 0
 bite-archive-move-look.py                Г4     done  0 34 9
 bite-archive-move-records.py             Г1     done  0 23 0
 bite-bridge-own-letters.py               Г1     done  0 32 0
-bite-brief-views.py                      Г2     done  0 17 0
+bite-brief-views.py                      Г2     done  0 18 0
 bite-call-form-counterexample.py         Г1     done  0 7 0
 bite-card-edit.py                        Г1     own  0 9 0
 bite-card-tags.py                        Г1     own  0 9 0
