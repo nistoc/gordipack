@@ -9,10 +9,11 @@ r"""ПРОВЕРКА: публичный образец не несёт путе
 
 ⚖️ ТРИ РОЛИ ОДНОЙ И ТОЙ ЖЕ СТРОКИ — их нельзя судить одинаково:
   🔴 в КОДЕ (строковый литерал, по которому механизм ходит) — механизм у чужого мёртв;
-  🔴 в ИСПОЛНИМОМ ПРИМЕРЕ (шапка модуля, блок команд в доке) — читающий скопирует
-     и получит отказ, а решит, что сломан механизм;
-  🟡 в КОММЕНТАРИИ И ПРОЗЕ — там путь чаще всего ПРЕДМЕТ УРОКА («вот на этом пути
-     сломалось»), и стирать его значит стирать причину решения. Называем, но не красим.
+  🔴 в ИСПОЛНИМОМ ПРИМЕРЕ (строка-команда в шапке модуля или функции, в блоке команд
+     дока) — читающий скопирует и получит отказ, а решит, что сломан механизм;
+  🟡 в КОММЕНТАРИИ И ПРОЗЕ (прочие строки шапки тоже) — там путь чаще всего ПРЕДМЕТ УРОКА
+     («вот на этом пути сломалось»), и стирать его значит стирать причину решения.
+     Называем, но не красим.
 
 ⛔ Заполнители не трогаем: `<ваш контейнер>`, `C:\path\to\...`, `…` — они уже обезличены,
    и требовать от них чистоты значит требовать переписать верный текст ради нуля в замере.
@@ -142,12 +143,17 @@ def files_to_judge(root: Path):
     return files, "обход диска по белому списку расширений"
 
 
-def code_lines(src: str) -> set[int]:
-    """Номера строк, где путь стои́т ВНУТРИ строкового литерала — то есть в самом коде.
+def code_lines(src: str) -> tuple[set[int], set[int]]:
+    """(в коде, в docstring) — номера строк внутри строкового литерала.
 
     Комментарии в разбор не попадают вовсе: их номеров здесь не будет, и это ровно
     то различение, которое нужно. Файл, который не разбирается, судим как прозу —
     молча объявить его чистым было бы хуже.
+
+    🪤 Карточка #732. Прежде docstring считался кодом целиком: на выгрузке 7395076 из 13 путей
+    с удвоенными слешами 9 были прозой шапки — уроком, а не механизмом. Docstring — шапка
+    модуля, класса или функции: её читают, а не исполняют, и судить её надо как текст .md —
+    строка-команда в ней находка, прочее проза.
     """
     try:
         # Разбор чужих исходников печатает предупреждения про escape-последовательности
@@ -158,18 +164,29 @@ def code_lines(src: str) -> set[int]:
             warnings.simplefilter("ignore", SyntaxWarning)
             tree = ast.parse(src)
     except SyntaxError:
-        return set()
+        return set(), set()
+    doc_ids: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) \
+                and node.body and isinstance(node.body[0], ast.Expr) \
+                and isinstance(node.body[0].value, ast.Constant) \
+                and isinstance(node.body[0].value.value, str):
+            doc_ids.add(id(node.body[0].value))
     in_code: set[int] = set()
+    in_doc: set[int] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             end = getattr(node, "end_lineno", node.lineno) or node.lineno
-            in_code.update(range(node.lineno, end + 1))
-    return in_code
+            (in_doc if id(node) in doc_ids else in_code).update(range(node.lineno, end + 1))
+    return in_code, in_doc
 
 
-# Начало исполнимой строки: то, что читающий скопирует и запустит.
-COMMAND_RE = re.compile(r"^\s*[$>]?\s*(python|py|dotnet|npm|node|git|cd|powershell|pwsh|sh|bash"
-                     r"|sqlite3|terraform|gcloud|docker)\b")
+# Начало исполнимой строки: то, что читающий скопирует и запустит. Перед командой может
+# стоять окружение «ИМЯ=значение» — так звали memory-history-fold.py (карточка #732), и без
+# этого строка-команда читалась прозой.
+COMMAND_RE = re.compile(r"^\s*[$>]?\s*(?:[A-Za-z_]\w*=\S*\s+)*"
+                        r"(python|py|dotnet|npm|node|git|cd|powershell|pwsh|sh|bash"
+                        r"|sqlite3|terraform|gcloud|docker)\b")
 
 
 def example_lines(src: str) -> set[int]:
@@ -194,7 +211,7 @@ def example_lines(src: str) -> set[int]:
 def judge_file(path: Path):
     """(красные, жёлтые) — списки (строка, номер, текст, почему)."""
     src = path.read_text(encoding="utf-8", errors="ignore")
-    code = code_lines(src) if path.suffix == ".py" else set()
+    code, docs = code_lines(src) if path.suffix == ".py" else (set(), set())
     examples = example_lines(src) if path.suffix == ".md" else set()
     reds, yellows = [], []
     for n, line in enumerate(src.splitlines(), 1):
@@ -207,6 +224,9 @@ def judge_file(path: Path):
                                 "рабочий конфиг: путь исполняет механизм, не читатель"))
             elif path.suffix == ".py" and n in code:
                 reds.append((n, line.strip()[:120], "в коде: у чужого механизм мёртв"))
+            elif path.suffix == ".py" and n in docs and COMMAND_RE.match(line):
+                reds.append((n, line.strip()[:120],
+                                "исполнимый пример в docstring: скопируют и получат отказ"))
             elif path.suffix == ".md" and n in examples:
                 reds.append((n, line.strip()[:120],
                                 "исполнимый пример: скопируют и получат отказ"))
