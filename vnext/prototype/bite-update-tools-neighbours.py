@@ -32,6 +32,13 @@ installed_fingerprints() читает meta.template_files_sha и различа�
   (б) ① «ПРОПАЛО»       — отпечаток есть, файла нет — провал
       ② «не приехало»   — отпечатков у контура полно, у этого имени нет — ⚠️ код 0
       ③ ГРАНИЦА         — отпечатков у контура нет ВООБЩЕ — провал (различить нечем)
+  карточка #641 (заметки COORD к #638)
+      (а)①-запись  a1-closure-recorded  --apply записал замыкание (meta.template_closure), звено в нём
+      (б)②-срок    b2-expiry-said       у «не приехало» назван срок: до обновления, записавшего замыкание
+      (б)②-истёк   b2-expired           замыкание записано и звено в нём, а звена нет — провал «ПРОПАЛО»
+      (б)②-истёк   b2-expired-unseen    замыкание записано, а имени звена в нём НЕТ — тоже провал
+      (б)②-команда b2-command-line      команда докладки отдельной строкой: начало «python », конец
+                                         «--apply», без «<», «>» и обратных косых (форма строки, не запуск)
 
 ═══ ПРЕДМЕТ (б), (в), (г) — карточка #678 (Э4 Ш1)
   (б) ИМЯ ШАГА СХЕМЫ ЗВЕНОМ НЕ СЧИТАЕТСЯ. Имя шага из scripts/migrations/ стоит в кавычках в
@@ -91,6 +98,9 @@ installed_fingerprints() читает meta.template_files_sha и различа�
   (множества равны ⇒ «ожидание подтвердилось»; иначе печатает расхождение и сохраняет стенды).
   no-closure        — update-tools.py: строки замыкания обезврежены (#637).
   no-discriminator  — guard-all.py: чтение отпечатков всегда отдаёт пустой словарь (#638).
+  closure-not-recorded · closure-ignored · command-inline · expiry-silent — карточка #641 ① ②:
+                      update-tools.py не пишет замыкание · guard-all.py его не читает · команда снова
+                      внутри фразы · срок не назван.
   Поломки #678 — см. BREAKS: по одной на каждое место правки (update-tools.py, init-group.py,
   mezo_paths.py, guard-all.py), у каждой в таблице названа причина падения.
 
@@ -184,7 +194,10 @@ UT_RECORD_SECOND = '                for f in sorted(second_dir.glob("*.py")):'
 UT_KEY_READ = "    if res.outcome == mezo_paths.LOCAL_DECLARED:"
 UT_MISSING_DIR = "        if res.path is not None and res.path.is_dir():"
 UT_UNREADABLE = "    if res.outcome == mezo_paths.LOCAL_UNREADABLE:"
-UT_NO_KEY_TAIL = "    return None, None\n\n\n# 🪤 КАРТОЧКА #637 (находка COORD"
+# карточка #641, найдено попутно: прежний хвост «# 🪤 КАРТОЧКА #637 (находка COORD» за этой строкой
+# пропал (там теперь раздел карточки #679), и поломка отказывала «якорь встречен 0 раз» — молча,
+# потому что поломки «ut» и так падали трассировкой (см. case_b)
+UT_NO_KEY_TAIL = "    return None, None\n\n\n# ═══ КАТАЛОГ МЕСТНОГО И --release"
 UT_IS_SCRIPTS = "    if second_dir is not None and second_dir.resolve() == tools.resolve():"
 UT_INDEX = "                if in_second:\n                    src_index[second_rel(f.name)] = f\n"
 UT_LINK_LAID = "                    if not in_second:"
@@ -204,13 +217,22 @@ UT_RECORD_NOTE = ('            if second_note:\n                print(f"⚠️ {
                   '            print("   Файлы НЕ тронуты')
 UT_HEADER = ('            print(f"             второй (файлы vnext/prototype, которые УЖЕ лежат там) — '
              '{second_dir}")')
-UT_PLAN_NOTE = '        if second_note:\n            print(f"⚠️ {second_note}")\n        print()\n'
+# Строка сводки местного каталога встала между словами о ключе и пустой строкой в 81b850c
+# (Э5, карточка #679); якорь без неё не находился, и поломка отказывала до прогона.
+UT_PLAN_NOTE = ('        if second_note:\n            print(f"⚠️ {second_note}")\n'
+                '        print(local_summary(local))\n        print()\n')
 # якоря init-group.py и mezo_paths.py
 IG_STEP = "            if name in schema_step_names:\n"
 IG_FP = '        fingerprints[f"migrations/{f.name}"] = _fingerprint(f.read_bytes())'
 MP_DOC = "    prototype_install_dir   НЕОБЯЗАТЕЛЬНЫЙ"
 GA_PREFIX_STRIP = ("            _FINGERPRINTS_CACHE = {k.split('::/')[-1]: v for k, v in json.loads(row[0]).items()} "
                    "if row and row[0] else {}  # ПОЛОМКА guard-prefix-confused — приставка срезана")
+# карточка #641 ① ②: якоря guard-all.py и update-tools.py
+GA_CLOSURE_BRANCH = "        elif closure is not None:"
+GA_COMMAND_LINE = '            print(f"      python {updater} --apply")'
+GA_EXPIRY_LINE = '            print("   ⏳ срок: до ближайшего обновления, которое запишет замыкание (meta.template_closure); "'
+UT_CLOSURE_RECORD = ('            meta_updates.append(("template_closure", json.dumps(sorted(closure), '
+                     'ensure_ascii=False)))')
 
 
 def find_pack() -> Path:
@@ -385,6 +407,17 @@ def case_a1_and_a3(update_tools: Path, break_mode: str):
     placed = (scripts / TARGET_NAME).exists()
     case(f"(а)① --apply кладёт звено{tag}", placed,
         f"код {r_apply.returncode}; файл {'на месте' if placed else 'НЕТ'}", cid="a1-apply")
+    # карточка #641 ①: --apply, посчитавший замыкание, записал его — это и есть срок «не приехало»
+    conn = sqlite3.connect(str(mez / "mezosync.db"))
+    raw_closure_meta = dict(conn.execute("SELECT key, value FROM meta")).get("template_closure")
+    conn.close()
+    try:
+        recorded = set(json.loads(raw_closure_meta)) if raw_closure_meta else None
+    except ValueError:
+        recorded = None
+    case(f"(а)①-запись (#641 ①) --apply записал замыкание (meta.template_closure), и звено в нём{tag}",
+        recorded is not None and TARGET_NAME in recorded,
+        f"записано имён {len(recorded)}" if recorded is not None else "ключа нет", cid="a1-closure-recorded")
 
     rg = subprocess.run([sys.executable, str(scripts / "guard-all.py")],
                         capture_output=True, text=True, encoding="utf-8", timeout=280, env=env)
@@ -504,13 +537,16 @@ def case_a4(update_tools_src_file: Path, break_mode: str):
 
 
 # ── (б) discriminator юнитом — прямой вызов sub_guard(), без подпроцесса ──────────────────
-def make_guard_db(prefix: str, fingerprints: dict) -> Path:
+def make_guard_db(prefix: str, fingerprints: dict, closure: list | None = None) -> Path:
     root = mezo_stand.new(prefix)
     db = root / "mezosync.db"
     conn = sqlite3.connect(str(db))
     conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
     conn.execute("INSERT INTO meta (key, value) VALUES ('template_files_sha', ?)",
                 (json.dumps(fingerprints, ensure_ascii=False),))
+    if closure is not None:     # карточка #641 ①: «обновление с записью замыкания уже проходило»
+        conn.execute("INSERT INTO meta (key, value) VALUES ('template_closure', ?)",
+                    (json.dumps(closure, ensure_ascii=False),))
     conn.commit()
     conn.close()
     return db
@@ -519,6 +555,7 @@ def make_guard_db(prefix: str, fingerprints: dict) -> Path:
 def probe_sub_guard(guard_mod, db_path: Path, target: Path) -> tuple[bool | None, str]:
     guard_mod.DB = db_path
     guard_mod._FINGERPRINTS_CACHE = None
+    guard_mod._CLOSURE_CACHE = None     # карточка #641 ①: запись замыкания — тоже на каждый под-случай
     guard_mod.RESULTS = []
     buf = StringIO()
     with redirect_stdout(buf):
@@ -535,6 +572,14 @@ def case_b(guard_all: Path, break_mode: str):
     # каждого под-случая probe_sub_guard() переставляет уже ПОСЛЕ импорта.
     boot_root, _boot_scripts = minimal_contour("bite-untn-b-boot-")
     os.environ["MEZO_CONTAINER"] = str(boot_root)
+    # 🪤 карточка #641 (найдено попутно): guard-all.py зовёт соседа bridge_letter по имени (с commit
+    # 981c25d, карточка #681), а при импорте модулем каталог файла в путь поиска сам не встаёт. В
+    # обычном прогоне его туда случайно ставил импорт НАСТОЯЩЕГО update-tools.py в (а)③; под поломкой
+    # update-tools.py (копия во временном каталоге) — нет, и (б) падал трассировкой: с 13.10 каждая
+    # поломка вида «ut» не доходила до сверки ожидания. Ставим оба каталога явно.
+    for d in (str(Path(guard_all).resolve().parent), str(MEZO_SCRIPTS)):
+        if d not in sys.path:
+            sys.path.insert(0, d)
     mod = import_module_from(guard_all, "untn_guard_all_under_test")
     probe_dir = mezo_stand.new("bite-untn-b-probe-")
     missing = probe_dir / "acceptance-env-guard-probe.py"   # никогда не создаётся — цель отсутствует
@@ -557,6 +602,38 @@ def case_b(guard_all: Path, break_mode: str):
     case(f"(б)② «не приехало» (отпечатков у контура полно, у ЭТОГО имени — нет) — ⚠️ код 0 "
          f"и готовая команда докладки{tag}",
         ok2 is True and command_named, out2 or "(пустой вывод)", cid="b2-notarrived")
+
+    # карточка #641 ② (заметка COORD, записка #5280): команда докладки — ОТДЕЛЬНОЙ строкой, которую
+    # копируют целиком: начало «python », конец «--apply», без «<»/«>» (оболочка примет их за
+    # перенаправление — так прежняя строка и падала кодом 1) и без обратных косых (Bash их съедает).
+    # ⚖️ Граница: судится форма строки; сама команда здесь не запускается.
+    cmd_lines = [l.strip() for l in out2.splitlines()
+                 if l.strip().startswith("python ") and l.strip().endswith("--apply")]
+    cmd_ok = bool(cmd_lines) and all("update-tools.py" in l and not (set("<>\\") & set(l)) for l in cmd_lines)
+    case(f"(б)②-команда (#641 ②) команда докладки стоит ОТДЕЛЬНОЙ строкой: python …update-tools.py "
+         f"--apply, без «<», «>» и обратных косых{tag}",
+        cmd_ok, cmd_lines[0] if cmd_lines else "строки-команды нет", cid="b2-command-line")
+    # карточка #641 ①: у предупреждения назван срок — что именно его снимает
+    case(f"(б)②-срок (#641 ①) у «не приехало» назван срок: до обновления, которое запишет замыкание "
+         f"(meta.template_closure){tag}",
+        ok2 is True and "срок" in out2 and "template_closure" in out2,
+        next((l.strip() for l in out2.splitlines() if "срок" in l), "строки о сроке нет"), cid="b2-expiry-said")
+
+    # карточка #641 ①: срок истёк — обновление с записью замыкания уже проходило, а звена нет.
+    # Ожидание фиксировано на провал при любой поломке — тем же приёмом, что у (б)②.
+    db2e = make_guard_db("bite-untn-b2e-", {"другое-звено.py": "abc123abc1230"},
+                         closure=["другое-звено.py", missing.name])
+    ok2e, out2e = probe_sub_guard(mod, db2e, missing)
+    case("(б)②-истёк (#641 ①) замыкание записано и звено в нём, а звена нет — провал «ПРОПАЛО»",
+        ok2e is False and "ПРОПАЛО" in out2e and "template_closure" in out2e,
+        out2e or "(пустой вывод)", cid="b2-expired")
+    db2u = make_guard_db("bite-untn-b2u-", {"другое-звено.py": "abc123abc1230"},
+                         closure=["другое-звено.py"])
+    ok2u, out2u = probe_sub_guard(mod, db2u, missing)
+    case("(б)②-истёк (#641 ①) замыкание записано, а имени звена в нём НЕТ — тоже провал, и сказано, "
+         "что обновление о звене не знает",
+        ok2u is False and "ПРОПАЛО" in out2u and "НЕТ" in out2u,
+        out2u or "(пустой вывод)", cid="b2-expired-unseen")
 
     db3 = make_guard_db("bite-untn-b3-", {})
     ok3, out3 = probe_sub_guard(mod, db3, missing)
@@ -1174,9 +1251,10 @@ BREAKS = {
             "контура без ключа звено уходит в «Вне обновления» (k-plan, k-apply, b-step-out-count)"),
     "no-discriminator": dict(
         kind="ga", anchor=DISCR_ANCHOR, broken=DISCR_BROKEN,
-        expect={"b2-notarrived", "g-guard-prefix"},
-        why="guard-all.py не читает отпечатки: «не приехало» становится «гард не найден» (b2) — и тот же "
-            "ответ получает проба с приставкой (g-guard-prefix)"),
+        expect={"b2-notarrived", "b2-command-line", "b2-expiry-said", "g-guard-prefix"},
+        why="guard-all.py не читает отпечатки: «не приехало» становится «гард не найден» (b2) — нет ни "
+            "команды докладки, ни срока (#641) — и тот же ответ получает проба с приставкой (g-guard-prefix); "
+            "пробы с записанным замыканием (b2-expired*) проходят: их решает запись замыкания, не отпечатки"),
     # ── (б) имя шага схемы — не звено ────────────────────────────────────────────────────────
     "closure-schema-step": dict(
         kind="ut", anchor=UT_CLOSURE_STEP,
@@ -1228,7 +1306,7 @@ BREAKS = {
         broken=('    guess = pathlib.Path(db).resolve().parent.parent / "vnext-tools"  '
                 '# ПОЛОМКА default-dir-guess — без ключа угадывает соседний каталог\n'
                 '    return (guess, None) if guess.is_dir() else (None, None)\n\n\n'
-                '# 🪤 КАРТОЧКА #637 (находка COORD'),
+                '# ═══ КАТАЛОГ МЕСТНОГО И --release'),
         expect={"k-plan", "k-apply", "k-record"},
         why="без ключа инструмент угадывает соседний vnext-tools: «без ключа» перестаёт быть прежним разбором"),
     "second-is-scripts": dict(
@@ -1298,7 +1376,8 @@ BREAKS = {
         why="история пакета ищется по пути scripts/<имя>, а файл второго каталога — vnext/prototype/<имя>: "
             "версия не находится — файл остаётся «❓» (g-history), опора у «✋» не находится (g-own-history)"),
     "helper-shadowed": dict(
-        kind="ut", anchor="show_name(", broken="shown(", count=7,
+        # 7 → 12: вызовы помощника в ветке --release добавлены в 81b850c (Э5, карточка #679)
+        kind="ut", anchor="show_name(", broken="shown(", count=12,
         expect={"g-own-history"},
         why="помощник плана снова зовётся shown — как обычная переменная ниже в main(): после первой "
             "же строки «пакет менял этот файл после опоры» её затирает строка коммитов, и печать плана падает "
@@ -1331,13 +1410,35 @@ BREAKS = {
         why="план не печатает строку про второй каталог (метки у файлов остаются)"),
     "plan-note-silent": dict(
         kind="ut", anchor=UT_PLAN_NOTE,
-        broken='        if False:  # ПОЛОМКА plan-note-silent\n            print(f"⚠️ {second_note}")\n        print()\n',
+        broken=('        if False:  # ПОЛОМКА plan-note-silent\n            print(f"⚠️ {second_note}")\n'
+                '        print(local_summary(local))\n        print()\n'),
         expect={"g-dir-missing", "g-file-unreadable", "g-key-is-scripts"},
         why="план не печатает слова про беду с ключом (нет каталога · файл не читается · ключ на скрипты)"),
     "mezo-paths-doc": dict(
         kind="mp", anchor=MP_DOC, broken="    second_dir_key_renamed   НЕОБЯЗАТЕЛЬНЫЙ",
         expect={"g-doc"},
         why="перечень ключей в шапке mezo_paths.py не называет prototype_install_dir"),
+    # ── карточка #641 ① ② ────────────────────────────────────────────────────────────────────
+    "closure-not-recorded": dict(
+        kind="ut", anchor=UT_CLOSURE_RECORD, broken="            pass  # ПОЛОМКА closure-not-recorded",
+        expect={"a1-closure-recorded"},
+        why="--apply не пишет замыкание: у «не приехало» нет срока, и guard-all.py так и не узнает, "
+            "что обновление, обязанное привезти звено, уже проходило"),
+    "closure-ignored": dict(
+        kind="ga", anchor=GA_CLOSURE_BRANCH,
+        broken="        elif False:  # ПОЛОМКА closure-ignored — запись замыкания не читается",
+        expect={"b2-expired", "b2-expired-unseen"},
+        why="guard-all.py не смотрит на записанное замыкание: отсутствие звена после такого обновления "
+            "снова только ⚠️ «не приехало», код 0, и так без конца"),
+    "command-inline": dict(
+        kind="ga", anchor=GA_COMMAND_LINE,
+        broken='            print(f"   докладка: python {updater} --apply привезёт звено")  # ПОЛОМКА command-inline',
+        expect={"b2-command-line"},
+        why="команда докладки снова стоит внутри фразы: скопированная целиком строка не исполняется"),
+    "expiry-silent": dict(
+        kind="ga", anchor=GA_EXPIRY_LINE, broken='            print("   ПОЛОМКА expiry-silent: "',
+        expect={"b2-expiry-said"},
+        why="предупреждение «не приехало» не называет, что снимает его срок"),
     "guard-prefix-confused": dict(
         kind="ga", anchor=DISCR_ANCHOR, broken=GA_PREFIX_STRIP,
         expect={"g-guard-prefix"},

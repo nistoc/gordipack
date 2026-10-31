@@ -965,6 +965,7 @@ def main() -> int:
         schema_step_names = {p.name for p in src_tools.glob("migrations/*.py")}
         linked_dir = src_dir / "vnext" / "prototype"
         out_of_scope = []
+        closure = None          # карточка #641 ①: посчитано ли замыкание — его пишет --apply (ниже)
         if linked_dir.is_dir():
             # 🪤 КАРТОЧКА #637: «звена у нас нет» раньше значило ОДНО — «сборка его не клала»,
             # и не различало «сборка положила бы его СЕЙЧАС, зови мы сборку заново» (звено из
@@ -1295,6 +1296,13 @@ def main() -> int:
                         ("template_files_sha", json.dumps(updated_fingerprints, ensure_ascii=False))]
         if write_source:
             meta_updates.append(("template_source", source))
+        # 🪤 КАРТОЧКА #641 ① (заметка COORD, записка #5280): записанное замыкание — срок годности
+        # предупреждения guard-all.py «звено не приехало с обновлением». Пока записи нет, звено,
+        # которого у контура не стояло, — ⚠️ и команда докладки; после первого --apply, посчитавшего
+        # замыкание, его отсутствие — провал «ПРОПАЛО». ⚖️ Пишет только --apply: --record-only
+        # ничего не привозит, и «обновление, обязанное привезти звено, уже было» про него неправда.
+        if closure is not None:
+            meta_updates.append(("template_closure", json.dumps(sorted(closure), ensure_ascii=False)))
         conn = sqlite3.connect(str(db))
         for k, v in meta_updates:
             conn.execute("INSERT INTO meta (key, value) VALUES (?, ?) "

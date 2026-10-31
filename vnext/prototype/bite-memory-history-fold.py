@@ -44,8 +44,11 @@ save-phoenix.py, не возраст) — приёмка давала 14 из 19
 🎯 ПОРЧА (--break seed-off, карточка #634): посев ВЫКЛЮЧЕН — там, где материала не хватало бы,
 он и остаётся пустым. Проваливаются РОВНО случаи, для которых посев был нужен (① · ② ·
 ③-контроль · ③-е, и ③, если у роли есть отметки пересоздания — каждый своей проверкой, не общей
-меткой), прочие ведут себя как обычно (в т.ч. случай ⑧, у которого свой отдельный засев на
-save-phoenix.py, не задет — другой материал). Не патчит инструмент memory-history-fold.py (как
+меткой; а если у роли нет ни одной версии вовсе — ещё ②-бис · ④ · ⑤-бис · ⑥: инструмент отказывает
+на входе), прочие ведут себя как обычно (в т.ч. случай ⑧, у которого свой отдельный засев на
+save-phoenix.py, не задет — другой материал). Карточка #641 ④: итог сверяет множество проваленных
+с этим множеством на РАВЕНСТВО — лишний провал и непроваленный ожидаемый оба дают код 1; копия,
+где посев не понадобился, — «⚪ НЕ ПОСТАВЛЕНА», код 2. Не патчит инструмент memory-history-fold.py (как
 --break rebirth) и не трогает архив-снимок (как --break stale-archive) — отдельный, третий
 механизм порчи.
 
@@ -86,10 +89,16 @@ STALE_ARCHIVE_BREAK = "stale-archive"
 SEED_OFF_BREAK = "seed-off"
 RESULTS = []
 NOT_STAGED = []  # карточка #634: случаи, которые честно не поставить (без выдуманных отметок)
+# ⚡ КАРТОЧКА #641 ④ (заметка COORD, записка #5282): под порчей seed-off итог печатал «✅ так и надо»
+# при ЛЮБОМ числе провалов — и при одном постороннем, и при всех. А множество случаев, которым
+# нужен был выключенный посев, приёмка знает сама: она его и выключила. Итог сверяет РАВЕНСТВО.
+CASE_IDS = []      # (метка случая — первое слово заголовка, прошёл ли)
+SEED_NEEDED = set()  # метки случаев, которым понадобился бы выключенный посев
 
 
 def case(title, ok, detail=""):
     RESULTS.append(ok)
+    CASE_IDS.append((title.split(" ", 1)[0], ok))
     print(("✅ " if ok else "🔴 ") + title + (f"\n   {detail}" if detail else ""))
 
 
@@ -182,7 +191,8 @@ def main() -> int:
     elif a.break_name == SEED_OFF_BREAK:
         print(f"⚠️ ПОРЧА «{SEED_OFF_BREAK}» ВЗВЕДЕНА — посев недостающего материала (карточка #634) "
               f"ВЫКЛЮЧЕН, ждём провала случаев ① · ② · ③-контроль · ③-е (и ③, если у роли есть "
-              f"отметки пересоздания) — каждый своей проверкой, не общей меткой\n")
+              f"отметки пересоздания; и ②-бис · ④ · ⑤-бис · ⑥, если у роли нет ни одной версии) — "
+              f"каждый своей проверкой, не общей меткой; итог сверяет провалы с этим множеством\n")
     try:
         # шаг схемы на копии
         r = subprocess.run([sys.executable, "-B", str(MIGR), "--db", str(db)], capture_output=True,
@@ -261,6 +271,19 @@ def main() -> int:
                   f"пересоздания); в копии не хватало материала для случаев ①/③-контроль/③-е"
                   + ("/③" if marks_now else ""))
         elif role_short and not seed_enabled:
+            # ⚖️ ЧЕМУ ИМЕННО НУЖЕН ЭТОТ ПОСЕВ — тем же расчётом, что и решение сеять (would_archive):
+            # нечему уехать ⇒ ①, ③-контроль, ③-е; отметки есть, а версий перед ними нет ⇒ ③
+            if not would_leave_now:
+                SEED_NEEDED.update({"①", "③-контроль", "③-е"})
+            if marks_now and not before_marks_now:
+                SEED_NEEDED.add("③")
+            # второй уровень нехватки: у роли нет ни одной версии вовсе (ни в истории, ни в архиве) ⇒
+            # инструмент отказывает на входе, и падает всё, что зовёт его на эту роль: ②-бис, ④, ⑤-бис, ⑥
+            # (замер на пустой копии 2026-10-31: без этого уровня итог называл их «лишними»)
+            role_archive = conn.execute("SELECT count(*) FROM phoenix_history_archive WHERE role=?",
+                                        (role,)).fetchone()[0]
+            if not history_now and not role_archive:
+                SEED_NEEDED.update({"②-бис", "④", "⑤-бис", "⑥"})
             print(f"⚠️ порча «{SEED_OFF_BREAK}»: посев роли {role} пропущен нарочно — материала "
                   f"в копии не хватает (уехало бы {len(would_leave_now)}, перед отметками "
                   f"{len(before_marks_now)})")
@@ -284,6 +307,7 @@ def main() -> int:
                   f"через save-phoenix.py (код {rseed_other.returncode}) — в копии не было ни одной "
                   f"версии этой роли для случая ②")
         elif not other_has and not seed_enabled:
+            SEED_NEEDED.add("②")
             print(f"⚠️ порча «{SEED_OFF_BREAK}»: посев роли {other_role} пропущен нарочно — версий "
                   f"в копии нет ни одной")
 
@@ -398,7 +422,7 @@ def main() -> int:
                     body = None
         if body is None:
             print(f"⚪ ⑧ пропущен: у роли {role} в копии базы нет ни одного раздела — переносить нечего")
-            RESULTS.append(False)
+            RESULTS.append(False); CASE_IDS.append(("⑧", False))  # карточка #641 ④: и в счёт меток
         else:
             total0 = conn.execute("SELECT (SELECT count(*) FROM phoenix_history)+(SELECT count(*) FROM phoenix_history_archive)").fetchone()[0]
             archived_save0 = conn.execute("SELECT count(*) FROM phoenix_history_archive WHERE role=? AND rule LIKE 'save-phoenix%'", (role,)).fetchone()[0]
@@ -434,7 +458,26 @@ def main() -> int:
         shutil.rmtree(tmp, ignore_errors=True)
     n = len(RESULTS); ok = sum(RESULTS)
     staged_n = len(NOT_STAGED)
+    if a.break_name == SEED_OFF_BREAK:
+        failed_ids = {cid for cid, passed in CASE_IDS if not passed}
+        if not SEED_NEEDED:
+            # материала в копии хватает — выключать нечего, опыт не поставлен (не «всё зелёное»)
+            print(f"\n⚪ порча «{SEED_OFF_BREAK}» НЕ ПОСТАВЛЕНА: посев в этой копии не понадобился "
+                  f"(материала хватает) — выключенный посев ничего не отнял; провалов {len(failed_ids)}"
+                  + (f": {' · '.join(sorted(failed_ids))}" if failed_ids else ""))
+            return 2
+        if failed_ids == SEED_NEEDED:
+            print(f"\n✅ так и надо: под порчей «{SEED_OFF_BREAK}» провалены РОВНО случаи, которым нужен "
+                  f"был посев — {' · '.join(sorted(SEED_NEEDED))} (из {n})")
+            return 0
+        print(f"\n⚠️ ОЖИДАНИЕ ПОРЧИ «{SEED_OFF_BREAK}» НЕ ПОДТВЕРДИЛОСЬ: ждали провала "
+              f"{' · '.join(sorted(SEED_NEEDED))}; провалено {' · '.join(sorted(failed_ids)) or 'ничего'}"
+              f" · лишние: {' · '.join(sorted(failed_ids - SEED_NEEDED)) or 'нет'}"
+              f" · не провалены: {' · '.join(sorted(SEED_NEEDED - failed_ids)) or 'нет'}")
+        return 1
     if a.break_name:
+        # ⚠️ порчи rebirth и stale-archive судятся по-прежнему «есть хоть один провал»: их
+        # ожидание зависит от данных копии (отметки пересоздания, чужой архив) — отдельная правка
         red_count = n - ok
         print(f"\n{'✅ так и надо' if red_count else '⚠️ ПОРЧА ВЗВЕДЕНА, А ВСЁ ЗЕЛЁНОЕ'}: под порчей красных {red_count} из {n}"
               + (f" · не поставлено {staged_n} ({', '.join(NOT_STAGED)})" if staged_n else ""))
