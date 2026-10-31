@@ -177,6 +177,14 @@ def verdict(code: int, out: str):
     return ("✅", "свойство держится") if code == 0 else ("🔴", "СЛОМАНО")
 
 
+# 🪤 ПОДПАПКА НА ПРОГОН (карточка #738, 2026-10-31). Прежде все прогоны клали копии провалов
+# в одну папку %TEMP%/bite-all-failures: затереть друг друга они могли только в одну и ту же
+# секунду, но разбирать было нечем — по файлу не видно, какой прогон его оставил, а два
+# прогона разом перемешивали свои провалы. Имя подпапки — час запуска по UTC и номер
+# процесса: оно задаётся ОДИН раз на прогон, поэтому все провалы прогона лежат вместе.
+RUN_DIR_NAME = time.strftime("%Y%m%d-%H%M%S", time.gmtime()) + f"-{os.getpid()}"
+
+
 def save_failure(name: str, out: str) -> None:
     # 🪤 ПОЛНЫЙ ВЫВОД УПАВШЕЙ ПРИЁМКИ СОХРАНЯЕТСЯ, А НЕ ОБРЕЗАЕТСЯ ДО ХВОСТА.
     # Повод — карточка #150, замер 2026-08-09: общий набор даёт редкий отказ (1 из 7
@@ -186,7 +194,7 @@ def save_failure(name: str, out: str) -> None:
     # ⇒ Редкое событие нельзя ловить руками: к моменту, когда оно случится, окно
     #   вывода уже уедет. Механизм обязан его ЗАПОМНИТЬ — иначе разбор стоит ожидания.
     try:
-        fail_dir = os.path.join(tempfile.gettempdir(), "bite-all-failures")
+        fail_dir = os.path.join(tempfile.gettempdir(), "bite-all-failures", RUN_DIR_NAME)
         os.makedirs(fail_dir, exist_ok=True)
         stamp = str(int(time.time()))
         path = os.path.join(fail_dir, f"{name}.{stamp}.txt")
