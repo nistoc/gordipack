@@ -53,7 +53,15 @@ import mezo_stand  # временный каталог убирается при
 
 
 LIVE = mezo_paths.live_db()
-SANDBOX = Path.home() / ".mezosync-sandbox" / "bite-r16.db"
+# Копия базы — в СВОЁМ стенде прогона, его ставит main() (карточка #688). Прежде она лежала по
+# постоянному пути ~/.mezosync-sandbox/bite-r16.db, и два одновременных прогона делили один файл:
+# prepare() второго переставлял отметку прочитанного посреди случаев первого (два замера 31.10 на
+# 51a5fdf: пары разом — расхождение исхода в 2 и в 3 кругах из 5).
+# Файл — в <стенд>/.mezosync/, как база контура: испытуемый read-messages.py (sync_backoff.py, обход
+# писем соседей) считает корнем контура каталог над .mezosync, и копия прямо в корне стенда делала
+# корнем всю временную папку Windows — обход шёл по ≈49 тыс. каталогов (4–14 с на вызов, замер 31.10)
+# и подбирал папки писем ЧУЖИХ стендов, то есть снова связывал прогоны между собой.
+SANDBOX: Path
 READER = mezo_target.script("read-messages.py")
 ROLE = "PROTO"
 SEED_COUNT = 50     # сколько своих нот сеем поверх границы — заведомо больше любого --limit ниже
@@ -125,6 +133,8 @@ def shown_ids(text: str):
 
 
 def main() -> int:
+    global SANDBOX
+    SANDBOX = mezo_stand.new("bite-r16-reissue-") / ".mezosync" / "bite-r16.db"
     print("ПРИЁМКА: перевыданный батч подтверждает больше, чем показал")
     print(f"копия базы ..... {SANDBOX}")
     start_cursor = prepare()
@@ -189,4 +199,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))
