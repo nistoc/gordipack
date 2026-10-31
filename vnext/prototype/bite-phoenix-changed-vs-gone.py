@@ -148,11 +148,20 @@ ok &= case("③ разрезана на ДВЕ половины → считае
            differ=True)
 
 # ④ КОНТРОЛЬ формы: та же правка ①, но тело в CRLF (концы строк Windows)
-new_body4_crlf = new_body1.replace("\n", "\r\n")
-old_body_crlf = OLD_BODY.replace("\n", "\r\n")
+# 🪤 КАРТОЧКА #641 ③ (заметка COORD, записка #5281): здесь стояла самоделка
+# `.replace("\n", "\r\n")` без сведения к LF — верная, пока вход из LF-констант, и задваивающая
+# разделитель, как только вход окажется CRLF. Теперь общий помощник mezo_stand.crlf_twin
+# (сводит к LF, потом ставит CRLF), а случай сам проверяет, что двойник ДЕЙСТВИТЕЛЬНО в CRLF:
+# помощник, вернувший текст как есть, иначе дал бы тот же вердикт на LF — и случай прошёл бы
+# не по своей причине.
+new_body4_crlf = mezo_stand.crlf_twin(new_body1)
+old_body_crlf = mezo_stand.crlf_twin(OLD_BODY)
+crlf_real = (old_body_crlf.count("\r\n") == OLD_BODY.count("\n") > 0
+             and new_body4_crlf.count("\r\n") == new_body1.count("\n") > 0
+             and "\r\r\n" not in old_body_crlf + new_body4_crlf)
 _, r4 = report(old_body_crlf, new_body4_crlf)
 ok &= case("④ КОНТРОЛЬ формы: тот же случай ① в CRLF → тот же вердикт «изменена»",
-           "изменено 1" in r4 and "пропало 0" in r4,
+           crlf_real and "изменено 1" in r4 and "пропало 0" in r4,
            "конец строки Windows не должен ломать классификацию")
 
 # ⑤ КОНТРОЛЬ похожести: рядом с удалённой строкой — совсем другая тема

@@ -367,6 +367,30 @@ def installed_fingerprints() -> dict:
     return _FINGERPRINTS_CACHE
 
 
+_CLOSURE_CACHE: tuple | None = None    # (имена или None,) — None самого кэша: ещё не читали
+
+
+def installed_closure() -> set | None:
+    """Замыкание звеньев (meta.template_closure) — имена файлов vnext/prototype, которые
+    update-tools.py --apply ПОСЧИТАЛ нужными контуру и привёз (карточка #641 ①). Ключ пишет
+    только обновление, умеющее замыкание; его наличие и значит «такое обновление уже проходило».
+    None — ключа нет (или он не разбирается): такого обновления не было, срок «не приехало»
+    ещё не истёк. Читается лениво и кэшируется, как отпечатки выше."""
+    global _CLOSURE_CACHE
+    if _CLOSURE_CACHE is None:
+        names = None
+        try:
+            c = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+            row = c.execute("SELECT value FROM meta WHERE key = 'template_closure'").fetchone()
+            c.close()
+            if row and row[0]:
+                names = set(json.loads(row[0]))
+        except Exception:                                       # noqa: BLE001
+            names = None
+        _CLOSURE_CACHE = (names,)
+    return _CLOSURE_CACHE[0]
+
+
 def sub_guard(name, script, skip, *extra, script_path=None):
     """Прогон отдельного гарда подпроцессом.
 
@@ -393,17 +417,39 @@ def sub_guard(name, script, skip, *extra, script_path=None):
         # (⚠️ предупреждение, код 0, готовая команда докладки). ⛔ ГРАНИЦА, названа не угадана:
         # у контура нет НИ ОДНОГО отпечатка (собран раньше, чем их стали писать) — различить
         # нечем, и это провал по-прежнему, а не тихое «не приехало» без основания.
+        # 🪤 КАРТОЧКА #641 ① (заметка COORD, записка #5280): «не приехало» жило без срока — не случись
+        # второго обновления или сломайся замыкание, общий прогон так и проходил бы с ⚠️. Срок —
+        # meta.template_closure: его пишет update-tools.py --apply, посчитавший замыкание. Есть
+        # запись ⇒ обновление, обязанное привезти звено, уже проходило ⇒ отсутствие звена — провал.
+        # ② (там же): команда докладки стояла внутри фразы рядом с «<клон пакета>», и строка,
+        # скопированная целиком, падала (оболочка приняла «<» за перенаправление, код 1). Теперь
+        # команда — отдельной строкой, путь в прямых косых (обратные косые оболочка Bash съедает).
         fp = installed_fingerprints()
+        closure = installed_closure()
         key = target.name
         if key in fp:
             check(name, False, f"звено ПРОПАЛО: {target} — отпечаток установки у него есть, "
                                 f"на месте его нет")
+        elif closure is not None:
+            seen = ("в записанном замыкании оно есть — обновление обязано было его привезти"
+                    if key in closure else
+                    "в записанном замыкании его НЕТ — гард зовёт звено, о котором обновление не знает "
+                    "(замыкание его не видит, либо гард правлен позже обновления)")
+            check(name, False, f"звено ПРОПАЛО: {target} — обновление с записью замыкания уже "
+                                f"проходило (meta.template_closure, имён {len(closure)}), а звена нет; {seen}")
         elif fp:
             check(name, True, "", force_print=True)
             print(f"   ⚠️ звено не приехало с обновлением: {target} — отпечатка установки "
-                  f"нет, у контура оно не стояло. 👉 докладка: python {SCRIPTS / 'update-tools.py'} "
-                  f"--apply привезёт звено (если пакет его зовёт); либо разово скопируй "
-                  f"{key} из <клон пакета>/vnext/prototype/{key}, когда адрес пакета известен.")
+                  f"нет, у контура оно не стояло.")
+            print("   ⏳ срок: до ближайшего обновления, которое запишет замыкание (meta.template_closure); "
+                  "после него отсутствие звена — провал, а не это предупреждение.")
+            print("   👉 докладка (строка ниже копируется целиком; звено приедет, если пакет его зовёт):")
+            updater = (SCRIPTS / "update-tools.py").as_posix()
+            if " " in updater:
+                updater = f'"{updater}"'    # путь с пробелом — в кавычках, иначе строка распадётся
+            print(f"      python {updater} --apply")
+            print(f"   либо разово скопируй {key} из каталога vnext/prototype клона пакета "
+                  f"в {target.parent.as_posix()}, когда адрес пакета известен.")
         else:
             check(name, False, f"гард не найден: {target} (отпечатков установки у контура "
                                 f"нет ВООБЩЕ — «не приехало» от «пропало» различить нечем)")
