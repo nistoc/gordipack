@@ -33,7 +33,7 @@ bite-cursor-segment-fed.py               Г1     done  0 7 0
 bite-db-q.py                             Г1     done  0 8 0
 bite-default-stamp.py                    Г2     done  0 4 0
 bite-direction-focus.py                  Г1     done  0 14 0
-bite-drift-sanitize.py                   Г1     own  0 13 0
+bite-drift-sanitize.py                   Г1     own  0 16 0
 bite-dropped-reason.py                   Г1     done  0 14 0
 bite-dryrun-tool-boundary.py             Г1     done  0 9 0
 bite-duplicate-note.py                   Г3     done  0 8 1
