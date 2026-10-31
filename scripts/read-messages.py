@@ -75,6 +75,23 @@ except Exception:  # noqa: BLE001 — без модуля читалка жив�
     def utc_to_local(s, tz=None):
         return f"{s} UTC" if s else "—"
 
+# карточка #466, пункт ①: возврат отметки прочитанного при новом чате роли. Обёрнут по той же
+# норме @TAXO: отказ модуля не вправе сломать чтение ленты — без него читалка работает по-прежнему.
+try:
+    import read_mark
+except Exception:  # noqa: BLE001
+    read_mark = None
+
+
+def read_mark_touch(conn, role):
+    """→ строки возврата отметки; сбой модуля — одна строка, чтение идёт дальше."""
+    if read_mark is None:
+        return []
+    try:
+        return read_mark.first_touch(conn, role, "read-messages")
+    except Exception as e:  # noqa: BLE001
+        return [f"⚠️ проверка нового чата НЕ выполнилась ({e}) — отметка прочитанного не тронута"]
+
 
 def ensure_batches_table(conn):
     # Идемпотентно (правило migration-safety): таблица одноразовых токенов чтения.
@@ -101,6 +118,18 @@ def ensure_batches_table(conn):
 
 
 def do_ack(conn, role, token):
+    # Карточка #466: подтверждение и возврат отметки новым чатом — под одним замком базы.
+    # Без него ключ прежнего чата, прочитанный ДО возврата, мог сдвинуть отметку ПОСЛЕ него.
+    conn.execute("BEGIN IMMEDIATE")
+    refusal = None
+    if read_mark is not None:
+        try:
+            refusal = read_mark.void_refusal(conn, role, token)
+        except Exception:  # noqa: BLE001 — без модуля погашенный ключ отклонит строка ниже
+            refusal = None
+    if refusal:
+        print(refusal, file=sys.stderr)
+        sys.exit(1)
     row = conn.execute(
         "SELECT last_id, shown_max, acked_at FROM read_batches WHERE token = ? AND role = ?",
         (token, role)).fetchone()
@@ -159,6 +188,9 @@ def do_ack(conn, role, token):
         print(f"[ack] {role}: {prev} → {new}")
 
 
+_returned_in_run = False      # карточка #466: в этом запуске отметку вернул новый чат
+
+
 def wake_mode(args):
     """Обзор для пробуждения: ТЕЛА обращённого лично + УКАЗАТЕЛЬ по всему остальному.
 
@@ -200,8 +232,12 @@ def wake_mode(args):
         sys.argv = saved_argv
     print()
     print("=" * 78)
-    print("  ⚖️ ЭТО ОБЗОР, А НЕ ЧТЕНИЕ ЛЕНТЫ. Отметка прочитанного НЕ двинута,")
-    print("     ключа подтверждения НЕТ — обе половины его не выдают.")
+    if _returned_in_run:
+        print("  ⚖️ ЭТО ОБЗОР, А НЕ ЧТЕНИЕ ЛЕНТЫ. Вперёд отметка прочитанного не двинута (назад её")
+        print("     вернула строка возврата в первой половине), ключа подтверждения НЕТ.")
+    else:
+        print("  ⚖️ ЭТО ОБЗОР, А НЕ ЧТЕНИЕ ЛЕНТЫ. Отметка прочитанного НЕ двинута,")
+        print("     ключа подтверждения НЕТ — обе половины его не выдают.")
     print("  👉 дальше: тела нужного — обычным вызовом; хвост, который читать телами")
     print("     не будешь, — проходом заголовками с основанием (--pass-by-index --basis).")
     print("=" * 78)
@@ -209,7 +245,11 @@ def wake_mode(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Прочитать непрочитанные сообщения")
+    parser = argparse.ArgumentParser(
+        description="Прочитать непрочитанные сообщения. Новый чат роли первым же вызовом "
+                    "(любым, кроме --ack и --register) возвращает отметку прочитанного к снимку, "
+                    "записанному вместе с памятью: прочитанное прежним чатом после сохранения "
+                    "памяти придёт снова. «Не двигает отметку» ниже значит «не двигает вперёд»")
     # R15a: --db не обязателен, путь резолвится от расположения СКРИПТА (не от CWD).
     parser.add_argument("--db", default=None, help="Путь к mezosync.db (по умолчанию — рядом со скриптом)")
     parser.add_argument("--role", required=True, help="Роль читателя (для отметки прочитанного)")
@@ -321,6 +361,23 @@ def main():
         do_ack(conn, role, args.ack)
         conn.close()
         return
+
+    # ── КАРТОЧКА #466: НОВЫЙ ЧАТ РОЛИ — ОТМЕТКА ВОЗВРАЩАЕТСЯ К СНИМКУ ПРИ СОХРАНЕНИИ ПАМЯТИ.
+    # ДО чтения отметки: возврат и выдача окна идут одним вызовом. Строки печатаются там, где
+    # их увидят, не ломая разрезанный ключ: при выдаче ключа — сразу ПОД первой строкой
+    # (первая обязана нести первую половину), в выдачах без ключа — первыми.
+    return_lines = [] if args.register else read_mark_touch(conn, role)
+    # указатель после возврата не должен говорить «отметка НЕ сдвинута» строкой ниже возврата
+    # (находка противника 31.10, M2): её сдвинул возврат, а не этот вызов. Обзор --wake зовёт
+    # указатель второй половиной в том же процессе — возврат случился в первой, флаг помнит его
+    global _returned_in_run
+    mark_returned = _returned_in_run or any(
+        line.startswith("↩ ОТМЕТКА ПРОЧИТАННОГО ВОЗВРАЩЕНА") for line in return_lines)
+    _returned_in_run = mark_returned
+    if return_lines and (args.all or args.to_me or args.index):
+        for line in return_lines:
+            print(line)
+        return_lines = []
 
     # Получить отметку прочитанного
     cursor_row = conn.execute(
@@ -443,8 +500,10 @@ def main():
         if conditions:
             total_sql += " WHERE " + " AND ".join(conditions)
         in_scope = conn.execute(total_sql, params).fetchone()[0]
+        mark_note = ("этот указатель отметку прочитанного не сдвигал — её вернула строка возврата выше"
+                     if mark_returned else "отметка прочитанного НЕ сдвинута")
         print(f"📇 УКАЗАТЕЛЬ для {args.role}: {len(rows)} записок из {in_scope} в отборе "
-              f"(отметка прочитанного НЕ сдвинута, ключ НЕ выдан)")
+              f"({mark_note}, ключ НЕ выдан)")
         if len(rows) < in_scope:
             # Обрез возможен ТОЛЬКО при явном --limit: умолчание указателя — весь долг.
             print(f"   🔴 ПОКАЗАНЫ НЕ ВСЕ: обрезано на --limit {args.limit}, "
@@ -632,6 +691,8 @@ def main():
         #    правду даром, не требуя третьей заплаты.
         unread = conn.execute(
             "SELECT COUNT(*) FROM messages WHERE id > ?", (last_read,)).fetchone()[0]
+        for line in return_lines:      # карточка #466: ключа не будет — строки возврата первыми
+            print(line)
         if args.to_me:
             print(f"[{role}] Обращённого ЛИЧНО к тебе среди непрочитанных НЕТ "
                   f"(cursor={last_read})")
@@ -830,6 +891,9 @@ def main():
         conn.commit()
         print(f"[begin-of-batch] {len(rows)} нот, #{rows[0][0]}…#{batch_max} (cursor={last_read}). "
               f"Токен разрезан: ПЕРВАЯ половина {half1}, вторая — в ПОСЛЕДНЕЙ строке.")
+        for line in return_lines:      # карточка #466: под первой строкой, а не над ней
+            print(line)
+        return_lines = []
         if first_unshown is not None:
             # Верх подтверждения ниже верха показанного — говорим это ДО тел, а не только у --ack.
             where = (f"не сдвинет отметку прочитанного (она на #{last_read})"
@@ -863,6 +927,8 @@ def main():
                       f"зови ридер снова. Нужен весь хвост сразу — --limit {rest_count + len(rows)}.")
         print()
 
+    for line in return_lines:          # карточка #466: ключ не выдан — строки не теряются
+        print(line)
     # Тот же предикат, что и в указателе — ОДИН модуль, не вторая копия рядом.
     # 07.08 две копии проверки разъехались молча, и роль поверила той, что мягче.
     urg = urgency.annotate(conn, rows, reader=args.role)

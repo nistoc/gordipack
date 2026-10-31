@@ -25,6 +25,7 @@
   Поэтому вызывающая сторона оборачивает вызов, а сам сборщик держит частичный отказ
   внутри и говорит о нём строкой, а не молчанием.
 """
+import importlib.util
 import re
 import sqlite3
 from pathlib import Path
@@ -64,6 +65,23 @@ def _own_notes_command(db_path, role: str, since: str, total: int) -> str:
             f'ORDER BY id"')
 
 
+def _read_mark_forecast(conn, role: str) -> list:
+    """Карточка #466: прогноз возврата отметки прочитанного в новом чате роли. Только чтение;
+    сбой модуля — одна строка, блок собирается дальше. Модуль берётся ИЗ ЭТОГО ЖЕ каталога, а не
+    по имени: приёмки грузят этот файл по пути, и голый import нашёл бы чужую копию или ничего.
+    Модуля рядом нет — механизма нет, прогнозировать нечего."""
+    path = Path(__file__).resolve().parent / "read_mark.py"
+    if not path.exists():
+        return []
+    try:
+        spec = importlib.util.spec_from_file_location("read_mark_for_machine_layer", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.forecast(conn, role)
+    except Exception as e:                                            # noqa: BLE001
+        return [f"   ⚠️ прогноз возврата отметки прочитанного НЕ собран ({e})"]
+
+
 def machine_block(db_path, role: str) -> list:
     """→ строки машинного слоя. Никогда не бросает: частичный отказ печатается строкой."""
     out = []
@@ -85,6 +103,7 @@ def machine_block(db_path, role: str) -> list:
                 "SELECT COUNT(*), COALESCE(SUM(length(body_md)), 0) / 1024 "
                 "FROM messages WHERE id > ?", (cur[0],)).fetchone()
             out.append(f"📬 ЛЕНТА: отметка #{cur[0]} · голова #{head} · долг {n} записок ({kb} КБ)")
+            out.extend(_read_mark_forecast(conn, role))
             personal = [(mid, w) for mid, w, b in conn.execute(
                 "SELECT id, writer_role, body_md FROM messages WHERE id > ? AND writer_role <> ?",
                 (cur[0], role)) if _addressed_personally(b, role)]

@@ -22,6 +22,24 @@ from pathlib import Path
 
 from mezo_paths import resolve_db   # R15a: путь к БД — от расположения скрипта, не от CWD
 
+# карточка #466, пункт ①: снимок отметки прочитанного вместе с разделом state и проверка нового
+# чата. Обёрнут: отказ модуля не вправе уронить сохранение памяти — без него запись идёт как прежде.
+try:
+    import read_mark
+except Exception:  # noqa: BLE001
+    read_mark = None
+
+
+def read_mark_call(name, *args, **kwargs):
+    """→ строки модуля read_mark; сбой — одна строка, сохранение идёт дальше."""
+    if read_mark is None:
+        return []
+    try:
+        return getattr(read_mark, name)(*args, **kwargs)
+    except Exception as e:  # noqa: BLE001
+        return [f"⚠️ отметка прочитанного: шаг «{name}» НЕ выполнился ({e}) — память сохраняется "
+                f"без него"]
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ПОРОГИ ПОТЕРИ. Числа НЕ из головы: посчитаны по audit_log 2026-08-23 — 1321 запись
@@ -850,6 +868,13 @@ def main():
         print("    текст правили мимо инструмента, и это стоит разобрать, а не сгладить.")
         return
 
+    # 🎯 КАРТОЧКА #466: новый чат роли, впервые пишущий память, возвращает отметку прочитанного
+    # ДО записи — иначе снимок ниже лёг бы на НЕ возвращённую отметку, и окно прежнего чата
+    # пропало бы навсегда. Только своей рукой и не вхолостую.
+    if actor == role and not args.dry_run:
+        for line in read_mark_call("first_touch", conn, role, "save-phoenix"):
+            print(line)
+
     if args.restore:
         row = conn.execute(
             "SELECT body, body_chars, saved_at FROM phoenix_history "
@@ -895,11 +920,16 @@ def main():
                      (actor, f"phoenix.{role}.{args.section}",
                       f"взгляд без правки ({was} знаков, тело не тронуто)"
                       + (f" [чужая секция: смотрел {actor}]" if actor != role else "")))
+        # Карточка #466, решение ① плана 03.10: своя отметка взгляда двигает снимок, как запись.
+        mark_lines = (read_mark_call("remember", conn, role, actor, "confirm")
+                      if args.section == "state" and not args.dry_run else [])
         conn.commit()
         conn.close()
         print(f"👁 phoenix/{role}/{args.section} — ВЗГЛЯД ОТМЕЧЕН ({was} знаков, тело не тронуто).")
         print("  Возраст ТЕКСТА не сдвинут — сдвинут возраст ВЗГЛЯДА: это разные факты.")
         print("  Отметка ПОГАСНЕТ сама при следующей записи тела — сбрасывать её командой не нужно.")
+        for line in mark_lines:
+            print(line)
         # Задача #478: и здесь тоже. Отметка взгляда — это МОМЕНТ, когда роль смотрит
         # на раздел; промолчать о его раздутости именно здесь значило бы промолчать
         # там, где сказать дешевле всего.
@@ -969,13 +999,22 @@ def main():
         if has_confirmed:
             conn.execute("UPDATE phoenix SET confirmed_at = datetime('now') "
                          "WHERE role=? AND section=?", (role, args.section))
-            conn.commit()
+        # Карточка #466: пересохранение того же текста двигает снимок; возврат версии (--restore),
+        # пришедший сюда с телом, равным нынешнему, — нет (решение ④ первого круга).
+        mark_lines = []
+        if args.section == "state" and not args.dry_run:
+            mark_lines = (["↩ снимок отметки прочитанного не сдвинут: это возврат версии (--restore)"]
+                          if args.restore else
+                          read_mark_call("remember", conn, role, actor, "same-body"))
+        conn.commit()
         conn.close()
         print(f"= phoenix/{role}/{args.section} — СОДЕРЖИМОЕ НЕ ИЗМЕНИЛОСЬ ({now} знаков).")
         print("  Возраст ТЕКСТА не сдвинут: иначе пересохранение вслепую выглядело бы свежестью.")
         print("  Возраст ВЗГЛЯДА обновлён: роль текст перечитала и подтвердила."
               if has_confirmed else
               "  ⚠️ колонки confirmed_at нет — прогони migrations/20260808-phoenix-confirmed-at.py")
+        for line in mark_lines:
+            print(line)
         # Долг по объёму говорится и здесь: раздел не изменился, но остался раздутым,
         # а роль перечитала его именно сейчас — это лучший момент сказать (задача #478).
         say_volume_threshold(now, role, args.section)
@@ -1106,6 +1145,14 @@ def main():
         VALUES (?, 'save_phoenix', ?, ?)
     """, (actor, f"phoenix.{role}.{args.section}", diff_note))
 
+    # 🎯 КАРТОЧКА #466: снимок отметки прочитанного — ТОЙ ЖЕ транзакцией и ТЕМ ЖЕ часом, что тело
+    # раздела state: порядок «сохранила → прочитала» решает база, часы сравнивать не нужно.
+    mark_lines = []
+    if args.section == "state" and not args.dry_run:
+        mark_lines = (["↩ снимок отметки прочитанного не сдвинут: это возврат версии (--restore)"]
+                      if args.restore else
+                      read_mark_call("remember", conn, role, actor, "save", at=action_time))
+
     conn.commit()
     # 🎯 КАРТОЧКА #702: второй раздел (state или plan) читается ДО закрытия соединения.
     shift_lines = shift_end_lines(conn, role, args.section, body)
@@ -1129,6 +1176,8 @@ def main():
     for line in foreign_lines:     # карточка #701 — сразу под «OK», до прочих строк
         print(line)
     for line in shift_lines:       # карточка #702 — блок «КОНЕЦ СМЕНЫ», если он есть в state
+        print(line)
+    for line in mark_lines:        # карточка #466 — снимок отметки прочитанного
         print(line)
     # 🎯 КАРТОЧКА #525, ЧАСТЬ А, ПУНКТ 2: тело ТОЛЬКО ЧТО записано и закоммичено (строки
     # выше) — слой `phoenix_records` обязан пересобраться СРАЗУ, а не ждать, пока роль

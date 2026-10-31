@@ -5,7 +5,8 @@
   "20260913-role-sessions-session-id",
   "20260913-role-rights-revoked-by",
   "20260915-foreign-rebirth-marks",
-  "20260924-role-sessions-transcript-id"
+  "20260924-role-sessions-transcript-id",
+  "20261031-read-mark-at-save"
  ],
  "tables": {
   "audit_log": {
@@ -67,6 +68,15 @@
    "acked_at": "TEXT",
    "message_id": "INTEGER",
    "role": "TEXT"
+  },
+  "chat_seen": {
+   "chat_id": "TEXT",
+   "cursor_after": "INTEGER",
+   "cursor_before": "INTEGER",
+   "first_at": "TEXT",
+   "mark_id": "INTEGER",
+   "role": "TEXT",
+   "source": "TEXT"
   },
   "cross_links": {
    "description": "TEXT",
@@ -198,6 +208,16 @@
    "saved_at": "TEXT",
    "section": "TEXT"
   },
+  "phoenix_read_marks": {
+   "actor": "TEXT",
+   "at": "TEXT",
+   "chat_id": "TEXT",
+   "how": "TEXT",
+   "id": "INTEGER",
+   "noted_at": "TEXT",
+   "read_mark": "INTEGER",
+   "role": "TEXT"
+  },
   "phoenix_records": {
    "alive": "TEXT",
    "body": "TEXT",
@@ -236,6 +256,15 @@
    "pgno": "",
    "segid": "",
    "term": ""
+  },
+  "read_batch_voids": {
+   "batch_last_id": "INTEGER",
+   "chat_id": "TEXT",
+   "cursor_after": "INTEGER",
+   "cursor_before": "INTEGER",
+   "role": "TEXT",
+   "token": "TEXT",
+   "voided_at": "TEXT"
   },
   "read_batches": {
    "acked_at": "TEXT",
