@@ -54,6 +54,7 @@ scripts/phoenix_lag.py
 scripts/read-broadcasts.py
 scripts/read-messages.py
 scripts/read-phoenix.py
+scripts/read_mark.py
 scripts/rebirth-mark.py
 scripts/refs_check.py
 scripts/remove-rows.py
