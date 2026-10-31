@@ -42,7 +42,15 @@ import mezo_paths  # пути машины выводятся, не впечат
 import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
 LIVE = mezo_paths.live_db()
-SANDBOX = Path.home() / ".mezosync-sandbox" / "bite-stamp.db"
+# Подставная база — в СВОЁМ стенде прогона, его ставит main() (карточка #688). Прежде она лежала
+# по постоянному пути ~/.mezosync-sandbox/bite-stamp.db, и два одновременных прогона делили один
+# файл: prepare() второго затирал базу посреди случаев первого (два замера 31.10 на 51a5fdf: пары
+# разом — расхождение исхода в 5 кругах из 5 оба раза).
+# Файл — в <стенд>/.mezosync/, как база контура: испытуемые (sync_backoff.py, обход писем соседей)
+# считают корнем контура каталог над .mezosync, и копия прямо в корне стенда делала корнем всю
+# временную папку Windows — обход шёл по ≈49 тыс. каталогов (4–14 с на вызов read-messages.py,
+# замер 31.10) и подбирал папки писем ЧУЖИХ стендов, то есть снова связывал прогоны между собой.
+SANDBOX: Path
 WRITER = mezo_target.script("write-message.py")
 ROLE = "PROTO"
 # «Старые» записки подставной базы: до Э6 случай ② судил историю живой ленты; на пустой базе истории нет,
@@ -116,6 +124,8 @@ def max_id_now() -> int:
 
 
 def main() -> int:
+    global SANDBOX
+    SANDBOX = mezo_stand.new("bite-default-stamp-") / ".mezosync" / "bite-stamp.db"
     print("ПРИЁМКА ①: умолчание штампа происхождения")
     print(f"подставная база  {SANDBOX}")
     prepare()
@@ -163,4 +173,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(mezo_stand.finish(main()))
