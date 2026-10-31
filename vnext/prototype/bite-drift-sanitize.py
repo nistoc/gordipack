@@ -26,6 +26,13 @@ r"""ПРИЁМКА сверки живого с образцом: обезлич
     (карточка #677: зеркало и образец читаются из файла путей, чтение само не падает;
     ловушка SystemExit остаётся как вторая страховка, а поломка ⑦б возвращает ПРЕЖНИЙ
     источник падения — вызов container_root() без указания файла — вместе с узким except)
+  ⑧ КАРТОЧКА #639: первая пара сличалась на каталогах СТЕНДА — строки «рантайм:» и    РАЗЛИЧАЮЩИЙ
+    «репо   :» сверки называют каталоги внутри стенда, а не контура
+  ⑧б НАРОЧНАЯ ПОЛОМКА к ⑧: первая пара не названа (как до карточки #667), копия        РАЗЛИЧАЮЩИЙ
+    сверки стоит в контуре-стенде БЕЗ зеркала — роняет РОВНО ⑧: признаки ①–⑤ на том
+    же выводе держатся (issue #39 пакета, «а»: без зеркала две другие пары сверяются)
+  ⑨ ВСТРЕЧНЫЙ к ⑧ (карточка #639 ②): дерево С зеркалом (непустые совпадающие каталоги)
+    и дерево БЕЗ зеркала (каталога зеркала нет) — признаки ①–⑤ те же, ложных провалов нет
 
 ═══ КАРТОЧКА #625 (2026-09-14) ═══
 guard-scripts-drift.py считал «строк по существу» построчным zip(a, b) — сравнением
@@ -50,11 +57,19 @@ guard-scripts-drift.py считал «строк по существу» пос�
 первой пары (живые инструменты против их зеркала) лежал в том же тексте, по которому судят
 ① ② ⑤. Теперь первая пара — два пустых каталога стенда (mirror_pair: «рантайм и зеркало
 совпадают»), и сверка всегда доходит до предмета.
+
+═══ КАРТОЧКА #639: ЧЕМ ДОКАЗАНО, ЧТО ПАРА — СВОЯ ═══
+Правка карточки #667 держалась только кодом: ни один случай не смотрел, ОТКУДА сверка взяла
+первую пару, и возврат к «пара контура» прошёл бы ①–⑤ на живом Atlas (там зеркало есть).
+Случай ⑧ читает это прямо в выводе, поломка ⑧б возвращает прежний вызов на стенде без
+зеркала, встречный ⑨ прогоняет предмет на двух деревьях. Признаки ①–⑤ определены одной
+функцией (subject_checks): встречный обязан сверять ТЕ ЖЕ признаки, а не свою их копию.
 """
 from __future__ import annotations
 
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -85,6 +100,37 @@ def mirror_pair(stand: pathlib.Path) -> list[str]:
     runtime.mkdir(exist_ok=True)
     repo.mkdir(exist_ok=True)
     return ["--runtime", str(runtime), "--repo", str(repo)]
+
+
+def subject_checks(out: str) -> dict:
+    """Признаки предмета ①–⑤ — одним местом для основного прогона и встречного ⑨ (карточка
+    #639): копия признаков во встречном разошлась бы с основными при первой же правке."""
+    return {
+        "①": "РАСХОДЯТСЯ" in out and "edited.py" in out,
+        "②": "sanitized.py" not in out.split("РАСХОДЯТСЯ")[-1] and "обезличено" in out,
+        "③": "ghost.py" in out,
+        "④": "строк по существу: 2" in out,
+        # Имя целым словом: подстрока «crlf.py» сидит и в «edited-crlf.py» фикстуры ⑤б — после
+        # неё признак ⑤ ложно падал бы на любом следующем прогоне (поймано первым прогоном ⑨).
+        "⑤": re.search(r"(?<![\w.-])crlf\.py", out.split("РАСХОДЯТСЯ")[-1]) is None,
+    }
+
+
+def first_pair_from_stand(out: str, stand: pathlib.Path) -> bool:
+    """Первая пара сличалась на каталогах СТЕНДА (карточка #639): ровно одна строка «рантайм:»
+    и одна «репо   :», и обе называют каталог внутри стенда. Пара контура называет его
+    каталоги либо печатает «зеркало не объявлено» / «НЕ ЗАВЕДЁН» без этих строк."""
+    lines = out.splitlines()
+    rt_lines = [s for s in lines if s.startswith("рантайм:")]
+    rp_lines = [s for s in lines if s.startswith("репо   :")]
+    return (len(rt_lines) == 1 and len(rp_lines) == 1
+            and str(stand) in rt_lines[0] and str(stand) in rp_lines[0])
+
+
+def not_held(checks: dict) -> str:
+    """Перечень несработавших признаков словами — для строки случая."""
+    bad = [k for k, v in checks.items() if not v]
+    return "все держатся" if not bad else "НЕ держатся: " + " ".join(bad)
 
 
 def main() -> int:
@@ -125,21 +171,21 @@ def main() -> int:
              "--vnext-template", str(tpl)],
             capture_output=True, text=True, encoding="utf-8", timeout=300, env=env)
         out = (r.stdout or "") + (r.stderr or "")
+        chk = subject_checks(out)
 
         ok &= case("① контроль: настоящая правка — «РАСХОДЯТСЯ», и файл назван",
-                   "РАСХОДЯТСЯ" in out and "edited.py" in out,
+                   chk["①"],
                    "без него всё дальнейшее могло бы означать ослепшую сверку")
         ok &= case("② обезличенное имя репозитория С ДИСКА — не расхождение",
-                   "sanitized.py" not in out.split("РАСХОДЯТСЯ")[-1]
-                   and "обезличено" in out,
+                   chk["②"],
                    "постоянный жёлтый, который нельзя погасить работой, учит пролистывать "
                    "сверку целиком", differ=True)
         ok &= case("③ ВСТРЕЧНЫЙ: имени нет на диске — файл ОСТАЁТСЯ расходящимся",
-                   "ghost.py" in out,
+                   chk["③"],
                    "иначе заглушка «съедала» бы любое имя, и настоящая правка примера "
                    "прошла бы как обезличивание", differ=True)
         ok &= case("④ при расхождении названо число строк по существу",
-                   "строк по существу: 2" in out,
+                   chk["④"],
                    "«46753б ≠ 46767б» не говорит, правка это или окончания строк; "
                    "различий больше, чем строк в файле, — признак кривой сверки. "
                    "⚠️ КАРТОЧКА #625: число — 2 (удалено 1 + добавлено 1), не 1 — "
@@ -148,7 +194,7 @@ def main() -> int:
                    "«на деле» было 2, а не 1 (сама карточка #625, живой замер PROTO)",
                    differ=True)
         ok &= case("⑤ разные окончания строк при том же тексте — не «расходятся»",
-                   "crlf.py" not in out.split("РАСХОДЯТСЯ")[-1],
+                   chk["⑤"],
                    "сверка байтов — не сверка содержимого (правило bytes-are-not-content)",
                    differ=True)
 
@@ -178,6 +224,60 @@ def main() -> int:
                    f"фикстуры явно в форме CRLF: {both_crlf} · вывод несёт «РАСХОДЯТСЯ» "
                    f"и edited-crlf.py: {both_named}",
                    differ=True)
+
+        # ⑧ КАРТОЧКА #639: первая пара — каталоги стенда. Читается по выводу основного прогона.
+        own_pair = first_pair_from_stand(out, tmp)
+        ok &= case("⑧ карточка #639: первая пара сличалась на каталогах СТЕНДА, не контура",
+                   own_pair,
+                   "строки «рантайм:» и «репо   :» называют каталоги стенда; иначе сверка взяла "
+                   "пару контура — и его зеркало или его отсутствие решают исход ①–⑤",
+                   differ=True)
+
+        # ⑧б НАРОЧНАЯ ПОЛОМКА: первая пара не названа — так приёмка звала сверку до карточки
+        # #667. Копия сверки стоит в контуре-стенде без зеркала (файла путей нет), то есть её
+        # «своя пара» — пара контура без зеркала, условие самой карточки #639.
+        # ⑧б и ⑨ идут в среде закреплённого стенда (env5b, карточка #613) — новых вызовов
+        # без неё проверка check-acceptance-env.py не получает.
+        own_scripts = mezo_stand.copy_tool(GUARD_TOOL, container / ".mezosync" / "scripts")
+        r8b = subprocess.run(
+            [sys.executable, str(own_scripts), "--vnext-runtime", str(rt),
+             "--vnext-template", str(tpl)],
+            capture_output=True, text=True, encoding="utf-8", timeout=300, env=env5b)
+        out8b = (r8b.stdout or "") + (r8b.stderr or "")
+        no_mirror_seen = "зеркало не объявлено" in out8b
+        dropped = not first_pair_from_stand(out8b, tmp)
+        chk8b = subject_checks(out8b)
+        ok &= case("⑧б НАРОЧНАЯ ПОЛОМКА (пара контура без зеркала) роняет РОВНО случай ⑧",
+                   no_mirror_seen and dropped and all(chk8b.values()),
+                   f"стенд без зеркала: {no_mirror_seen} · признак ⑧ пропал: {dropped} · "
+                   f"признаки ①–⑤ на том же выводе: {not_held(chk8b)}"
+                   + ("" if all(chk8b.values()) else
+                      " — без своей пары предмет снова не сличается: issue #39 пакета, «а», "
+                      "отменена?"),
+                   differ=True)
+
+        # ⑨ ВСТРЕЧНЫЙ (карточка #639 ②): тот же предмет на двух деревьях — С зеркалом
+        # (непустые совпадающие каталоги) и БЕЗ зеркала (каталога зеркала нет).
+        runtime9, repo9 = tmp / "mirror9-runtime", tmp / "mirror9-repo"
+        runtime9.mkdir(), repo9.mkdir()
+        (runtime9 / "mirror-tool.py").write_text("x = 1\n", encoding="utf-8")
+        (repo9 / "mirror-tool.py").write_text("x = 1\n", encoding="utf-8")
+        outs9 = {}
+        for tree, repo_arg in (("с зеркалом", repo9), ("без зеркала", tmp / "mirror9-absent")):
+            r9 = subprocess.run(
+                [sys.executable, str(GUARD_TOOL), "--runtime", str(runtime9),
+                 "--repo", str(repo_arg), "--vnext-runtime", str(rt), "--vnext-template", str(tpl)],
+                capture_output=True, text=True, encoding="utf-8", timeout=300, env=env5b)
+            outs9[tree] = (r9.stdout or "") + (r9.stderr or "")
+        with_ok = ("СОВПАДАЕТ" in outs9["с зеркалом"]
+                   and first_pair_from_stand(outs9["с зеркалом"], tmp))
+        without_ok = "ЗЕРКАЛО-РЕПОЗИТОРИЙ НЕ ЗАВЕДЁН" in outs9["без зеркала"]
+        chk9 = {tree: subject_checks(o) for tree, o in outs9.items()}
+        ok &= case("⑨ ВСТРЕЧНЫЙ: дерево с зеркалом и дерево без зеркала — признаки ①–⑤ те же",
+                   with_ok and without_ok and all(all(c.values()) for c in chk9.values()),
+                   f"с зеркалом: «совпадает» на каталогах стенда {with_ok}, признаки "
+                   f"{not_held(chk9['с зеркалом'])} · без зеркала: «не заведён» {without_ok}, "
+                   f"признаки {not_held(chk9['без зеркала'])}")
     finally:
         mezo_stand.release(tmp)  # уборка отложена до исхода прогона
 
