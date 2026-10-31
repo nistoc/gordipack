@@ -11,10 +11,14 @@
 Существующие таблицы не меняются.
 
 ПОСЕВ (один раз, при применении):
-  · снимок роли: час = последний СВОЙ ход по разделу state — saved_at, если последнюю запись
-    тела сделала сама роль (иначе час её последней записи по audit_log), и не раньше её
+  · снимок роли: час = последний СВОЙ ход по разделу state — последняя запись тела своей рукой
+    по истории разделов (причина 'save'; возврат версии и перенос в архив памяти не в счёт —
+    находки противника 31.10); без такой записи в истории — saved_at, если последнюю запись
+    тела сделала сама роль (иначе час её последней записи по audit_log); и не раньше её
     последнего своего confirm по audit_log (решение ⑤ первого круга: confirmed_at сдвигает
-    и чужая рука пересохранением того же текста);
+    и чужая рука пересохранением того же текста). Пересохранение того же текста следа
+    не оставляет ни в журнале, ни в истории — посев его не видит, снимок выйдет раньше,
+    новый чат перечитает больше (перечитывание, не потеря);
     число = MAX(to_id) только тех отрезков cursor_segments, что ДВИГАЛИ отметку (kind='declared',
     kind='born' или kind='read' без основания), с часом СТРОГО раньше; не выше текущей отметки. Отрезки
     «тело показано отбором --to-me» отметку не двигали и в посев не входят;
@@ -73,14 +77,40 @@ TABLES = ("phoenix_read_marks", "chat_seen", "read_batch_voids")
 MOVING_SEGMENT = "(kind IN ('declared', 'born') OR (kind = 'read' AND basis IS NULL))"
 
 
+# Запись тела своей рукой в истории разделов. Возврат версии ('restore <id>') и перенос в архив
+# памяти ('archive-move: …') сюда не входят: после шага ни то, ни другое снимок не двигает,
+# и посев судит так же (находки противника 31.10, R1 и R2: прежде час брался из phoenix.saved_at,
+# а его сдвигают оба).
+OWN_SAVE_REASONS = "(reason = 'save' OR reason LIKE 'save %')"
+
+
+def own_body_save(conn, role):
+    """→ час последней записи тела state своей рукой по истории разделов или None."""
+    hours = []
+    for table in ("phoenix_history", "phoenix_history_archive"):
+        try:
+            hours.append(conn.execute(
+                f"SELECT MAX(saved_at) FROM {table} WHERE upper(role) = ? AND section = 'state' "
+                f"AND upper(actor) = ? AND {OWN_SAVE_REASONS}", (role, role)).fetchone()[0])
+        except sqlite3.OperationalError:      # таблицы нет — история не ведётся
+            pass
+    hours = [h for h in hours if h]
+    return max(hours) if hours else None
+
+
 def seed_hour(conn, role):
-    """→ час последнего СВОЕГО хода по разделу state или None."""
+    """→ час последнего СВОЕГО хода по разделу state или None.
+
+    Ход — запись тела своей рукой (по истории разделов) или своя отметка взгляда --confirm (по
+    журналу). Своей записи в истории нет (история не ведётся или моложе записи) — судим журналом
+    и самим разделом, как до находок R1 и R2."""
     row = conn.execute("SELECT saved_at FROM phoenix WHERE role = ? AND section = 'state'",
                        (role,)).fetchone()
     if row is None:
         return None
     saved_at = row[0]
     target = f"phoenix.{role}.state"
+    from_history = own_body_save(conn, role)
     try:
         last_save = conn.execute(
             "SELECT actor_role FROM audit_log WHERE target = ? AND action = 'save_phoenix' "
@@ -91,12 +121,14 @@ def seed_hour(conn, role):
         own_confirm = conn.execute(
             "SELECT MAX(timestamp) FROM audit_log WHERE target = ? AND action = 'confirm_phoenix' "
             "AND upper(actor_role) = ?", (target, role)).fetchone()[0]
-    except sqlite3.OperationalError:          # журнала нет — судим по самому разделу
-        return saved_at
+    except sqlite3.OperationalError:          # журнала нет — судим историей или самим разделом
+        return from_history or saved_at
     if last_save is None or last_save[0].upper() == role:
         base = saved_at
     else:
         base = own_save                        # последнюю запись тела сделала чужая рука
+    if from_history:
+        base = from_history                    # история знает причину записи, журнал — нет
     hours = [h for h in (base, own_confirm) if h]
     return max(hours) if hours else None
 

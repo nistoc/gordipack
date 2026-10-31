@@ -56,22 +56,38 @@ def tables_ready(conn):
     return all(t in have for t in TABLES)
 
 
-def owner_of_chat(conn, chat):
-    """→ роль, за которой записан чат, или None.
+def owners_of_chat(conn, chat):
+    """→ роли, за которыми записан чат (по алфавиту), или пустой список.
 
-    Решение ② первого круга: текущая запись role_sessions решает; история — только последняя
+    Решение ② первого круга: текущие записи role_sessions решают; история — только последняя
     запись номера и только когда в role_sessions его нет (чат, переведённый к другой роли,
-    не остаётся «чужим» навсегда)."""
+    не остаётся «чужим» навсегда). Номер сравнивается без регистра и без пробелов по краям —
+    так же, как его берёт посев шага (находка противника 31.10, M3)."""
     try:
-        row = conn.execute("SELECT role FROM role_sessions WHERE lower(transcript_id) = ? "
-                           "LIMIT 1", (chat,)).fetchone()
-        if row:
-            return row[0].upper()
-        row = conn.execute("SELECT role FROM role_sessions_history WHERE lower(transcript_id) = ? "
+        rows = conn.execute("SELECT DISTINCT upper(role) FROM role_sessions "
+                            "WHERE lower(trim(transcript_id)) = ? ORDER BY 1", (chat,)).fetchall()
+        if rows:
+            return [r[0] for r in rows]
+        row = conn.execute("SELECT role FROM role_sessions_history WHERE lower(trim(transcript_id)) = ? "
                            "ORDER BY id DESC LIMIT 1", (chat,)).fetchone()
-        return row[0].upper() if row else None
+        return [row[0].upper()] if row else []
     except sqlite3.OperationalError:     # контур без колонки transcript_id или без истории
-        return None
+        return []
+
+
+def foreign_owners(conn, chat, role):
+    """→ (чужие роли чата, записан ли чат и за этой ролью).
+
+    Номер, записанный за двумя ролями сразу, — чужой для обеих: «номер не записан за другой
+    ролью» — часть определения нового чата. Прежде брался первый попавшийся ряд реестра, и исход
+    зависел от порядка строк (находка противника 31.10, R3)."""
+    owners = owners_of_chat(conn, chat)
+    return [o for o in owners if o != role], role in owners
+
+
+def _shared_lines(chat, role, foreign, what):
+    return [f"⚠️ {what}: номер чата {chat[:8]}… записан в реестре чатов и за {role}, и за "
+            f"{', '.join(foreign)} — такой чат чужой для каждой из них. Оставь номер за одной ролью"]
 
 
 def _seen(conn, role, chat):
@@ -121,6 +137,13 @@ def _reader_cmd(conn, role, extra=""):
 def _window_lines(conn, role, low, high):
     n, size, archived = window(conn, low, high)
     lines = []
+    if n:
+        tail = " (кроме ушедших в архив — строка ниже)" if archived else ""
+        lines.append(f"   записки #{low + 1}…#{high} придут снова{tail} — их читал прежний чат, этот их не видел")
+    if not n and not archived:
+        # окно ушло из ленты мимо архива (строки удалены): обещать «придут снова» было бы неправдой
+        lines.append(f"   ⚠️ записок окна #{low + 1}…#{high} нет ни в ленте, ни в архиве — показать нечего; "
+                     f"отметка всё равно на #{low}")
     if archived:
         dbq = (HERE / "db-q.py").as_posix()
         lines.append(f"   📦 из окна уже в архиве: {archived} — лента их не покажет, читать запросом:\n"
@@ -144,9 +167,9 @@ def first_touch(conn, role, source):
     role = role.upper()
     if _seen(conn, role, chat):
         return []
-    owner = owner_of_chat(conn, chat)
-    if owner is not None and owner != role:
-        return []                      # чужой чат: ни возврата, ни строки chat_seen
+    foreign, mine_too = foreign_owners(conn, chat, role)
+    if foreign:                        # чужой чат: ни возврата, ни строки chat_seen
+        return _shared_lines(chat, role, foreign, "отметка прочитанного не возвращается") if mine_too else []
     if conn.in_transaction:
         conn.commit()
     conn.execute("BEGIN IMMEDIATE")
@@ -196,8 +219,7 @@ def first_touch(conn, role, source):
                 f"памяти ({mark[2]} UTC) прежний чат ленту дальше #{cur} не подтверждал"]
     lines = [f"↩ ОТМЕТКА ПРОЧИТАННОГО ВОЗВРАЩЕНА #{cur} → #{new}: это новый чат роли {role} "
              f"(номер {chat[:8]}…), а прежний подтверждал ленту после сохранения памяти "
-             f"({mark[2]} UTC).",
-             f"   записки #{new + 1}…#{cur} придут снова — их читал прежний чат, этот их не видел"]
+             f"({mark[2]} UTC)."]
     if voided:
         lines.append(f"   погашено неподтверждённых выдач прежнего чата: {voided} — их ключи "
                      f"отметку больше не сдвинут")
@@ -218,18 +240,20 @@ def remember(conn, role, actor, how, at=None):
     role = role.upper()
     if actor.upper() != role or not tables_ready(conn):
         return []
+    # роль не среди читателей — снимку не на чем стоять; совет «прочитай ленту» был бы
+    # неисполним: читатель ответит «роли нет» (находка противника 31.10, M1)
+    cur = _cursor(conn, role)
+    if cur is None:
+        return []
     chat = chat_id()
     if chat is not None:
-        owner = owner_of_chat(conn, chat)
-        if owner is not None and owner != role:
-            return []
+        foreign, mine_too = foreign_owners(conn, chat, role)
+        if foreign:
+            return _shared_lines(chat, role, foreign, "снимок отметки прочитанного не записан") if mine_too else []
         if not _seen(conn, role, chat):
             return ["⚠️ снимок отметки прочитанного НЕ записан: проверка нового чата для этого "
                     "чата не прошла. Прочитай ленту, затем сохрани state снова: "
                     + _reader_cmd(conn, role)]
-    cur = _cursor(conn, role)
-    if cur is None:
-        return []
     conn.execute("INSERT INTO phoenix_read_marks (role, at, read_mark, how, chat_id, actor) "
                  "VALUES (?, COALESCE(?, datetime('now')), ?, ?, ?, ?)",
                  (role, at, cur, how, chat, actor.upper()))
@@ -267,8 +291,8 @@ def forecast(conn, role):
                 f"прочитанного #{cur} НЕ вернётся к снимку #{mark[1]}"]
     if _seen(conn, role, chat):
         return []
-    owner = owner_of_chat(conn, chat)
-    if owner is not None and owner != role:
+    foreign, _ = foreign_owners(conn, chat, role)
+    if foreign:
         return []
     n, size, archived = window(conn, mark[1], cur)
     lines = [f"   ↩ это новый чат роли: при первом чтении ленты или записи памяти отметка вернётся "

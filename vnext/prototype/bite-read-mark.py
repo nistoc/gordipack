@@ -62,6 +62,8 @@ STRAY = "f0000000-0000-4000-8000-00000000000f"      # незаписанная �
 HIST = "90000000-0000-4000-8000-000000000009"       # чат PROTO только в истории реестра
 HISTC = "91000000-0000-4000-8000-000000000091"      # чат COORD только в истории реестра
 MOVED = "92000000-0000-4000-8000-000000000092"      # чат, переведённый от COORD к PROTO
+ZCHAT = "93000000-0000-4000-8000-000000000093"      # чат роли ZETA, у которой нет отметки прочитанного
+LATE = "2026-10-01 13:30:00"                        # после чтения окна (AFTER)
 TOKEN = "aaaaaa-bbbbbb"                             # неподтверждённая выдача прежнего чата
 WINDOW = [4419, 4420, 4421, 4422]
 OWN_BODY = "память PROTO: раздел state стенда B"
@@ -84,9 +86,9 @@ BREAKS = {
     # отметки в K10 и K10b добавила позже, чем записала ожидания)
     ], {"K2", "K3", "K4", "K10", "K10b", "K11a", "K11b", "K21", "K21b", "KS", "K16", "D2a"}),
     "foreign-chat": ("first_touch не смотрит, за кем записан чат", [
-        ("read_mark.py", "    if owner is not None and owner != role:\n        return []                      # чужой чат",
-         "    if False:\n        return []                      # чужой чат"),
-    ], {"K6", "K9b", "D2b"}),
+        ("read_mark.py", "    if foreign:                        # чужой чат",
+         "    if False:                        # чужой чат"),
+    ], {"K6", "K9b", "D2b", "K6b"}),
     "save-no-touch": ("save-phoenix не зовёт проверку нового чата", [
         ("save-phoenix.py", 'read_mark_call("first_touch", conn, role, "save-phoenix")', "[]"),
     ], {"K8", "K50"}),
@@ -94,9 +96,11 @@ BREAKS = {
         ("read_mark.py", "    if actor.upper() != role or not tables_ready(conn):", "    if not tables_ready(conn):"),
     ], {"K9a"}),
     "remember-owner": ("снимок не смотрит, за кем записан чат", [
-        ("read_mark.py", "        owner = owner_of_chat(conn, chat)\n        if owner is not None and owner != role:\n            return []\n        if not _seen",
+        ("read_mark.py", "        foreign, mine_too = foreign_owners(conn, chat, role)\n        if foreign:\n"
+                         "            return _shared_lines(chat, role, foreign, \"снимок отметки прочитанного не записан\") if mine_too else []\n"
+                         "        if not _seen",
          "        if not _seen"),
-    ], {"K9c"}),
+    ], {"K9c", "K9d"}),
     "restore-moves": ("--restore пишет снимок", [
         ("save-phoenix.py", '(["↩ снимок отметки прочитанного не сдвинут: это возврат версии (--restore)"]\n                      if args.restore else\n                      read_mark_call("remember", conn, role, actor, "save", at=action_time))',
          'read_mark_call("remember", conn, role, actor, "save", at=action_time)'),
@@ -121,7 +125,13 @@ BREAKS = {
     ], {"K7", "K17", "K18"}),
     "archive-silent": ("строка об архиве молчит", [
         ("read_mark.py", "    if archived:\n        dbq", "    if False:\n        dbq"),
-    ], {"K13"}),
+    ], {"K13", "K13c"}),
+    "nowhere-silent": ("окна нет ни в ленте, ни в архиве — строка об этом молчит", [
+        ("read_mark.py", "    if not n and not archived:", "    if False:"),
+    ], {"K13b"}),
+    "promise-always": ("«придут снова» и тогда, когда в ленте окна нет", [
+        ("read_mark.py", "    if n:\n        tail", "    if True:\n        tail"),
+    ], {"K13b", "K13c"}),
     "seed-no-chats": ("посев без известных чатов", [
         ("migration", "    chats = known_chats(conn)\n", "    chats = set()\n"),
     ], {"K3", "K10", "K10b", "K11a", "K11b", "K17", "K21", "K21b"}),
@@ -148,9 +158,9 @@ BREAKS = {
         ("read_mark.py", "        if not _seen(conn, role, chat):\n            return [", "        if False:\n            return ["),
     ], {"D1"}),
     "owner-history-first": ("история реестра решает раньше текущей записи (решение ②)", [
-        ("read_mark.py", '        row = conn.execute("SELECT role FROM role_sessions WHERE lower(transcript_id) = ? "\n                           "LIMIT 1", (chat,)).fetchone()\n        if row:\n            return row[0].upper()\n',
-         '        row = conn.execute("SELECT role FROM role_sessions_history WHERE lower(transcript_id) = ? "\n                           "ORDER BY id DESC LIMIT 1", (chat,)).fetchone()\n        if row:\n            return row[0].upper()\n'
-         '        row = conn.execute("SELECT role FROM role_sessions WHERE lower(transcript_id) = ? "\n                           "LIMIT 1", (chat,)).fetchone()\n        if row:\n            return row[0].upper()\n'),
+        ("read_mark.py", '        rows = conn.execute("SELECT DISTINCT upper(role) FROM role_sessions "\n                            "WHERE lower(trim(transcript_id)) = ? ORDER BY 1", (chat,)).fetchall()\n        if rows:\n            return [r[0] for r in rows]\n',
+         '        row = conn.execute("SELECT role FROM role_sessions_history WHERE lower(trim(transcript_id)) = ? "\n                           "ORDER BY id DESC LIMIT 1", (chat,)).fetchone()\n        if row:\n            return [row[0].upper()]\n'
+         '        rows = conn.execute("SELECT DISTINCT upper(role) FROM role_sessions "\n                            "WHERE lower(trim(transcript_id)) = ? ORDER BY 1", (chat,)).fetchall()\n        if rows:\n            return [r[0] for r in rows]\n'),
     ], {"D2a", "K9c"}),
     "no-seen-without-mark": ("без снимка строка chat_seen не пишется (находка 5)", [
         ("read_mark.py", "        mark = latest_mark(conn, role)\n        new = min(cur, mark[1]) if mark else cur\n",
@@ -172,9 +182,39 @@ BREAKS = {
         ("read-messages.py", "    if return_lines and (args.all or args.to_me or args.index):\n        for line in return_lines:\n            print(line)\n        return_lines = []\n", ""),
     ], {"KS", "KB"}, {"KC", "K20"}),
     "forecast-foreign": ("прогноз и для чужого чата", [
-        ("read_mark.py", "    owner = owner_of_chat(conn, chat)\n    if owner is not None and owner != role:\n        return []\n    n, size, archived",
+        ("read_mark.py", "    foreign, _ = foreign_owners(conn, chat, role)\n    if foreign:\n        return []\n    n, size, archived",
          "    n, size, archived"),
     ], {"K17b"}),
+    # ── находки противника 31.10 (R1–R3, M1, M2): ожидания записаны до прогона
+    "seed-any-reason": ("посев: причина записи в истории не судится (возврат версии и перенос в архив — в счёт)", [
+        ("migration", 'f"AND upper(actor) = ? AND {OWN_SAVE_REASONS}"', 'f"AND upper(actor) = ?"'),
+    ], {"K14c", "K14d"}),
+    "seed-history-foreign": ("посев: рука в истории не судится", [
+        ("migration", 'f"AND upper(actor) = ? AND {OWN_SAVE_REASONS}"', 'f"AND ? IS NOT NULL AND {OWN_SAVE_REASONS}"'),
+    ], {"K15c"}),
+    "seed-no-history": ("посев не смотрит историю разделов — прежний путь по saved_at", [
+        ("migration", "    from_history = own_body_save(conn, role)\n", "    from_history = None\n"),
+    ], {"K14c", "K14d"}),
+    "seed-history-min": ("посев берёт первую свою запись вместо последней", [
+        ("migration", 'f"SELECT MAX(saved_at) FROM {table}', 'f"SELECT MIN(saved_at) FROM {table}'),
+    ], {"K14e"}),
+    "shared-first-row": ("номер за двумя ролями: решает первый ряд реестра", [
+        ("read_mark.py", "    owners = owners_of_chat(conn, chat)\n    return [o for o in owners if o != role], role in owners",
+         "    owners = owners_of_chat(conn, chat)[:1]\n    return [o for o in owners if o != role], role in owners"),
+    ], {"K6b", "K9d"}),
+    "remember-cursor-late": ("снимок: отметка прочитанного проверяется после проверки чата", [
+        ("read_mark.py", "    cur = _cursor(conn, role)\n    if cur is None:\n        return []\n    chat = chat_id()\n",
+         "    cur = _cursor(conn, role)\n    chat = chat_id()\n"),
+        ("read_mark.py", "            + _reader_cmd(conn, role)]\n    conn.execute(",
+         "            + _reader_cmd(conn, role)]\n    if cur is None:\n        return []\n    conn.execute("),
+    ], {"F6"}),
+    "index-note-stale": ("указатель после возврата пишет «отметка НЕ сдвинута»", [
+        ("read-messages.py", '                     if mark_returned else "отметка прочитанного НЕ сдвинута")',
+         '                     if False else "отметка прочитанного НЕ сдвинута")'),
+    ], {"K20"}),
+    "wake-footer-stale": ("подвал обзора --wake после возврата пишет «НЕ двинута»", [
+        ("read-messages.py", '    if _returned_in_run:\n        print("  ⚖️ ЭТО ОБЗОР', '    if False:\n        print("  ⚖️ ЭТО ОБЗОР'),
+    ], {"K20"}),
     "stand-env-leak": ("mezo_stand.stand_env передаёт номер чата стенду", [
         ("mezo_stand", "", ""),
     ], {"KE"}),
@@ -517,6 +557,22 @@ def k6():
     return "отметка #4422, строки chat_seen за PROTO нет"
 
 
+# номер NEW записан после шага и за PROTO, и за COORD (находка противника 31.10, R3)
+DUAL = [("UPDATE role_sessions SET transcript_id = ? WHERE role IN ('PROTO', 'COORD')", (NEW,))]
+
+
+@case("K6b", "номер чата записан за двумя ролями: чужой для обеих, строка об этом у каждой")
+def k6b():
+    s = build("k6b", post=DUAL)
+    _, out = s.rm(NEW)
+    need("записан в реестре чатов и за PROTO, и за COORD" in out, out[:300])
+    need(s.mark() == 4422 and returns(s) == 0, f"отметка {s.mark()}, возвратов {returns(s)}")
+    _, out_c = s.rm(NEW, role="COORD")
+    need("записан в реестре чатов и за COORD, и за PROTO" in out_c, out_c[:300])
+    need(not s.q("SELECT 1 FROM chat_seen WHERE chat_id = ?", (NEW,)), "строка chat_seen за номером двух ролей")
+    return "PROTO и COORD: возврата нет, строка есть, chat_seen пуст"
+
+
 @case("K7", "номера чата нет: возврата нет, прогноз говорит «номер чата неизвестен»")
 def k7():
     s = build("k7")
@@ -570,6 +626,15 @@ def k9c():
     _, r = s.rm(NEW)
     need(shown(r) == WINDOW, f"показаны {shown(r)}")
     return "снимок посева, окно пришло"
+
+
+@case("K9d", "сохранение state из чата, записанного за двумя ролями: снимок не пишется, строка об этом есть")
+def k9d():
+    s = build("k9d", post=DUAL)
+    rc, out = s.sp(NEW, "--body", OWN_BODY + " · из чата за двумя ролями")
+    need(rc == 0 and s.latest() == (4418, "seed", None), f"код {rc}, снимок {s.latest()}")
+    need("снимок отметки прочитанного не записан: номер чата" in out, out[-400:])
+    return "снимок посева, строка о номере за двумя ролями"
 
 
 HISTORY_ROW = ("INSERT INTO phoenix_history (id, role, section, body, body_chars, saved_at, actor, reason) "
@@ -642,6 +707,31 @@ def k13():
     return "показаны #4419, #4421, #4422 и строка архива"
 
 
+@case("K13b", "окна нет ни в ленте, ни в архиве: строка говорит это, «придут снова» не обещано")
+def k13b():
+    s = build("k13b", post=["DELETE FROM messages WHERE id BETWEEN 4419 AND 4422"])
+    _, out = s.rm(NEW)
+    need(returned(out, 4422, 4418) and out.count("ОТМЕТКА ПРОЧИТАННОГО ВОЗВРАЩЕНА") == 1, out[:300])
+    need("нет ни в ленте, ни в архиве" in out, "нет строки «нигде»")
+    need("придут снова" not in out, "обещано «придут снова», а показывать нечего")
+    need(shown(out) == [] and s.mark() == 4418, f"показаны {shown(out)}, отметка {s.mark()}")
+    return "строка «нигде», обещания нет, отметка #4418"
+
+
+@case("K13c", "всё окно в архиве: строка архива есть, «придут снова» не обещано")
+def k13c():
+    s = build("k13c", post=[
+        "INSERT INTO messages_archive (id, writer_role, timestamp, body_md, moved_by, rule) "
+        "SELECT id, writer_role, timestamp, body_md, 'messages-fold.py', 'приёмка' FROM messages "
+        "WHERE id BETWEEN 4419 AND 4422",
+        "DELETE FROM messages WHERE id BETWEEN 4419 AND 4422"])
+    _, out = s.rm(NEW)
+    need(returned(out, 4422, 4418), out[:300])
+    need("из окна уже в архиве: 4" in out, "нет строки архива")
+    need("придут снова" not in out and "нет ни в ленте, ни в архиве" not in out, out[:600])
+    return "строка архива, обещания нет"
+
+
 @case("K14a", "посев стенда B — снимок #4418 часом сохранения state")
 def k14a():
     s = build("k14a")
@@ -660,7 +750,52 @@ def k14b():
     return "посев #4418, пришли все четыре"
 
 
-@case("K15", "подтверждение в ту же секунду, что сохранение state: считается сделанным после")
+# История разделов до шага: своя запись тела state в 12:00 и ещё один ход в 13:30 — после чтения окна.
+HIST_SAVE = ("INSERT INTO phoenix_history (role, section, body, body_chars, saved_at, actor, reason) "
+             "VALUES ('PROTO', 'state', ?, ?, ?, ?, ?)")
+OWN_AT_H = (HIST_SAVE, (OWN_BODY, len(OWN_BODY), H, "PROTO", "save"))
+BODY_LATE = ("UPDATE phoenix SET saved_at = ? WHERE role = 'PROTO' AND section = 'state'", (LATE,))
+
+
+def audit_save(actor):
+    return ("INSERT INTO audit_log (timestamp, actor_role, action, target, diff_md) VALUES "
+            "(?, ?, 'save_phoenix', 'phoenix.PROTO.state', 'Updated state (стенд)')", (LATE, actor))
+
+
+def seed_then_read(s, expect):
+    need(s.latest() == (expect, "seed", None), f"посев {s.latest()}")
+    _, out = s.rm(NEW)
+    return out
+
+
+@case("K14c", "возврат версии (--restore) до шага, после чтения окна: посев по своей записи 12:00")
+def k14c():
+    s = build("k14c", pre=[OWN_AT_H, (HIST_SAVE, ("прежняя версия", 14, LATE, "PROTO", "restore 1")),
+                           BODY_LATE, audit_save("PROTO")])
+    out = seed_then_read(s, 4418)
+    need(returned(out, 4422, 4418) and shown(out) == WINDOW, f"показаны {shown(out)}")
+    return "посев #4418, окно пришло"
+
+
+@case("K14d", "перенос в архив памяти до шага, после чтения окна: посев по своей записи 12:00")
+def k14d():
+    s = build("k14d", pre=[OWN_AT_H, (HIST_SAVE, ("горячее", 7, LATE, "PROTO", "archive-move: унесено 1 кусков, 9 знаков")),
+                           BODY_LATE])
+    out = seed_then_read(s, 4418)
+    need(returned(out, 4422, 4418) and shown(out) == WINDOW, f"показаны {shown(out)}")
+    return "посев #4418, окно пришло"
+
+
+@case("K14e", "своя запись тела после чтения окна: посев #4422, новый чат получает пусто")
+def k14e():
+    s = build("k14e", pre=[OWN_AT_H, (HIST_SAVE, (OWN_BODY + " · позже", len(OWN_BODY) + 8, LATE, "PROTO", "save")),
+                           BODY_LATE, audit_save("PROTO")])
+    out = seed_then_read(s, 4422)
+    need("Нет непрочитанных" in out and not returned(out, 4422, 4418), out[:300])
+    return "посев #4422, возврата нет"
+
+
+@case("K15","подтверждение в ту же секунду, что сохранение state: считается сделанным после")
 def k15():
     seg = BASE_SEGMENTS[:2] + [(4419, 4422, "read", None, H)]
     s = build("k15", segments=seg)
@@ -677,6 +812,15 @@ def k15b():
         "('2026-10-01 14:00:00', 'COORD', 'save_phoenix', 'phoenix.PROTO.state', 'Updated state [чужая]')"])
     need(s.latest()[0] == 4418, f"посев {s.latest()}")
     return "посев #4418 (час своей записи 12:00)"
+
+
+@case("K15c", "чужая запись тела в истории после чтения окна посев не сдвигает")
+def k15c():
+    s = build("k15c", pre=[OWN_AT_H, (HIST_SAVE, (OWN_BODY + " · рука COORD", len(OWN_BODY) + 12, LATE, "COORD", "save")),
+                           BODY_LATE, audit_save("COORD")])
+    out = seed_then_read(s, 4418)
+    need(returned(out, 4422, 4418) and shown(out) == WINDOW, f"показаны {shown(out)}")
+    return "посев #4418, окно пришло"
 
 
 @case("K16", "неподтверждённая выдача прежнего чата: новый чат получает окно НОВЫМ ключом, прежняя гаснет")
@@ -795,6 +939,10 @@ def k20():
     need(0 <= i_ret < i_idx, f"возврат {i_ret}, указатель {i_idx}")
     tail = out[i_idx:]
     need(all(f"#{i} " in tail for i in WINDOW) and s.mark() == 4418, "в указателе нет окна")
+    # находка противника 31.10, M2: под строкой возврата указатель не пишет «НЕ сдвинута»
+    need("её вернула строка возврата выше" in out and "отметка прочитанного НЕ сдвинута" not in out,
+         "строка указателя спорит с возвратом")
+    need("назад её" in out and "Отметка прочитанного НЕ двинута" not in out, "подвал обзора спорит с возвратом")
     return "возврат в первой половине, в указателе #4419…#4422"
 
 
@@ -860,6 +1008,16 @@ def f5():
     s.sp(NEW, "--body", "память SEPA", role="SEPA")
     need(s.latest("SEPA") == (4422, "save", NEW), f"снимок {s.latest('SEPA')}")
     return "строка chat_seen есть, снимок заведён"
+
+
+@case("F6", "роль без отметки прочитанного сохраняет state: ни снимка, ни неисполнимого совета")
+def f6():
+    s = build("f6")
+    rc, out = s.sp(ZCHAT, "--body", "память ZETA: стенд", role="ZETA")
+    need(rc == 0, f"код {rc}: {out[-300:]}")
+    need("НЕ записан" not in out and "read-messages.py --role ZETA" not in out, out[-400:])
+    need(s.latest("ZETA") is None, f"снимок {s.latest('ZETA')}")
+    return "сохранение прошло, строки о снимке нет"
 
 
 @case("KA", "возврат записан в журнал")
