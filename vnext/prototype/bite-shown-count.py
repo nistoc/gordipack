@@ -120,9 +120,14 @@ def shown_column(cols: list):
 
 
 def call_reader(*extra) -> str:
+    # среда стенда (карточка #613): MEZO_CONTAINER — корень стенда (каталог над .mezosync), номер
+    # чата испытуемому не передаётся. Прежде ридер получал среду вызывающего: с MEZO_CONTAINER
+    # живого контура --db вёл в копию, а то, что ридер ищет по корню контура (обход писем
+    # соседей, sync_backoff.py), — в живой контур.
     out = subprocess.run([sys.executable, str(READER), "--db", str(SANDBOX),
                           "--role", ROLE, *extra],
-                         capture_output=True, text=True, encoding="utf-8", errors="replace")
+                         capture_output=True, text=True, encoding="utf-8", errors="replace",
+                         env=mezo_stand.stand_env(SANDBOX.parent.parent, PYTHONIOENCODING="utf-8"))
     return out.stdout
 
 

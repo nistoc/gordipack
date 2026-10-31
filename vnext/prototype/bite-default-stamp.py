@@ -75,10 +75,15 @@ def prepare() -> None:
 
 def write_note(body: str, *extra) -> int | None:
     """Зовём настоящий инструмент. Возвращаем id записанной записки."""
+    # среда стенда (карточка #613): MEZO_CONTAINER — корень стенда (каталог над .mezosync), номер
+    # чата испытуемому не передаётся. Прежде write-message.py получал среду вызывающего: с
+    # MEZO_CONTAINER живого контура --db вёл в копию, а то, что инструмент ищет по корню контура,
+    # — в живой контур.
     out = subprocess.run(
         [sys.executable, str(WRITER), "--db", str(SANDBOX), "--role", ROLE,
          "--body", body, *extra],
-        capture_output=True, text=True, encoding="utf-8", errors="replace")
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        env=mezo_stand.stand_env(SANDBOX.parent.parent, PYTHONIOENCODING="utf-8"))
     if out.returncode != 0:
         print(f"   ⛔ инструмент отказал: {out.stderr.strip()[:200]}")
         return None

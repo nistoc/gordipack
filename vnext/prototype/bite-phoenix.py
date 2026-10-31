@@ -18,6 +18,12 @@ bite-phoenix.py — приёмки для Э-А: смерть без свёрт�
 Теперь база снимается в стенд прогона (mezo_stand.snapshot_db), и все записи идут в копию.
 Копия лежит в <стенд>/.mezosync/, как база контура: инструменты считают корнем контура каталог
 над .mezosync, и копия прямо в корне стенда сделала бы корнем всю временную папку Windows.
+
+ИМЯ КОПИИ — bite-phoenix.db, НЕ mezosync.db (карточка #613). Испытуемый получает среду стенда
+(MEZO_CONTAINER = корень стенда), и для него <стенд>/.mezosync/mezosync.db — живая база контура:
+phoenix-vnext.py отказывает в записи («это ЖИВАЯ mezosync.db»). Замер 31.10 22:45 UTC: при имени
+mezosync.db сохранение и откат сценария ② вернули код 1, а приёмка вышла кодом 0 — она не смотрела
+на код шагов. Теперь смотрит: шаг записи с ненулевым кодом — провал приёмки (код 1).
 """
 import argparse
 import sqlite3
@@ -32,9 +38,13 @@ PROTO = Path(__file__).resolve().parent / "phoenix-vnext.py"
 ROLE = "STUD"          # роль, которая 2026-07-25 реально умерла без свёртки
 
 
-def run(args, **kw):
+def run(stand, args):
+    # среда стенда (карточка #613): корень стенда приходит параметром — его ставит main().
+    # Прежде phoenix-vnext.py получал среду вызывающего: с MEZO_CONTAINER живого контура
+    # --db вёл в копию, а то, что инструмент ищет по корню контура, — в живой контур.
     p = subprocess.run([sys.executable, str(PROTO), *args], capture_output=True, text=True,
-                       encoding="utf-8", errors="replace", **kw)
+                       encoding="utf-8", errors="replace",
+                       env=mezo_stand.stand_env(stand, PYTHONIOENCODING="utf-8"))
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 
@@ -55,7 +65,7 @@ def main():
         return 2
     stand = mezo_stand.new("bite-phoenix-")
     (stand / ".mezosync").mkdir()
-    db = mezo_stand.snapshot_db(src, stand / ".mezosync" / "mezosync.db")
+    db = mezo_stand.snapshot_db(src, stand / ".mezosync" / "bite-phoenix.db")
     print(f"копия песочницы: {db} (источник {src} только читается)")
     con = sqlite3.connect(str(db))
 
@@ -74,7 +84,11 @@ def main():
     print(f"  последняя нота роли:        {last_note} UTC")
     print(f"  ⇒ после сохранения памяти роль дала ещё {n_after} нот — в памяти их НЕТ.")
     print(f"     Это и есть дрейф: память честна о себе и молчит о мире.\n")
-    rc, out = run(["--db", str(db), "derive", "--role", ROLE])
+    # шаги испытуемого с ненулевым кодом — провал приёмки (карточка #613: отказ записи прошёл молча)
+    failed = []
+    rc, out = run(stand, ["--db", str(db), "derive", "--role", ROLE])
+    if rc:
+        failed.append(f"сборка памяти (код {rc})")
     body = [l for l in out.splitlines() if l.strip()]
     print(f"  DERIVED (rc={rc}) — собран сейчас, {len(out)} симв., ничего не переписывалось руками:")
     for line in body[3:14]:
@@ -103,10 +117,12 @@ def main():
 
     # ПОСЛЕ: возвращаем прежнее через версионируемое сохранение и проверяем историю
     tmp.write_text(before, encoding="utf-8")
-    rc, out = run(["--db", str(db), "save", "--role", ROLE, "--section", "plan",
+    rc, out = run(stand, ["--db", str(db), "save", "--role", ROLE, "--section", "plan",
                    "--file", str(tmp), "--reason", "восстановление после укуса"])
     print(f"  ПОСЛЕ (версионируемое сохранение) rc={rc}: {out.strip()}")
-    rc, out = run(["--db", str(db), "history", "--role", ROLE, "--section", "plan"])
+    if rc:
+        failed.append(f"сохранение (код {rc})")
+    rc, out = run(stand, ["--db", str(db), "history", "--role", ROLE, "--section", "plan"])
     print("  история секции:")
     for line in out.strip().splitlines():
         print("    " + line)
@@ -114,15 +130,23 @@ def main():
     v1 = con.execute("SELECT MIN(version) FROM phoenix_history_vnext WHERE role=? AND section='plan'",
                      (ROLE,)).fetchone()[0]
     if v1:
-        rc, out = run(["--db", str(db), "restore", "--role", ROLE, "--section", "plan",
+        rc, out = run(stand, ["--db", str(db), "restore", "--role", ROLE, "--section", "plan",
                        "--version", str(v1)])
         print(f"  откат к v{v1} rc={rc}: {out.strip()}")
-        rc, out = run(["--db", str(db), "history", "--role", ROLE, "--section", "plan"])
+        if rc:
+            failed.append(f"откат (код {rc})")
+        rc, out = run(stand, ["--db", str(db), "history", "--role", ROLE, "--section", "plan"])
         print(f"  ⇒ история после отката (откат — НОВАЯ версия, прошлое не переписано):")
         for line in out.strip().splitlines()[-3:]:
             print("    " + line)
+    else:
+        failed.append("истории секции нет — откатывать не к чему")
     tmp.unlink(missing_ok=True)
     con.close()
+    if failed:
+        print(f"\nИТОГ: ❌ шаги испытуемого не прошли: {'; '.join(failed)}")
+        return 1
+    print("\nИТОГ: ✅ сборка, сохранение и откат прошли; откат записан новой версией")
     return 0
 
 
