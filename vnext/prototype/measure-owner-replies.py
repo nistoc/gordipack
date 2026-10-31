@@ -23,7 +23,8 @@ Claude Code, отвечающих контуру C:\\guts\\.atlas и его по
 
 РАЗЛИЧЕНИЕ «слово, набранное владельцем» ПРОТИВ «вставка среды» — ИМПОРТОМ модуля
 <КОНТУР>/vnext-tools/find-owner-word.py (не копией куска кода). Переиспользованы
-его функции происхождение() и служебное(), и константа ОБЁРТКА_БУДИЛЬНИКА_СТАРАЯ.
+его функции origin_of() и is_service_insert(), и константа OLD_ALARM_WRAPPER (до 31.10 —
+происхождение(), служебное() и ОБЁРТКА_БУДИЛЬНИКА_СТАРАЯ: имена переведены по карточке #635).
 Причина импорта, а не копии: у образца это живой, уже проверенный на граничных
 случаях разбор (см. историю правок в его докстринге) — копия неизбежно разошлась бы
 с ним при следующей находке новой ложной формы, импорт расходиться не может.
@@ -104,7 +105,7 @@ def load_find_owner_word(path: Path):
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(module)
-    for needed in ("происхождение", "служебное", "ОБЁРТКА_БУДИЛЬНИКА_СТАРАЯ"):
+    for needed in ("origin_of", "is_service_insert", "OLD_ALARM_WRAPPER"):
         if not hasattr(module, needed):
             sys.exit(f"⛔ ОТКАЗ: в образце {path} не нашёл {needed} — он мог измениться несовместимо.")
     return module
@@ -301,10 +302,10 @@ def extract_owner_text(fow, raw_text: str) -> Optional[str]:
 
     Повторяет классификацию «человек»+«текст» из find-owner-word.py: отсекает
     старую ложную обёртку будильника, разворачивает косую команду, набранную
-    руками, отсекает пустое и служебные вставки среды (fow.служебное).
+    руками, отсекает пустое и служебные вставки среды (fow.is_service_insert).
     """
     stripped = raw_text.lstrip()
-    if stripped.startswith(fow.ОБЁРТКА_БУДИЛЬНИКА_СТАРАЯ):
+    if stripped.startswith(fow.OLD_ALARM_WRAPPER):
         return None
     if stripped.startswith("<command-"):
         name_m = COMMAND_NAME_RE.search(raw_text)
@@ -314,7 +315,7 @@ def extract_owner_text(fow, raw_text: str) -> Optional[str]:
         return plain or None
     if not raw_text.strip():
         return None
-    if fow.служебное(raw_text):
+    if fow.is_service_insert(raw_text):
         return None
     return raw_text
 
@@ -371,7 +372,7 @@ def scan_chat_file(path: Path, fow) -> ChatScan:
 
             if rtype != "user" or rec.get("isSidechain"):
                 continue
-            origin_kind = fow.происхождение(rec)
+            origin_kind = fow.origin_of(rec)
             if origin_kind != "человек":
                 continue
             ts = rec.get("timestamp", "")

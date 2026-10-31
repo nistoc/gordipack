@@ -26,6 +26,8 @@ r"""НАЙТИ СЛОВО ВЛАДЕЛЬЦА В ЗАПИСЯХ РАЗГОВОР�
     🔘 НАЙДЕНО ВЫБОРОМ ......... владелец нажал вариант; час — приход ответа в чат,
                                  то есть ВЕРХНЯЯ граница (сколько он думал до нажатия,
                                  запись не знает и знать не может)
+    ✍ СВОИМ ТЕКСТОМ В ОКНЕ .... владелец набрал ответ сам в поле «другое» окна вопросов —
+                                 его слово, а не вариант из предложенных; час — как у выбора
     ⚪ НЕ НАЙДЕНО .............. и здесь инструмент НЕ говорит «выдумано»: см. ниже
 
 🔢 КОДЫ ВОЗВРАТА (различимы МАШИНОЙ, а не только в тексте вывода):
@@ -35,7 +37,24 @@ r"""НАЙТИ СЛОВО ВЛАДЕЛЬЦА В ЗАПИСЯХ РАЗГОВОР�
 
 ✍ ПРОИСХОЖДЕНИЕ СУДИТСЯ ПО ПОЛЮ ЗАПИСИ, А НЕ ПО ВИДУ ТЕКСТА (с 2026-09-04 20:15 UTC,
   признак нашёл @CHROME, исключение и встречный случай — перемер PROTO; подробно в
-  происхождение()). Примета текста осталась ПОДСКАЗКОЙ и решает только там, где поля нет.
+  origin_of()). Примета текста осталась ПОДСКАЗКОЙ и решает только там, где поля нет.
+
+═══ КАРТОЧКА #635 (2026-10-31): ОКНО ВОПРОСОВ И ПРИШЕДШЕЕ ПОСРЕДИ ХОДА ═══
+Четыре ответа владельца в одном окне (чат PROTO, 2026-09-14T21:03:21Z) — «не найдено» по куску
+каждого. Причины, по замеру 31.10 на всех 2325 файлах записей:
+    · у ответа ДВЕ формы начала: 757 «Your questions have been answered:», 110 «The user
+      answered:» — вторую инструмент не знал (CHOICE_PREFIXES);
+    · ответ делился по первой паре «вопрос»="ответ": при нескольких вопросах печатался ПЕРВЫЙ,
+      а слово стояло в третьем (замер COORD и OPSSRE 11.10). Теперь — поле записи
+      toolUseResult (questions + answers + annotations), ПО ОДНОМУ ответу на вопрос
+      (window_answers); текст разбирается, только когда поля нет (parse_choice_text);
+    · свой текст из поля «другое» — ответ, не совпадающий ни с одним вариантом, — подписан как
+      слово человека; заметка к выбору (annotations) — тоже;
+    · пришедшее ПОСРЕДИ хода лежит вложением queued_command, а не репликой «user»: 767 набраны
+      человеком, 751 из них больше нигде нет (midturn_items);
+    · охват печатается ДВУМЯ счётами раздельно — реплик текстом и ответов в окне (предложение
+      RCC 11.10): сведённые в один ноль, они прятали бы, что окна инструмент не читал.
+Имена в коде — по-английски (слово владельца 07.09); прежние русские флаги приняты синонимами.
 
 ⛔ ЧЕГО ЭТОТ ИНСТРУМЕНТ НЕ ДОКАЗЫВАЕТ, СКАЗАНО ПРЯМО. Пустой ответ НЕ доказывает, что
 слова не было. Записи разговоров могут быть удалены, усечены при сжатии, лежать в другом
@@ -44,9 +63,10 @@ r"""НАЙТИ СЛОВО ВЛАДЕЛЬЦА В ЗАПИСЯХ РАЗГОВОР�
 был виден, а не подразумевался.
 
 Зовут так:
-    python <КОНТУР>/vnext-tools/find-owner-word.py --слово "ступенчато"
-    python <КОНТУР>/vnext-tools/find-owner-word.py --слово "пушить можно" --за 2026-08-08
-    python <КОНТУР>/vnext-tools/find-owner-word.py --слово "различать агентов" --подробно
+    python <КОНТУР>/vnext-tools/find-owner-word.py --word "ступенчато"
+    python <КОНТУР>/vnext-tools/find-owner-word.py --word "пушить можно" --date 2026-08-08
+    python <КОНТУР>/vnext-tools/find-owner-word.py --word "различать агентов" --verbose
+(прежние имена флагов --слово · --за · --корень · --подробно · --все-файлы принимаются)
 """
 from __future__ import annotations
 
@@ -63,10 +83,28 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 # Каталог записей разговоров. ⚖️ Выводится от домашнего каталога, а не впечатан:
 # впечатанный путь сделал бы инструмент непереносимым на другую машину, а молчал бы
 # он при этом так же убедительно, как работал.
-ПО_УМОЛЧАНИЮ = pathlib.Path.home() / ".claude" / "projects"
+DEFAULT_ROOT = pathlib.Path.home() / ".claude" / "projects"
 
 # Признак ответа, пришедшего интерфейсом выбора. Форма проверена на живых записях 04.09.
-МЕТКА_ВЫБОРА = "questions have been answered"
+CHOICE_MARK = "questions have been answered"
+
+# 🩸 КАРТОЧКА #635: у того же ответа ДВЕ формы начала. Замер 2026-10-31 по 2325 файлам записей:
+# 757 начинаются с «Your questions have been answered:», 110 — с «The user answered:». Вторую
+# инструмент не знал, и ответ 2026-09-14T21:03:21Z чата PROTO был «не найден» по каждому куску.
+CHOICE_PREFIXES = ("Your " + CHOICE_MARK, "The user answered")
+
+# Особые ответы окна вопросов: варианта владелец не выбрал. Это не слово, но и не пустота —
+# у каждого свой следующий шаг читателя, и он назван словами.
+NO_ANSWER_MARKS = (
+    ("[User did not answer this question",
+     "в окне не ответил — ответ пришёл отдельной репликой, ищи её рядом по часу"),
+    ("[No preference]", "отметил «без предпочтения»"),
+)
+
+# Пришедшее ПОСРЕДИ хода ложится в запись не репликой «user», а вложением queued_command
+# (карточка #635, находка COORD 12.10). Замер 31.10: 767 таких набраны человеком, и 751 из них
+# нигде больше в записи нет — поиск, не читающий вложений, их не видит вовсе.
+MIDTURN_TAG = "   ⟨пришло посреди хода — вложение queued_command⟩"
 
 # 🩸 ПОЙМАНО НА ПЕРВОМ ЖЕ ПРОГОНЕ ЭТОГО ИНСТРУМЕНТА (2026-09-04 16:41 UTC).
 # ⚡ КЛАСС: ПОИСК НАХОДИТ СОБСТВЕННОЕ ЭХО. Инструмент читает записи разговоров — и его
@@ -80,7 +118,7 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 # И вторая половина того же: служебные вставки системы лежат в записи РОЛИ «user» —
 # там же, где реплики владельца. Сводка сжатия разговора, вставка навыка, напоминание
 # среды: позиция одна, а автор разный. Отсеиваются по началу текста.
-СЛУЖЕБНЫЕ_НАЧАЛА = (
+SERVICE_PREFIXES = (
     "This session is being continued",
     "Caveat:",
     "<system-reminder>",
@@ -109,7 +147,7 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 # НЕВЕРНО и снято в 20:12 UTC тем же днём: «вызовом будильника» я назвала запись,
 # которую владелец вставил руками (текст рождения роли — в нём слова «сверка» и
 # «порядок хода»). Поверила словам, а не полю. Признак есть, нашёл @CHROME; счёт
-# и исключение — в происхождение(). Надгробие оставлено, чтобы преемник не
+# и исключение — в origin_of(). Надгробие оставлено, чтобы преемник не
 # «переоткрыл» ту же ложь тем же путём: она правдоподобна и легко воспроизводится.
 #
 # ⇒ ЛЕЧИМ НЕ УГАДЫВАНИЕ, А ЛОЖНУЮ УВЕРЕННОСТЬ. Пометка «час ТОЧЕН: это час самой
@@ -117,7 +155,7 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 #   что это реплика ВЛАДЕЛЬЦА — инструмент не знает и знать не может.
 #   Перечень ниже остаётся, но он — фильтр ИЗВЕСТНЫХ форм, стареющий и неполный,
 #   и инструмент говорит это вслух вместо того, чтобы притворяться полным.
-МАШИННЫЕ_ПРИМЕТЫ = (
+MACHINE_HINTS = (
     "исполни наказ-файл",
     "scheduled-tasks",
     "сверка",
@@ -134,13 +172,13 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 )
 
 
-def служебное(текст: str) -> bool:
+def is_service_insert(text: str) -> bool:
     """Служебная вставка системы, лежащая в позиции реплики владельца."""
-    н = текст.lstrip()
-    return any(н.startswith(п) for п in СЛУЖЕБНЫЕ_НАЧАЛА)
+    stripped = text.lstrip()
+    return any(stripped.startswith(p) for p in SERVICE_PREFIXES)
 
 
-def похоже_на_машинное(текст: str) -> str | None:
+def machine_hint_of(text: str) -> str | None:
     """Какая примета машинного вызова сработала. None — ни одна.
 
     ⚖️ РЕГИСТР НЕ ВАЖЕН — оплачено замером @COORD: он искал «Сверка COORD», а в записях
@@ -148,17 +186,17 @@ def похоже_на_машинное(текст: str) -> str | None:
     ⛔ И перечень всё равно НЕПОЛОН: это фильтр известных форм, а не знание автора.
     Потому находки не выбрасываются, а ОТДЕЛЯЮТСЯ — решает читатель, а не список.
     """
-    низ = текст.lower()
-    for п in МАШИННЫЕ_ПРИМЕТЫ:
-        if п in низ:
-            return п
+    lowered = text.lower()
+    for p in MACHINE_HINTS:
+        if p in lowered:
+            return p
     return None
 
 
-ОБЁРТКА_БУДИЛЬНИКА_СТАРАЯ = "<scheduled-task"
+OLD_ALARM_WRAPPER = "<scheduled-task"
 
 
-def происхождение(з: dict) -> str:
+def origin_of(rec: dict) -> str:
     """Кто ЗАПИСАЛ реплику — по полю записи, а не по виду текста.
 
     🔑 ПРИЗНАК НАШЁЛ @CHROME (записка #4702, 2026-09-04 19:40 UTC): у набранного
@@ -180,55 +218,63 @@ def происхождение(з: dict) -> str:
                                   «<scheduled-task …» 27–31.08 несут «human»
     ⇒ три исхода, а не два, и каждый назван ниже своим словом.
     """
-    o = з.get("origin")
+    o = rec.get("origin")
     if o is None:
         return "не записано"
-    вид = o.get("kind") if isinstance(o, dict) else None
-    return "человек" if вид == "human" else f"иное: {вид}"
+    kind = o.get("kind") if isinstance(o, dict) else None
+    return "человек" if kind == "human" else f"иное: {kind}"
 
 
-def реплики(файл: pathlib.Path):
-    """Выдать (час, вид, текст, происхождение, служебные_метки) для реплик роли «user».
+def user_turns(file_name: pathlib.Path):
+    """Выдать (час, вид, текст, происхождение, служебные_метки, ответ_окна) для реплик роли
+    «user» и для вложений queued_command (пришедшее посреди хода).
 
-    вид: 'текст' — лежит в позиции набранного · 'выбор' — нажат вариант в интерфейсе.
-    происхождение: 'человек' · 'не записано' · 'иное: <вид>' — см. происхождение().
+    вид: 'текст' — лежит в позиции набранного · 'выбор' — ответ в окне вопросов, ПО ОДНОМУ на
+    вопрос (карточка #635) · 'посреди-хода' — вложение с полем «человек» · 'посреди-хода-механизм'
+    — то же вложение от механизма · 'команда-механизма' · 'сводка'.
+    ответ_окна: у вида 'выбор' — словарь из window_answers() либо parse_choice_text(), иначе None.
+    происхождение: 'человек' · 'не записано' · 'иное: <вид>' — см. origin_of().
     служебные_метки: подсадка навыка (isMeta) и сводка сжатия (isCompactSummary) —
     у них поля нет ЗАКОННО, и в «не записано» им не место.
     """
     try:
-        fh = open(файл, encoding="utf-8", errors="replace")
+        fh = open(file_name, encoding="utf-8", errors="replace")
     except OSError:
         return
     with fh:
-        for стр in fh:
-            if '"type":"user"' not in стр and '"type": "user"' not in стр:
+        for line in fh:
+            if ('"type":"user"' not in line and '"type": "user"' not in line
+                    and "queued_command" not in line):
                 continue
             try:
-                з = json.loads(стр)
+                rec = json.loads(line)
             except Exception:
                 continue
-            if з.get("type") != "user":
+            if rec.get("type") == "attachment":
+                yield from midturn_items(rec)
                 continue
-            ч = з.get("timestamp", "")
+            if rec.get("type") != "user":
+                continue
+            ts = rec.get("timestamp", "")
             # ⚡ ДВЕ РАЗНЫЕ МЕТКИ, и слить их — значит спрятать будильник (поймано 20:17 UTC:
             # нынешние вызовы будильника приходят как подсадка механизма, isMeta=True).
-            метки = ("подсадка" if з.get("isMeta") else
-                     "сводка" if з.get("isCompactSummary") else None)
-            пр = происхождение(з)
-            тело = з.get("message", {}).get("content")
-            if isinstance(тело, str) and пр == "человек" and тело.lstrip().startswith("<command-"):
+            marks = ("подсадка" if rec.get("isMeta") else
+                     "сводка" if rec.get("isCompactSummary") else None)
+            origin = origin_of(rec)
+            body = rec.get("message", {}).get("content")
+            if isinstance(body, str) and origin == "человек" and body.lstrip().startswith("<command-"):
                 # ⚡ КОСАЯ КОМАНДА ВЛАДЕЛЬЦА («/loop 2h sync …») хранится в служебной обёртке
                 # <command-name>…<command-args>…</command-args> — и отсеивалась как служебное,
                 # хотя поле говорит «человек». Найдено на живом случае @CORE 04.09 20:55 UTC:
                 # его основание для работы весь вечер — эта команда — было невидимо поиску.
                 # Поле сильнее обёртки: вынимаем имя команды и её слова, показываем как реплику.
-                имя = re.search(r"<command-name>(.*?)</command-name>", тело, re.S)
-                арг = re.search(r"<command-args>(.*?)</command-args>", тело, re.S)
-                текст = ((имя.group(1).strip() if имя else "") + " " + (арг.group(1).strip() if арг else "")).strip()
-                if текст:
-                    yield ч, "текст", текст + "   ⟨косая команда, набрана владельцем⟩", пр, метки
+                name_m = re.search(r"<command-name>(.*?)</command-name>", body, re.S)
+                arg_m = re.search(r"<command-args>(.*?)</command-args>", body, re.S)
+                text = ((name_m.group(1).strip() if name_m else "") + " " + (arg_m.group(1).strip() if arg_m else "")).strip()
+                if text:
+                    yield ts, "текст", text + "   ⟨косая команда, набрана владельцем⟩", origin, marks, None
                 continue
-            if isinstance(тело, str) and тело.lstrip().startswith("<command-"):
+            if isinstance(body, str) and body.lstrip().startswith("<command-"):
                 # 🔑 ТА ЖЕ ОБЁРТКА БЕЗ ПОЛЯ «ЧЕЛОВЕК» — подача механизма: перенос пробуждения
                 # (ScheduleWakeup) кладёт в чат ту же команду «/loop …» повторно, и запись несёт
                 # НИ поля, НИ метки isMeta — по форме она неотличима от набранной человеком.
@@ -238,68 +284,194 @@ def реплики(файл: pathlib.Path):
                 # До 05.09 они отсеивались МОЛЧА как служебное. Молчаливый отсев неотличим от
                 # «слова не было» — показываем их в 🤖, чтобы читатель видел, что слово в чат
                 # ПРИХОДИЛО, но не от владельца. Судится ВИДОМ записи, не приметой текста.
-                имя = re.search(r"<command-name>(.*?)</command-name>", тело, re.S)
-                арг = re.search(r"<command-args>(.*?)</command-args>", тело, re.S)
-                текст = ((имя.group(1).strip() if имя else "") + " " + (арг.group(1).strip() if арг else "")).strip()
-                if текст:
-                    yield ч, "команда-механизма", текст, пр, метки
+                name_m = re.search(r"<command-name>(.*?)</command-name>", body, re.S)
+                arg_m = re.search(r"<command-args>(.*?)</command-args>", body, re.S)
+                text = ((name_m.group(1).strip() if name_m else "") + " " + (arg_m.group(1).strip() if arg_m else "")).strip()
+                if text:
+                    yield ts, "команда-механизма", text, origin, marks, None
                 continue
-            if isinstance(тело, str):
-                if метки == "сводка":
+            if isinstance(body, str):
+                if marks == "сводка":
                     # сводка сжатия отдаётся ОТДЕЛЬНЫМ видом: её не показывают как слово,
                     # но и не прячут число — одно событие лежит и в записи, и в пересказе
-                    yield ч, "сводка", тело, пр, метки
-                elif тело.strip() and not служебное(тело):
-                    yield ч, "текст", тело, пр, метки
+                    yield ts, "сводка", body, origin, marks, None
+                elif body.strip() and not is_service_insert(body):
+                    yield ts, "текст", body, origin, marks, None
                 continue
-            if not isinstance(тело, list):
+            if not isinstance(body, list):
                 continue
-            for к in тело:
-                if not isinstance(к, dict):
+            for item in body:
+                if not isinstance(item, dict):
                     continue
-                if к.get("type") == "text" and к.get("text", "").strip():
-                    if not служебное(к["text"]):
-                        yield ч, "текст", к["text"], пр, метки
-                elif к.get("type") == "tool_result":
-                    c = к.get("content")
+                if item.get("type") == "text" and item.get("text", "").strip():
+                    if not is_service_insert(item["text"]):
+                        yield ts, "текст", item["text"], origin, marks, None
+                elif item.get("type") == "tool_result":
+                    c = item.get("content")
                     s = c if isinstance(c, str) else json.dumps(c, ensure_ascii=False)
-                    # ⛔ НАЧИНАЕТСЯ, а не «содержит»: см. разбор про эхо выше
-                    if s.lstrip().startswith("Your " + МЕТКА_ВЫБОРА):
-                        yield ч, "выбор", s, пр, метки
+                    # ⛔ НАЧИНАЕТСЯ, а не «содержит»: см. разбор про эхо выше. Обе формы начала.
+                    if not s.lstrip().startswith(CHOICE_PREFIXES):
+                        continue
+                    # Поле записи сильнее текста (карточка #635): в нём каждый вопрос со своими
+                    # вариантами. Текст разбирается, только когда поля нет.
+                    answers = window_answers(rec.get("toolUseResult"))
+                    if answers is None:
+                        answers = parse_choice_text(s)
+                    for ans in answers:
+                        yield ts, "выбор", ans["match"], origin, marks, ans
 
 
-def разобрать_выбор(s: str):
-    """Из «...answered: "вопрос"="ответ". You can now...» достать пару.
+def midturn_items(rec: dict):
+    """Вложение queued_command — то, что пришло ПОСРЕДИ хода (карточка #635).
+
+    Происхождение лежит не в записи, а во вложении: attachment.origin.kind. «human» — набрал
+    человек; «peer» — записка другой сессии; «task-notification» — извещение о задаче;
+    «coordinator» — сообщение координатора; поля нет — подача механизма (замер 31.10: это
+    извещения о задачах и одно событие CI). Текст — attachment.prompt: строка либо список
+    кусков {"type": "text"} (46 из 767 человеческих — списком).
+    """
+    att = rec.get("attachment")
+    if not isinstance(att, dict) or att.get("type") != "queued_command":
+        return
+    prompt = att.get("prompt")
+    if isinstance(prompt, list):
+        prompt = "\n".join(p.get("text", "") for p in prompt
+                           if isinstance(p, dict) and p.get("type") == "text")
+    if not isinstance(prompt, str) or not prompt.strip():
+        return
+    ts = rec.get("timestamp") or att.get("timestamp", "")
+    o = att.get("origin")
+    who = o.get("kind") if isinstance(o, dict) else None
+    if who == "human":
+        yield ts, "посреди-хода", prompt + MIDTURN_TAG, "человек", None, None
+    else:
+        # пятым элементом — вид вложения (commandMode): он идёт в причину строки 🤖
+        yield (ts, "посреди-хода-механизм", prompt,
+               f"происхождение «{who}»" if who else "происхождение не записано",
+               att.get("commandMode"), None)
+
+
+def special_answer(s: str):
+    """Особый ответ окна (владелец не выбрал) — его описание словами; иначе None."""
+    return next((words for prefix, words in NO_ANSWER_MARKS if s.startswith(prefix)), None)
+
+
+def split_answer(raw, labels: list) -> tuple:
+    """Ответ одного вопроса → (выбранные варианты, свой текст, особый ответ).
+
+    Несколько выбранных приходят списком либо строкой через запятую — а запятая бывает и внутри
+    варианта (ответ 14.09 «…,mezosync_v6.sql — оставить,…»). Поэтому строку не режем по запятым,
+    а вынимаем из неё известные варианты целыми кусками между запятыми, длинные первыми; что
+    осталось — свой текст из поля «другое», набранный человеком.
+    """
+    items = raw if isinstance(raw, list) else [raw]
+    picked, own, special = [], [], None
+    for it in items:
+        s = (it if isinstance(it, str) else json.dumps(it, ensure_ascii=False)).strip()
+        mark = special_answer(s)
+        if mark:
+            special = mark
+            continue
+        rest = s
+        for label in sorted({x for x in labels if x}, key=len, reverse=True):
+            pat = re.compile(r"(^|,)\s*" + re.escape(label) + r"\s*(?=,|$)")
+            if pat.search(rest):
+                picked.append(label)
+                rest = pat.sub(r"\1", rest, count=1)
+        rest = re.sub(r"(\s*,\s*){2,}", ", ", rest).strip(" ,")
+        if rest:
+            own.append(rest)
+    whole = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False)
+    picked.sort(key=whole.find)
+    return picked, ("; ".join(own) or None), special
+
+
+def window_answers(tur) -> list | None:
+    """Ответы окна вопросов по полю записи toolUseResult — ПО ОДНОМУ на вопрос (карточка #635).
+
+    Поле несёт questions (текст вопроса и его варианты) и answers — словарь «вопрос → ответ»;
+    у части записей ещё annotations — «вопрос → {notes: заметка владельца к выбору}».
+    🩸 Прежде ответ разбирался по ТЕКСТУ и делился по первой паре «вопрос»="ответ": при
+    нескольких вопросах печатался первый, а слово стояло в третьем (замер COORD и OPSSRE 11.10).
+    None — поля нет или оно не той формы: тогда разбирается текст (parse_choice_text).
+    """
+    if not isinstance(tur, dict):
+        return None
+    answers, questions = tur.get("answers"), tur.get("questions")
+    if not isinstance(answers, dict) or not isinstance(questions, list):
+        return None
+    labels = {}
+    for q in questions:
+        if isinstance(q, dict) and isinstance(q.get("question"), str):
+            labels[q["question"]] = [o.get("label", "") for o in (q.get("options") or [])
+                                     if isinstance(o, dict)]
+    notes = tur.get("annotations") if isinstance(tur.get("annotations"), dict) else {}
+    result = []
+    for i, (question, raw) in enumerate(answers.items(), 1):
+        picked, own, special = split_answer(raw, labels.get(question, []))
+        ann = notes.get(question)
+        note = ann.get("notes") if isinstance(ann, dict) else None
+        note = note.strip() if isinstance(note, str) and note.strip() else None
+        answer_text = "\n".join(picked + [own or "", note or ""])
+        result.append({"question": question, "picked": picked, "own": own, "note": note,
+                       "special": special, "of": (i, len(answers)), "source": "поле записи",
+                       "answer_text": answer_text, "match": question + "\n" + answer_text})
+    return result
+
+
+def parse_choice_text(s: str) -> list:
+    """Запасной путь, когда поля toolUseResult нет: пары «вопрос»="ответ" из ТЕКСТА результата.
 
     ⚖️ Разбор нарочно грубый и НЕ падает: если форма изменится, инструмент отдаст строку
     целиком, а не соврёт пустотой. Молчаливый разбор хуже грубого — он выглядит успехом.
+    ⚠️ Без поля вариант от своего текста не отличить: варианты знает только поле.
     """
-    ядро = s.split(МЕТКА_ВЫБОРА, 1)[1].lstrip(": ").strip()
-    хвост = " You can now continue"
-    if хвост in ядро:
-        ядро = ядро.split(хвост, 1)[0].rstrip(" .")
-    if '"="' in ядро:
-        вопрос, ответ = ядро.split('"="', 1)
-        return вопрос.lstrip('"'), ответ.rstrip('".')
-    return None, ядро
+    body = s.lstrip()
+    for prefix in CHOICE_PREFIXES:
+        if body.startswith(prefix):
+            body = body[len(prefix):]
+            break
+    body = body.lstrip(": ").strip()
+    for tail in (" You can now continue", " Read the answers carefully"):
+        if tail in body:
+            body = body.split(tail, 1)[0]
+    body = body.rstrip(" .")
+    pairs = [seg.split('"="', 1) for seg in body.split('", "') if '"="' in seg]
+    if not pairs:
+        pairs = [(None, body)]
+    result = []
+    for i, (question, answer) in enumerate(pairs, 1):
+        q = question.strip('"') if question is not None else None
+        a = answer.strip('"')
+        special = special_answer(a)
+        result.append({"question": q, "picked": [] if special else [a], "own": None,
+                       "note": None, "special": special, "of": (i, len(pairs)),
+                       "source": "текст результата (поля нет — вариант от своего текста не отличить)",
+                       "answer_text": "" if special else a, "match": (q or "") + "\n" + a})
+    return result
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--слово", dest="слово", required=True,
-                    help="искомый кусок текста (регистр не важен)")
-    ap.add_argument("--за", dest="за", default=None,
-                    help="только за эту дату, ГГГГ-ММ-ДД")
-    ap.add_argument("--корень", dest="корень", default=str(ПО_УМОЛЧАНИЮ))
-    ap.add_argument("--подробно", dest="подробно", action="store_true",
-                    help="печатать текст найденного целиком, а не первые 200 знаков")
-    ap.add_argument("--все-файлы", dest="все_файлы", action="store_true",
+    # Флаги по-английски (слово владельца 07.09 о коде); прежние русские имена — синонимы:
+    # ими инструмент зовут свод правил, карточки и память ролей.
+    ap.add_argument("--word", "--слово", dest="word", required=True,
+                    help="искомый кусок текста (регистр не важен); прежнее имя --слово")
+    ap.add_argument("--date", "--за", dest="date", default=None,
+                    help="только за эту дату, ГГГГ-ММ-ДД; прежнее имя --за")
+    ap.add_argument("--root", "--корень", dest="root", default=str(DEFAULT_ROOT),
+                    help="каталог записей разговоров; прежнее имя --корень")
+    ap.add_argument("--verbose", "--подробно", dest="verbose", action="store_true",
+                    help="печатать текст найденного целиком, а не первые 200 знаков; "
+                         "прежнее имя --подробно")
+    ap.add_argument("--all-files", "--все-файлы", dest="all_files", action="store_true",
                     help="читать ВСЕ записи, даже правленные до искомой даты "
-                         "(отключает отбор по времени правки — см. разбор ниже)")
+                         "(отключает отбор по времени правки — см. разбор ниже); "
+                         "прежнее имя --все-файлы")
     a = ap.parse_args()
 
-    корень = pathlib.Path(a.корень)
-    if not корень.is_dir():
+    root = pathlib.Path(a.root)
+    if not root.is_dir():
         # ⛔ Отказ мерить, а не «ничего не нашлось»: пустой ответ от несуществующего
         # каталога неотличим от честного «нет такого слова» — ровно та беда, которую
         # эта карточка и лечит.
@@ -310,15 +482,19 @@ def main() -> int:
         # вывода, недоступно вызывающему: сценарий, приёмка и общий прогон видят ОДНО
         # число. Это ровно та беда, ради которой заведена эта задача, — воспроизведённая
         # мной внутри лекарства от неё.
-        print(f"⛔ ОТКАЗ МЕРИТЬ: каталога записей разговоров нет — {корень}")
-        print("   Это НЕ «слова не было»: искать было негде. Укажи --корень.")
+        print(f"⛔ ОТКАЗ МЕРИТЬ: каталога записей разговоров нет — {root}")
+        print("   Это НЕ «слова не было»: искать было негде. Укажи --root.")
         return 2
 
-    искомое = a.слово.lower()
-    файлов = 0
+    needle = a.word.lower()
+    files_read = 0
     # четыре корзины, и это НЕ оформление — у каждой свой следующий шаг читателя
-    человек, выбором, без_признака, машинным = [], [], [], []
-    сводок = 0
+    by_human, by_choice, no_origin, machine = [], [], [], []
+    summaries = 0
+    # ДВА СЧЁТА ОХВАТА РАЗДЕЛЬНО (карточка #635, предложение RCC 11.10): сколько реплик, набранных
+    # текстом, и сколько ответов в окне вопросов просмотрено за отбор — независимо от искомого
+    # слова. Сведённые в один ноль, они прятали бы, что окна инструмент не читал.
+    seen = {"текст": 0, "выбор": 0, "посреди-хода": 0}
 
     # ── ОТБОР ФАЙЛОВ ПО ВРЕМЕНИ ПРАВКИ (карточка #530) ──────────────────────────────
     # 📏 ЗАМЕР 2026-09-04 22:50 UTC, роль OPSSRE, 620 файлов / 1 862 МБ:
@@ -328,64 +504,72 @@ def main() -> int:
     #     и «грубый отбор по подстроке до разбора» (догадка (а) карточки) купил бы
     #     секунды ценой ложного «не найдено» на экранированной кириллице. НЕ СДЕЛАНО
     #     НАРОЧНО: измерено, что там не время.
-    # 🎯 Сделано (б): при --за <дата> файл, правленный ДО начала этой даты, не читается.
-    #      --за 2026-09-04 ⇒ 25 файлов из 620, 486 МБ вместо 1 862 — НЕ ЧИТАЕМ 74%
+    # 🎯 Сделано (б): при --date <дата> файл, правленный ДО начала этой даты, не читается.
+    #      --date 2026-09-04 ⇒ 25 файлов из 620, 486 МБ вместо 1 862 — НЕ ЧИТАЕМ 74%
     # ⚠️ ЧТО ЭТОТ ОТБОР МОЖЕТ ПРОПУСТИТЬ, названо ДО починки: файл, чьё время правки
     #    старше искомой даты, но внутри лежит запись этой даты. Обычной дописью такого
     #    не бывает (дописал ⇒ время правки новее записи), но так ведёт себя ВОССТАНОВЛЕНИЕ
-    #    ИЗ КОПИИ со старым временем. ⇒ отбор ОТКЛЮЧАЕМ (--все-файлы) и НАЗЫВАЕТСЯ ВСЛУХ
+    #    ИЗ КОПИИ со старым временем. ⇒ отбор ОТКЛЮЧАЕМ (--all-files) и НАЗЫВАЕТСЯ ВСЛУХ
     #    в строке охвата: сужение, о котором читатель не знает, — это ложное «не найдено».
-    пропущено = 0
-    порог = None
-    if a.за and not a.все_файлы:
+    skipped = 0
+    threshold = None
+    if a.date and not a.all_files:
         try:
             # 🔎 Приёмка @PROTO 05.09 (карточка #530): порог — ПОЛНОЧЬ UTC искомой даты, не местная.
-            # Даты записей — UTC («…Z»), и отбор записей по --за идёт по UTC; «наивная» полночь
+            # Даты записей — UTC («…Z»), и отбор записей по --date идёт по UTC; «наивная» полночь
             # через .timestamp() — местная: при смещении +02 порог уезжал на 2 ч РАНЬШЕ (лишние
             # два часа читаем — безвредно), а при отрицательном смещении уехал бы ПОЗЖЕ — и файл,
             # дописанный последний раз между полночью UTC и местной, был бы пропущен вместе
             # с записями искомой даты: ложное «не найдено» на машине западнее Гринвича.
             # Здесь смещение +02 — беда не воспроизводилась; названа по построению, не замером.
-            порог = dt.datetime.fromisoformat(a.за).replace(tzinfo=dt.timezone.utc).timestamp()
+            threshold = dt.datetime.fromisoformat(a.date).replace(tzinfo=dt.timezone.utc).timestamp()
         except ValueError:
-            print(f"⛔ ОТКАЗ МЕРИТЬ: дату «{a.за}» не разобрать, нужна форма ГГГГ-ММ-ДД.")
+            print(f"⛔ ОТКАЗ МЕРИТЬ: дату «{a.date}» не разобрать, нужна форма ГГГГ-ММ-ДД.")
             return 2
 
-    for f in корень.rglob("*.jsonl"):
-        if порог is not None:
+    for f in root.rglob("*.jsonl"):
+        if threshold is not None:
             try:
-                if f.stat().st_mtime < порог:
-                    пропущено += 1
+                if f.stat().st_mtime < threshold:
+                    skipped += 1
                     continue
             except OSError:
                 pass          # не смогли узнать время правки — читаем, а не пропускаем
-        файлов += 1
-        for ч, вид, текст, пр, метки in реплики(f):
-            if a.за and not ч.startswith(a.за):
+        files_read += 1
+        for ts, kind, text, origin, marks, window in user_turns(f):
+            if a.date and not ts.startswith(a.date):
                 continue
-            if искомое not in текст.lower():
+            if kind in ("выбор", "посреди-хода"):
+                seen[kind] += 1
+            elif kind == "текст" and origin == "человек":
+                seen["текст"] += 1
+            if needle not in text.lower():
                 continue
-            if вид == "сводка":
-                сводок += 1
+            if kind == "сводка":
+                summaries += 1
                 continue
-            запись = (ч, f.parent.name, f.name, текст)
-            if вид == "выбор":
-                выбором.append(запись + (None,))
+            entry = (ts, f.parent.name, f.name, text)
+            if kind == "выбор":
+                by_choice.append(entry + (window,))
                 continue
-            if вид == "команда-механизма":
-                машинным.append(запись + ("косая команда в обёртке БЕЗ поля «человек» — повтор "
+            if kind == "посреди-хода-механизм":
+                machine.append(entry + (f"пришло посреди хода (вложение queued_command, вид "
+                                        f"«{marks or '—'}»), {origin}: не набрано человеком",))
+                continue
+            if kind == "команда-механизма":
+                machine.append(entry + ("косая команда в обёртке БЕЗ поля «человек» — повтор "
                                           "механизма (перенос пробуждения); слово владельца — "
                                           "та же команда С полем, ищи её в 📝",))
                 continue
-            подсказка = похоже_на_машинное(текст)
-            if пр == "человек":
+            hint = machine_hint_of(text)
+            if origin == "человек":
                 # ⚠️ ИСКЛЮЧЕНИЕ, найденное перемером 04.09 20:12 UTC: старая обёртка
                 # будильника (27–31.08) записывалась С полем «человек». Судим по ней.
-                if текст.lstrip().startswith(ОБЁРТКА_БУДИЛЬНИКА_СТАРАЯ):
-                    машинным.append(запись + ("обёртка будильника 27–31.08, поле «человек» ложное",))
+                if text.lstrip().startswith(OLD_ALARM_WRAPPER):
+                    machine.append(entry + ("обёртка будильника 27–31.08, поле «человек» ложное",))
                 else:
-                    человек.append(запись + (подсказка,))
-            elif пр == "не записано":
+                    by_human.append(entry + (hint,))
+            elif origin == "не записано":
                 # 🔑 ПОДАЧА МЕХАНИЗМА (isMeta) ⇒ 🤖. История этой ветки — за одни сутки ТРИ редакции:
                 #   20:17 UTC 04.09 — «isMeta ⇒ машинное» (как здесь);
                 #   20:55 UTC 04.09 — снято по находке @CORE (записка #4716): «в моём чате повтор
@@ -400,133 +584,163 @@ def main() -> int:
                 # ⇒ Такая запись идёт в 🤖 с причиной, а в ⚪ («чей голос — не узнать») ей не место:
                 # чей голос, известно — механизма. Кто перечитает эту ветку и захочет снова снять
                 # суждение — сперва перемерь: `человек И isMeta` по всем файлам должно стать > 0.
-                if метки == "подсадка":
-                    машинным.append(запись + ("подано механизмом (isMeta): тело навыка, удар будильника "
+                if marks == "подсадка":
+                    machine.append(entry + ("подано механизмом (isMeta): тело навыка, удар будильника "
                                               "или напоминание среды — не новое слово владельца",))
-                elif подсказка:
-                    машинным.append(запись + (f"поля нет + примета «{подсказка}»",))
+                elif hint:
+                    machine.append(entry + (f"поля нет + примета «{hint}»",))
                 else:
-                    без_признака.append(запись + (None,))
+                    no_origin.append(entry + (None,))
             else:
-                машинным.append(запись + (f"происхождение {пр}",))
+                machine.append(entry + (f"происхождение {origin}",))
 
     print("=" * 92)
-    print(f"ПОИСК СЛОВА ВЛАДЕЛЬЦА: «{a.слово}»"
-          + (f" · только за {a.за}" if a.за else ""))
-    print(f"охват: файлов записей просмотрено {файлов} · корень {корень}")
-    if пропущено:
+    print(f"ПОИСК СЛОВА ВЛАДЕЛЬЦА: «{a.word}»"
+          + (f" · только за {a.date}" if a.date else ""))
+    print(f"охват: файлов записей просмотрено {files_read} · корень {root}")
+    print(f"       за отбор РАЗДЕЛЬНО: реплик текстом (поле «человек») {seen['текст']} · "
+          f"ответов в окне вопросов {seen['выбор']} · пришедших посреди хода {seen['посреди-хода']}")
+    if skipped:
         # ⛔ СУЖЕНИЕ ГОВОРИТСЯ ВСЛУХ. Молчаливое сужение охвата неотличимо от честного
         # «слова не было» — тот самый класс, ради которого весь инструмент и написан.
-        print(f"       ⚠️ ПРОПУЩЕНО {пропущено} файлов: время их правки старше {a.за}, "
+        print(f"       ⚠️ ПРОПУЩЕНО {skipped} файлов: время их правки старше {a.date}, "
               f"записи этой даты в них взяться неоткуда.")
-        print(f"       Читать всё равно ВСЕ: добавь --все-файлы")
+        print(f"       Читать всё равно ВСЕ: добавь --all-files")
     print("=" * 92)
 
-    for ч, проект, файл, текст, подсказка in sorted(человек):
-        показ = текст.strip() if a.подробно else текст.strip()[:200]
+    for ts, project, file_name, text, hint in sorted(by_human):
+        shown = text.strip() if a.verbose else text.strip()[:200]
         print()
-        print(f"📝 НАБРАНО ЧЕЛОВЕКОМ · {ч}")
-        print(f"   чат: {проект} / {файл[:8]}…")
+        print(f"📝 НАБРАНО ЧЕЛОВЕКОМ · {ts}")
+        print(f"   чат: {project} / {file_name[:8]}…")
         print(f"   ⏱ час записи ТОЧЕН (до миллисекунды) — час, когда текст лёг в чат")
         print(f"   ✍ происхождение ЗАПИСАНО в самой записи: «человек» (поле origin).")
         print(f"      Кто именно из людей — запись не знает; в этих чатах человек один.")
-        if подсказка:
-            print(f"   ⚠️ по тексту похоже на машинный вызов (примета «{подсказка}»), но поле")
+        if hint:
+            print(f"   ⚠️ по тексту похоже на машинный вызов (примета «{hint}»), но поле")
             print(f"      говорит «человек»: владелец мог вставить наказ руками. Верю полю.")
-        for с in показ.splitlines():
-            print(f"   │ {с}")
+        for ln in shown.splitlines():
+            print(f"   │ {ln}")
 
-    for ч, проект, файл, текст, _ in sorted(выбором):
-        вопрос, ответ = разобрать_выбор(текст)
+    def cut(s: str, n: int = 180) -> str:
+        return s if a.verbose else s[:n]
+
+    # ключ сортировки — без словаря ответа: два одинаковых начала иначе сравнили бы словари
+    for ts, project, file_name, text, w in sorted(by_choice, key=lambda e: e[:4]):
         print()
-        print(f"🔘 НАЙДЕНО ВЫБОРОМ (интерфейс вариантов) · {ч}")
-        print(f"   чат: {проект} / {файл[:8]}…")
+        if w["own"]:
+            # ✍ свой текст — слово человека, а не вариант из предложенных ролью (карточка #635)
+            print(f"✍ НАЙДЕНО СВОИМ ТЕКСТОМ В ОКНЕ ВОПРОСОВ — набрано человеком · {ts}")
+        elif w["special"] and not w["picked"]:
+            print(f"⚪ НАЙДЕНО В ОКНЕ ВОПРОСОВ — вариант не выбран · {ts}")
+        else:
+            print(f"🔘 НАЙДЕНО ВЫБОРОМ (интерфейс вариантов) · {ts}")
+        print(f"   чат: {project} / {file_name[:8]}…")
         print(f"   ⚖️ час — ВЕРХНЯЯ ГРАНИЦА: это приход ответа в чат. Сколько владелец")
         print(f"      держал выбор открытым до нажатия, запись не знает и знать не может")
-        if вопрос is not None:
-            в = вопрос if a.подробно else вопрос[:180]
-            print(f"   ❓ спрашивали: {в}")
-        print(f"   ✅ ВЫБРАНО: {ответ if a.подробно else ответ[:180]}")
+        i, n = w["of"]
+        if w["question"] is not None:
+            print(f"   ❓ спрашивали (вопрос {i} из {n}): {cut(w['question'])}")
+        if w["picked"]:
+            print(f"   ✅ ВЫБРАНО: {cut(' · '.join(w['picked']))}")
+        if w["own"]:
+            print(f"   ✍ СВОИМ ТЕКСТОМ (поле «другое»): {cut(w['own'])}")
+            print(f"      это слово человека, набранное им самим, а не вариант из предложенных")
+        if w["note"]:
+            print(f"   📝 заметка к выбору, набрана человеком: {cut(w['note'])}")
+        if w["special"]:
+            print(f"   ⚪ особый ответ: {w['special']}")
+        where = ("в ответе" if needle in w["answer_text"].lower() else
+                 "ТОЛЬКО в тексте вопроса — его писала роль, это не слово владельца; ответ выше")
+        print(f"   🔎 слово найдено: {where}")
+        print(f"   📎 разобрано по: {w['source']}")
 
-    if без_признака:
+    if no_origin:
         print()
         print("·" * 92)
-        print(f"⚪ ПРОИСХОЖДЕНИЕ НЕ ЗАПИСАНО — {len(без_признака)} шт. Это НЕ «машина»:")
+        print(f"⚪ ПРОИСХОЖДЕНИЕ НЕ ЗАПИСАНО — {len(no_origin)} шт. Это НЕ «машина»:")
         print("   поле появилось не у всех клиентов сразу (чаты 09–15.08 в другом проекте")
         print("   его не писали, а там владелец говорил сам), и его нет у наказов, которые")
         print("   роли пишут помощникам. Кто автор — из записи не узнать. Смотри текст.")
         # ⚰️ Здесь стояла строка «„подано механизмом (isMeta)“ — это может быть и повтор слова
         # владельца … замер @CORE 04.09, 2 из 6 таких — его». Снята 05.09: находка отозвана
         # автором (записка #4760), верное число — 0 из 6; подачи механизма теперь лежат в 🤖.
-        for ч, проект, файл, текст, ог in sorted(без_признака):
-            п = (текст.strip().splitlines() or [""])[0][:104]
-            print(f"   ─ {ч} · {проект[:24]:24}" + (f" · {ог}" if ог else ""))
-            print(f"     │ {п}")
+        for ts, project, file_name, text, note in sorted(no_origin):
+            p = (text.strip().splitlines() or [""])[0][:104]
+            print(f"   ─ {ts} · {project[:24]:24}" + (f" · {note}" if note else ""))
+            print(f"     │ {p}")
 
-    if машинным:
+    if machine:
         print()
         print("·" * 92)
-        print(f"🤖 МАШИННОЕ — {len(машинным)} шт. Судилось по ПРОИСХОЖДЕНИЮ (поле записи),")
+        print(f"🤖 МАШИННОЕ — {len(machine)} шт. Судилось по ПРОИСХОЖДЕНИЮ (поле записи),")
         print("   примета текста лишь дополняет; причина названа у каждой строки.")
-        for ч, проект, файл, текст, причина in sorted(машинным):
-            п = (текст.strip().splitlines() or [""])[0][:96]
-            print(f"   ─ {ч} · {проект[:24]:24} · {причина}")
-            print(f"     │ {п}")
+        for ts, project, file_name, text, reason in sorted(machine):
+            p = (text.strip().splitlines() or [""])[0][:96]
+            print(f"   ─ {ts} · {project[:24]:24} · {reason}")
+            print(f"     │ {p}")
 
-    if сводок:
+    if summaries:
         print()
-        print(f"📎 сводок сжатия с этим словом: {сводок} — не показаны: это ПЕРЕСКАЗ разговора,")
+        print(f"📎 сводок сжатия с этим словом: {summaries} — не показаны: это ПЕРЕСКАЗ разговора,")
         print("   а не слово; их час — час сжатия, а не речи. Слово ищи среди записей выше.")
 
     print()
     print("-" * 92)
-    найдено = человек or выбором
-    if найдено:
+    found = by_human or by_choice
+    if found:
         # ⚖️ СЧЁТ И ПО ЧАТАМ, не только по строкам — заявка @TAXO: одно и то же слово
         # лежит и в записи разговора, и в его авто-сводке, и «найдено 4 раза» читается
         # как четыре независимых свидетельства там, где событие ОДНО.
-        чатов = len({(п, ф) for _, п, ф, _, _ in человек + выбором})
-        print(f"ИТОГ: человеком {len(человек)} · выбором {len(выбором)}"
-              + (f" · без признака {len(без_признака)}" if без_признака else "")
-              + (f" · машинных {len(машинным)}" if машинным else ""))
-        print(f"      строк {len(человек) + len(выбором)}, а РАЗНЫХ ЧАТОВ {чатов}: "
+        chats = len({(p, fname) for _, p, fname, _, _ in by_human + by_choice})
+        print(f"ИТОГ: человеком {len(by_human)} · выбором {len(by_choice)}"
+              + (f" · без признака {len(no_origin)}" if no_origin else "")
+              + (f" · машинных {len(machine)}" if machine else ""))
+        print(f"      строк {len(by_human) + len(by_choice)}, а РАЗНЫХ ЧАТОВ {chats}: "
               f"слово попадает и в запись, и в сводку сжатия — это ОДНО событие")
-        if выбором and not человек:
-            print("⚡ ВАЖНО: слово найдено ТОЛЬКО как выбор в интерфейсе. Поиск по тексту")
-            print("   его НЕ находит — и роль, ищущая текстом, решила бы, что цитата")
+        own_n = sum(1 for e in by_choice if e[4]["own"])
+        midturn_n = sum(1 for e in by_human if MIDTURN_TAG in e[3])
+        if own_n or midturn_n:
+            print(f"      из них: своим текстом в окне вопросов {own_n} · пришло посреди хода {midturn_n}")
+        if by_choice and not by_human:
+            print("⚡ ВАЖНО: слово найдено ТОЛЬКО в окне вопросов (выбором или своим текстом). Поиск")
+            print("   по тексту реплик его НЕ находит — и роль, ищущая текстом, решила бы, что цитата")
             print("   выдумана. Ровно этот случай и завёл карточку #521.")
         return 0
     # ⛔ САМОЕ ВАЖНОЕ МЕСТО ЭТОГО ИНСТРУМЕНТА: чего пустой ответ НЕ значит.
     print("⚪ НЕ НАЙДЕНО среди реплик с записанным происхождением «человек» и среди выборов.")
-    if без_признака:
-        print(f"⚠️ НО совпадения ЕСТЬ: без признака {len(без_признака)} · машинных {len(машинным)}")
+    if no_origin:
+        print(f"⚠️ НО совпадения ЕСТЬ: без признака {len(no_origin)} · машинных {len(machine)}")
         print("   (напечатаны выше). Слово владельца могло лечь в чат, чей клиент поле не")
         print("   писал, — тогда оно среди «без признака». Прочти их, прежде чем судить.")
         # ⚡ ОТДЕЛЬНЫЙ КОД — тот же урок, что «отказ мерить» (2): «не нашли ничего» и
         # «нашли, но происхождение не «человек»» требуют РАЗНОГО следующего шага, а
         # вызывающий видит число. Коды: 0 нашли · 1 ничего · 2 отказ · 3 только спорное.
         return 3
-    if машинным:
+    if machine:
         # 05.09: совпадения ТОЛЬКО машинные — это не «спорное» (3), а «слова владельца нет» (1)
         # с оговоркой: до 05.09 подачи механизма лежали в ⚪ и тянули за собой код 3 и совет
         # «прочти, прежде чем судить» — совет о записях, чей автор известен. Теперь автор назван
         # у каждой строки, а код говорит то же, что и текст.
-        print(f"⚠️ НО совпадения ЕСТЬ — все МАШИННЫЕ ({len(машинным)}, напечатаны выше): слово в чат")
+        print(f"⚠️ НО совпадения ЕСТЬ — все МАШИННЫЕ ({len(machine)}, напечатаны выше): слово в чат")
         print("   ПРИХОДИЛО, но не от владельца (подачи механизма, удары будильника, повторы команд).")
         print("   Слово владельца, если оно было, лежит там, где стоит поле «человек»; здесь его нет.")
-    print(f"⚖️ ЭТО НЕ ДОКАЗАТЕЛЬСТВО, ЧТО СЛОВА НЕ БЫЛО. Просмотрено файлов: {файлов}.")
-    if пропущено:
+    print(f"⚖️ ЭТО НЕ ДОКАЗАТЕЛЬСТВО, ЧТО СЛОВА НЕ БЫЛО. Просмотрено файлов: {files_read}.")
+    print(f"   Просмотрено РАЗДЕЛЬНО: реплик текстом {seen['текст']} · ответов в окне вопросов "
+          f"{seen['выбор']} · пришедших посреди хода {seen['посреди-хода']} — ноль в одном счёте")
+    print("   не значит ноль в другом.")
+    if skipped:
         # 🔑 САМОЕ ДОРОГОЕ МЕСТО СУЖЕНИЯ — именно здесь, а не в строке охвата: роль,
         # получившая «не найдено», делает из него ВЫВОД. Число пропущенных обязано
         # стоять рядом с выводом, а не только в шапке, которую уже пролистали.
-        print(f"   ⚠️ И ЕЩЁ {пропущено} файлов НЕ ЧИТАНЫ ВОВСЕ: их время правки старше "
-              f"{a.за}. Если запись могла приехать из копии со старым временем —")
-        print(f"      перепроверь с --все-файлы, прежде чем делать вывод.")
+        print(f"   ⚠️ И ЕЩЁ {skipped} файлов НЕ ЧИТАНЫ ВОВСЕ: их время правки старше "
+              f"{a.date}. Если запись могла приехать из копии со старым временем —")
+        print(f"      перепроверь с --all-files, прежде чем делать вывод.")
     print("   Записи могли быть удалены, усечены при сжатии разговора, лежать в другом")
     print("   каталоге проектов или относиться к сеансу, чей файл не сохранён.")
     print("   👉 прежде чем звать цитату выдуманной: попробуй другой кусок фразы")
-    print("      (владелец пишет короче, чем мы его пересказываем), сними --за,")
-    print("      проверь --корень. И спроси владельца, а не объявляй за него.")
+    print("      (владелец пишет короче, чем мы его пересказываем), сними --date,")
+    print("      проверь --root. И спроси владельца, а не объявляй за него.")
     return 1
 
 
