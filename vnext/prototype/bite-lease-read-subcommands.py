@@ -55,7 +55,10 @@ def case(title, verdict, detail, differ=False):
 
 
 def run(db, role, *args):
-    env = dict(os.environ, MEZO_ROLE=role, MEZO_LEASE_TEST="1")
+    # среда стенда (карточка #613): MEZO_CONTAINER — корень стенда (каталог копии базы), номер
+    # чата испытуемому не передаётся. Прежде backlog.py получал среду вызывающего: --db вёл в
+    # копию, а то, что инструмент ищет по корню контура, — в живой контур.
+    env = mezo_stand.stand_env(pathlib.Path(db).parent, MEZO_ROLE=role, MEZO_LEASE_TEST="1")
     p = subprocess.run([sys.executable, BACKLOG, "--db", str(db), *args],
                        capture_output=True, text=True, encoding="utf-8",
                        errors="replace", env=env)

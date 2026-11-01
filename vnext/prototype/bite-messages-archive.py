@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import os
 import pathlib
 import re
 import shutil
@@ -69,9 +68,15 @@ def copy_db(stand: pathlib.Path) -> pathlib.Path:
     return db
 
 
-def run_tool(script: pathlib.Path, *args, env=None):
+def run_tool(script: pathlib.Path, *args, stand: pathlib.Path):
+    # среда стенда (карточка #613): MEZO_CONTAINER — корень стенда, номер чата испытуемому не
+    # передаётся. Прежде шаг схемы получал среду вызывающего, а write-message.py в случае ⑤ —
+    # MEZO_CONTAINER ЖИВОГО контура: --db вёл в копию, а то, что инструмент ищет по корню
+    # контура, — в живой контур. Копия базы лежит в корне стенда (mezosync.db), а не в его
+    # .mezosync — живой базой для испытуемого она не становится.
     r = subprocess.run([sys.executable, str(script), *args], capture_output=True, text=True,
-                       encoding="utf-8", timeout=300, env=env)
+                       encoding="utf-8", timeout=300,
+                       env=mezo_stand.stand_env(stand, PYTHONIOENCODING="utf-8"))
     return (r.stdout or "") + (r.stderr or ""), r.returncode
 
 
@@ -165,7 +170,8 @@ def main() -> int:
     conn0.close()
 
     # ⓪ КОНТРОЛЬ
-    out0, code0 = run_tool(scripts_copy / "migrations" / "20260905-messages-archive.py", "--db", str(db))
+    out0, code0 = run_tool(scripts_copy / "migrations" / "20260905-messages-archive.py", "--db", str(db),
+                           stand=stand)
     conn = sqlite3.connect(str(db))
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     vsql = (conn.execute("SELECT sql FROM sqlite_master WHERE type='view' AND name='messages_all'").fetchone() or [""])[0]
@@ -177,7 +183,8 @@ def main() -> int:
                f"код {code0}; отпечаток вида до {fp_before} · после {fp_after}")
 
     # ① ПОВТОР
-    out1, code1 = run_tool(scripts_copy / "migrations" / "20260905-messages-archive.py", "--db", str(db))
+    out1, code1 = run_tool(scripts_copy / "migrations" / "20260905-messages-archive.py", "--db", str(db),
+                           stand=stand)
     ok &= case("① повтор шага — «уже сведено», отпечаток вида не меняется",
                code1 == 0 and "уже сведено" in out1 and view_fingerprint(conn) == fp_after,
                "шаг обязан быть идемпотентным: второй прогон не имеет права трогать базу", differ=True)
@@ -215,12 +222,12 @@ def main() -> int:
 
     # ⑤ ПЕРВЫЙ ЧИТАТЕЛЬ — write-message.py из копии, на копии базы
     # ⚠️ Копия скриптов лежит ВНЕ контейнера — mezo_paths не найдёт маркер .mezosync/mezosync.db
-    #    вверх по дереву и откажет. Контейнер называем средой (та же форма, что у других приёмок
-    #    на копиях: MEZO_CONTAINER); база — явным --db на копию, живая не тронута.
-    env = dict(os.environ, MEZO_CONTAINER=str(mezo_paths.container_root(__file__)))
+    #    вверх по дереву и откажет. Контейнер называем средой: MEZO_CONTAINER — корень стенда
+    #    (run_tool, карточка #613; прежде здесь стоял корень ЖИВОГО контура); база — явным --db
+    #    на копию, живая не тронута.
     out5, code5 = run_tool(scripts_copy / "write-message.py", "--db", str(db), "--role", "PROTO",
                          "--body", "проба приёмки архива ленты: ack на унесённую записку", "--ack", str(mid),
-                         "--reply-to", str(mid), "--resolves", "--to", "PROTO", env=env)
+                         "--reply-to", str(mid), "--resolves", "--to", "PROTO", stand=stand)
     resolved_arc = conn.execute("SELECT resolved FROM messages_archive WHERE id=?", (mid,)).fetchone()
     ok &= case("⑤ первый читатель: --ack на унесённую не отвечает «такой ноты нет»; --resolves ставит resolved В АРХИВЕ",
                code5 == 0 and "такой ноты нет" not in out5 and resolved_arc is not None and resolved_arc[0] == 1,

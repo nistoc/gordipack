@@ -57,8 +57,13 @@ def prepare():
     tmp = mezo_stand.new("bite-addressee-")
     db = os.path.join(tmp, "copy.db")
     mezo_stand.empty_db(LIVE, db)
+    # среда стенда (карточка #613): MEZO_CONTAINER — корень стенда (каталог копии базы), номер
+    # чата испытуемому не передаётся. Прежде шаг схемы и write-message.py получали среду
+    # вызывающего: --db вёл в копию, а то, что инструмент ищет по корню контура, — в живой контур
+    # (а у скриптов пакета вне контура — отказ «контейнер группы НЕ НАЙДЕН»).
     r = subprocess.run([sys.executable, MIGRATION, "--db", db],
-                       capture_output=True, text=True, encoding="utf-8")
+                       capture_output=True, text=True, encoding="utf-8",
+                       env=mezo_stand.stand_env(tmp, PYTHONIOENCODING="utf-8"))
     if r.returncode != 0:
         raise SystemExit(f"⛔ НЕ ЗАПУСТИЛАСЬ: миграция упала на копии\n{r.stdout}{r.stderr}")
     # 🩹 ДОГОН (пустой свежий контур пакета, карточка #667): write-message.py отказывает
@@ -74,9 +79,11 @@ def prepare():
 
 
 def write(db, body, extra=()):
+    # среда стенда (карточка #613) — та же, что у шага схемы в prepare(): корень — каталог копии базы
     r = subprocess.run([sys.executable, WRITE, "--db", db, "--role", "PROTO",
                         "--body", body, *extra],
-                       capture_output=True, text=True, encoding="utf-8")
+                       capture_output=True, text=True, encoding="utf-8",
+                       env=mezo_stand.stand_env(os.path.dirname(db), PYTHONIOENCODING="utf-8"))
     out = (r.stdout or "") + (r.stderr or "")
     # ═══ Карточка #359: номер — из СТРОКИ ПОДТВЕРЖДЕНИЯ «OK #NNNN», не «первое число
     # вывода». Прежний разбор брал первый числовой знак где угодно — а предупреждение

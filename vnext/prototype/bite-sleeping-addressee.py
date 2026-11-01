@@ -81,20 +81,22 @@ def case(title, verdict, detail, differ=False):
     return verdict
 
 
-def run(script, *args):
+def run(script, *args, stand):
     """PYTHONPATH на каталог инструментов: ослабленная копия писателя живёт во временном
     каталоге и без этого умерла бы на импорте. 🪤 Обратный ход уже был однажды ПУСТЫМ
     ровно так: копия падала на импорте, ненулевой код читался как работа признака.
 
     🩹 ДОГОН (класс ошибок (107)/(127), приёмка для пакета): MEZO_CONTAINER ВЫЗЫВАЮЩЕГО
-    (самой приёмки) здесь ГЛУШИТСЯ, а не наследуется молча. Рецепт прогона приёмки на
-    свежей выгрузке пакета зовёт ЕЁ САМУ с MEZO_CONTAINER=<пакет> — без глушения подопытный
+    (самой приёмки) здесь не наследуется молча. Рецепт прогона приёмки на
+    свежей выгрузке пакета зовёт ЕЁ САМУ с MEZO_CONTAINER=<пакет> — без этого подопытный
     писатель унаследовал бы эту переменную и мог бы решить, что его контейнер — сам пакет,
     а не временная копия-песочница в --db (тот же класс и та же починка, что в
     bite-signal-templates.py; довод — mezo_stand.stand_env(): «направление закрепляет
-    ЗАПУСКАЮЩИЙ, а не mezo_paths»)."""
-    env = dict(os.environ)
-    env.pop("MEZO_CONTAINER", None)
+    ЗАПУСКАЮЩИЙ, а не mezo_paths»).
+    Карточка #613: переменная прежде ГЛУШИЛАСЬ, и писатель искал контур по своему
+    расположению — у настоящего это живой контур, у ослабленной копии во временном каталоге
+    его нет вовсе. Теперь MEZO_CONTAINER — корень стенда (stand), номер чата не передаётся."""
+    env = mezo_stand.stand_env(stand, PYTHONIOENCODING="utf-8")
     env["PYTHONPATH"] = os.pathsep.join(
         [p for p in (str(pathlib.Path(script).parent), str(WRITER_TOOL.parent),
                      env.get("PYTHONPATH", "")) if p])
@@ -170,7 +172,7 @@ def send(db, body, to, cc=None):
     args = ["--role", "PROTO", "--db", str(db), "--file", str(note_path), "--to", to]
     if cc:
         args += ["--cc", cc]
-    return run(WRITER_TOOL, *args)
+    return run(WRITER_TOOL, *args, stand=pathlib.Path(db).parent)
 
 
 def weaken(root, which: str) -> pathlib.Path:
@@ -263,7 +265,7 @@ def main() -> int:
             ("курсор", "отметка прочитанного", "④", WRITES, output4)):
         weak_tool = weaken(root, which)
         code_x, output_x = run(weak_tool, "--role", "PROTO", "--db", str(db),
-                              "--body", f"обратный ход {which}", "--to", role)
+                              "--body", f"обратный ход {which}", "--to", role, stand=root)
         named = role in sleeping_section(output_x)
         ok &= case(f"{'⑨' if which == 'нота' else '⑩'} ОБРАТНЫЙ ХОД «только {shown_name}»:"
                    f" случай {case_label} у ослабленной копии КРАСНЕЕТ",

@@ -24,7 +24,6 @@ r"""bite-phoenix-truncation-named.py — приёмка находки @RCC (з�
   ⑥ ВСТРЕЧНЫЙ: ничего не исчезло — ни имён, ни остатка
   ⑦ контроль: своих следов в живой базе нет
 """
-import os
 import shutil
 import sqlite3
 import subprocess
@@ -60,17 +59,17 @@ def case(name, cond, detail=""):
     OK, FAIL = OK + (1 if cond else 0), FAIL + (0 if cond else 1)
 
 
-def env():
-    return dict(os.environ, PYTHONIOENCODING="utf-8", MEZO_ROLE="PROTO",
-                MEZO_CONTAINER=str(mezo_paths.container_root()))
-
-
 def save(db, body, path):
     Path(path).write_text(body, encoding="utf-8")
+    # среда стенда (карточка #613): MEZO_CONTAINER — корень стенда (каталог копии базы), номер
+    # чата испытуемому не передаётся. Прежде здесь стоял корень ЖИВОГО контура: --db вёл в копию,
+    # а то, что save-phoenix.py ищет по корню контура, — в живой контур. Копия лежит в корне
+    # стенда (mezosync.db), а не в его .mezosync — живой базой для испытуемого она не становится.
     p = subprocess.run(
         [sys.executable, str(TARGET_TOOL), "--db", str(db), "--role", ROLE,
          "--section", "state", "--file", str(path), "--allow-shrink"],
-        capture_output=True, text=True, encoding="utf-8", errors="replace", env=env())
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        env=mezo_stand.stand_env(Path(db).parent, PYTHONIOENCODING="utf-8", MEZO_ROLE="PROTO"))
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 

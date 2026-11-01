@@ -72,7 +72,10 @@ def case(title, verdict, detail, differ=False):
 
 
 def run(tool, db, *args, extra_env=None):
-    env = dict(os.environ, MEZO_ROLE="PROTO", MEZO_LEASE_TEST="")
+    # среда стенда (карточка #613): MEZO_CONTAINER — корень стенда (каталог копии базы), номер
+    # чата испытуемому не передаётся. Прежде backlog.py, role-brief.py и track.py получали среду
+    # вызывающего: --db вёл в копию, а то, что инструмент ищет по корню контура, — в живой контур.
+    env = mezo_stand.stand_env(pathlib.Path(db).parent, MEZO_ROLE="PROTO", MEZO_LEASE_TEST="")
     if extra_env:
         env.update(extra_env)
     p = subprocess.run([sys.executable, tool, "--db", str(db), *args],
