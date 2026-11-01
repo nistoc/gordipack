@@ -49,7 +49,11 @@ def case(name, cond, detail=""):
 
 
 def run(script, *args, db):
-    env = dict(os.environ, PYTHONIOENCODING="utf-8")
+    # среда стенда (карточка #613): MEZO_CONTAINER — корень стенда (каталог копии базы), номер
+    # чата испытуемому не передаётся. Прежде track.py получал среду вызывающего: --db вёл в
+    # копию, а то, что инструмент ищет по корню контура, — в живой контур. Копия лежит в корне
+    # стенда (mezosync.db), а не в его .mezosync — живой базой она не становится.
+    env = mezo_stand.stand_env(Path(db).parent, PYTHONIOENCODING="utf-8")
     p = subprocess.run([sys.executable, str(script), "--db", str(db), *args],
                        capture_output=True, text=True, encoding="utf-8",
                        errors="replace", env=env)

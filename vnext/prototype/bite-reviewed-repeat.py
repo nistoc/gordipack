@@ -17,7 +17,6 @@ r"""ПРИЁМКА накопления --reviewed в write-message.py — ка�
 """
 from __future__ import annotations
 
-import os
 import pathlib
 import shutil
 import sqlite3
@@ -60,8 +59,11 @@ def run_tool(db, note_path, label, *forms, script=WRITER):
     # PYTHONPATH на каталог писателя: слабая копия живёт в чужом каталоге, и без него
     # умирает на ПЕРВОМ ЖЕ импорте (mezo_paths, dryrun…) — красный был бы гибелью
     # копии, а не работой накопления. Копировать модули поимённо нельзя: список протухает.
-    env = dict(os.environ, MEZO_CONTAINER=str(mezo_paths.container_root(__file__)),
-               PYTHONPATH=str(SCRIPTS))
+    # Среда стенда (карточка #613): MEZO_CONTAINER — корень стенда (каталог копии базы), номер
+    # чата не передаётся. Прежде здесь стоял корень ЖИВОГО контура: --db вёл в копию, а то, что
+    # писатель ищет по корню контура, — в живой контур.
+    env = mezo_stand.stand_env(pathlib.Path(db).parent, PYTHONPATH=str(SCRIPTS),
+                               PYTHONIOENCODING="utf-8")
     r = subprocess.run([sys.executable, str(script), "--db", str(db), "--role", "PROTO",
                         "--file", str(note_path), *forms],
                        capture_output=True, text=True, encoding="utf-8",

@@ -45,9 +45,13 @@ def case(title, verdict, detail, differ=False):
     return verdict
 
 
-def run_tool(script, *argv):
+def run_tool(script, *argv, stand):
+    # среда стенда (карточка #613): MEZO_CONTAINER — корень стенда (каталог копии базы), номер
+    # чата испытуемому не передаётся. Прежде ридер получал среду вызывающего: --db вёл в копию,
+    # а то, что ридер ищет по корню контура (обход писем соседей, sync_backoff.py), — в живой контур.
     r = subprocess.run([sys.executable, str(script), *argv], capture_output=True,
-                       text=True, encoding="utf-8", errors="replace", timeout=300)
+                       text=True, encoding="utf-8", errors="replace", timeout=300,
+                       env=mezo_stand.stand_env(stand, PYTHONIOENCODING="utf-8"))
     return r.returncode, (r.stdout or "") + (r.stderr or "")
 
 
@@ -107,7 +111,7 @@ def main() -> int:
             return 2
 
         before = mark(db, role)
-        code, output = run_tool(READER, "--db", str(db), "--role", role, "--wake")
+        code, output = run_tool(READER, "--db", str(db), "--role", role, "--wake", stand=d)
         after = mark(db, role)
 
         ok &= case("① обзор показывает ОБЕ половины: тела личного И указатель остального",
@@ -126,7 +130,7 @@ def main() -> int:
                    "иначе роль погасила бы долг, увидев ЗАГОЛОВКИ: писавшим было бы "
                    "сказано «дошло» про тела, которых никто не читал", differ=True)
 
-        _, bodies = run_tool(READER, "--db", str(db), "--role", role, "--limit", "500")
+        _, bodies = run_tool(READER, "--db", str(db), "--role", role, "--limit", "500", stand=d)
         a, b = len(bodies.encode("utf-8")), len(output.encode("utf-8"))
         ok &= case("④ обзор ДЕШЕВЛЕ тел на роли с долгом — числом",
                    b < a and a > 50000,
@@ -145,8 +149,9 @@ def main() -> int:
             weak = d / "читатель-слабый.py"
             weak.write_text(intact.replace(CHUNK, '("ВТОРАЯ ПОЛОВИНА ВЫКЛЮЧЕНА ПРИЁМКОЙ", [])'),
                               encoding="utf-8")
-            import os
-            env = dict(os.environ, PYTHONPATH=str(READER.parent))
+            # среда стенда (карточка #613) — та же, что у run_tool, плюс каталог настоящего
+            # ридера для импортов ослабленной копии
+            env = mezo_stand.stand_env(d, PYTHONPATH=str(READER.parent), PYTHONIOENCODING="utf-8")
             r5 = subprocess.run([sys.executable, str(weak), "--db", str(db),
                                  "--role", role, "--wake"], capture_output=True, text=True,
                                 encoding="utf-8", errors="replace", timeout=300, env=env)
@@ -158,7 +163,7 @@ def main() -> int:
                        f"вторая половина. Слабый сказал: "
                        f"{(tail[0][:70] if tail else '(молча)')}", differ=True)
 
-        code6, output6 = run_tool(READER, "--db", str(db), "--role", role, "--limit", "3")
+        code6, output6 = run_tool(READER, "--db", str(db), "--role", role, "--limit", "3", stand=d)
         ok &= case("⑥ КОНТРОЛЬ: обычное чтение телами ключ ВЫДАЁТ",
                    "--ack" in output6,
                    "без этого случая ③ мог бы зеленеть просто оттого, что ключей "
