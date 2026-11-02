@@ -63,11 +63,14 @@ def case(title, ok, detail, differ=False):
 
 
 def send(scripts: pathlib.Path, db: pathlib.Path, body_file: pathlib.Path, *extra):
+    # Среда стенда (карточка #613): MEZO_CONTAINER — корень стенда (каталог копии базы), номер
+    # чата не передаётся. Прежде копия write-message.py получала среду вызывающего. Копия базы
+    # лежит в корне стенда (mezosync.db), а не в его .mezosync — живой базой она не становится.
     r = subprocess.run([sys.executable, str(scripts / "write-message.py"), "--role", SENDER_ROLE,
                         "--db", str(db), "--file", str(body_file), *extra],
                        capture_output=True, text=True, encoding="utf-8", timeout=120,
-                       env={**os.environ, "MEZO_ROLE": SENDER_ROLE,
-                            "MEZO_LEASE_TEST": "1"})
+                       env=mezo_stand.stand_env(db.parent, MEZO_ROLE=SENDER_ROLE,
+                                                MEZO_LEASE_TEST="1"))
     return r.returncode, (r.stdout or "") + (r.stderr or "")
 
 

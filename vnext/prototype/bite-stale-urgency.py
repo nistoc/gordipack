@@ -35,8 +35,12 @@ LIVE = mezo_paths.live_db()
 def run(db: Path) -> tuple:
     # --all обязателен: без него приёмка читала бы УСЕЧЁННЫЙ список и приняла бы
     # «не показано» за «не найдено». Именно так первый прогон и соврал.
+    # Среда стенда (карточка #613): MEZO_CONTAINER — корень стенда (каталог копии базы), номер
+    # чата не передаётся. Прежде инструмент получал среду вызывающего. Копия лежит в корне
+    # стенда (copy.db), а не в его .mezosync — живой базой она не становится.
     r = subprocess.run([sys.executable, str(TOOL), "--db", str(db), "--all"],
-                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+                       capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       env=mezo_stand.stand_env(db.parent))
     listed = {int(x) for x in re.findall(r"записка #(\d+)", r.stdout)}
     return r.returncode, listed, r.stdout
 

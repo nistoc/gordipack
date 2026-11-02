@@ -76,9 +76,13 @@ def build_db(path: Path, with_spent_right: bool = False) -> None:
 
 
 def run(db: Path, bridges: Path, *args):
+    # Среда стенда (карточка #613): MEZO_CONTAINER — корень стенда (каталог базы), номер чата
+    # не передаётся. Прежде испытуемый получал среду вызывающего. Базы стенда — голые файлы
+    # *.db в его корне, без .mezosync — живой базой ни одна из них не становится.
     r = subprocess.run([sys.executable, str(TOOL), "--role", "PROBE", "--db", str(db),
                         "--bridges", str(bridges), *args],
-                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+                       capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       env=mezo_stand.stand_env(db.parent))
     return r.returncode, (r.stdout or "") + (r.stderr or "")
 
 
@@ -104,9 +108,9 @@ def main() -> int:
 
         # ② ПРАВКА РУКОЙ ЛОВИТСЯ — СМЫСЛ ВАРИАНТА ③
         run(db, bridges, "--write")
-        файл = bridges / "atlas-сосед" / "card.probe.md"
-        файл.write_text(файл.read_text(encoding="utf-8") + "\nдописано рукой\n",
-                        encoding="utf-8")
+        card_file = bridges / "atlas-сосед" / "card.probe.md"
+        card_file.write_text(card_file.read_text(encoding="utf-8") + "\nдописано рукой\n",
+                             encoding="utf-8")
         code2, out2 = run(db, bridges, "--check")
         ok &= case("② правка файла РУКОЙ ловится сверкой, и отказ называет ТРИ причины",
                    code2 == 1 and "РАСХОДИТСЯ" in out2 and "СБОРЩИК" in out2,
@@ -126,7 +130,8 @@ def main() -> int:
         # ④ РОЛИ НЕТ — ОТКАЗ, А НЕ ПУСТАЯ КАРТОЧКА
         r4 = subprocess.run([sys.executable, str(TOOL), "--role", "НЕТТАКОЙ", "--db", str(db),
                              "--bridges", str(bridges)],
-                            capture_output=True, text=True, encoding="utf-8", errors="replace")
+                            capture_output=True, text=True, encoding="utf-8", errors="replace",
+                            env=mezo_stand.stand_env(tmp))  # среда стенда, как у run()
         out4 = (r4.stdout or "") + (r4.stderr or "")
         ok &= case("④ роли нет в базе — ОТКАЗ собрать карточку",
                    r4.returncode == 1 and "НЕ ЗАПУСТИЛАСЬ" in out4,
@@ -144,7 +149,7 @@ def main() -> int:
                    "неправды здесь: он попросит того, что роли уже нельзя", differ=True)
 
         # ⑥ ФАЙЛА НЕТ — КРАСНОЕ, А НЕ МОЛЧАНИЕ
-        файл.unlink()
+        card_file.unlink()
         code6, out6 = run(db, bridges, "--check")
         ok &= case("⑥ карточки нет на месте — сверка КРАСНЕЕТ, а не молчит",
                    code6 == 1 and "карточки нет" in out6,
@@ -152,11 +157,11 @@ def main() -> int:
 
         # ⑦ ЧУЖАЯ ПЕРЕПИСКА НЕ ЗАСОРЯЕТСЯ. Рядом с обменом контуров лежат обмены отдельных
         #    ролей с чужими продуктами: карточка роли контура там никому не адресована.
-        чужая = bridges / "aia-stud-exchange"
-        чужая.mkdir()
+        foreign_dir = bridges / "aia-stud-exchange"
+        foreign_dir.mkdir()
         code7, out7 = run(db, bridges, "--write")
         ok &= case("⑦ папка чужой переписки пропускается, и это СКАЗАНО",
-                   code7 == 0 and not (чужая / "card.probe.md").exists()
+                   code7 == 0 and not (foreign_dir / "card.probe.md").exists()
                    and "пропущено папок" in out7,
                    "молчаливый пропуск читался бы как «других папок не было»; отбор идёт по "
                    "имени нашей группы ИЗ БАЗЫ, а не по виду каталога", differ=True)

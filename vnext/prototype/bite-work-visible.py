@@ -13,7 +13,6 @@
 from __future__ import annotations
 
 import importlib.util
-import os
 import pathlib
 import shutil
 import subprocess
@@ -48,14 +47,17 @@ def main() -> int:
         shutil.copytree(live / "scripts", scripts)
         db = tmp / "mezosync.db"
         mezo_stand.snapshot_db(live / "mezosync.db", db)
-        env = {**os.environ, "MEZO_ROLE": "PROTO", "MEZO_LEASE_TEST": "1"}
-
         def backlog(*args):
             # ⚠️ --db идёт ДО подкоманды: у argparse общий флаг живёт у корневого
             # разбора, и после подкоманды он «нераспознан». Поймано первым же прогоном.
+            # Среда стенда (карточка #613): MEZO_CONTAINER — корень стенда tmp, номер чата не
+            # передаётся. Прежде копия backlog.py получала среду вызывающего. Копия базы лежит
+            # в корне стенда (mezosync.db), а не в его .mezosync — живой базой она не становится.
             r = subprocess.run([sys.executable, str(scripts / "backlog.py"), "--db", str(db),
                                 *args], capture_output=True, text=True,
-                               encoding="utf-8", timeout=120, env=env)
+                               encoding="utf-8", timeout=120,
+                               env=mezo_stand.stand_env(tmp, MEZO_ROLE="PROTO",
+                                                        MEZO_LEASE_TEST="1"))
             return r.returncode, (r.stdout or "") + (r.stderr or "")
 
         spec = importlib.util.spec_from_file_location("ml", scripts / "machine_layer.py")

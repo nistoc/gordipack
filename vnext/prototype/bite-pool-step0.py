@@ -26,7 +26,6 @@ bite-pool-step0.py — приёмка шага 0 пула: «карточки п
 НЕ судится: сегодня их два, и судьба TRACK-NEWUX — слово владельца; замер печатается
 СПРАВКОЙ в конце, чтобы не красить механизм чужим решением.
 """
-import os
 import shutil
 import sqlite3
 import subprocess
@@ -56,7 +55,11 @@ def case(name, cond, detail=""):
 
 
 def run(script, *args, db):
-    env = dict(os.environ, PYTHONIOENCODING="utf-8")
+    # Среда стенда (карточка #613): MEZO_CONTAINER — корень стенда (каталог копии базы), номер
+    # чата испытуемому не передаётся. Прежде backlog.py получал среду вызывающего: --db вёл в
+    # копию, а то, что инструмент ищет по корню контура, — в живой контур. Копия лежит в корне
+    # стенда (mezosync.db), а не в его .mezosync — живой базой она не становится.
+    env = mezo_stand.stand_env(Path(db).parent, PYTHONIOENCODING="utf-8")
     p = subprocess.run([sys.executable, str(script), "--db", str(db), *args],
                        capture_output=True, text=True, encoding="utf-8",
                        errors="replace", env=env)
@@ -203,10 +206,10 @@ print(f"\nИТОГ: {OK}/{OK + FAIL}")
 
 # СПРАВКА (не случай): живой инвариант «активный пул ровно один» — решение владельца
 con = sqlite3.connect(f"file:{LIVE_DB}?mode=ro", uri=True)
-живые = [r[0] for r in con.execute("SELECT track_id FROM tracks WHERE status='active'")]
+active_pools = [r[0] for r in con.execute("SELECT track_id FROM tracks WHERE status='active'")]
 con.close()
-if len(живые) != 1:
-    print(f"⏳ СПРАВКА: активных пулов в ЖИВОЙ базе {len(живые)} ({', '.join(живые)}) — "
+if len(active_pools) != 1:
+    print(f"⏳ СПРАВКА: активных пулов в ЖИВОЙ базе {len(active_pools)} ({', '.join(active_pools)}) — "
           f"норма нового порядка: ОДИН; судьба лишнего — слово владельца, механизм это "
           f"печатает сам в каждом list")
 raise SystemExit(mezo_stand.finish(0 if FAIL == 0 else 1))

@@ -67,8 +67,12 @@ def build(path: str, rows, links=()):
 
 
 def run(path: str, cover: str = "95"):
+    # Среда стенда (карточка #613): MEZO_CONTAINER — каталог песочницы, номер чата не
+    # передаётся. Прежде замер получал среду вызывающего. Песочница — голые файлы *.db
+    # в корне стенда, без .mezosync — живой базой ни одна из них не становится.
     out = subprocess.run([sys.executable, MEASURE, "--db", path, "--cover", cover],
-                         capture_output=True, text=True, encoding="utf-8")
+                         capture_output=True, text=True, encoding="utf-8",
+                         env=mezo_stand.stand_env(os.path.dirname(path)))
     return out.stdout + out.stderr
 
 
