@@ -24,7 +24,6 @@ bite-reviewer-named.py — приёмка карточки #482: КТО ПРИН
   ⑧ ТРЕТИЙ ИСХОД: базы без столбца сводка читает и НЕ падает (старые копии живут)
   ⑨ контроль: своих следов в ЖИВОЙ базе нет
 """
-import os
 import shutil
 import sqlite3
 import subprocess
@@ -62,25 +61,28 @@ def case(name, cond, detail=""):
     OK, FAIL = OK + (1 if cond else 0), FAIL + (0 if cond else 1)
 
 
-def env():
-    return dict(os.environ, PYTHONIOENCODING="utf-8", MEZO_ROLE="PROTO",
-                MEZO_CONTAINER=str(mezo_paths.container_root()))
-
-
+# Среда стенда (карточка #613): MEZO_CONTAINER — корень стенда (каталог копии базы), номер чата
+# испытуемому не передаётся. Прежде здесь стоял корень ЖИВОГО контура: --db вёл в копию, а то,
+# что backlog.py и role-brief.py ищут по корню контура, — в живой контур. Копии лежат в корне
+# стенда (mezosync.db, old.db), а не в его .mezosync — живой базой они не становятся.
 def submit(db, cid, actor, reviewer=None):
     cmd = [sys.executable, str(SUBJECT), "--db", str(db), "status", str(cid),
            "in_review", "--actor", actor]
     if reviewer:
         cmd += ["--reviewer", reviewer]
     p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
-                       errors="replace", env=env())
+                       errors="replace",
+                       env=mezo_stand.stand_env(Path(db).parent, PYTHONIOENCODING="utf-8",
+                                                MEZO_ROLE="PROTO"))
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 
 def brief(db, role):
     p = subprocess.run([sys.executable, str(BRIEF), "--role", role, "--db", str(db)],
                        capture_output=True, text=True, encoding="utf-8",
-                       errors="replace", env=env())
+                       errors="replace",
+                       env=mezo_stand.stand_env(Path(db).parent, PYTHONIOENCODING="utf-8",
+                                                MEZO_ROLE="PROTO"))
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 

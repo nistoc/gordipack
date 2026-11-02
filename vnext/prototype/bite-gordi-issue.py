@@ -50,7 +50,6 @@ gordi-issue.py: поломка, оставшаяся в старом месте,
 """
 from __future__ import annotations
 
-import os
 import shutil
 import sqlite3
 import subprocess
@@ -60,6 +59,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
+import mezo_stand  # noqa: E402 — среда запуска испытуемого (карточка #613)
 import mezo_target  # noqa: E402 — испытуемый берётся ЧЕРЕЗ общий помощник (MEZO_SCRIPTS_ROOT),
                     # а не жёстким подъёмом на два каталога (карточка #659, группа F)
 
@@ -178,7 +178,9 @@ def call_tool(tool: Path, container: Path, *args):
     r = subprocess.run(
         [sys.executable, "-B", str(tool), "create", *args],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
-        env={**os.environ, "MEZO_CONTAINER": str(container)})
+        # Среда стенда (карточка #613): контейнер прежний — своя раскладка стенда; общий
+        # помощник вдобавок не передаёт испытуемому номер чата вызывающего.
+        env=mezo_stand.stand_env(container))
     return r.returncode, (r.stdout or "") + (r.stderr or "")
 
 
