@@ -20,6 +20,29 @@ MEZO_CONTAINER указывает на другой (живой) контур, �
 приёмки называет инструмент, который читает MEZO_CONTAINER (прямо словом в тексте, или
 через mezo_paths/mezo_stand/mezo_target/mezo_hints/mezo_refs).
 
+КОРЕНЬ СТЕНДА, ВЕДУЩИЙ В ЖИВОЙ КОНТУР (карточка #613, слово владельца 2026-11-02 14:21:16 UTC
+в чате PROTO; просьба COORD, записка #6232). До этой правки проверка судила только ФОРМУ —
+есть ли stand_env( в env= — и вызов env=mezo_stand.stand_env(mezo_paths.container_root())
+считался закреплённым, хотя отдаёт испытуемому ровно живой контур вызывающего (нарочная
+поломка COORD m1c, записка #6235: «новых: 0», а журнал среды — живой контур у 5 из 5).
+Теперь судится и АРГУМЕНТ: корень стенда (первый аргумент stand_env и значение MEZO_CONTAINER
+в самом stand_env или поверх готовой среды) считается ведущим в живой контур, если это
+цепочка «предков» — .parent · .parents[N] · .resolve() · Path() · str() · os.path.dirname() —
+над одним из оснований:
+  · mezo_paths.container_root() / live_db() / live_scripts() — с любым аргументом: все три
+    берут MEZO_CONTAINER вызывающего раньше расположения файла, то есть это контур вызывающего;
+  · __file__ — предок файла самой приёмки, а она лежит в живом vnext-tools или .mezosync/scripts;
+  · os.environ["MEZO_CONTAINER"] · os.environ.get("MEZO_CONTAINER") · os.getenv("MEZO_CONTAINER").
+Имя прослеживается по присваиваниям своей области и модуля, до трёх звеньев (тот же приём,
+что у интерпретатора в переменной). Такой вызов считается вызовом БЕЗ закреплённого env=:
+находкой с тем же ключом реестра, а в выводе — отдельной строкой с причиной.
+Не считается ведущим: путь с присоединённым подкаталогом (`... / "стенд"` — это уже не сам
+контур), параметр функции, значение, возвращённое функцией, атрибут объекта (stand.root),
+mezo_paths.template_root() (клон пакета, а не живой контур).
+Поверх готовой среды прослеживаются env.update(MEZO_CONTAINER=…), env.update({"MEZO_CONTAINER": …})
+и env["MEZO_CONTAINER"] = … — в своей области, до строки вызова. Среда, собранная в другой
+функции и переданная параметром или возвращённая, не прослеживается — названо границей.
+
 ИЗВЕСТНЫЙ ДОЛГ (карточка #613, доработка PROTO 2026-09-14). Подключённая к общему
 прогону проверка сразу нашла 134 находки у всех ролей разом — провал среди известного
 перестаёт читаться. Поэтому рядом лежит РЕЕСТР `acceptance-env-debt.txt` (по умолчанию —
@@ -96,6 +119,12 @@ ALLOW_RE = re.compile(r'#\s*env:\s*caller\b(.*)')
 DEBT_CATEGORY_DEBT = "долг"
 DEBT_CATEGORY_LEGIT = "законно"
 DEFAULT_DEBT_NAME = "acceptance-env-debt.txt"
+# Помощники mezo_paths, которые берут MEZO_CONTAINER вызывающего раньше расположения файла:
+# что бы им ни передали, они отвечают контуром вызывающего.
+LIVE_PATH_CALLS = {"container_root", "live_db", "live_scripts"}
+# Обёртки, которые не уводят путь из контура: путь остаётся тем же каталогом или его предком.
+PATH_WRAPPERS = {"Path", "PurePath", "str", "dirname", "abspath", "realpath", "fspath"}
+CONTAINER_VAR = "MEZO_CONTAINER"
 
 
 def has_sys_executable(node: ast.AST) -> bool:
@@ -239,6 +268,126 @@ def env_is_pinned(call: ast.Call, scopes: list) -> bool:
     return "stand_env(" in "\n".join(text)
 
 
+def call_name(func: ast.AST):
+    """Имя вызываемого: `x.y.name(...)` и `name(...)` → "name"; иначе None."""
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    if isinstance(func, ast.Name):
+        return func.id
+    return None
+
+
+def is_container_var(node) -> bool:
+    return isinstance(node, ast.Constant) and node.value == CONTAINER_VAR
+
+
+def is_env_key(target, env_name: str) -> bool:
+    """env["MEZO_CONTAINER"] = … — цель присваивания: ключ MEZO_CONTAINER переменной среды."""
+    return (isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name)
+            and target.value.id == env_name and is_container_var(target.slice))
+
+
+def live_origin(expr: ast.AST, pools: list, links: int = 3):
+    """Ведёт ли выражение корня стенда в живой контур вызывающего — причина словами или None.
+
+    Разбирается только цепочка «предков» (.parent · .parents[N] · .resolve() · Path() · str() ·
+    os.path.dirname()) над основанием; присоединённый подкаталог (`/`) цепочку обрывает: такой
+    путь уже не сам контур. Имя — по присваиваниям своей области и модуля, до `links` звеньев."""
+    node = expr
+    while True:
+        if isinstance(node, ast.Attribute) and node.attr == "parent":
+            node = node.value
+            continue
+        if (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Attribute)
+                and node.value.attr == "parents"):
+            node = node.value.value
+            continue
+        if isinstance(node, ast.Subscript) and is_container_var(node.slice):
+            return f"{CONTAINER_VAR} вызывающего ({ast.unparse(node)})"
+        if isinstance(node, ast.Call):
+            name = call_name(node.func)
+            if name in LIVE_PATH_CALLS:
+                return f"mezo_paths.{name}() — контур вызывающего"
+            if name in ("get", "getenv") and node.args and is_container_var(node.args[0]):
+                return f"{CONTAINER_VAR} вызывающего ({ast.unparse(node)})"
+            if (name in ("resolve", "absolute") and isinstance(node.func, ast.Attribute)
+                    and not node.args):
+                node = node.func.value
+                continue
+            if name in PATH_WRAPPERS and len(node.args) == 1:
+                node = node.args[0]
+                continue
+            return None
+        if isinstance(node, ast.Name):
+            if node.id == "__file__":
+                return "предок файла самой приёмки (__file__) — она лежит в живом контуре"
+            if links <= 0:
+                return None
+            for value in assigned_values(node.id, pools):
+                reason = live_origin(value, pools, links - 1)
+                if reason:
+                    return reason
+            return None
+        return None
+
+
+def stand_roots(stand_call: ast.Call) -> list:
+    """Выражения, которые станут MEZO_CONTAINER испытуемого: первый аргумент stand_env
+    (или container=) и значение MEZO_CONTAINER= поверх него."""
+    roots = []
+    if stand_call.args:
+        roots.append(stand_call.args[0])
+    roots += [kw.value for kw in stand_call.keywords if kw.arg in ("container", CONTAINER_VAR)]
+    return roots
+
+
+def env_live_reason(call: ast.Call, scopes: list, module_stmts: list):
+    """Закреплённый за стендом env= вызова ведёт в живой контур? Причина словами или None.
+
+    Смотрит те же места, что env_is_pinned: выражение env= на месте вызова либо присваивания
+    переменной env, её .update() и присваивание по ключу env["MEZO_CONTAINER"] ДО строки
+    вызова в своей области."""
+    env_kw = next((kw.value for kw in call.keywords if kw.arg == "env"), None)
+    if env_kw is None:
+        return None
+    scope = enclosing_scope(call, scopes)
+    pools = ([scope[1]] if scope else []) + [module_stmts]
+    sources = []
+    if isinstance(env_kw, ast.Name) and scope:
+        for stmt in scope[1]:
+            if getattr(stmt, "lineno", 10 ** 9) >= call.lineno:
+                continue
+            if isinstance(stmt, ast.Assign) and any(
+                    isinstance(t, ast.Name) and t.id == env_kw.id for t in stmt.targets):
+                sources.append(stmt.value)
+            elif isinstance(stmt, ast.Assign) and any(is_env_key(t, env_kw.id) for t in stmt.targets):
+                sources.append(stmt.value)
+            elif (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call)
+                    and isinstance(stmt.value.func, ast.Attribute)
+                    and isinstance(stmt.value.func.value, ast.Name)
+                    and stmt.value.func.value.id == env_kw.id
+                    and stmt.value.func.attr == "update"):
+                sources += [kw.value for kw in stmt.value.keywords if kw.arg == CONTAINER_VAR]
+                for arg in stmt.value.args:
+                    if isinstance(arg, ast.Dict):
+                        sources += [v for k, v in zip(arg.keys, arg.values) if is_container_var(k)]
+    else:
+        sources.append(env_kw)
+    for source in sources:
+        for node in ast.walk(source):
+            if isinstance(node, ast.Call) and call_name(node.func) == "stand_env":
+                for root in stand_roots(node):
+                    reason = live_origin(root, pools)
+                    if reason:
+                        return reason
+        if not any(isinstance(n, ast.Call) and call_name(n.func) == "stand_env"
+                   for n in ast.walk(source)):
+            reason = live_origin(source, pools)
+            if reason:
+                return reason
+    return None
+
+
 def reads_container(path: Path) -> bool:
     try:
         text = path.read_text(encoding="utf-8")
@@ -321,11 +470,13 @@ def make_key(relfile: str, function: str, tool: str) -> tuple:
 
 def scan_dir(root: Path, container: Path, tool_reads: dict):
     """→ (findings [(файл, строка)], excused [(файл, строка, причина)],
-    keyed [{key: count}]) — findings/excused как раньше (построчно), keyed — то же самое,
-    сгруппированное по ключу реестра «файл·функция·инструмент» для сверки с долгом."""
-    findings, excused, keyed = [], [], {}
+    keyed [{key: count}], live [(файл, строка, причина)]) — findings/excused как раньше
+    (построчно), keyed — то же самое, сгруппированное по ключу реестра «файл·функция·инструмент»
+    для сверки с долгом; live — те из находок, где env= закреплён за стендом, а корень стенда
+    ведёт в живой контур (они же стоят и в findings)."""
+    findings, excused, keyed, live = [], [], {}, []
     if not root.is_dir():
-        return findings, excused, keyed
+        return findings, excused, keyed, live
     for f in sorted(root.glob("bite-*.py")):
         if f.name.endswith(".bak"):
             continue
@@ -355,8 +506,11 @@ def scan_dir(root: Path, container: Path, tool_reads: dict):
                 name = func.id
             if name is None or not runs_interpreter(node, scopes, module_stmts):
                 continue
+            live_reason = None
             if env_is_pinned(node, scopes):
-                continue
+                live_reason = env_live_reason(node, scopes, module_stmts)
+                if live_reason is None:
+                    continue
             line_text = lines[node.lineno - 1] if 0 < node.lineno <= len(lines) else ""
             m = ALLOW_RE.search(line_text)
             if m:
@@ -368,7 +522,9 @@ def scan_dir(root: Path, container: Path, tool_reads: dict):
             tool = resolve_target(node, scopes, module_stmts, reading_targets)
             key = make_key(relfile, function, tool)
             keyed[key] = keyed.get(key, 0) + 1
-    return findings, excused, keyed
+            if live_reason:
+                live.append((relfile, node.lineno, live_reason, key))
+    return findings, excused, keyed, live
 
 
 def load_debt(path: Path):
@@ -449,8 +605,22 @@ def format_key(key: tuple) -> str:
     return " :: ".join(key)
 
 
+def print_live(live: list, indent: str = "") -> None:
+    """Строки про env=, закреплённый за стендом, корень которого ведёт в живой контур: такие
+    вызовы уже посчитаны находками как вызовы без env=, здесь — только где и почему.
+    Знак «🔎», а не «ℹ️»/«⚠️»: те два уже значат «свойство нового контура» и «реестра нет»."""
+    if not live:
+        return
+    print(f"{indent}🔎 env= закреплён за стендом, но корень стенда ведёт в живой контур — "
+          f"считаю как вызов без env=: {len(live)}")
+    for p, n, r, _key in live[:20]:
+        print(f"{indent}   {p}:{n} — {r}")
+    if len(live) > 20:
+        print(f"{indent}   … ещё {len(live) - 20} — полный список: python {Path(__file__).resolve()} --json")
+
+
 def report_without_debt(as_json: bool, debt_path: Path, findings: list, excused: list,
-                        zero_day: bool = False) -> int:
+                        zero_day: bool = False, live_json=None) -> int:
     """Реестра по умолчанию рядом нет (так выглядит контур, собранный из пакета GORDI) —
     находки печатаются предупреждением с числом, код 0. Почему не провал — в шапке файла.
 
@@ -463,6 +633,7 @@ def report_without_debt(as_json: bool, debt_path: Path, findings: list, excused:
             "ok": True,
             "findings": [{"file": p, "line": n} for p, n in findings],
             "excused": [{"file": p, "line": n, "reason": r} for p, n, r in excused],
+            "live_env": live_json or [],
             "debt": {"path": str(debt_path), "missing": True, "zero_day": zero_day},
         }, ensure_ascii=False, indent=2))
         return 0
@@ -498,13 +669,15 @@ def main() -> int:
     dirs = [container / "vnext-tools", container / ".mezosync" / "scripts"]
     tool_reads = build_tool_reads(dirs)
 
-    all_findings, all_excused, all_keyed = [], [], {}
+    all_findings, all_excused, all_keyed, all_live = [], [], {}, []
     for root in dirs:
-        f, e, k = scan_dir(root, container, tool_reads)
+        f, e, k, lv = scan_dir(root, container, tool_reads)
         all_findings += f
         all_excused += e
+        all_live += lv
         for key, n in k.items():
             all_keyed[key] = all_keyed.get(key, 0) + n
+    live_json = [{"file": p, "line": n, "reason": r} for p, n, r, _key in all_live]
 
     if args.no_debt_list:
         ok = not all_findings
@@ -513,8 +686,10 @@ def main() -> int:
                 "ok": ok,
                 "findings": [{"file": p, "line": n} for p, n in all_findings],
                 "excused": [{"file": p, "line": n, "reason": r} for p, n, r in all_excused],
+                "live_env": live_json,
             }, ensure_ascii=False, indent=2))
             return 0 if ok else 1
+        print_live(all_live)
         if ok:
             print(f"✅ ИТОГО (без реестра долга): непрощённых находок нет; прощено комментарием: {len(all_excused)}")
             return 0
@@ -532,7 +707,10 @@ def main() -> int:
         # старее этой правки признака нет — тогда прежнее «⚠️», а не падение. Не прочиталось — тоже «⚠️».
         db_path = Path(args.db) if args.db else container / ".mezosync" / mezo_paths.DB_NAME
         zero_day = bool(getattr(mezo_paths, "is_zero_day", lambda _db: False)(db_path))
-        return report_without_debt(args.json, debt_path, all_findings, all_excused, zero_day)
+        if not args.json:
+            print_live(all_live)
+        return report_without_debt(args.json, debt_path, all_findings, all_excused, zero_day,
+                                   live_json)
     debt = load_debt(debt_path)
     known_calls, known_files, legitimate_calls, new_items, shrunk = reconcile(all_keyed, debt)
     ok = not new_items
@@ -542,6 +720,7 @@ def main() -> int:
             "ok": ok,
             "findings": [{"file": p, "line": n} for p, n in all_findings],
             "excused": [{"file": p, "line": n, "reason": r} for p, n, r in all_excused],
+            "live_env": live_json,
             "debt": {
                 "path": str(debt_path),
                 "known_calls": known_calls,
@@ -567,6 +746,10 @@ def main() -> int:
         print(f"   … ещё {len(new_items) - 20} — полный список: python {Path(__file__).resolve()} --json")
     for key, rec, live in shrunk:
         print(f"   ℹ️ долг уменьшился — поправь список: {format_key(key)} (было {rec}, стало {live})")
+    # при реестре — только новые: записанный в реестр вызов уже назван там с причиной, и строка
+    # про него в каждом общем прогоне была бы шумом; полный перечень — в --json, поле live_env
+    new_keys = {k for k, _n, _r in new_items}
+    print_live([e for e in all_live if e[3] in new_keys], indent="   ")
     if not ok:
         print("   👉 чини: subprocess.run([sys.executable, TOOL, ...], env=mezo_stand.stand_env(<корень стенда>))")
         print(f"   👉 либо допиши строку в {debt_path.name} (разряд «долг»), либо на СТРОКЕ ВЫЗОВА:")

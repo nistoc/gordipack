@@ -43,6 +43,24 @@
   — (к) пропадает, (л) остаётся; «голое имя-аргумент не прослеживается» — (л) пропадает,
   (к) остаётся; «обёртка run(…) прослеживается как subprocess» — (м) становится находкой.
 
+Корень стенда, ведущий в живой контур (карточка #613, слово владельца 2026-11-02 14:21:16 UTC,
+просьба COORD — записка #6232; её нарочная поломка m1c из записки #6235 — случай (с)):
+  с) env=mezo_stand.stand_env(mezo_paths.container_root()) .............. НАХОДКА, причина названа   РАЗЛИЧАЮЩИЙ
+  т) корень — предок __file__ через два имени (HERE → root → env) ....... НАХОДКА                     РАЗЛИЧАЮЩИЙ
+  у) поверх stand_env(d) — env.update(MEZO_CONTAINER=os.environ.get(…)) .. НАХОДКА                     РАЗЛИЧАЮЩИЙ
+  ф) встречный: подкаталог рядом с приёмкой (`… / "sandbox"`) и стенд mezo_stand.new — НЕ находка
+  ш) поверх stand_env(d) — env["MEZO_CONTAINER"] = os.environ["MEZO_CONTAINER"] ...... НАХОДКА   РАЗЛИЧАЮЩИЙ
+  щ) поверх stand_env(d) — env.update({"MEZO_CONTAINER": str(container_root())}) .... НАХОДКА   РАЗЛИЧАЮЩИЙ
+  Поломки (в копии проверки), у каждой приманки своя: «корень стенда не судится» — (с)(т)(у)(ш)(щ)
+  пропадают, (ф) не меняется; «имя не прослеживается» — (т) пропадает, (с) остаётся;
+  «подкаталог не обрывает цепочку предков» — (ф) становится находкой.
+  По поломке на каждое основание (просьба COORD, записка #6239):
+  «помощники mezo_paths не судятся» — (с)(щ) пропадают, (т)(у)(ш) остаются;
+  «__file__ не судится» — (т) пропадает, (с)(у) остаются;
+  «имя MEZO_CONTAINER не узнаётся» — (у)(ш)(щ) пропадают, (с)(т) остаются.
+  И на каждый путь поверх готовой среды: «ключ env["MEZO_CONTAINER"] не прослеживается» — (ш)
+  пропадает, (у)(щ) остаются; «словарь в .update() не прослеживается» — (щ) пропадает, (у)(ш) остаются.
+
 Нулевой день контура (заявка 29 пакета): реестра рядом нет у свежесобранного контура — это свойство
 нового контура, «ℹ️», а не «⚠️». Контур для этих случаев СОБИРАЕТСЯ из пакета сборщиком init-group.py
 (так же, как у bite-fresh-circuit.py), а не рисуется рукой: признак читается из ленты настоящей базы.
@@ -179,6 +197,87 @@ def call(d):
     run(cmd, d)
 '''
 
+# ── синтетика случаев (с)(т)(у)(ф): корень стенда ведёт в живой контур (карточка #613) ──
+BITE_CASE12_LIVE_ROOT = '''import subprocess, sys
+from pathlib import Path
+import mezo_paths
+import mezo_stand
+TOOL = str(Path(__file__).resolve().parent / "fake-container-tool.py")
+
+
+def call():
+    subprocess.run([sys.executable, TOOL, "--db", "x"], capture_output=True,
+                   env=mezo_stand.stand_env(mezo_paths.container_root()))
+'''
+
+BITE_CASE13_FILE_ANCESTOR = '''import subprocess, sys
+from pathlib import Path
+import mezo_stand
+HERE = Path(__file__).resolve().parent
+TOOL = str(HERE / "fake-container-tool.py")
+
+
+def call():
+    root = HERE.parent
+    env = mezo_stand.stand_env(root, PYTHONIOENCODING="utf-8")
+    subprocess.run([sys.executable, TOOL, "--db", "x"], capture_output=True, env=env)
+'''
+
+BITE_CASE14_ENV_OVERRIDE = '''import os, subprocess, sys
+from pathlib import Path
+import mezo_stand
+TOOL = str(Path(__file__).resolve().parent / "fake-container-tool.py")
+
+
+def call(d):
+    env = mezo_stand.stand_env(d)
+    env.update(MEZO_CONTAINER=os.environ.get("MEZO_CONTAINER", ""))
+    subprocess.run([sys.executable, TOOL, "--db", "x"], capture_output=True, env=env)
+'''
+
+BITE_CASE15_NOT_LIVE = '''import subprocess, sys
+from pathlib import Path
+import mezo_stand
+TOOL = str(Path(__file__).resolve().parent / "fake-container-tool.py")
+
+
+def call_sandbox():
+    sandbox = Path(__file__).resolve().parent / "sandbox"
+    subprocess.run([sys.executable, TOOL, "--db", "x"], capture_output=True,
+                   env=mezo_stand.stand_env(sandbox))
+
+
+def call_new():
+    root = mezo_stand.new("bite-case15-")
+    subprocess.run([sys.executable, TOOL, "--db", "x"], capture_output=True,
+                   env=mezo_stand.stand_env(root))
+'''
+
+BITE_CASE16_ENV_KEY = '''import os, subprocess, sys
+from pathlib import Path
+import mezo_stand
+TOOL = str(Path(__file__).resolve().parent / "fake-container-tool.py")
+
+
+def call(d):
+    env = mezo_stand.stand_env(d)
+    env["MEZO_CONTAINER"] = os.environ["MEZO_CONTAINER"]
+    subprocess.run([sys.executable, TOOL, "--db", "x"], capture_output=True, env=env)
+'''
+
+BITE_CASE17_UPDATE_DICT = '''import subprocess, sys
+from pathlib import Path
+import mezo_paths
+import mezo_stand
+TOOL = str(Path(__file__).resolve().parent / "fake-container-tool.py")
+
+
+def call(d):
+    env = mezo_stand.stand_env(d)
+    env.update({"MEZO_CONTAINER": str(mezo_paths.container_root())})
+    subprocess.run([sys.executable, TOOL, "--db", "x"], capture_output=True, env=env)
+'''
+
 # ── синтетика случаев (а)-(г): реестр известного долга ──────────────────────────────
 BITE_CASE6_RECORDED = '''import subprocess, sys
 from pathlib import Path
@@ -245,6 +344,12 @@ def build_stand(checker_source: str):
     (vt / "bite-case9-py-var.py").write_text(BITE_CASE9_PY_VAR, encoding="utf-8")
     (vt / "bite-case10-cmd-var.py").write_text(BITE_CASE10_CMD_VAR, encoding="utf-8")
     (vt / "bite-case11-wrapper.py").write_text(BITE_CASE11_WRAPPER, encoding="utf-8")
+    (vt / "bite-case12-live-root.py").write_text(BITE_CASE12_LIVE_ROOT, encoding="utf-8")
+    (vt / "bite-case13-file-ancestor.py").write_text(BITE_CASE13_FILE_ANCESTOR, encoding="utf-8")
+    (vt / "bite-case14-env-override.py").write_text(BITE_CASE14_ENV_OVERRIDE, encoding="utf-8")
+    (vt / "bite-case15-not-live.py").write_text(BITE_CASE15_NOT_LIVE, encoding="utf-8")
+    (vt / "bite-case16-env-key.py").write_text(BITE_CASE16_ENV_KEY, encoding="utf-8")
+    (vt / "bite-case17-update-dict.py").write_text(BITE_CASE17_UPDATE_DICT, encoding="utf-8")
     return d
 
 
@@ -430,6 +535,100 @@ def main() -> int:
     ok &= case("(м) поломка «обёртка прослеживается как subprocess»: (м) становится находкой",
                "bite-case11-wrapper.py" in found_m,
                f"находки на копии: {sorted(found_m)}", differ=True)
+
+    # ── (с)(т)(у)(ф) корень стенда ведёт в живой контур (карточка #613, записка #6232) ──────
+    live = {Path(e["file"]).name: e.get("reason", "") for e in data.get("live_env", [])}
+    ok &= case("(с) env=stand_env(mezo_paths.container_root()) — НАХОДКА, причина названа",
+               "bite-case12-live-root.py" in found
+               and "container_root" in live.get("bite-case12-live-root.py", ""),
+               f"находки: {sorted(found)} · причина: {live.get('bite-case12-live-root.py', '—')}",
+               differ=True)
+    ok &= case("(т) корень — предок __file__ через два имени (HERE → root → env) — НАХОДКА",
+               "bite-case13-file-ancestor.py" in found
+               and "__file__" in live.get("bite-case13-file-ancestor.py", ""),
+               f"причина: {live.get('bite-case13-file-ancestor.py', '—')}", differ=True)
+    ok &= case("(у) поверх stand_env(d) — env.update(MEZO_CONTAINER=os.environ.get(…)) — НАХОДКА",
+               "bite-case14-env-override.py" in found
+               and "MEZO_CONTAINER" in live.get("bite-case14-env-override.py", ""),
+               f"причина: {live.get('bite-case14-env-override.py', '—')}", differ=True)
+    ok &= case("(ф) встречный: подкаталог рядом с приёмкой и стенд mezo_stand.new — НЕ находка",
+               "bite-case15-not-live.py" not in found and "bite-case15-not-live.py" not in live,
+               f"находки: {sorted(found)}")
+    ok &= case('(ш) поверх stand_env(d) — env["MEZO_CONTAINER"] = os.environ[…] — НАХОДКА',
+               "bite-case16-env-key.py" in found
+               and "MEZO_CONTAINER" in live.get("bite-case16-env-key.py", ""),
+               f"причина: {live.get('bite-case16-env-key.py', '—')}", differ=True)
+    ok &= case('(щ) поверх stand_env(d) — env.update({"MEZO_CONTAINER": str(container_root())}) — НАХОДКА',
+               "bite-case17-update-dict.py" in found
+               and "container_root" in live.get("bite-case17-update-dict.py", ""),
+               f"причина: {live.get('bite-case17-update-dict.py', '—')}", differ=True)
+    anchor_judge = "                live_reason = env_live_reason(node, scopes, module_stmts)"
+    anchor_links = "            if links <= 0:\n                return None"
+    anchor_chain = '        if isinstance(node, ast.Attribute) and node.attr == "parent":'
+    anchor_helpers = 'LIVE_PATH_CALLS = {"container_root", "live_db", "live_scripts"}'
+    anchor_file = '            if node.id == "__file__":'
+    anchor_var = "    return isinstance(node, ast.Constant) and node.value == CONTAINER_VAR"
+    anchor_key = "            and target.value.id == env_name and is_container_var(target.slice))"
+    anchor_dict = "                    if isinstance(arg, ast.Dict):"
+    for anchor_text, label in ((anchor_judge, "суда корня"), (anchor_links, "прослеживания имени"),
+                               (anchor_chain, "цепочки предков"), (anchor_helpers, "помощников mezo_paths"),
+                               (anchor_file, "__file__"), (anchor_var, "имени MEZO_CONTAINER"),
+                               (anchor_key, "ключа среды"), (anchor_dict, "словаря в .update()")):
+        if real_source.count(anchor_text) != 1:
+            raise SystemExit(f"ПРИЁМКА НЕ СОСТОЯЛАСЬ: якорь «{label}» найден {real_source.count(anchor_text)} раз")
+    c_root, c_file, c_upd = ("bite-case12-live-root.py", "bite-case13-file-ancestor.py",
+                             "bite-case14-env-override.py")
+    c_key, c_dict = "bite-case16-env-key.py", "bite-case17-update-dict.py"
+    live_cases = (c_root, c_file, c_upd, c_key, c_dict)
+    broken_x = build_stand(real_source.replace(
+        anchor_judge, "                live_reason = None  # ПОЛОМКА (х): корень стенда не судится"))
+    found_x = names(run_checker(broken_x, "--no-debt-list")[0].get("findings", []))
+    ok &= case("(х) поломка «корень стенда не судится»: (с)(т)(у)(ш)(щ) пропадают, (ф) не меняется",
+               not any(n in found_x for n in live_cases) and "bite-case15-not-live.py" not in found_x,
+               f"находки на копии: {sorted(found_x)}", differ=True)
+    broken_c = build_stand(real_source.replace(
+        anchor_links, "            if True:  # ПОЛОМКА (ц): имя не прослеживается\n                return None"))
+    found_c = names(run_checker(broken_c, "--no-debt-list")[0].get("findings", []))
+    ok &= case("(ц) поломка «имя не прослеживается»: (т) пропадает, (с) остаётся",
+               "bite-case13-file-ancestor.py" not in found_c and "bite-case12-live-root.py" in found_c,
+               f"находки на копии: {sorted(found_c)}", differ=True)
+    broken_ch = build_stand(real_source.replace(
+        anchor_chain, "        if isinstance(node, ast.BinOp):  # ПОЛОМКА (ч): подкаталог не обрывает цепочку\n"
+                      "            node = node.left\n            continue\n" + anchor_chain))
+    found_ch = names(run_checker(broken_ch, "--no-debt-list")[0].get("findings", []))
+    ok &= case("(ч) поломка «подкаталог не обрывает цепочку предков»: (ф) становится находкой",
+               "bite-case15-not-live.py" in found_ch,
+               f"находки на копии: {sorted(found_ch)}", differ=True)
+
+    def broken_found(anchor_text, replacement):
+        return names(run_checker(build_stand(real_source.replace(anchor_text, replacement)),
+                                 "--no-debt-list")[0].get("findings", []))
+
+    def gone_kept(found_b, gone, kept):
+        return all(n not in found_b for n in gone) and all(n in found_b for n in kept)
+
+    # по поломке на каждое основание «ведёт в живой контур» (просьба COORD, записка #6239)
+    found_y = broken_found(anchor_helpers, "LIVE_PATH_CALLS = set()  # ПОЛОМКА (ы): помощники mezo_paths не судятся")
+    ok &= case("(ы) поломка «помощники mezo_paths не судятся»: (с)(щ) пропадают, (т)(у)(ш) остаются",
+               gone_kept(found_y, (c_root, c_dict), (c_file, c_upd, c_key)),
+               f"находки на копии: {sorted(found_y)}", differ=True)
+    found_e = broken_found(anchor_file, "            if False:  # ПОЛОМКА (э): __file__ не судится")
+    ok &= case("(э) поломка «__file__ не судится»: (т) пропадает, (с)(у) остаются",
+               gone_kept(found_e, (c_file,), (c_root, c_upd)),
+               f"находки на копии: {sorted(found_e)}", differ=True)
+    found_yu = broken_found(anchor_var, "    return False  # ПОЛОМКА (ю): имя MEZO_CONTAINER не узнаётся")
+    ok &= case("(ю) поломка «имя MEZO_CONTAINER не узнаётся»: (у)(ш)(щ) пропадают, (с)(т) остаются",
+               gone_kept(found_yu, (c_upd, c_key, c_dict), (c_root, c_file)),
+               f"находки на копии: {sorted(found_yu)}", differ=True)
+    # и по поломке на каждый путь поверх готовой среды
+    found_ya = broken_found(anchor_key, "            and False)  # ПОЛОМКА (я): ключ среды не прослеживается")
+    ok &= case('(я) поломка «ключ env["MEZO_CONTAINER"] не прослеживается»: (ш) пропадает, (у)(щ) остаются',
+               gone_kept(found_ya, (c_key,), (c_upd, c_dict)),
+               f"находки на копии: {sorted(found_ya)}", differ=True)
+    found_j = broken_found(anchor_dict, "                    if False:  # ПОЛОМКА (й): словарь в .update() не прослеживается")
+    ok &= case("(й) поломка «словарь в .update() не прослеживается»: (щ) пропадает, (у)(ш) остаются",
+               gone_kept(found_j, (c_dict,), (c_upd, c_key)),
+               f"находки на копии: {sorted(found_j)}", differ=True)
 
     # ── Р1 обратный ход: строка-разрешение ОСЛЕПЛЕНА в КОПИИ проверки ──────────────
     anchor = "m = ALLOW_RE.search(line_text)"
