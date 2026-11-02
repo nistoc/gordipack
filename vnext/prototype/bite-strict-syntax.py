@@ -44,9 +44,13 @@ def case(title, cond, detail, differ=False):
 
 
 def run(tool, *dirs):
+    # Среда стенда (карточка #613): MEZO_CONTAINER — корень стенда (каталог над судимой папкой),
+    # номер чата не передаётся. Прежде проверка получала среду вызывающего. Что судить, задаёт
+    # --dirs; прогон ⑦ по живым каталогам идёт мимо этой функции и намеренно остаётся живым.
     r = subprocess.run([sys.executable, str(tool), "--dirs", *map(str, dirs)],
                        capture_output=True, text=True, encoding="utf-8",
-                       errors="replace", timeout=120)
+                       errors="replace", timeout=120,
+                       env=mezo_stand.stand_env(Path(dirs[0]).parent))
     return (r.stdout or "") + (r.stderr or ""), r.returncode
 
 

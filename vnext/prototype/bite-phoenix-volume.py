@@ -13,6 +13,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 GUARD = HERE / "guard-phoenix-volume.py"
+sys.path.insert(0, str(HERE))
+import mezo_stand  # noqa: E402 — среда запуска проверки (карточка #613)
 LIMIT = 20_000
 
 CASES, OK = 0, True
@@ -44,8 +46,12 @@ def stand(tmp, name, sections):
 
 
 def run(db):
+    # Среда стенда (карточка #613): MEZO_CONTAINER — корень стенда (каталог базы), номер чата
+    # не передаётся. Прежде проверка получала среду вызывающего. Базы стенда — голые файлы
+    # *.db в его корне, без .mezosync — живой базой ни одна из них не становится.
     r = subprocess.run([sys.executable, str(GUARD), "--db", str(db)],
-                       capture_output=True, text=True, encoding="utf-8")
+                       capture_output=True, text=True, encoding="utf-8",
+                       env=mezo_stand.stand_env(Path(db).parent))
     return (r.stdout or "") + (r.stderr or ""), r.returncode
 
 

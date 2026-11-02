@@ -91,6 +91,7 @@ import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
+import mezo_stand  # noqa: E402 — среда запуска испытуемого (карточка #613)
 
 CASES = DIFFER = GREENS = 0
 
@@ -119,8 +120,12 @@ STAND_HAND = "ZZX"
 
 
 def call_tool(tool, db, *args):
+    # Среда стенда (карточка #613): MEZO_CONTAINER — корень стенда (каталог копии базы), номер
+    # чата не передаётся. Прежде копия инструмента получала среду вызывающего. Копия базы лежит
+    # в корне стенда (copy.db), а не в его .mezosync — живой базой она не становится.
     r = subprocess.run([sys.executable, "-B", str(tool), "--db", str(db), "--role", STAND_HAND, *args],
-                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+                       capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       env=mezo_stand.stand_env(pathlib.Path(db).parent))
     return r.returncode, (r.stdout or "") + (r.stderr or "")
 
 

@@ -37,16 +37,16 @@ def case(title, ok, detail, differ=False):
     return ok
 
 
-def стенд(tmp: Path, версия, есть_правило: bool = True) -> Path:
+def make_stand(tmp: Path, version, has_rule: bool = True) -> Path:
     """Копия живой базы с подменённой версией правила-словаря.
 
     Копия, а не живая база: приёмка, правящая живое, однажды и правит его насовсем.
     """
-    db = tmp / f"c{версия}.db"
+    db = tmp / f"c{version}.db"
     mezo_stand.snapshot_db(mezo_paths.live_db(), db)
     con = sqlite3.connect(str(db))
-    if есть_правило:
-        con.execute("UPDATE rules SET version = ? WHERE rule_key = 'plain-words'", (версия,))
+    if has_rule:
+        con.execute("UPDATE rules SET version = ? WHERE rule_key = 'plain-words'", (version,))
     else:
         con.execute("DELETE FROM rules WHERE rule_key = 'plain-words'")
     con.commit()
@@ -55,8 +55,12 @@ def стенд(tmp: Path, версия, есть_правило: bool = True) ->
 
 
 def run(db: Path, *args):
+    # Среда стенда (карточка #613): MEZO_CONTAINER — корень стенда (каталог копии базы), номер
+    # чата не передаётся. Прежде замер получал среду вызывающего. Копии лежат в корне стенда
+    # (c<версия>.db), а не в его .mezosync — живой базой ни одна из них не становится.
     r = subprocess.run([sys.executable, str(TOOL), "--db", str(db), "--memories", *args],
-                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+                       capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       env=mezo_stand.stand_env(db.parent))
     return (r.stdout or "") + (r.stderr or ""), r.returncode
 
 
@@ -68,20 +72,20 @@ def main() -> int:
 
     tmp = mezo_stand.new("bite-yard-")
     try:
-        out7, _ = run(стенд(tmp, 7))
+        out7, _ = run(make_stand(tmp, 7))
         ok &= case("① мерка названа: версия правила-словаря взята ИЗ БАЗЫ",
                    "v7" in out7 and "МЕРЕНО" in out7,
                    "без версии два вывода несравнимы, а выглядят сравнимыми — ровно то, "
                    "на чём 20.08 число выросло со 131 до 181 без единой правки памятей",
                    differ=True)
 
-        out9, _ = run(стенд(tmp, 9))
+        out9, _ = run(make_stand(tmp, 9))
         ok &= case("② ВСТРЕЧНЫЙ: другая версия в базе — другая мерка в выводе",
                    "v9" in out9 and "v7" not in out9,
                    "без этого случая ① зеленел бы и на впечатанной строке: печатать «v7» "
                    "можно и не спрашивая базу", differ=True)
 
-        outnone, _ = run(стенд(tmp, 0, есть_правило=False))
+        outnone, _ = run(make_stand(tmp, 0, has_rule=False))
         ok &= case("③ правила нет в базе — СКАЗАНО вслух, а не молча пропущено",
                    "МЕРЕНО" in outnone and ("не прочиталось" in outnone or "?" in outnone),
                    "пропавшая мерка опаснее неверной: вывод выглядит полным и не даёт "
@@ -92,7 +96,7 @@ def main() -> int:
                    "правило и признак живут порознь и расходятся молча: «мерено v4» при "
                    "признаке, не знающем новых слов, соврало бы точнее прежнего", differ=True)
 
-        short, _ = run(стенд(tmp, 7), "--short")
+        short, _ = run(make_stand(tmp, 7), "--short")
         ok &= case("⑤ короткая форма тоже несёт мерку — её встраивают в общий прогон",
                    "plain-words v7" in short,
                    "именно короткую строку роль видит при каждом пробуждении; мерка, "

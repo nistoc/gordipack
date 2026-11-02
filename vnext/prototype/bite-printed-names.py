@@ -118,8 +118,13 @@ def lay_out(where: Path, files: dict) -> None:
 
 
 def run_guard(where: Path) -> str:
+    # Среда стенда (карточка #613): MEZO_CONTAINER — корень стенда (каталог над папкой образцов),
+    # номер чата не передаётся. Прежде проверка получала среду вызывающего и читала имена таблиц
+    # живой базы; в стенде базы нет, и сличение имён полей проверка честно пропускает — ни один
+    # образец этой приёмки на него не опирается: правила Б, Б, Г и А ловятся по флагам argparse.
     out = subprocess.run([sys.executable, str(GUARD), "--dir", str(where), "--quiet"],
-                         capture_output=True, text=True, encoding="utf-8", errors="replace")
+                         capture_output=True, text=True, encoding="utf-8", errors="replace",
+                         env=mezo_stand.stand_env(where.parent))
     return out.stdout
 
 

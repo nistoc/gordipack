@@ -86,8 +86,12 @@ def stand(rules, mark=CATCHUP, seed_broken=False, duplicate=None):
 
 
 def run(seed, db):
+    # Среда стенда (карточка #613): MEZO_CONTAINER — корень стенда (каталог базы), номер чата
+    # не передаётся. Прежде проверка получала среду вызывающего. База стенда лежит в его корне
+    # (live.db — имя случая, не живая база), а не в .mezosync — живой базой она не становится.
     r = subprocess.run([sys.executable, str(TOOL), "--seed", str(seed), "--db", str(db)],
-                       capture_output=True, text=True, encoding="utf-8", timeout=300)
+                       capture_output=True, text=True, encoding="utf-8", timeout=300,
+                       env=mezo_stand.stand_env(pathlib.Path(db).parent))
     return (r.stdout or "") + (r.stderr or ""), r.returncode
 
 
