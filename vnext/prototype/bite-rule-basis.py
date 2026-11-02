@@ -44,7 +44,6 @@ import subprocess
 import sys
 
 import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
-import mezo_paths  # noqa: E402 — контейнер для копии проверки под нарочной поломкой
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CHECK = os.path.join(HERE, "check-rule-basis.py")
@@ -98,10 +97,13 @@ def build(path: str, rules, roles=ATLAS_ROLES):
 
 
 def run(path: str, extra=(), check=CHECK):
+    # Среда стенда (карточка #613): MEZO_CONTAINER — корень стенда (каталог песочной базы), номер
+    # чата не передаётся. Переменная нужна по-прежнему — копия проверки под нарочной поломкой
+    # лежит вне контура и без неё не нашла бы корня, — но прежде она указывала на контур
+    # вызывающего или живой. Песочные базы — голые файлы *.db в корне стенда, без .mezosync.
     r = subprocess.run([sys.executable, check, "--db", path, *extra],
                        capture_output=True, text=True, encoding="utf-8",
-                       env={**os.environ, "MEZO_CONTAINER": os.environ.get(
-                           "MEZO_CONTAINER") or str(mezo_paths.container_root())})
+                       env=mezo_stand.stand_env(os.path.dirname(path)))
     return (r.stdout or "") + (r.stderr or ""), r.returncode
 
 
