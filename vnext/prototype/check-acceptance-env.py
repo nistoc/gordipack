@@ -23,25 +23,54 @@ MEZO_CONTAINER указывает на другой (живой) контур, �
 КОРЕНЬ СТЕНДА, ВЕДУЩИЙ В ЖИВОЙ КОНТУР (карточка #613, слово владельца 2026-11-02 14:21:16 UTC
 в чате PROTO; просьба COORD, записка #6232). До этой правки проверка судила только ФОРМУ —
 есть ли stand_env( в env= — и вызов env=mezo_stand.stand_env(mezo_paths.container_root())
-считался закреплённым, хотя отдаёт испытуемому ровно живой контур вызывающего (нарочная
-поломка COORD m1c, записка #6235: «новых: 0», а журнал среды — живой контур у 5 из 5).
+считался закреплённым, хотя отдаёт испытуемому ровно живой контур вызывающего. Нарочная
+поломка COORD m1c из записки #6235 («новых: 0», а журнал среды — живой контур у 5 из 5) была
+сделана ДРУГОЙ формой — корнем строкой-путём к живому контуру. Первая правка (PR 72) её
+не судила, хотя шапка называла её образцом; судит вторая — форма q01 ниже.
 Теперь судится и АРГУМЕНТ: корень стенда (первый аргумент stand_env и значение MEZO_CONTAINER
 в самом stand_env или поверх готовой среды) считается ведущим в живой контур, если это
 цепочка «предков» — .parent · .parents[N] · .resolve() · Path() · str() · os.path.dirname() —
 над одним из оснований:
   · mezo_paths.container_root() / live_db() / live_scripts() — с любым аргументом: все три
     берут MEZO_CONTAINER вызывающего раньше расположения файла, то есть это контур вызывающего;
+    и они же под псевдонимом импорта: from mezo_paths import container_root as croot (q02);
   · __file__ — предок файла самой приёмки, а она лежит в живом vnext-tools или .mezosync/scripts;
-  · os.environ["MEZO_CONTAINER"] · os.environ.get("MEZO_CONTAINER") · os.getenv("MEZO_CONTAINER").
+  · os.environ["MEZO_CONTAINER"] · os.environ.get("MEZO_CONTAINER") · os.getenv("MEZO_CONTAINER");
+  · рабочий каталог вызывающего — Path.cwd() · os.getcwd() · Path() без аргументов (q07):
+    приёмка, запущенная из живого контура, отдаст именно его;
+  · непустая строка-путь (q01). Стенд делают mezo_stand.new или tempfile, а путь, вписанный
+    в приёмку строкой, ведёт туда, куда указывает. Сравнивать строку с контуром самой проверки
+    нельзя: поломку m1c (строку к живому контуру) проверка судила на подставном контуре, и
+    сравнение ответило бы «чужой каталог, не живой» — то есть пропустило бы её. Цена — осторожная
+    находка у строки к настоящему стенду; пустая строка ("") не судится — она снимает переменную.
 Имя прослеживается по присваиваниям своей области и модуля, до трёх звеньев (тот же приём,
-что у интерпретатора в переменной). Такой вызов считается вызовом БЕЗ закреплённого env=:
+что у интерпретатора в переменной). В своей области судятся только присваивания, которые
+могут дойти до места использования: последнее присваивание выше в том же блоке (или в
+охватывающем) исполняется наверняка и перекрывает прежние, а вложенные после него (if · try ·
+for) судятся все. Так снята ложная находка z07: root = container_root(); root = mezo_stand.new(…);
+stand_env(root). Такой вызов считается вызовом БЕЗ закреплённого env=:
 находкой с тем же ключом реестра, а в выводе — отдельной строкой с причиной.
 Не считается ведущим: путь с присоединённым подкаталогом (`... / "стенд"` — это уже не сам
 контур), параметр функции, значение, возвращённое функцией, атрибут объекта (stand.root),
 mezo_paths.template_root() (клон пакета, а не живой контур).
-Поверх готовой среды прослеживаются env.update(MEZO_CONTAINER=…), env.update({"MEZO_CONTAINER": …})
-и env["MEZO_CONTAINER"] = … — в своей области, до строки вызова. Среда, собранная в другой
-функции и переданная параметром или возвращённая, не прослеживается — названо границей.
+Поверх готовой среды прослеживаются env.update(MEZO_CONTAINER=…), env.update({"MEZO_CONTAINER": …}),
+env["MEZO_CONTAINER"] = …, перезапись env = {**env, "MEZO_CONTAINER": …} (q05) и env |= {…} (q06) —
+в своей области, до строки вызова; в самом env= — словарь {**stand_env(d), "MEZO_CONTAINER": …}
+(q03) и dict(stand_env(d), MEZO_CONTAINER=…) (q04). Семь форм q01–q07 судятся по слову владельца
+2026-11-03 09:14:10 UTC в чате COORD («Судить все семь», записка #6243); замер 2026-11-03 10:57 UTC
+на живом контуре: ни одной из семи в коде нет — находок 113 и живой корень 1, как до правки.
+НЕ СУДЯТСЯ — названо границей (пробы COORD, комментарий на карточке #613 2026-11-02 15:30:53 UTC,
+и мои пробы этой правки):
+  q08 цепочка из четырёх имён и длиннее — звеньев три;
+  q09 значение, возвращённое функцией (def live(): return container_root());
+  q10 значение параметра по умолчанию (def call(root=container_root()));
+  присваивание ПОСЛЕ места использования внутри цикла, когда выше стоит прямое: судится прямое;
+  f-строка и путь, собранный сложением строк, — не судятся.
+ОСТОРОЖНЫЕ ЛОЖНЫЕ НАХОДКИ — тоже граница, в обратную сторону: перезапись самой среды целиком
+(env = stand_env(живой); env = stand_env(стенд) — судятся обе); os.chdir(стенд) перед Path.cwd();
+строка-путь к настоящему стенду. В живом коде ни одной (замер выше).
+Среда, собранная в другой функции и переданная параметром или возвращённая, не прослеживается —
+тоже граница.
 
 ИЗВЕСТНЫЙ ДОЛГ (карточка #613, доработка PROTO 2026-09-14). Подключённая к общему
 прогону проверка сразу нашла 134 находки у всех ролей разом — провал среди известного
@@ -125,6 +154,8 @@ LIVE_PATH_CALLS = {"container_root", "live_db", "live_scripts"}
 # Обёртки, которые не уводят путь из контура: путь остаётся тем же каталогом или его предком.
 PATH_WRAPPERS = {"Path", "PurePath", "str", "dirname", "abspath", "realpath", "fspath"}
 CONTAINER_VAR = "MEZO_CONTAINER"
+# Рабочий каталог вызывающего (q07): приёмка, запущенная из живого контура, отдаст именно его.
+CWD_CALLS = {"cwd", "getcwd", "getcwdb"}
 
 
 def has_sys_executable(node: ast.AST) -> bool:
@@ -287,12 +318,85 @@ def is_env_key(target, env_name: str) -> bool:
             and target.value.id == env_name and is_container_var(target.slice))
 
 
-def live_origin(expr: ast.AST, pools: list, links: int = 3):
+def mezo_paths_aliases(pools: list) -> dict:
+    """Псевдонимы помощников mezo_paths из `from mezo_paths import X as Y` своей области
+    и модуля → {Y: X} (q02: под псевдонимом помощник прежде не узнавался)."""
+    aliases = {}
+    for stmts in pools:
+        for stmt in stmts:
+            if isinstance(stmt, ast.ImportFrom) and stmt.module == "mezo_paths":
+                aliases.update({a.asname: a.name for a in stmt.names if a.asname})
+    return aliases
+
+
+def statement_lists(scope_node) -> list:
+    """Списки операторов области — те же блоки, что обходит flat_statements, но порознь."""
+    lists = []
+
+    def walk_body(body):
+        lists.append(body)
+        for stmt in body:
+            for field in ("body", "orelse", "finalbody"):
+                sub = getattr(stmt, field, None)
+                if isinstance(sub, list) and sub and isinstance(sub[0], ast.stmt):
+                    walk_body(sub)
+            for handler in getattr(stmt, "handlers", None) or []:
+                walk_body(handler.body)
+
+    walk_body(scope_node.body)
+    return lists
+
+
+def assigns_name(stmt, name: str) -> bool:
+    return ((isinstance(stmt, ast.Assign)
+             and any(isinstance(t, ast.Name) and t.id == name for t in stmt.targets))
+            or (isinstance(stmt, ast.AnnAssign) and stmt.value is not None
+                and isinstance(stmt.target, ast.Name) and stmt.target.id == name))
+
+
+def reaching_values(name: str, use_line, pools: list, scope_node) -> list:
+    """Правые части присваиваний имени, которые могут дойти до строки use_line.
+
+    Имя своей области: последнее присваивание, стоящее ВЫШЕ в том же блоке, что и место
+    использования (или в блоке, его охватывающем), исполняется наверняка и перекрывает все
+    прежние — они не судятся. Так снята ложная находка z07: root = container_root();
+    root = mezo_stand.new(…); stand_env(root). Присваивания во вложенных блоках после него
+    (if · try · for) могли исполниться, а могли и нет — судятся все. Прямого присваивания
+    выше нет — судятся все присваивания области, как прежде. Имени в области нет — все
+    присваивания модуля, как прежде.
+
+    → [(правая часть, область для её имён)]: значение из модуля судится уже без своей области."""
+    if scope_node is None or use_line is None:
+        return [(v, None) for v in assigned_values(name, pools)]
+    own = [s for s in pools[0] if assigns_name(s, name)]
+    if not own:
+        return [(v, None) for v in assigned_values(name, pools[1:])]
+    lists = statement_lists(scope_node)
+
+    def straight(stmt) -> bool:
+        for body in lists:
+            for i, s in enumerate(body):
+                if s is stmt:
+                    return any(t.lineno <= use_line <= getattr(t, "end_lineno", t.lineno)
+                               for t in body[i + 1:])
+        return False
+
+    before = [s for s in own if s.lineno < use_line]
+    direct = [s for s in before if straight(s)]
+    if direct:
+        last = max(direct, key=lambda s: s.lineno)
+        own = [s for s in before if s.lineno >= last.lineno]
+    return [(s.value, scope_node) for s in own]
+
+
+def live_origin(expr: ast.AST, pools: list, links: int = 3, scope_node=None):
     """Ведёт ли выражение корня стенда в живой контур вызывающего — причина словами или None.
 
     Разбирается только цепочка «предков» (.parent · .parents[N] · .resolve() · Path() · str() ·
     os.path.dirname()) над основанием; присоединённый подкаталог (`/`) цепочку обрывает: такой
-    путь уже не сам контур. Имя — по присваиваниям своей области и модуля, до `links` звеньев."""
+    путь уже не сам контур. Имя — по присваиваниям своей области и модуля, до `links` звеньев;
+    в своей области — только те, что могут дойти до места использования (reaching_values)."""
+    aliases = mezo_paths_aliases(pools)
     node = expr
     while True:
         if isinstance(node, ast.Attribute) and node.attr == "parent":
@@ -306,10 +410,16 @@ def live_origin(expr: ast.AST, pools: list, links: int = 3):
             return f"{CONTAINER_VAR} вызывающего ({ast.unparse(node)})"
         if isinstance(node, ast.Call):
             name = call_name(node.func)
+            if isinstance(node.func, ast.Name) and aliases.get(name) in LIVE_PATH_CALLS:
+                return f"mezo_paths.{aliases[name]}() под именем {name} — контур вызывающего"
             if name in LIVE_PATH_CALLS:
                 return f"mezo_paths.{name}() — контур вызывающего"
             if name in ("get", "getenv") and node.args and is_container_var(node.args[0]):
                 return f"{CONTAINER_VAR} вызывающего ({ast.unparse(node)})"
+            if (name in CWD_CALLS and not node.args) or (
+                    name in ("Path", "PurePath") and not node.args and not node.keywords):
+                return (f"рабочий каталог вызывающего ({ast.unparse(node)}) — приёмка, запущенная "
+                        "из живого контура, отдаст его")
             if (name in ("resolve", "absolute") and isinstance(node.func, ast.Attribute)
                     and not node.args):
                 node = node.func.value
@@ -318,13 +428,19 @@ def live_origin(expr: ast.AST, pools: list, links: int = 3):
                 node = node.args[0]
                 continue
             return None
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value:
+            # q01: стенд делают mezo_stand.new или tempfile; путь, вписанный строкой, ведёт туда,
+            # куда указывает, — с контуром проверки его сравнивать бесполезно (поломка m1c была
+            # строкой к живому контуру, а проверка судила подставной).
+            return (f"путь строкой {node.value!r} — каталог, вписанный в приёмку, а не стенд "
+                    "(абсолютный — каталог машины, относительный — от рабочего каталога)")
         if isinstance(node, ast.Name):
             if node.id == "__file__":
                 return "предок файла самой приёмки (__file__) — она лежит в живом контуре"
             if links <= 0:
                 return None
-            for value in assigned_values(node.id, pools):
-                reason = live_origin(value, pools, links - 1)
+            for value, value_scope in reaching_values(node.id, getattr(node, "lineno", None), pools, scope_node):
+                reason = live_origin(value, pools, links - 1, value_scope)
                 if reason:
                     return reason
             return None
@@ -345,12 +461,15 @@ def env_live_reason(call: ast.Call, scopes: list, module_stmts: list):
     """Закреплённый за стендом env= вызова ведёт в живой контур? Причина словами или None.
 
     Смотрит те же места, что env_is_pinned: выражение env= на месте вызова либо присваивания
-    переменной env, её .update() и присваивание по ключу env["MEZO_CONTAINER"] ДО строки
-    вызова в своей области."""
+    переменной env, её .update(), `|=` и присваивание по ключу env["MEZO_CONTAINER"] ДО строки
+    вызова в своей области. В каждом таком выражении судятся корни всех stand_env(…) и значения
+    MEZO_CONTAINER во вставках поверх: словарь {…, "MEZO_CONTAINER": …} и dict(…, MEZO_CONTAINER=…)
+    (q03–q06: прежде вставка поверх готовой среды судилась только через .update и ключ)."""
     env_kw = next((kw.value for kw in call.keywords if kw.arg == "env"), None)
     if env_kw is None:
         return None
     scope = enclosing_scope(call, scopes)
+    scope_node = scope[0] if scope else None
     pools = ([scope[1]] if scope else []) + [module_stmts]
     sources = []
     if isinstance(env_kw, ast.Name) and scope:
@@ -359,9 +478,12 @@ def env_live_reason(call: ast.Call, scopes: list, module_stmts: list):
                 continue
             if isinstance(stmt, ast.Assign) and any(
                     isinstance(t, ast.Name) and t.id == env_kw.id for t in stmt.targets):
-                sources.append(stmt.value)
+                sources.append(stmt.value)  # env = … — и сама среда, и её перезапись поверх (q05)
             elif isinstance(stmt, ast.Assign) and any(is_env_key(t, env_kw.id) for t in stmt.targets):
                 sources.append(stmt.value)
+            elif (isinstance(stmt, ast.AugAssign) and isinstance(stmt.target, ast.Name)
+                    and stmt.target.id == env_kw.id):
+                sources.append(stmt.value)  # env |= {…} (q06)
             elif (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call)
                     and isinstance(stmt.value.func, ast.Attribute)
                     and isinstance(stmt.value.func.value, ast.Name)
@@ -376,13 +498,20 @@ def env_live_reason(call: ast.Call, scopes: list, module_stmts: list):
     for source in sources:
         for node in ast.walk(source):
             if isinstance(node, ast.Call) and call_name(node.func) == "stand_env":
-                for root in stand_roots(node):
-                    reason = live_origin(root, pools)
-                    if reason:
-                        return reason
+                roots = stand_roots(node)
+            elif isinstance(node, ast.Dict):
+                roots = [v for k, v in zip(node.keys, node.values) if is_container_var(k)]
+            elif isinstance(node, ast.Call) and call_name(node.func) == "dict":
+                roots = [kw.value for kw in node.keywords if kw.arg == CONTAINER_VAR]
+            else:
+                continue
+            for root in roots:
+                reason = live_origin(root, pools, scope_node=scope_node)
+                if reason:
+                    return reason
         if not any(isinstance(n, ast.Call) and call_name(n.func) == "stand_env"
                    for n in ast.walk(source)):
-            reason = live_origin(source, pools)
+            reason = live_origin(source, pools, scope_node=scope_node)
             if reason:
                 return reason
     return None

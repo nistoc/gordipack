@@ -44,15 +44,16 @@
   (к) остаётся; «обёртка run(…) прослеживается как subprocess» — (м) становится находкой.
 
 Корень стенда, ведущий в живой контур (карточка #613, слово владельца 2026-11-02 14:21:16 UTC,
-просьба COORD — записка #6232; её нарочная поломка m1c из записки #6235 — случай (с)):
+просьба COORD — записка #6232). Случай (с) — НЕ поломка m1c из записки #6235, как было написано
+здесь до PR 74: та была корнем строкой-путём к живому контуру, это форма q01 ниже:
   с) env=mezo_stand.stand_env(mezo_paths.container_root()) .............. НАХОДКА, причина названа   РАЗЛИЧАЮЩИЙ
   т) корень — предок __file__ через два имени (HERE → root → env) ....... НАХОДКА                     РАЗЛИЧАЮЩИЙ
   у) поверх stand_env(d) — env.update(MEZO_CONTAINER=os.environ.get(…)) .. НАХОДКА                     РАЗЛИЧАЮЩИЙ
   ф) встречный: подкаталог рядом с приёмкой (`… / "sandbox"`) и стенд mezo_stand.new — НЕ находка
   ш) поверх stand_env(d) — env["MEZO_CONTAINER"] = os.environ["MEZO_CONTAINER"] ...... НАХОДКА   РАЗЛИЧАЮЩИЙ
   щ) поверх stand_env(d) — env.update({"MEZO_CONTAINER": str(container_root())}) .... НАХОДКА   РАЗЛИЧАЮЩИЙ
-  Поломки (в копии проверки), у каждой приманки своя: «корень стенда не судится» — (с)(т)(у)(ш)(щ)
-  пропадают, (ф) не меняется; «имя не прослеживается» — (т) пропадает, (с) остаётся;
+  Поломки (в копии проверки), у каждой приманки своя: «корень стенда не судится» — (с)(т)(у)(ш)(щ),
+  а с PR 74 и q01–q07 со встречными z07-бис и z07-тер пропадают, (ф) не меняется; «имя не прослеживается» — (т) пропадает, (с) остаётся;
   «подкаталог не обрывает цепочку предков» — (ф) становится находкой.
   По поломке на каждое основание (просьба COORD, записка #6239):
   «помощники mezo_paths не судятся» — (с)(щ) пропадают, (т)(у)(ш) остаются;
@@ -60,6 +61,28 @@
   «имя MEZO_CONTAINER не узнаётся» — (у)(ш)(щ) пропадают, (с)(т) остаются.
   И на каждый путь поверх готовой среды: «ключ env["MEZO_CONTAINER"] не прослеживается» — (ш)
   пропадает, (у)(щ) остаются; «словарь в .update() не прослеживается» — (щ) пропадает, (у)(ш) остаются.
+
+Семь форм q01–q07 и ложная находка z07 (слово владельца 2026-11-03 09:14:10 UTC в чате COORD
+«Судить все семь», записка #6243; формы — из проб COORD к PR 72):
+  q01 корень строкой-путём к живому контуру (так сделана поломка m1c) ............ НАХОДКА   РАЗЛИЧАЮЩИЙ
+  q02 from mezo_paths import container_root as croot → stand_env(croot()) .......... НАХОДКА   РАЗЛИЧАЮЩИЙ
+  q03 env={**stand_env(d), "MEZO_CONTAINER": …} ..................................... НАХОДКА   РАЗЛИЧАЮЩИЙ
+  q04 env=dict(stand_env(d), MEZO_CONTAINER=…) ...................................... НАХОДКА   РАЗЛИЧАЮЩИЙ
+  q05 env = stand_env(d); env = {**env, "MEZO_CONTAINER": …} ........................ НАХОДКА   РАЗЛИЧАЮЩИЙ
+  q06 env = stand_env(d); env |= {"MEZO_CONTAINER": …} .............................. НАХОДКА   РАЗЛИЧАЮЩИЙ
+  q07 корень — рабочий каталог: Path.cwd() · os.getcwd() · Path() ................... НАХОДКИ   РАЗЛИЧАЮЩИЙ
+  z07 root = container_root(); root = mezo_stand.new(…); stand_env(root) ............ НЕ находка (снята)   РАЗЛИЧАЮЩИЙ
+  встречные: z07-бис — вложенное присваивание после прямого, z07-тер — имя через само себя:
+  НАХОДКИ; z08 — вставка стенда поверх стенда, z09 — пустая строка: НЕ находки.
+  Поломки (в копии проверки), по одной на форму, у каждой пропадает своя, а соседняя остаётся:
+  «строка-путь не судится» — q01, остаются (с) и q07; «псевдоним не узнаётся» — q02, остаётся (с);
+  «словарь {…} не судится» — q03 q05 q06, остаются q04 и (щ); «dict(…) не судится» — q04, остаётся q03;
+  «судится только первое env = …» — q05, остаются q06 (т) (у); «env |= не судится» — q06, остаётся q05;
+  «cwd() и getcwd() не судятся» — они, остаются Path() и (с); «Path() не судится» — Path(), остаются
+  cwd() и getcwd(); «судится любое присваивание имени» (как в PR 72) — z07 снова находка, z07-бис
+  и z07-тер остаются; «вложенное после прямого не судится» — z07-бис пропадает, z07-тер остаётся.
+  У z07-тер своей поломки нет: ни одна поломка разбора доходящих присваиваний его не роняет.
+  Он держит только одно — что снятие z07 не ослепило проверку на имени, переприсвоенном через себя.
 
 Нулевой день контура (заявка 29 пакета): реестра рядом нет у свежесобранного контура — это свойство
 нового контура, «ℹ️», а не «⚠️». Контур для этих случаев СОБИРАЕТСЯ из пакета сборщиком init-group.py
@@ -278,6 +301,50 @@ def call(d):
     subprocess.run([sys.executable, TOOL, "--db", "x"], capture_output=True, env=env)
 '''
 
+# ── синтетика семи форм q01–q07 и снятой ложной находки z07 (слово владельца 2026-11-03
+#    09:14:10 UTC в чате COORD «Судить все семь», записка #6243; формы — из проб COORD) ──
+SEVEN_HEAD = '''import os, subprocess, sys
+from pathlib import Path
+import mezo_paths
+import mezo_stand
+TOOL = str(Path(__file__).resolve().parent / "fake-container-tool.py")
+'''
+SEVEN_RUN = 'subprocess.run([sys.executable, TOOL, "--db", "x"], capture_output=True, env={env})'
+SEVEN_CASES = {
+    # q01 — так была сделана поломка m1c из записки #6235: корень строкой-путём к живому контуру
+    "bite-case18-str-path.py": "\ndef call():\n    " + SEVEN_RUN.format(
+        env='mezo_stand.stand_env(r"C:\\guts\\.atlas")') + "\n",
+    "bite-case19-alias.py": "from mezo_paths import container_root as croot\n\ndef call():\n    "
+        + SEVEN_RUN.format(env="mezo_stand.stand_env(croot())") + "\n",
+    "bite-case20-dict-literal.py": "\ndef call(d):\n    " + SEVEN_RUN.format(
+        env='{**mezo_stand.stand_env(d), "MEZO_CONTAINER": str(mezo_paths.container_root())}') + "\n",
+    "bite-case21-dict-call.py": "\ndef call(d):\n    " + SEVEN_RUN.format(
+        env="dict(mezo_stand.stand_env(d), MEZO_CONTAINER=str(mezo_paths.container_root()))") + "\n",
+    "bite-case22-reassign-merge.py": "\ndef call(d):\n    env = mezo_stand.stand_env(d)\n"
+        '    env = {**env, "MEZO_CONTAINER": str(mezo_paths.container_root())}\n    '
+        + SEVEN_RUN.format(env="env") + "\n",
+    "bite-case23-ior.py": "\ndef call(d):\n    env = mezo_stand.stand_env(d)\n"
+        '    env |= {"MEZO_CONTAINER": str(mezo_paths.container_root())}\n    '
+        + SEVEN_RUN.format(env="env") + "\n",
+    "bite-case24-cwd.py": "\ndef call():\n    " + SEVEN_RUN.format(env="mezo_stand.stand_env(Path.cwd())") + "\n",
+    "bite-case25-getcwd.py": "\ndef call():\n    " + SEVEN_RUN.format(env="mezo_stand.stand_env(os.getcwd())") + "\n",
+    "bite-case26-path-noargs.py": "\ndef call():\n    " + SEVEN_RUN.format(env="mezo_stand.stand_env(Path())") + "\n",
+    # z07 — ложная находка PR 72: имя переприсвоено стенду прямо перед вызовом
+    "bite-case27-reassigned.py": "\ndef call():\n    root = mezo_paths.container_root()\n"
+        "    root = mezo_stand.new('bite-case27-')\n    " + SEVEN_RUN.format(env="mezo_stand.stand_env(root)") + "\n",
+    # встречные к снятию z07: вложенное присваивание после прямого и имя через само себя
+    "bite-case28-nested-after.py": "\ndef call(flag):\n    root = mezo_stand.new('bite-case28-')\n"
+        "    if flag:\n        root = mezo_paths.container_root()\n    "
+        + SEVEN_RUN.format(env="mezo_stand.stand_env(root)") + "\n",
+    "bite-case29-self-ref.py": "\ndef call():\n    root = mezo_paths.container_root()\n"
+        "    root = Path(root).parent\n    " + SEVEN_RUN.format(env="mezo_stand.stand_env(root)") + "\n",
+    # встречные к суду вставок и строк: вставка стенда поверх стенда и пустая строка
+    "bite-case30-dict-stand.py": "\ndef call(d):\n    st = mezo_stand.new('bite-case30-')\n    "
+        + SEVEN_RUN.format(env='{**mezo_stand.stand_env(d), "MEZO_CONTAINER": str(st)}') + "\n",
+    "bite-case31-empty-str.py": "\ndef call(d):\n    env = mezo_stand.stand_env(d)\n"
+        '    env.update(MEZO_CONTAINER="")\n    ' + SEVEN_RUN.format(env="env") + "\n",
+}
+
 # ── синтетика случаев (а)-(г): реестр известного долга ──────────────────────────────
 BITE_CASE6_RECORDED = '''import subprocess, sys
 from pathlib import Path
@@ -350,6 +417,8 @@ def build_stand(checker_source: str):
     (vt / "bite-case15-not-live.py").write_text(BITE_CASE15_NOT_LIVE, encoding="utf-8")
     (vt / "bite-case16-env-key.py").write_text(BITE_CASE16_ENV_KEY, encoding="utf-8")
     (vt / "bite-case17-update-dict.py").write_text(BITE_CASE17_UPDATE_DICT, encoding="utf-8")
+    for fname, body in SEVEN_CASES.items():
+        (vt / fname).write_text(SEVEN_HEAD + body, encoding="utf-8")
     return d
 
 
@@ -579,11 +648,20 @@ def main() -> int:
     c_root, c_file, c_upd = ("bite-case12-live-root.py", "bite-case13-file-ancestor.py",
                              "bite-case14-env-override.py")
     c_key, c_dict = "bite-case16-env-key.py", "bite-case17-update-dict.py"
-    live_cases = (c_root, c_file, c_upd, c_key, c_dict)
+    q01, q02, q03, q04 = ("bite-case18-str-path.py", "bite-case19-alias.py",
+                          "bite-case20-dict-literal.py", "bite-case21-dict-call.py")
+    q05, q06 = "bite-case22-reassign-merge.py", "bite-case23-ior.py"
+    q07_cwd = ("bite-case24-cwd.py", "bite-case25-getcwd.py")
+    q07_empty = "bite-case26-path-noargs.py"
+    z07, z07b, z07c = "bite-case27-reassigned.py", "bite-case28-nested-after.py", "bite-case29-self-ref.py"
+    z08, z09 = "bite-case30-dict-stand.py", "bite-case31-empty-str.py"
+    seven_live = (q01, q02, q03, q04, q05, q06, *q07_cwd, q07_empty, z07b, z07c)
+    live_cases = (c_root, c_file, c_upd, c_key, c_dict, *seven_live)
     broken_x = build_stand(real_source.replace(
         anchor_judge, "                live_reason = None  # ПОЛОМКА (х): корень стенда не судится"))
     found_x = names(run_checker(broken_x, "--no-debt-list")[0].get("findings", []))
-    ok &= case("(х) поломка «корень стенда не судится»: (с)(т)(у)(ш)(щ) пропадают, (ф) не меняется",
+    ok &= case("(х) поломка «корень стенда не судится»: (с)(т)(у)(ш)(щ), q01–q07 и встречные z07 пропадают, "
+               "(ф) не меняется",
                not any(n in found_x for n in live_cases) and "bite-case15-not-live.py" not in found_x,
                f"находки на копии: {sorted(found_x)}", differ=True)
     broken_c = build_stand(real_source.replace(
@@ -629,6 +707,101 @@ def main() -> int:
     ok &= case("(й) поломка «словарь в .update() не прослеживается»: (щ) пропадает, (у)(ш) остаются",
                gone_kept(found_j, (c_dict,), (c_upd, c_key)),
                f"находки на копии: {sorted(found_j)}", differ=True)
+
+    # ── семь форм q01–q07 и ложная находка z07 (слово владельца 2026-11-03 09:14:10 UTC в чате
+    #    COORD «Судить все семь», записка #6243; формы — из проб COORD) ─────────────────────────
+    def judged(fname, word):
+        return fname in found and word in live.get(fname, "")
+
+    def why(*fnames):
+        return " · ".join(f"{n}: {live.get(n, 'нет находки' if n not in found else 'находка без причины')}"
+                          for n in fnames)
+
+    ok &= case("(q01) корень строкой-путём к живому контуру (так сделана поломка m1c) — НАХОДКА",
+               judged(q01, "путь строкой"), why(q01), differ=True)
+    ok &= case("(q02) from mezo_paths import container_root as croot → stand_env(croot()) — НАХОДКА",
+               judged(q02, "под именем croot"), why(q02), differ=True)
+    ok &= case('(q03) env={**stand_env(d), "MEZO_CONTAINER": str(container_root())} — НАХОДКА',
+               judged(q03, "container_root"), why(q03), differ=True)
+    ok &= case("(q04) env=dict(stand_env(d), MEZO_CONTAINER=str(container_root())) — НАХОДКА",
+               judged(q04, "container_root"), why(q04), differ=True)
+    ok &= case('(q05) env = stand_env(d); env = {**env, "MEZO_CONTAINER": …} — НАХОДКА',
+               judged(q05, "container_root"), why(q05), differ=True)
+    ok &= case('(q06) env = stand_env(d); env |= {"MEZO_CONTAINER": …} — НАХОДКА',
+               judged(q06, "container_root"), why(q06), differ=True)
+    ok &= case("(q07) корень — рабочий каталог: Path.cwd() · os.getcwd() · Path() — три НАХОДКИ",
+               all(judged(n, "рабочий каталог") for n in (*q07_cwd, q07_empty)),
+               why(*q07_cwd, q07_empty), differ=True)
+    ok &= case("(z07) root = container_root(); root = mezo_stand.new(…); stand_env(root) — НЕ находка "
+               "(ложная находка PR 72 снята)",
+               z07 not in found and z07 not in live, why(z07), differ=True)
+    ok &= case("(z07-бис) встречный: root = new(…); if flag: root = container_root() — НАХОДКА "
+               "(вложенное присваивание после прямого судится)",
+               judged(z07b, "container_root"), why(z07b), differ=True)
+    ok &= case("(z07-тер) встречный: root = container_root(); root = Path(root).parent — НАХОДКА "
+               "(имя через само себя прослеживается)",
+               judged(z07c, "container_root"), why(z07c), differ=True)
+    ok &= case('(z08·z09) встречные: {**stand_env(d), "MEZO_CONTAINER": str(стенд)} и '
+               'env.update(MEZO_CONTAINER="") — НЕ находки',
+               all(n not in found for n in (z08, z09)), why(z08, z09))
+
+    # по поломке на каждую форму: пропадает своя, соседняя остаётся
+    anchor_str = "        if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value:"
+    anchor_alias = "    aliases = mezo_paths_aliases(pools)"
+    anchor_dict_lit = "            elif isinstance(node, ast.Dict):"
+    anchor_dict_call = '            elif isinstance(node, ast.Call) and call_name(node.func) == "dict":'
+    anchor_reassign = "                sources.append(stmt.value)  # env = … — и сама среда, и её перезапись поверх (q05)"
+    anchor_ior = "                sources.append(stmt.value)  # env |= {…} (q06)"
+    anchor_cwd = 'CWD_CALLS = {"cwd", "getcwd", "getcwdb"}'
+    anchor_empty = '                    name in ("Path", "PurePath") and not node.args and not node.keywords):'
+    anchor_reach = ('            for value, value_scope in reaching_values(node.id, getattr(node, "lineno", None), '
+                    'pools, scope_node):')
+    anchor_last = "        own = [s for s in before if s.lineno >= last.lineno]"
+    for anchor_text, label in ((anchor_str, "строки-пути"), (anchor_alias, "псевдонима"),
+                               (anchor_dict_lit, "словаря в env="), (anchor_dict_call, "dict(…) в env="),
+                               (anchor_reassign, "перезаписи env"), (anchor_ior, "env |="),
+                               (anchor_cwd, "рабочего каталога"), (anchor_empty, "Path() без аргументов"),
+                               (anchor_reach, "доходящих присваиваний"), (anchor_last, "последнего прямого")):
+        if real_source.count(anchor_text) != 1:
+            raise SystemExit(f"ПРИЁМКА НЕ СОСТОЯЛАСЬ: якорь «{label}» найден {real_source.count(anchor_text)} раз")
+    found_b = broken_found(anchor_str, "        if False:  # ПОЛОМКА (q01): строка-путь не судится")
+    ok &= case("(q01) поломка «строка-путь не судится»: q01 пропадает, (с) и q07 остаются",
+               gone_kept(found_b, (q01,), (c_root, *q07_cwd)), f"находки на копии: {sorted(found_b)}", differ=True)
+    found_b = broken_found(anchor_alias, "    aliases = {}  # ПОЛОМКА (q02): псевдоним импорта не узнаётся")
+    ok &= case("(q02) поломка «псевдоним импорта не узнаётся»: q02 пропадает, (с) остаётся",
+               gone_kept(found_b, (q02,), (c_root,)), f"находки на копии: {sorted(found_b)}", differ=True)
+    found_b = broken_found(anchor_dict_lit, "            elif False:  # ПОЛОМКА (q03): словарь в env= не судится")
+    ok &= case("(q03) поломка «словарь {…} не судится»: q03 q05 q06 пропадают, q04 и (щ) остаются",
+               gone_kept(found_b, (q03, q05, q06), (q04, c_dict)), f"находки на копии: {sorted(found_b)}",
+               differ=True)
+    found_b = broken_found(anchor_dict_call, "            elif False:  # ПОЛОМКА (q04): dict(…) в env= не судится")
+    ok &= case("(q04) поломка «dict(…) не судится»: q04 пропадает, q03 остаётся",
+               gone_kept(found_b, (q04,), (q03,)), f"находки на копии: {sorted(found_b)}", differ=True)
+    found_b = broken_found(anchor_reassign, "                sources.append(stmt.value) if not sources else None"
+                                            "  # ПОЛОМКА (q05): судится только первое env = …")
+    ok &= case("(q05) поломка «судится только первое env = …»: q05 пропадает, q06 (т) (у) остаются",
+               gone_kept(found_b, (q05,), (q06, c_file, c_upd)), f"находки на копии: {sorted(found_b)}",
+               differ=True)
+    found_b = broken_found(anchor_ior, "                pass  # ПОЛОМКА (q06): env |= {…} не судится")
+    ok &= case("(q06) поломка «env |= не судится»: q06 пропадает, q05 остаётся",
+               gone_kept(found_b, (q06,), (q05,)), f"находки на копии: {sorted(found_b)}", differ=True)
+    found_b = broken_found(anchor_cwd, "CWD_CALLS = set()  # ПОЛОМКА (q07): рабочий каталог не судится")
+    ok &= case("(q07) поломка «cwd() и getcwd() не судятся»: они пропадают, Path() и (с) остаются",
+               gone_kept(found_b, q07_cwd, (q07_empty, c_root)), f"находки на копии: {sorted(found_b)}",
+               differ=True)
+    found_b = broken_found(anchor_empty, "                    False):  # ПОЛОМКА (q07): Path() без аргументов не судится")
+    ok &= case("(q07-бис) поломка «Path() без аргументов не судится»: Path() пропадает, cwd() и getcwd() остаются",
+               gone_kept(found_b, (q07_empty,), q07_cwd), f"находки на копии: {sorted(found_b)}", differ=True)
+    found_b = broken_found(anchor_reach, "            for value, value_scope in [(v, None) for v in assigned_values("
+                                         "node.id, pools)]:  # ПОЛОМКА (z07): судится любое присваивание имени")
+    ok &= case("(z07) поломка «судится любое присваивание имени» (как в PR 72): z07 снова находка, "
+               "z07-бис и z07-тер остаются",
+               z07 in found_b and all(n in found_b for n in (z07b, z07c)), f"находки на копии: {sorted(found_b)}",
+               differ=True)
+    found_b = broken_found(anchor_last, "        own = [last]  # ПОЛОМКА (z07-бис): вложенное после прямого не судится")
+    ok &= case("(z07-бис) поломка «вложенное после прямого не судится»: z07-бис пропадает, z07-тер остаётся, "
+               "z07 по-прежнему не находка",
+               gone_kept(found_b, (z07b, z07), (z07c,)), f"находки на копии: {sorted(found_b)}", differ=True)
 
     # ── Р1 обратный ход: строка-разрешение ОСЛЕПЛЕНА в КОПИИ проверки ──────────────
     anchor = "m = ALLOW_RE.search(line_text)"
