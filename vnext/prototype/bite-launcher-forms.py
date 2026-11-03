@@ -221,8 +221,12 @@ def direct_answers(name, scripts_dir, db_path):
             continue
         argv = _glf().build_argv(Path(scripts_dir) / name, sub, flags, ctx, Path(db_path))
         try:
+            # Среда стенда (карточка #613, PR 75): команда приходит возвратом build_argv, и прежде
+            # проверка среды этот вызов не видела — механизм получал среду вызывающего, номер чата
+            # в том числе (журнал среды: 10 запусков). Корень — тот же, что у run() выше.
             r = subprocess.run(argv, capture_output=True, text=True,
-                               encoding="utf-8", errors="replace", timeout=120)
+                               encoding="utf-8", errors="replace", timeout=120,
+                               env=mezo_stand.stand_env(Path(db_path).parent.parent))
             body = (r.stdout or "") + (r.stderr or "")
             answers[(sub, tuple(flags))] = (r.returncode, "Traceback" in body,
                                            "unrecognized" in body)
