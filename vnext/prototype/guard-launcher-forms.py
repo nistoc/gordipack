@@ -40,6 +40,35 @@ import mezo_stand  # noqa: E402 — временный каталог убира
 import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
 LIVE_SCRIPTS = mezo_paths.live_scripts()
+
+
+def home_scripts() -> Path:
+    """Скрипты контура, где стоит САМА проверка: признак базы вверх от её файла, затем ключ
+    container файла путей, и только затем MEZO_CONTAINER — копии вне контейнера без файла путей
+    узнать свой контур больше неоткуда.
+
+    Это тот же поиск, что у mezo_paths.container_root, но среда в нём ПОСЛЕДНЯЯ, а не первая.
+    По ответу resolve() отличает испытуемую копию от живого каталога. LIVE_SCRIPTS для этого не
+    годится: приёмка зовёт проверку со средой стенда, среда первой делала «живым» сам стенд, и
+    проверка уходила к целым файлам по путям из памяти (карточка #613). Умолчания --db и
+    --scripts-root остаются от LIVE_SCRIPTS — контур, названный вызывающим."""
+    def is_db(path: Path) -> bool:          # то же, что mezo_paths._is_db_file: файл и не пуст
+        try:
+            return path.is_file() and path.stat().st_size > 0
+        except OSError:
+            return False
+
+    start = Path(__file__).resolve().parent
+    for cand in (start, *start.parents):
+        if is_db(cand / ".mezosync" / "mezosync.db"):
+            return cand / ".mezosync" / "scripts"
+    declared = mezo_paths.local_path("container", __file__)
+    if declared.outcome == mezo_paths.LOCAL_DECLARED and is_db(declared.path / ".mezosync" / "mezosync.db"):
+        return declared.path / ".mezosync" / "scripts"
+    return LIVE_SCRIPTS
+
+
+HOME_SCRIPTS = home_scripts()
 VNEXT_TOOLS = Path(__file__).resolve().parent
 TEMPLATE_ROOT = mezo_paths.template_root()     # относительные пути вида «vnext/tools/» — сюда
 LIVE_DB = LIVE_SCRIPTS.parent / "mezosync.db"
@@ -250,7 +279,7 @@ def resolve(script, paths, root):
     # случай «файла там нет». Первая редакция подменяла каталог только пока файл в копии ЕСТЬ,
     # а иначе тихо уходила по абсолютному пути в живой контур: удали скрипт из копии — прибор
     # оставался зелёным, потому что смотрел на оригинал. Приёмка это и поймала.
-    if root.resolve() != LIVE_SCRIPTS.resolve():
+    if root.resolve() != HOME_SCRIPTS.resolve():
         inside = [p for p in named
                   if (".mezosync" in p and "scripts" in p) or "vnext-tools" in p]
         if inside or not named:

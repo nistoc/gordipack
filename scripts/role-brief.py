@@ -9,7 +9,7 @@ role-brief.py — СОБИРАЕМЫЙ НАКАЗ РОЛИ + ПАЁК ПУЛА (
 
 ИСТОЧНИКИ (сломанный ИСТОЧНИК НАЗЫВАЕТСЯ, наказ не собирается молча неполным):
   · реестр ролей (зона, жизненный цикл)      · права (role_rights, живые)
-  · формы вызова — ВЫЧИСЛЯЮТСЯ от mezo_paths  · пул: карточки + скиллы + объявления
+  · формы вызова — от каталога самого наказа    · пул: карточки + скиллы + объявления
   · умения роли (role_skill, протухшие по expired_at НЕ входят)
 
 ГРАНИЦА ВСЛУХ: пометки «обязательный шаг» у правил свода НЕТ полем — свод в паёк
@@ -21,10 +21,15 @@ import sqlite3
 import sys
 from pathlib import Path
 
-from mezo_paths import resolve_db, live_scripts
+from mezo_paths import resolve_db
 import mezo_hints
 
-S = live_scripts().as_posix()
+# Формы вызова печатаются от каталога, где лежит САМ наказ: у установленного наказа это и есть
+# скрипты контура, и всё, что формы зовут, лежит рядом. Прежде каталог брался от
+# mezo_paths.live_scripts(), то есть от MEZO_CONTAINER вызывающего: со средой стенда в формах
+# оказывался путь стенда, где скриптов нет (bite-waiting-on-you.py, случай ④-бис; карточка #613).
+HERE = Path(__file__).resolve().parent
+S = HERE.as_posix()
 OPEN = ("open", "in_progress", "blocked", "awaiting_word", "in_review")
 
 
@@ -67,13 +72,13 @@ def find_coordinator(conn):
                   f"{len(lookup.found)}" + everyone_tail)
 
 
-def build(conn, role, полный=False, full=False, db_path=None):
+def build(conn, role, waiting_full=False, full=False, db_path=None):
     """полный=True (флаг --waiting) — раздел «ТЕБЯ ЖДУТ» печатает СПИСОК ЦЕЛИКОМ.
     Команда в строке остатка обязана существовать: обещать несуществующий вызов —
     ровно предмет карточки #124 (имя инструмента, которого нет по названному пути)."""
     out = []
 
-    def роль(out):
+    def role_registry(out):
         r = conn.execute("SELECT lifecycle, zone FROM roles WHERE role=?", (role,)).fetchone()
         if not r:
             out.append(f"⚠️ роли {role} нет в реестре — зона неизвестна, спроси владельца")
@@ -82,9 +87,9 @@ def build(conn, role, полный=False, full=False, db_path=None):
         out.append(f"🧭 РОЛЬ {role} [{lc}] · зона: {zone or '— не названа'}")
         if lc != "alive":
             out.append(f"   ⚠️ жизненный цикл «{lc}» — работать без живого слова нельзя")
-    section("реестр ролей", роль, out)
+    section("реестр ролей", role_registry, out)
 
-    def права(out):
+    def rights(out):
         rows = conn.execute(
             "SELECT role, right_key, scope, kind FROM role_rights "
             "WHERE role IN (?, 'ALL') AND revoked_at IS NULL AND spent_at IS NULL "
@@ -96,12 +101,12 @@ def build(conn, role, полный=False, full=False, db_path=None):
         for r_, key, scope, kind in rows:
             out.append(f"   · {key} [{kind}{', общее' if r_ == 'ALL' else ''}]: "
                        f"{(scope or '')[:90]}")
-    section("права", права, out)
+    section("права", rights, out)
 
-    def формы(out):
+    def call_forms(out):
         out.append("🛠 ФОРМЫ ВЫЗОВА (вычислены от живого каталога — не переписывай в память "
                    "относительными):")
-        for name, tail, что in [
+        for name, tail, purpose in [
                 ("guard-all.py", "", "шаг 0 пробуждения: все гарды"),
                 ("read-phoenix.py", f" --role {role}", "сохранённая память"),
                 ("read-messages.py", f" --role {role}", "лента; дочитай и --ack"),
@@ -109,7 +114,7 @@ def build(conn, role, полный=False, full=False, db_path=None):
                 ("track.py", " view", "сводка активного пула"),
                 ("write-message.py", f" --role {role} --file <нота.md>", "писать (длинное — файлом)"),
                 ("save-phoenix.py", f" --role {role} --section state --file <f>", "сохранить память")]:
-            out.append(f"   {что:32} python {S}/{name}{tail}")
+            out.append(f"   {purpose:32} python {S}/{name}{tail}")
         # ═══ Карточка #362: уборка памяти — ПОСЛЕ первого отчёта, не внутри старта ═══
         # Замер 29.08: полный старт роли 41 мин, из них ~13 — сжатие раздутых разделов
         # памяти ДО первого отчёта. Владелец ждёт признака жизни, а роль прибирается.
@@ -123,9 +128,9 @@ def build(conn, role, полный=False, full=False, db_path=None):
                     "ОТЧЁТ владельцу; УБОРКА памяти (сжатие раздутых разделов) — отдельным "
                     "ходом ПОСЛЕ отчёта: красные общего прогона о раздутых разделах — "
                     "долг дня, не приказ убирать немедленно"))
-    section("формы вызова", формы, out)
+    section("формы вызова", call_forms, out)
 
-    def пул(out):
+    def pool(out):
         pools = {r[0]: (r[1], r[2]) for r in conn.execute(
             "SELECT track_id, title, skills FROM tracks WHERE status='active'")}
         if not pools:
@@ -148,22 +153,22 @@ def build(conn, role, полный=False, full=False, db_path=None):
             out.append(f"🎯 в пуле ({', '.join(sorted(pools))}) твоих карточек нет")
             return
         for tid, (title, skills) in pools.items():
-            карточки = [m for m in mine if m[3] == tid]
-            if not карточки:
+            cards = [m for m in mine if m[3] == tid]
+            if not cards:
                 continue
             out.append(f"🎯 ПУЛ {tid}: «{title[:70]}»")
             out.append(f"   🧰 скиллы под задачу: {skills[:150] if skills else 'НЕ НАЗВАНЫ — спроси заводившего пул'}")
-            for bid, t, st, _tr in карточки:
+            for bid, t, st, _tr in cards:
                 out.append(f"   #{bid} [{st}] {t[:76]}")
-        sys.path.insert(0, str(live_scripts()))
+        sys.path.insert(0, str(HERE))  # backlog.py — сосед наказа, а не файл контура вызывающего
         from backlog import live_and_overdue, pool_open_ids
         _, overdue = live_and_overdue(conn, pool_open_ids(conn, set(pools)))
         for bid, actor, _u, note, hours in overdue[:3]:
             out.append(f"   ⏰ {actor} молчит над карточкой #{bid} — шаг истёк {hours} ч")
         out.append(f"   полнее: python {S}/track.py view")
-    section("пул", пул, out)
+    section("пул", pool, out)
 
-    def вопросы_владельцу(out):
+    def owner_questions(out):
         # ═══ Карточка #430 ступень ④ (правило interview-before-recommend): вопросы,
         # ждущие слова владельца, ДОСТАВЛЯЮТСЯ — роль видит их в стартовой сводке
         # и несёт в первый отчёт. Замер 29.08: шесть карточек ждали слова МОЛЧА,
@@ -181,17 +186,17 @@ def build(conn, role, полный=False, full=False, db_path=None):
             # ноль ждущих ⇒ НИ ОДНОЙ строки: счётчик, горящий всегда, не значит
             # ничего и промолчит, когда впервые окажется настоящим (встречный① критерия)
             return
-        возраст = lambda ч: f"{ч // 24} дн" if ч >= 48 else f"{ч} ч"   # noqa: E731
-        out.append(f"🙋 ЖДУТ СЛОВА ВЛАДЕЛЬЦА: {len(rows)} (старший {возраст(rows[0][3])}) — "
+        age_text = lambda age_hours: f"{age_hours // 24} дн" if age_hours >= 48 else f"{age_hours} ч"   # noqa: E731
+        out.append(f"🙋 ЖДУТ СЛОВА ВЛАДЕЛЬЦА: {len(rows)} (старший {age_text(rows[0][3])}) — "
                    f"старое ПЕРВЫМ, неси в отчёт; отвеченное исчезает само")
-        for bid, r, why, ч in rows[:6]:
-            вопрос = (why or "вопрос в карточке").strip().splitlines()[0]
-            out.append(f"   карточка #{bid} ({r}, {возраст(ч)}) — {вопрос[:84]}")
+        for bid, r, why, age_hours in rows[:6]:
+            question = (why or "вопрос в карточке").strip().splitlines()[0]
+            out.append(f"   карточка #{bid} ({r}, {age_text(age_hours)}) — {question[:84]}")
         if len(rows) > 6:
             out.append(f"   … и ещё {len(rows) - 6}")
-    section("вопросы владельцу", вопросы_владельцу, out)
+    section("вопросы владельцу", owner_questions, out)
 
-    def освободилось(out):
+    def released(out):
         # ═══ Карточка #488 (слово владельца 30.08 11:55 UTC «1 + 2»): ВЗЯТИЕ инструмента
         # расходится само — кто упёрся, тот увидел. СНЯТИЕ не расходится никак.
         # 📏 Замер 30.08 11:36 UTC: объявлений 127, снято раньше объявленного срока 126
@@ -221,15 +226,15 @@ def build(conn, role, полный=False, full=False, db_path=None):
             return                       # ноль — обычный день, вечная строка была бы шумом
         out.append(f"🔓 ОСВОБОДИЛОСЬ, ПОКА ТЫ ЖДАЛА: {len(rows)} "
                    f"(показываю 12 ч от снятия)")
-        for инстр, отказ, кто, снято, итог in rows[:5]:
-            out.append(f"   {инстр} — ждала с {отказ} UTC, {кто} снял(а) в {снято} UTC")
-            if итог:
-                out.append(f"      что изменилось: {итог[:90]}")
+        for tool, refused_at, who, released_at, change_note in rows[:5]:
+            out.append(f"   {tool} — ждала с {refused_at} UTC, {who} снял(а) в {released_at} UTC")
+            if change_note:
+                out.append(f"      что изменилось: {change_note[:90]}")
         if len(rows) > 5:
             out.append(f"   … и ещё {len(rows) - 5}")
-    section("освободилось", освободилось, out)
+    section("освободилось", released, out)
 
-    def тебя_ждут(out):
+    def waiting_on_you(out):
         # ═══ Карточка #471 (слово владельца 30.08 10:16 UTC): чужие ожидания НЕ переживают
         # пересоздания роли — ни одно. Замер @COORD 30.08 09:49: в текст пересоздания
         # попадает НОЛЬ чужих ожиданий при обеих его мерках. Сбывшийся случай — карточка
@@ -244,20 +249,20 @@ def build(conn, role, полный=False, full=False, db_path=None):
         # @COORD теряла её же. ⇒ Отбираем ПОЛЯМИ карточки, а не словами в тексте:
         # состояние «на приёмке» — машинный признак ожидания чужой руки, возраст — мера боли.
         # Замер того же часа: пар «роль × чужая карточка» 275 · из них на приёмке 13.
-        роли = [r[0] for r in conn.execute(
+        roles = [r[0] for r in conn.execute(
             "SELECT role FROM roles WHERE lifecycle='alive'")]
-        if role not in роли:
-            роли.append(role)
+        if role not in roles:
+            roles.append(role)
         ph_ = ",".join("?" * len(OPEN))
-        строки = conn.execute(
+        card_rows = conn.execute(
             f"SELECT id, role, status, title, COALESCE(body_md,''), COALESCE(done_when,''),"
             f" CAST((julianday('now') - julianday(created_at)) AS INTEGER)"
             f" FROM backlog WHERE status IN ({ph_}) AND role <> ?", (*OPEN, role)).fetchall()
         import re as _re
-        обо_мне = _re.compile(rf"(?<![A-Za-z]){_re.escape(role)}(?![A-Za-z])")
-        мои = [(i, r, st, t, age) for i, r, st, t, b, d, age in строки
-               if обо_мне.search(f"{t}\n{b}\n{d}")]
-        if not мои:
+        about_me = _re.compile(rf"(?<![A-Za-z]){_re.escape(role)}(?![A-Za-z])")
+        waiting_cards = [(i, r, st, t, age) for i, r, st, t, b, d, age in card_rows
+               if about_me.search(f"{t}\n{b}\n{d}")]
+        if not waiting_cards:
             # ⚖️ Ноль говорится СЛОВОМ, в отличие от соседней секции «ждут слова владельца».
             # Там ноль — норма дня, и вечная строка была бы шумом. Здесь ноль — редкость
             # (замер 30.08: непустой список у ВСЕХ девяти ролей, от 7 до 55), и роль по этому
@@ -267,21 +272,21 @@ def build(conn, role, полный=False, full=False, db_path=None):
                        "карточкам, это НЕ «раздел не собрался»")
             return
         # на приёмке — первыми (чужая рука названа состоянием), дальше старшие
-        мои.sort(key=lambda m: (m[2] != "in_review", -m[4]))
-        показать = мои if полный else мои[:10]
-        возраст = lambda ч: f"{ч} дн"                             # noqa: E731
-        out.append(f"🫱 ТЕБЯ ЖДУТ: {len(мои)} чужих незакрытых карточек называют тебя "
+        waiting_cards.sort(key=lambda m: (m[2] != "in_review", -m[4]))
+        shown = waiting_cards if waiting_full else waiting_cards[:10]
+        age_text = lambda age_hours: f"{age_hours} дн"                             # noqa: E731
+        out.append(f"🫱 ТЕБЯ ЖДУТ: {len(waiting_cards)} чужих незакрытых карточек называют тебя "
                    f"(на приёмке — первыми, дальше старшие)")
-        for i, r, st, t, age in показать:
-            out.append(f"   карточка #{i} [{r} · {st} · {возраст(age)}] {t[:70]}")
-        if len(мои) > len(показать):
-            out.append(f"   … ещё {len(мои) - len(показать)} — python {S}/role-brief.py "
+        for i, r, st, t, age in shown:
+            out.append(f"   карточка #{i} [{r} · {st} · {age_text(age)}] {t[:70]}")
+        if len(waiting_cards) > len(shown):
+            out.append(f"   … ещё {len(waiting_cards) - len(shown)} — python {S}/role-brief.py "
                        f"--role {role} --waiting")
         out.append("   ⚖️ мерка ШИРОКАЯ: имя роли названо в карточке — это УПОМИНАНИЕ, "
                    "а не доказанное ожидание. Читай сама; отбор по словам отвергнут замером")
-    section("тебя ждут", тебя_ждут, out)
+    section("тебя ждут", waiting_on_you, out)
 
-    def ты_сдал(out):
+    def you_handed_in(out):
         # ═══ Встречная половина, находка @RCC (записка #4426 §②): пересоздания не переживает
         # не только ЧУЖОЕ ожидание, но и СВОЯ сданная работа. «У тебя роль не узнает, что ЕЁ
         # ЖДУТ; у меня — что ОНА СДАЛА и чьей руки ждёт результат». Цена разная: чужое
@@ -291,29 +296,29 @@ def build(conn, role, полный=False, full=False, db_path=None):
         # заполняют и никто не читает, мертво; поэтому оно печатается там, где роль и так
         # смотрит, а «не назначен» говорится СЛОВОМ — иначе пустота неотличима от «назначен,
         # но не показан», и роль не узнает, что её работа не ждёт ничьей руки.
-        есть_поле = "reviewer" in {r[1] for r in conn.execute("PRAGMA table_info(backlog)")}
-        поле = "COALESCE(reviewer,'')" if есть_поле else "''"
+        has_field = "reviewer" in {r[1] for r in conn.execute("PRAGMA table_info(backlog)")}
+        field = "COALESCE(reviewer,'')" if has_field else "''"
         rows = conn.execute(
             f"SELECT id, title, CAST((julianday('now') - julianday(updated_at)) * 24 AS INTEGER),"
-            f" {поле}"
+            f" {field}"
             f" FROM backlog WHERE role=? AND status='in_review' ORDER BY updated_at",
             (role,)).fetchall()
         if not rows:
             return          # ноль здесь — норма дня, а не редкость: вечная строка была бы шумом
-        безрукие = sum(1 for r in rows if not (r[3] or "").strip())
+        no_reviewer = sum(1 for r in rows if not (r[3] or "").strip())
         out.append(f"📤 ТЫ СДАЛ, ЖДЁТ ЧУЖОЙ РУКИ: {len(rows)} — приёмку не торопи, "
                    f"но и не забывай: о своей сдаче помнишь только ты"
-                   + (f" · 🫱 БЕЗ НАЗНАЧЕННОГО ПРИЁМЩИКА: {безрукие}" if безрукие else ""))
-        for i, t, ч, кто in rows[:6]:
-            кто = (кто or "").strip()
-            out.append(f"   карточка #{i} ({ч} ч на полке · "
-                       + (f"приёмщик: {кто[:28]}" if кто else "приёмщик НЕ НАЗНАЧЕН")
+                   + (f" · 🫱 БЕЗ НАЗНАЧЕННОГО ПРИЁМЩИКА: {no_reviewer}" if no_reviewer else ""))
+        for i, t, age_hours, who in rows[:6]:
+            who = (who or "").strip()
+            out.append(f"   карточка #{i} ({age_hours} ч на полке · "
+                       + (f"приёмщик: {who[:28]}" if who else "приёмщик НЕ НАЗНАЧЕН")
                        + f") {t[:52]}")
         if len(rows) > 6:
             out.append(f"   … и ещё {len(rows) - 6}")
-    section("ты сдал", ты_сдал, out)
+    section("ты сдал", you_handed_in, out)
 
-    def умения(out):
+    def role_skills(out):
         rows = conn.execute(
             "SELECT skill, measured_at, until_cond FROM role_skill "
             "WHERE role=? AND expired_at IS NULL ORDER BY measured_at DESC", (role,)).fetchall()
@@ -332,9 +337,9 @@ def build(conn, role, полный=False, full=False, db_path=None):
                        + (f"; протухнет: {cond[:50]}" if cond else "") + ")")
         if len(rows) > 6:
             out.append(f"   … и ещё {len(rows) - 6}")
-    section("умения", умения, out)
+    section("умения", role_skills, out)
 
-    def ритм(out):
+    def rhythm(out):
         st = conn.execute(
             "SELECT status FROM rules WHERE rule_key='sync-alarm-in-chat'").fetchone()
         if st and st[0] != "active":
@@ -357,17 +362,17 @@ def build(conn, role, полный=False, full=False, db_path=None):
                     "задачу-расписание вне чата для сверок не заводи"))
         out.append(f"   период и стандарт целиком: python {S}/set-rule.py "
                    f"--key sync-alarm-in-chat --show")
-    section("ритм", ритм, out)
+    section("ритм", rhythm, out)
 
-    def свод(out):
+    def rules(out):
         n = conn.execute("SELECT COUNT(*) FROM rules WHERE status='active'").fetchone()[0]
         out.append(f"📜 СВОД: активных правил {n} —")
         out.append(("_HINT_", "role-brief-свод-целиком",
                     "   в стартовую сводку не режется (граница в шапке); целиком: python {S}/set-rule.py --list".format(S=S),
                     "   в стартовую сводку не режется (граница в шапке); целиком: python {S}/set-rule.py --list".format(S=S)))
-    section("свод", свод, out)
+    section("свод", rules, out)
 
-    def ответы(out):
+    def answers(out):
         st = conn.execute(
             "SELECT status FROM rules WHERE rule_key='owner-reply-format'").fetchone()
         if not st or st[0] != "active":
@@ -380,7 +385,7 @@ def build(conn, role, полный=False, full=False, db_path=None):
                     "🗣 ОТВЕТЫ ВЛАДЕЛЬЦУ: перед КАЖДЫМ ответом владельцу перечитай правило "
                     "(тут ссылка, не тело — две редакции разошлись бы):"))
         out.append(f"   python {S}/set-rule.py --key owner-reply-format --show")
-    section("ответы владельцу", ответы, out)
+    section("ответы владельцу", answers, out)
 
     def periscope_view(out):
         # ═══ Слово владельца 2026-10-04 07:38 UTC, чат PROTO: «реализовать правила в своде пакета
@@ -455,7 +460,7 @@ def main():
     conn = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
     print(f"═══ НАКАЗ {role} (собран из живой базы сейчас; рукописной копии НЕ верь "
           f"старше этого вывода)")
-    for item in build(conn, role, полный=a.waiting, full=a.full, db_path=db.as_posix()):
+    for item in build(conn, role, waiting_full=a.waiting, full=a.full, db_path=db.as_posix()):
         if isinstance(item, tuple) and len(item) == 4 and item[0] == '_HINT_':
             _, key, text, text_for_hint = item
             mezo_hints.подсказка(conn, mezo_hints.кто_читает(a.actor, role), key, text_for_hint,
