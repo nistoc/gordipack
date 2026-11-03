@@ -84,6 +84,18 @@
   У z07-тер своей поломки нет: ни одна поломка разбора доходящих присваиваний его не роняет.
   Он держит только одно — что снятие z07 не ослепило проверку на имени, переприсвоенном через себя.
 
+Команда из возврата функции q11 (слово владельца 2026-11-03 13:40:44 UTC в чате COORD «Все три одним
+PR 75», записка #6247; живой образец — direct_answers в bite-launcher-forms.py, команду ему собирает
+build_argv из guard-launcher-forms.py):
+  q11 свой помощник: argv = make_cmd(…) → subprocess.run(argv), make_cmd возвращает argv ...... НАХОДКА   РАЗЛИЧАЮЩИЙ
+  q11 помощник соседнего файла: subprocess.run(helper.build_cmd(…)) ............................ НАХОДКА   РАЗЛИЧАЮЩИЙ
+  встречные — НЕ находки: помощник возвращает git · env стенда на месте · своё одноимённое
+  определение возвращает git (соседнее build_cmd — интерпретатор) · помощник возвращает итог прогона.
+  Поломки (в копии проверки), у каждой приманки своя: «команда из возврата не судится» — обе находки
+  пропадают, (к)(л) остаются; «своё определение не главнее чужого» — встречный с git становится находкой;
+  «имя в return не прослеживается» — свой помощник пропадает, соседний остаётся; «итог прогона
+  считается командой» — встречный out = run_tool(…).stdout → git становится находкой.
+
 Нулевой день контура (заявка 29 пакета): реестра рядом нет у свежесобранного контура — это свойство
 нового контура, «ℹ️», а не «⚠️». Контур для этих случаев СОБИРАЕТСЯ из пакета сборщиком init-group.py
 (так же, как у bite-fresh-circuit.py), а не рисуется рукой: признак читается из ленты настоящей базы.
@@ -345,6 +357,45 @@ SEVEN_CASES = {
         '    env.update(MEZO_CONTAINER="")\n    ' + SEVEN_RUN.format(env="env") + "\n",
 }
 
+# ── синтетика q11: команда пришла возвратом функции (слово владельца 2026-11-03 13:40:44 UTC
+#    в чате COORD «Все три одним PR 75», записка #6247; живой образец — direct_answers
+#    в bite-launcher-forms.py, команду ему собирает build_argv из guard-launcher-forms.py) ──
+FAKE_CMD_HELPER = '''# -*- coding: utf-8 -*-
+"""fake-cmd-helper.py — синтетика приёмки #613 (q11): соседний инструмент, чей помощник
+возвращает команду с интерпретатором — как build_argv у guard-launcher-forms.py."""
+import sys
+from pathlib import Path
+TOOL = str(Path(__file__).resolve().parent / "fake-container-tool.py")
+
+
+def build_cmd(db):
+    return [sys.executable, TOOL, "--db", db]
+'''
+Q11_CASES = {
+    # свой помощник, команда в возврате — именем, собранным в два шага (как у build_argv).
+    # Имя у вызывающего НАРОЧНО другое: прежний след по именам ходит и в тела соседних функций
+    # (модульный список операторов включает их), и при общем имени argv случай ловился бы
+    # без суда q11 — поломки «команда из возврата не судится» его не роняли (прогон 14:10 UTC)
+    "bite-case32-ret-local.py": "\ndef make_cmd(db):\n    argv = [sys.executable, TOOL]\n"
+        '    argv += ["--db", db]\n    return argv\n\n\ndef call():\n    cmd = make_cmd("x")\n'
+        "    subprocess.run(cmd, capture_output=True)\n",
+    # помощник соседнего файла, вызов прямо в аргументе (как _glf().build_argv(…) у direct_answers)
+    "bite-case33-ret-neighbour.py": '\ndef call(helper):\n    subprocess.run(helper.build_cmd("x"), capture_output=True)\n',
+    # встречные: помощник возвращает git · команда из возврата, но env стенда на месте ·
+    # своё одноимённое определение возвращает git (чужое build_cmd — интерпретатор) ·
+    # помощник возвращает ИТОГ прогона, а не команду
+    "bite-case34-ret-git.py": '\ndef git_cmd():\n    return ["git", "status", "--short"]\n\n\n'
+        "def call():\n    subprocess.run(git_cmd(), capture_output=True)\n",
+    "bite-case35-ret-pinned.py": '\ndef make_cmd(db):\n    return [sys.executable, TOOL, "--db", db]\n\n\n'
+        'def call(d):\n    subprocess.run(make_cmd("x"), capture_output=True, env=mezo_stand.stand_env(d))\n',
+    "bite-case36-ret-shadow.py": '\ndef build_cmd(db):\n    return ["git", "log", "--", db]\n\n\n'
+        'def call():\n    subprocess.run(build_cmd("x"), capture_output=True)\n',
+    "bite-case37-ret-run.py": '\ndef run_tool(db):\n    return subprocess.run([sys.executable, TOOL, "--db", db], '
+        "capture_output=True,\n                          env=mezo_stand.stand_env(Path(db).parent))\n\n\n"
+        'def call():\n    out = run_tool("x").stdout\n'
+        '    subprocess.run(["git", "commit", "-m", out], capture_output=True)\n',
+}
+
 # ── синтетика случаев (а)-(г): реестр известного долга ──────────────────────────────
 BITE_CASE6_RECORDED = '''import subprocess, sys
 from pathlib import Path
@@ -418,6 +469,9 @@ def build_stand(checker_source: str):
     (vt / "bite-case16-env-key.py").write_text(BITE_CASE16_ENV_KEY, encoding="utf-8")
     (vt / "bite-case17-update-dict.py").write_text(BITE_CASE17_UPDATE_DICT, encoding="utf-8")
     for fname, body in SEVEN_CASES.items():
+        (vt / fname).write_text(SEVEN_HEAD + body, encoding="utf-8")
+    (vt / "fake-cmd-helper.py").write_text(FAKE_CMD_HELPER, encoding="utf-8")
+    for fname, body in Q11_CASES.items():
         (vt / fname).write_text(SEVEN_HEAD + body, encoding="utf-8")
     return d
 
@@ -802,6 +856,51 @@ def main() -> int:
     ok &= case("(z07-бис) поломка «вложенное после прямого не судится»: z07-бис пропадает, z07-тер остаётся, "
                "z07 по-прежнему не находка",
                gone_kept(found_b, (z07b, z07), (z07c,)), f"находки на копии: {sorted(found_b)}", differ=True)
+
+    # ── q11 команда пришла возвратом функции (слово владельца 2026-11-03 13:40:44 UTC в чате
+    #    COORD «Все три одним PR 75», записка #6247) ─────────────────────────────────────────
+    q11_local, q11_neigh = "bite-case32-ret-local.py", "bite-case33-ret-neighbour.py"
+    q11_git, q11_pinned = "bite-case34-ret-git.py", "bite-case35-ret-pinned.py"
+    q11_shadow, q11_run = "bite-case36-ret-shadow.py", "bite-case37-ret-run.py"
+    q11_counter = (q11_git, q11_pinned, q11_shadow, q11_run)
+    ok &= case("(q11) свой помощник возвращает команду с интерпретатором (cmd = make_cmd(…)) — НАХОДКА",
+               q11_local in found, f"находки: {sorted(n for n in found if 'ret-' in n)}", differ=True)
+    ok &= case("(q11) помощник СОСЕДНЕГО файла: subprocess.run(helper.build_cmd(…)) — НАХОДКА "
+               "(так direct_answers берёт build_argv)",
+               q11_neigh in found, f"находки: {sorted(n for n in found if 'ret-' in n)}", differ=True)
+    ok &= case("(q11) встречные: помощник возвращает git · env стенда на месте · своё одноимённое определение "
+               "возвращает git · помощник возвращает итог прогона — НЕ находки",
+               all(n not in found for n in q11_counter), f"находки: {sorted(n for n in found if 'ret-' in n)}")
+    anchor_index = "        file_returners = (set(returners) - defined) | own_returning  # своё определение — главнее"
+    anchor_ret_name = "        frontier += [n.id for n in nodes if isinstance(n, ast.Name)]  # имя в return (q11)"
+    anchor_runs = ("        if isinstance(n, ast.Call) and call_name(n.func) in SUBPROCESS_FUNCS:\n"
+                   "            continue\n        out.append(n)")
+    for anchor_text, label in ((anchor_index, "индекса возврата"), (anchor_ret_name, "имени в return"),
+                               (anchor_runs, "итога прогона")):
+        if real_source.count(anchor_text) != 1:
+            raise SystemExit(f"ПРИЁМКА НЕ СОСТОЯЛАСЬ: якорь «{label}» найден {real_source.count(anchor_text)} раз")
+    py_var, cmd_var = "bite-case9-py-var.py", "bite-case10-cmd-var.py"
+    found_b = broken_found(anchor_index, "        file_returners = set()  # ПОЛОМКА (q11): команда из возврата не судится")
+    ok &= case("(q11) поломка «команда из возврата не судится»: обе находки q11 пропадают, (к)(л) остаются, "
+               "встречные не меняются",
+               gone_kept(found_b, (q11_local, q11_neigh, *q11_counter), (py_var, cmd_var)),
+               f"находки на копии: {sorted(found_b)}", differ=True)
+    found_b = broken_found(anchor_index, "        file_returners = set(returners) | own_returning"
+                                         "  # ПОЛОМКА (q11): своё определение не главнее чужого")
+    ok &= case("(q11) поломка «своё определение не главнее чужого одноимённого»: встречный с git становится "
+               "находкой, обе находки q11 остаются",
+               gone_kept(found_b, (), (q11_shadow, q11_local, q11_neigh)),
+               f"находки на копии: {sorted(found_b)}", differ=True)
+    found_b = broken_found(anchor_ret_name, "        pass  # ПОЛОМКА (q11): имя в return не прослеживается")
+    ok &= case("(q11) поломка «имя в return не прослеживается»: свой помощник (return argv) пропадает, "
+               "соседний (return [sys.executable, …]) остаётся",
+               gone_kept(found_b, (q11_local,), (q11_neigh,)), f"находки на копии: {sorted(found_b)}", differ=True)
+    found_b = broken_found(anchor_runs, "        if False:  # ПОЛОМКА (q11): итог прогона считается командой\n"
+                                        "            continue\n        out.append(n)")
+    ok &= case("(q11) поломка «итог прогона считается командой»: встречный out = run_tool(…).stdout → git "
+               "становится находкой",
+               gone_kept(found_b, (), (q11_run, q11_local, q11_neigh)), f"находки на копии: {sorted(found_b)}",
+               differ=True)
 
     # ── Р1 обратный ход: строка-разрешение ОСЛЕПЛЕНА в КОПИИ проверки ──────────────
     anchor = "m = ALLOW_RE.search(line_text)"

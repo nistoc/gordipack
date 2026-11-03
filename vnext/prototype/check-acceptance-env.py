@@ -14,7 +14,7 @@ MEZO_CONTAINER указывает на другой (живой) контур, �
 
 ЧТО ЛОВИТ. Вызов subprocess.run/Popen/check_output/call/check_call с sys.executable
 (прямо в вызове или в переменной: PY = sys.executable · cmd = [sys.executable, …] —
-до трёх звеньев присваиваний) внутри bite-*.py (vnext-tools и .mezosync/scripts), БЕЗ env=, закреплённого за стендом
+до трёх звеньев присваиваний — или в команде, возвращённой функцией: q11 ниже) внутри bite-*.py (vnext-tools и .mezosync/scripts), БЕЗ env=, закреплённого за стендом
 (env=mezo_stand.stand_env(<корень стенда>) — прямо на месте вызова, через переменную
 или через .update()/.pop() поверх неё), — если хотя бы ОДИН .py-литерал во ВСЁМ файле
 приёмки называет инструмент, который читает MEZO_CONTAINER (прямо словом в тексте, или
@@ -122,9 +122,34 @@ mezo_*), через «+», как раньше. Цена упрощения ③:
 у записей долга и требует переразбора — отдельной работой, не молча.
 Интерпретатор, пришедший ПАРАМЕТРОМ функции (def run(cmd): subprocess.run(cmd)),
 не прослеживается: судится место, где список собран, если оно само — вызов subprocess.
-Интерпретатор, ВОЗВРАЩЁННЫЙ функцией (PY = find_python(); subprocess.run([PY, …])),
-тоже не прослеживается: цепочка идёт по присваиваниям и в тело вызываемой функции
-не заходит (граница названа по записке COORD #5272; в живых приёмках такой формы нет).
+Интерпретатор или команда, ВОЗВРАЩЁННЫЕ функцией, с PR 75 судятся — раздел q11 ниже.
+
+КОМАНДА ИЗ ВОЗВРАТА ФУНКЦИИ (q11; слово владельца 2026-11-03 13:40:44 UTC в чате COORD
+«Все три одним PR 75», записка #6247). Живой образец: direct_answers в bite-launcher-forms.py
+брал команду у build_argv из guard-launcher-forms.py (argv = _glf().build_argv(…);
+subprocess.run(argv, …)) и звал механизм без env= — проверка этого не видела, а журнал среды
+показал 10 запусков с номером чата вызывающего. Теперь:
+  · по ВСЕМ .py обоих каталогов разбора (не только bite-*.py) собираются имена функций, чей
+    `return` несёт sys.executable — прямо или через имя, прослеженное по присваиваниям своей
+    области и модуля до трёх звеньев (return argv, где argv = [sys.executable, …]);
+  · итог вызова subprocess.X(…) командой НЕ считается, даже если команда стоит в его аргументах
+    (def run(cmd): return subprocess.run(cmd, …) возвращает итог прогона). Без этого отсечения
+    замер 2026-11-03 дал 154 имени функций, с ним — 40;
+  · вызов subprocess.X(…) судится, если вызов такой функции стоит в его аргументах прямо
+    (subprocess.run(make_cmd())) или в значении имени, прослеженного до трёх звеньев
+    (argv = make_cmd(); subprocess.run(argv));
+  · функция, объявленная в самом файле приёмки, судится по СВОЕМУ определению, а не по чужому
+    одноимённому из соседнего файла.
+Замер 2026-11-03 14:01 UTC на живом контуре с живым реестром: новый вызов ОДИН — сам
+direct_answers; он починен в том же PR. Долг «было 101 в 56 → стало 101 в 56», других новых нет.
+НЕ СУДЯТСЯ (граница q11): функция, возвращающая команду, полученную ПАРАМЕТРОМ
+(def with_db(cmd, db): return cmd + ["--db", db]); два уровня вызовов (функция возвращает вызов
+другой такой функции); lambda; функция вне двух каталогов разбора; команда, собранная только
+приращениями (argv += …) без присваивания с sys.executable; КОРЕНЬ стенда из возврата функции
+(q09, проба COORD q09-returned: stand_env(live())) — это суд корня env=, а не команды, и он
+остаётся границей. ОСТОРОЖНАЯ ЛОЖНАЯ НАХОДКА: индекс — по ИМЕНИ функции, поэтому файл без
+своего определения, зовущий чужую одноимённую функцию, которая команду не возвращает, судится
+по той, что возвращает. В живом коде такого нет (замер выше: новый вызов один и настоящий).
 
     python check-acceptance-env.py [--json] [--debt-list ПУТЬ] [--no-debt-list] [--db ПУТЬ]
 exit 0 — новых находок нет (либо всё разрешено/учтено долгом, либо реестра рядом нет —
@@ -180,9 +205,105 @@ def assigned_values(name: str, pools: list) -> list:
     return values
 
 
-def runs_interpreter(call: ast.Call, scopes: list, module_stmts: list) -> bool:
+def is_sys_executable(node: ast.AST) -> bool:
+    return (isinstance(node, ast.Attribute) and node.attr == "executable"
+            and isinstance(node.value, ast.Name) and node.value.id == "sys")
+
+
+def outside_runs(node: ast.AST) -> list:
+    """Узлы выражения, кроме лежащих внутри вызова subprocess.X(…): итог прогона — не команда,
+    даже если команда стоит в его аргументах (def run(cmd): return subprocess.run(cmd, …)
+    возвращает итог, а не команду; без этого отсечения индекс q11 замер 2026-11-03 дал
+    154 имени функций, с ним — 40)."""
+    out, stack = [], [node]
+    while stack:
+        n = stack.pop()
+        if isinstance(n, ast.Call) and call_name(n.func) in SUBPROCESS_FUNCS:
+            continue
+        out.append(n)
+        stack.extend(ast.iter_child_nodes(n))
+    return out
+
+
+def own_return_values(fn) -> list:
+    """Значения `return …` самой функции — без вложенных def, lambda и class."""
+    values, stack = [], list(fn.body)
+    while stack:
+        n = stack.pop()
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+            continue
+        if isinstance(n, ast.Return) and n.value is not None:
+            values.append(n.value)
+        stack.extend(ast.iter_child_nodes(n))
+    return values
+
+
+def returns_command(fn, module_stmts: list) -> bool:
+    """Функция возвращает команду с интерпретатором (q11): sys.executable в значении `return` —
+    прямо или через имя, прослеженное по присваиваниям её области и модуля до трёх звеньев
+    (def build_argv(…): argv = [sys.executable, …]; …; return argv)."""
+    pools = [flat_statements(fn), module_stmts]
+    frontier = []
+    for value in own_return_values(fn):
+        nodes = outside_runs(value)
+        if any(is_sys_executable(n) for n in nodes):
+            return True
+        frontier += [n.id for n in nodes if isinstance(n, ast.Name)]  # имя в return (q11)
+    seen = set()
+    for _link in range(3):
+        next_names = []
+        for name in frontier:
+            if name in seen:
+                continue
+            seen.add(name)
+            for value in assigned_values(name, pools):
+                nodes = outside_runs(value)
+                if any(is_sys_executable(n) for n in nodes):
+                    return True
+                next_names += [n.id for n in nodes if isinstance(n, ast.Name)]
+        frontier = next_names
+    return False
+
+
+def command_returners(tree) -> tuple:
+    """→ (имена всех функций файла, имена тех из них, что возвращают команду с интерпретатором)."""
+    module_stmts = flat_statements(tree)
+    defined, returning = set(), set()
+    for fn in ast.walk(tree):
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            defined.add(fn.name)
+            if returns_command(fn, module_stmts):
+                returning.add(fn.name)
+    return defined, returning
+
+
+def build_command_returners(dirs: list) -> set:
+    """Имена функций во ВСЕХ .py каталогов разбора, возвращающих команду с интерпретатором (q11).
+    Не только bite-*.py: приёмка берёт команду и у соседнего инструмента — bite-launcher-forms.py
+    зовёт build_argv из guard-launcher-forms.py."""
+    names = set()
+    for root in dirs:
+        if not root.is_dir():
+            continue
+        for f in root.glob("*.py"):
+            if f.name.endswith(".bak"):
+                continue
+            try:
+                tree = ast.parse(f.read_text(encoding="utf-8"))
+            except (OSError, SyntaxError, UnicodeDecodeError):
+                continue
+            names |= command_returners(tree)[1]
+    return names
+
+
+def calls_command_returner(nodes, returners) -> bool:
+    return any(isinstance(n, ast.Call) and call_name(n.func) in returners for n in nodes)
+
+
+def runs_interpreter(call: ast.Call, scopes: list, module_stmts: list, returners=frozenset()) -> bool:
     """Вызов запускает интерпретатор: sys.executable прямо в вызове ЛИБО в переменной,
-    попавшей в его аргументы (PY = sys.executable · cmd = [sys.executable, …]).
+    попавшей в его аргументы (PY = sys.executable · cmd = [sys.executable, …]), ЛИБО команда
+    пришла возвратом функции из `returners` (q11: subprocess.run(make_cmd()) · argv = make_cmd()).
 
     ⚡ ВОЗВРАТ COORD по карточке #613 (записка #5267): проверка узнавала вызов только
     по «sys.executable» ВНУТРИ него — и 4 места в 3 живых приёмках были невидимы, два
@@ -201,6 +322,8 @@ def runs_interpreter(call: ast.Call, scopes: list, module_stmts: list) -> bool:
     scope = enclosing_scope(call, scopes)
     pools = ([scope[1]] if scope else []) + [module_stmts]
     args = list(call.args) + [kw.value for kw in call.keywords if kw.arg == "args"]
+    if calls_command_returner([n for a in args for n in ast.walk(a)], returners):
+        return True                                                        # subprocess.run(make_cmd())
     bare = [a.id for a in args if isinstance(a, ast.Name)]                 # subprocess.run(cmd)
     nested = [n.id for a in args if not isinstance(a, ast.Name)
               for n in ast.walk(a) if isinstance(n, ast.Name)]             # [PY, TOOL, …]
@@ -213,7 +336,7 @@ def runs_interpreter(call: ast.Call, scopes: list, module_stmts: list) -> bool:
                 continue
             seen.add(name)
             for value in assigned_values(name, pools):
-                if has_sys_executable(value):
+                if has_sys_executable(value) or calls_command_returner(ast.walk(value), returners):
                     return True
                 next_names += [n.id for n in ast.walk(value) if isinstance(n, ast.Name)]
         frontier = next_names
@@ -597,12 +720,14 @@ def make_key(relfile: str, function: str, tool: str) -> tuple:
     return (relfile, function, tool)
 
 
-def scan_dir(root: Path, container: Path, tool_reads: dict):
+def scan_dir(root: Path, container: Path, tool_reads: dict, returners=frozenset()):
     """→ (findings [(файл, строка)], excused [(файл, строка, причина)],
     keyed [{key: count}], live [(файл, строка, причина)]) — findings/excused как раньше
     (построчно), keyed — то же самое, сгруппированное по ключу реестра «файл·функция·инструмент»
     для сверки с долгом; live — те из находок, где env= закреплён за стендом, а корень стенда
-    ведёт в живой контур (они же стоят и в findings)."""
+    ведёт в живой контур (они же стоят и в findings). returners — имена функций всех каталогов
+    разбора, возвращающих команду с интерпретатором (q11); имя, объявленное в самом файле,
+    судится по своему определению, а не по чужому одноимённому."""
     findings, excused, keyed, live = [], [], {}, []
     if not root.is_dir():
         return findings, excused, keyed, live
@@ -623,6 +748,8 @@ def scan_dir(root: Path, container: Path, tool_reads: dict):
             if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 scopes.append((fn, flat_statements(fn)))
         module_stmts = scopes[0][1]
+        defined, own_returning = command_returners(tree)
+        file_returners = (set(returners) - defined) | own_returning  # своё определение — главнее
         relfile = str(f.relative_to(container)).replace("\\", "/")
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
@@ -633,7 +760,7 @@ def scan_dir(root: Path, container: Path, tool_reads: dict):
                 name = func.attr
             elif isinstance(func, ast.Name) and func.id in SUBPROCESS_FUNCS:
                 name = func.id
-            if name is None or not runs_interpreter(node, scopes, module_stmts):
+            if name is None or not runs_interpreter(node, scopes, module_stmts, file_returners):
                 continue
             live_reason = None
             if env_is_pinned(node, scopes):
@@ -797,10 +924,11 @@ def main() -> int:
     container = mezo_paths.container_root(__file__)
     dirs = [container / "vnext-tools", container / ".mezosync" / "scripts"]
     tool_reads = build_tool_reads(dirs)
+    returners = build_command_returners(dirs)
 
     all_findings, all_excused, all_keyed, all_live = [], [], {}, []
     for root in dirs:
-        f, e, k, lv = scan_dir(root, container, tool_reads)
+        f, e, k, lv = scan_dir(root, container, tool_reads, returners)
         all_findings += f
         all_excused += e
         all_live += lv
