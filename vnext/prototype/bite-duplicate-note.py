@@ -95,12 +95,18 @@ def foreign_lease(scripts: pathlib.Path, db: pathlib.Path):
     return live[0] if live else None
 
 
-def run_self(source_db: pathlib.Path):
-    """Дочерний прогон этой же приёмки на копии, снятой с source_db (для случая ⑥)."""
+def run_self(source_db: pathlib.Path, stand_root: pathlib.Path):
+    """Дочерний прогон этой же приёмки на копии, снятой с source_db (для случая ⑥).
+
+    Среда стенда (карточка #613): MEZO_CONTAINER — stand_root, номер чата не передаётся.
+    Скрипты дочерний прогон берёт из <MEZO_CONTAINER>/.mezosync/scripts (container_root
+    смотрит в среду первой), поэтому в stand_root лежит копия тех скриптов, что судит
+    родитель. Прежде дочерний прогон получал среду вызывающего: у кого MEZO_CONTAINER
+    указывал на другой контур, тот копировал и судил его скрипты."""
     r = subprocess.run([sys.executable, str(pathlib.Path(__file__).resolve()),
                         "--source-db", str(source_db)],
                        capture_output=True, text=True, encoding="utf-8", timeout=300,
-                       env={**os.environ, NO_SELFTEST_ENV: "1"})
+                       env=mezo_stand.stand_env(stand_root, **{NO_SELFTEST_ENV: "1"}))
     return r.returncode, (r.stdout or "") + (r.stderr or "")
 
 
@@ -203,8 +209,12 @@ def main(argv=None) -> int:
         # объявлением: у чужой роли — дочерний прогон обязан сказать «не сужу» кодом 4 и не судить
         # ни одного случая; у своей роли (SENDER_ROLE) — судить как прежде и принять.
         if not os.environ.get(NO_SELFTEST_ENV):
+            # Корень стенда для дочерних прогонов: <корень>/.mezosync/scripts — копия скриптов родителя.
+            child_root = tmp / "child"
+            shutil.copytree(scripts, child_root / ".mezosync" / "scripts",
+                            ignore=shutil.ignore_patterns("__pycache__"))
             foreign_db = with_lease(source_db, tmp / "lease-foreign.db", "ZZLEASE")
-            rc6f, out6f = run_self(foreign_db)
+            rc6f, out6f = run_self(foreign_db, child_root)
             ok &= case("⑥ под ЧУЖИМ действующим объявлением о правке write-message.py — «не сужу» "
                        "отдельным исходом, ни один случай не судился",
                        rc6f == NOT_JUDGED_EXIT and "НЕ СУЖУ" in out6f and "ZZLEASE" in out6f
@@ -212,7 +222,7 @@ def main(argv=None) -> int:
                        f"код {rc6f} (ждём {NOT_JUDGED_EXIT}); до карточки #623 здесь было 🔴 ①–④ "
                        f"с кодом 1 — занятость читалась как поломка", differ=True)
             own_db = with_lease(source_db, tmp / "lease-own.db", SENDER_ROLE)
-            rc6o, out6o = run_self(own_db)
+            rc6o, out6o = run_self(own_db, child_root)
             ok &= case("⑥ под СВОИМ объявлением (роль отправителя) — судится как прежде и принято",
                        rc6o == 0 and "ПРИНЯТО" in out6o and "НЕ СУЖУ" not in out6o,
                        f"код {rc6o} (ждём 0); своё объявление механизм пропускает — «не сужу» "

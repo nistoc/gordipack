@@ -18,7 +18,6 @@ bite-issue-loop.py — приёмка П⑤ пула: канал проблем 
   ⑩ close без слов → отказ; ⑪ живая база не тронута
 """
 import json
-import os
 import shutil
 import sqlite3
 import subprocess
@@ -34,7 +33,6 @@ import mezo_target  # noqa: E402 — испытуемое (gordi-issue.py) бе�
 
 SCRIPTS = mezo_paths.live_scripts()
 LIVE_DB = mezo_paths.live_db()
-CONTAINER_ROOT = mezo_paths.container_root()
 sys.path.insert(0, str(SCRIPTS))
 import mezo_stand  # noqa: E402
 
@@ -50,7 +48,10 @@ def case(name, cond, detail=""):
 
 
 def run(script, *args):
-    env = dict(os.environ, PYTHONIOENCODING="utf-8")
+    # Среда стенда (карточка #613): MEZO_CONTAINER — корень стенда stand (копия базы — в его
+    # .mezosync, снята до ①), номер чата не передаётся. Прежде gordi-issue.py и backlog.py
+    # получали среду вызывающего.
+    env = mezo_stand.stand_env(stand, PYTHONIOENCODING="utf-8")
     p = subprocess.run([sys.executable, str(script), *args],
                        capture_output=True, text=True, encoding="utf-8",
                        errors="replace", env=env)
@@ -63,6 +64,11 @@ live_before = (LIVE_DB.stat().st_size, LIVE_DB.stat().st_mtime_ns)
 # MEZO_SCRIPTS_ROOT (карточка #659): образец прочих приёмок набора берёт ИСПЫТУЕМОЕ
 # через mezo_target.script(), оставляя live_scripts()/live_db() соседям и снимку базы.
 GI = mezo_target.script("gordi-issue.py")
+# Копия базы — в .mezosync стенда и ДО первого случая (карточка #613): со средой стенда
+# gordi-issue.py ищет координатора в <MEZO_CONTAINER>/.mezosync/mezosync.db, то есть в этой копии.
+db = stand / ".mezosync" / "mezosync.db"
+db.parent.mkdir()
+mezo_stand.snapshot_db(LIVE_DB, db)
 
 good = stand / "good.md"
 good.write_text("## ЗАМЕР\nотказ дословно: «нет пути»\n## КЛАСС\nмолчащий отказ\n"
@@ -98,9 +104,7 @@ rc, out4 = run(GI, "create", "--role", "PROTO", "--title", "проба",
 case("④ писатель не координатор → отказ (канал публичный, писатель один)",
      rc != 0 and "ОДИН" in out4)
 
-# ⑤⑥ poll на фикстуре + копии базы
-db = stand / "mezosync.db"
-mezo_stand.snapshot_db(LIVE_DB, db)
+# ⑤⑥ poll на фикстуре + копии базы (снята выше, до ①)
 con = sqlite3.connect(str(db))
 con.execute("INSERT INTO backlog (role, title, body_md, status, priority, tags, created_by, "
             "done_when) VALUES ('PROTO','починка по заявке','тело','open','normal',"
@@ -158,15 +162,10 @@ weak.mkdir()
 shutil.copy(GI, weak / "gordi-issue.py")
 shutil.copy(SCRIPTS / "mezo_paths.py", weak / "mezo_paths.py")
 # ГРУППА F, карточка #659: копия лежит ОТДЕЛЬНО (stand — системный temp, не внутри контура),
-# и mezo_paths копии искал бы контейнер подъёмом от weak/ — не нашёл бы НИКОГДА и упал бы
-# отказом «контейнер группы не найден» ДО того, как дошёл бы до _writer_gate/секций (доказано
-# прогоном: без этой строки ⑨ падал именно так). Второй замок — тот же приём, что и у
-# рабочего контура: файл путей РЯДОМ с копией (<каталог копии>/../local/paths.json, ключ container;
-# с карточки #677 он заменил строку container= в local.paths), а не переменная среды (её здесь
-# неоткуда взять).
-(stand / "local").mkdir(exist_ok=True)
-(stand / "local" / "paths.json").write_text(json.dumps({"container": str(CONTAINER_ROOT)}),
-                                            encoding="utf-8")
+# и mezo_paths копии без каталога группы упал бы отказом «контейнер группы не найден» ДО того,
+# как дошёл бы до _writer_gate/секций. Прежде каталог давал файл путей рядом с копией (ключ
+# container — живой контур); с карточки #613 его даёт среда стенда: MEZO_CONTAINER — сам stand
+# с копией базы в .mezosync, и файл путей больше не нужен.
 src = (weak / "gordi-issue.py").read_text(encoding="utf-8")
 ANCHOR = "if missing:"
 if ANCHOR not in src:

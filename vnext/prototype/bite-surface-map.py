@@ -14,6 +14,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 MAPTOOL = HERE / "map-surface-guards.py"
+sys.path.insert(0, str(HERE))
+import mezo_stand  # noqa: E402 — среда стенда для испытуемого (карточка #613)
 
 GUARDS = ["guard-printed-forms.py", "guard-rule-expiry.py", "check-rule-basis.py",
           "guard-launcher-forms.py", "bite-plain-words.py", "check-false-signature.py",
@@ -35,9 +37,12 @@ def case(title, verdict, detail=""):
         print(f"   {detail}")
 
 
-def run(tools):
+def run(tools, stand):
+    # Среда стенда (карточка #613): MEZO_CONTAINER — временный каталог приёмки stand, номер чата
+    # не передаётся. Карта читает только каталог --tools; прежде она получала среду вызывающего.
     r = subprocess.run([sys.executable, str(MAPTOOL), "--tools", str(tools)],
-                       capture_output=True, text=True, encoding="utf-8")
+                       capture_output=True, text=True, encoding="utf-8",
+                       env=mezo_stand.stand_env(stand))
     return (r.stdout or "") + (r.stderr or ""), r.returncode
 
 
@@ -52,7 +57,7 @@ def fresh_stand(tmp, name):
 def main() -> int:
     tmp = tempfile.mkdtemp(prefix="bite-smap-")
 
-    out, code = run(HERE)
+    out, code = run(HERE, tmp)
     case("① живой прогон: пустые клетки ПЕЧАТАЮТСЯ строкой, красных 0",
          code == 0 and out.count("БЕЗ ПРОВЕРКИ") >= 2 and "красных 0" in out,
          "пустая клетка — строка, а не отсутствие строки")
@@ -65,7 +70,7 @@ def main() -> int:
     g = d / "guard-rule-expiry.py"
     g.write_text(g.read_text(encoding="utf-8").replace(
         "# SURFACES: rules", "# SURFACES: rules ghost-surface"), encoding="utf-8")
-    out, code = run(d)
+    out, code = run(d, tmp)
     case("② проверка объявила поверхность, которой нет в карте → красное поимённо",
          code == 1 and "ghost-surface" in out and "guard-rule-expiry.py" in out)
 
@@ -73,14 +78,14 @@ def main() -> int:
     g = d / "guard-launcher-forms.py"
     g.write_text(g.read_text(encoding="utf-8").replace(
         "# SURFACES: phoenix", "# SURFACES:  "), encoding="utf-8")
-    out, code = run(d)
+    out, code = run(d, tmp)
     case("③ карта приписывает проверке поверхность, а та её НЕ объявляет → красное",
          code == 1 and "НЕ объявляет" in out and "guard-launcher-forms.py" in out,
          "карта, отставшая от проверки, обязана краснеть, а не молчать")
 
     d = fresh_stand(tmp, "gone")
     (d / "guard-skills-fresh.py").unlink()
-    out, code = run(d)
+    out, code = run(d, tmp)
     case("⑤ файла проверки нет → красное «имя протухло», клетка не лжёт о покрытии",
          code == 1 and "файла проверки НЕТ" in out and "guard-skills-fresh.py" in out)
 
@@ -88,7 +93,7 @@ def main() -> int:
     g = d / "check-rule-basis.py"
     g.write_text(re.sub(r"^# SURFACES:.*\n", "", g.read_text(encoding="utf-8"),
                         count=1, flags=re.M), encoding="utf-8")
-    out, code = run(d)
+    out, code = run(d, tmp)
     case("⑥ проверка БЕЗ строки SURFACES — названа счётом, не красное",
          code == 0 and "без машинного объявления" in out and "check-rule-basis.py" in out,
          "отсутствие контракта — не дефект; молчать о нём — дефект")
@@ -99,7 +104,7 @@ def main() -> int:
     g.write_text(g.read_text(encoding="utf-8").replace(
         "# PLANTS: canon rules tasks printed vitrina",
         "# PLANTS: canon rules tasks printed"), encoding="utf-8")
-    out, code = run(d)
+    out, code = run(d, tmp)
     case("⑦а источник без подсадки в приёмке → красное «зелёное не доказано»",
          code == 1 and "БЕЗ ПОДСАДКИ" in out and "vitrina" in out,
          "ровно так жило зелёное по слепоте: проверка объявляла, приёмка не подсаживала")
@@ -109,7 +114,7 @@ def main() -> int:
     g = d / "bite-rule-expiry.py"
     g.write_text(re.sub(r"^# PLANTS:.*\n", "", g.read_text(encoding="utf-8"),
                         count=1, flags=re.M), encoding="utf-8")
-    out, code = run(d)
+    out, code = run(d, tmp)
     case("⑦б приёмка без строки PLANTS → красное «что доказывает — не сказано»",
          code == 1 and "не объявляет подсадок" in out and "bite-rule-expiry.py" in out)
 

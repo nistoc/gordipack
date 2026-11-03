@@ -31,6 +31,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 CHECKER = HERE / "check-false-signature.py"
 MIRROR = mezo_paths.container_root() / "atlas.agents-sync.db"
+LIVE_DB = mezo_paths.live_db()
+LIVE_SCRIPTS = mezo_paths.live_scripts()
 if not CHECKER.exists():
     print(f"⛔ ИСПЫТУЕМОГО НЕТ: {CHECKER} — отказ мерить, не «чисто»")
     sys.exit(2)
@@ -60,9 +62,14 @@ def git_show(rev_path: str) -> str:
     return r.stdout
 
 
-def run_checker(*args):
-    r = subprocess.run([sys.executable, str(CHECKER), *args],
-                       capture_output=True, text=True, encoding="utf-8", timeout=120)
+def run_checker(stand, *args):
+    # Среда стенда (карточка #613): MEZO_CONTAINER — корень стенда, номер чата не передаётся.
+    # Умолчания испытуемого (live_db/live_scripts) идут от MEZO_CONTAINER и под этой средой
+    # смотрели бы в стенд, поэтому живая база для сверки имён приходит ЯВНО через --db,
+    # а живые скрипты для случая ⑤ — через --root. Прежде их давала среда вызывающего.
+    r = subprocess.run([sys.executable, str(CHECKER), "--db", str(LIVE_DB), *args],
+                       capture_output=True, text=True, encoding="utf-8", timeout=120,
+                       env=mezo_stand.stand_env(stand))
     return r.returncode, (r.stdout or "") + (r.stderr or "")
 
 
@@ -77,7 +84,7 @@ def main() -> int:
         return 2
     p2 = tmp / "wm_old.py"
     p2.write_text(old_wm, encoding="utf-8")
-    code, out = run_checker("--file", str(p2))
+    code, out = run_checker(tmp, "--file", str(p2))
     ok &= case("② ИСТОРИЯ: справка --to обещала сосуд ПРОЗОЙ — правило А ловит",
                code == 1 and "[А]" in out and "--to" in out and "ПРОЗОЙ" in out,
                "«признак «адресат задан полем»» — ни поля, ни таблицы; проверить нечем."
@@ -90,7 +97,7 @@ def main() -> int:
         return 2
     p6 = tmp / "bl_old.py"
     p6.write_text(old_bl, encoding="utf-8")
-    code, out = run_checker("--file", str(p6))
+    code, out = run_checker(tmp, "--file", str(p6))
     ok &= case("⑥ ИСТОРИЯ: help «обязателен по слову владельца» без required — правило Б",
                code == 1 and "[Б]" in out and "done-when" in out,
                "слово держало обязательность, код молча принимал без критерия", differ=True)
@@ -105,7 +112,7 @@ def main() -> int:
             print(f"⛔ ревизия {rev} недоступна — случай ①-семьи НЕ ПРОВЕРЕН")
             return 2
         (root1 / name).write_text(src, encoding="utf-8")
-    code, out = run_checker("--root", str(root1))
+    code, out = run_checker(tmp, "--root", str(root1))
     ok &= case("①-семья ИСТОРИЕЙ: канон «--db необязателен» против required=True — правило В",
                code == 1 and "[В]" in out and "backup-db.py" in out,
                "роль, поверившая канону, получала отказ инструмента (до R15a-волны)",
@@ -118,14 +125,14 @@ def main() -> int:
     for name in ("write-message.py", "backlog.py", "read-phoenix.py", "backup-db.py"):
         (root2 / name).write_text((live / name).read_text(encoding="utf-8"),
                                   encoding="utf-8")
-    code, out = run_checker("--root", str(root2))
+    code, out = run_checker(tmp, "--root", str(root2))
     ok &= case("④ на ПОЧИНЕННЫХ версиях тех же файлов признак МОЛЧИТ (различающий)",
                code == 0,
                f"код {code}; без этого случая он зелен и когда исправен, и когда"
                " не смотрит вовсе", differ=True)
 
     # ── ЖИВОЙ ПРОГОН: ноль ложных на здоровом контуре (критерий ⑤) ──
-    code, out = run_checker()
+    code, out = run_checker(tmp, "--root", str(LIVE_SCRIPTS))
     n_found = out.count("🔴 [")
     ok &= case("⑤ живой контур: ложных срабатываний НОЛЬ",
                code == 0 and n_found == 0,
