@@ -145,9 +145,14 @@ def sandbox():
 
 
 def run(scripts, db, *extra):
+    # Среда стенда (карточка #613): MEZO_CONTAINER — корень песочницы (она — настоящая раскладка
+    # контура: <корень>/.mezosync/mezosync.db), номер чата не передаётся. Прежде проверка форм
+    # получала среду вызывающего и по корню контура читала ЖИВОЙ CLAUDE.md рядом с песочницей;
+    # теперь — CLAUDE.md песочницы, которого там нет, как и у копий проверки в run_copy ниже.
     r = subprocess.run([sys.executable, str(TOOL), "--scripts-root", str(scripts),
                         "--db", str(db), *extra],
-                       capture_output=True, text=True, encoding="utf-8", timeout=600)
+                       capture_output=True, text=True, encoding="utf-8", timeout=600,
+                       env=mezo_stand.stand_env(Path(db).parent.parent))
     return (r.stdout or "") + (r.stderr or ""), r.returncode
 
 

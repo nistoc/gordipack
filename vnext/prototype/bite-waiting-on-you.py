@@ -40,7 +40,6 @@ bite-waiting-on-you.py — приёмка карточки #471: раздел «
     Нет карточки или она больше не ждёт PROTO — честное «⚪ не проверено» с причиной,
     итоговый код 2, если других провалов нет.
 """
-import os
 import re
 import shutil
 import sqlite3
@@ -87,8 +86,12 @@ def brief(db, role, waiting=False):
     # из 15 — и краснеет НЕ ПО СВОЕЙ ПРИЧИНЕ: контрольная пара (та же копия без поломки)
     # даёт ровно тот же результат. Такая приёмка «доказала» бы, что умеет краснеть,
     # ничего на самом деле не проверив.
-    env = dict(os.environ, PYTHONIOENCODING="utf-8", MEZO_ROLE="PROTO",
-               MEZO_CONTAINER=str(mezo_paths.container_root()))
+    # Среда стенда (карточка #613): довод выше в силе — переменная нужна по-прежнему, — но
+    # указывает она теперь на корень СТЕНДА (каталог копии базы), а не живого контура, и номер
+    # чата испытуемому не передаётся. Прежде --db вёл в копию, а то, что role-brief.py ищет по
+    # корню контура, — в живой контур. Копии лежат в корне стенда (mezosync.db, broken.db),
+    # а не в его .mezosync — живой базой они не становятся.
+    env = mezo_stand.stand_env(Path(db).parent, PYTHONIOENCODING="utf-8", MEZO_ROLE="PROTO")
     cmd = [sys.executable, str(TARGET_TOOL), "--role", role, "--db", str(db)]
     if waiting:
         cmd.append("--waiting")
@@ -233,8 +236,14 @@ total, shown, rest = header_count(out6), shown_count(out6), remainder_count(out6
 case("④ порог: показано + остаток = ВСЕГО (молчаливого усечения нет)",
      total == MANY_TOTAL and shown == 10 and rest is not None and shown + rest == total,
      f"роль {MANY}: всего {total} из подсаженных {MANY_TOTAL} · поимённо {shown} · остаток {rest}")
+# Путь в строке остатка — каталог САМОГО испытуемого наказа (карточка #613): формы печатаются
+# от него, и команда там существует по построению. Прежде сверка шла с живым каталогом приёмки,
+# а испытуемый брал каталог от MEZO_CONTAINER вызывающего: со средой стенда — путь стенда без
+# скриптов. Поломка «каталог форм — снова от MEZO_CONTAINER» роняет ровно этот случай.
 case("④-бис остаток называет КОМАНДУ, и она существует (не имя без пути)",
-     "--waiting" in out6 and str(SCRIPTS.as_posix()) in out6)
+     "--waiting" in out6 and f"{TARGET_TOOL.resolve().parent.as_posix()}/role-brief.py" in out6
+     and TARGET_TOOL.exists(),
+     f"ждём путь {TARGET_TOOL.resolve().parent.as_posix()}/role-brief.py")
 
 # ═══ ⑤ --waiting печатает всё
 rc7, out7 = brief(db, MANY, waiting=True)
