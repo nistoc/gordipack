@@ -38,6 +38,12 @@
   ⑨-септ карточка #415 ВСТРЕЧНЫЙ к ведру «форм нет»: подсаженная форма
      обязана ВЫВЕСТИ механизм из ведра; в самом ведре — независимый
      поиск командных строк, отличающий пустоту от слепоты сборщика      РАЗЛИЧАЮЩИЙ
+  ⑩-септ…⑩-ундец карточка #722: признак «роли нет» различает три поломки границы
+     (M1 имя без границы · M2 жадный кусок · M3 один поиск) — под каждой меняется
+     ровно своя строка; «у роли X нет …» (роль есть, нет другого) — не отказ  РАЗЛИЧАЮЩИЙ
+  ⑪…⑪-тер карточка #720: форма-читатель без --db дольше предела — строка
+     «ВИСНЕТ», итог есть, внук формы погашен; поломки «перехват снят» и
+     «гасится только ребёнок» роняют каждая свой случай                 РАЗЛИЧАЮЩИЙ
 
 ⛔ Живого контура не касается: работает на копии каталога скриптов и копии базы.
 """
@@ -48,6 +54,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -86,8 +93,81 @@ ROLE_REFUSALS = ("ERR: роли PROTO нет среди читателей (ес
 WHOLE_LINE_PATCH = ("                 if any(named(m.group(0)) for m in ROLE_ABSENT.finditer(line))), None)",
                     "                 if ROLE_ABSENT.search(line) and any(n in line for n in names)), None)")
 # поломка ⑩-секст: флаг «--role» снова считается словом «роль»
-FLAG_WORD_PATCH = ('ROLE_ABSENT = re.compile(r"(?<![-\\w])(рол[ьиейю]|role)',
-                   'ROLE_ABSENT = re.compile(r"(рол[ьиейю]|role)')
+FLAG_WORD_PATCH = ('ROLE_ABSENT = re.compile(r"(?<![-\\w])(?<!\\bу )(рол[ьиейю]|role)',
+                   'ROLE_ABSENT = re.compile(r"(?<!\\bу )(рол[ьиейю]|role)')
+# Случаи ⑩-септ…⑩-ундец (карточка #722, приёмка OPSSRE, записка #5948): три поломки границы, которых
+# ⑩-кватер не различал, — у каждой своя строка, и под своей поломкой меняется РОВНО она.
+BOUNDARY_LINES = (
+    ("M1", "роли CORE-B нет", False),                                           # приставка — не та роль
+    ("M2", "роль взята: флаг) · НЕ запускались (нет argparse): CORE не найден", False),  # лень: до первого «нет»
+    ("M3", "роль взята: (нет argparse) · роли CORE нет", True),                 # второй кусок строки
+)
+BOUNDARY_PATCHES = {
+    "M1": ('return any(re.search(rf"(?<![\\w-]){re.escape(n)}(?![\\w-])", span) for n in names if n)',
+           'return any(n in span for n in names if n)'),
+    "M2": (".{0,60}?\\b(нет", ".{0,60}\\b(нет"),
+    "M3": ("if any(named(m.group(0)) for m in ROLE_ABSENT.finditer(line))), None)",
+           "if ROLE_ABSENT.search(line) and named(ROLE_ABSENT.search(line).group(0))), None)"),
+}
+# Класс «у роли X нет …» — роль ЕСТЬ, нет другого: тексты самих скриптов пакета (read-phoenix ·
+# memory-records · memory-archive · signal-templates · role-rights), имя подставлено.
+OWNER_LINES = ("   у роли PROTO открытых карточек нет (проверено запросом, а не молчанием сохранённой памяти)",
+               "⛔ У роли PROTO нет раздела «state»",
+               "⚪ у роли PROTO записей нет. Разобрать раздел: --section <раздел> --разобрать",
+               "⛔ НЕЧЕГО СИГНАЛИТЬ: у роли PROTO нет ни одной записки в ленте.",
+               "⚠️ У РОЛИ PROTO НЕТ НИ ОДНОГО ПРАВА — и общих (ALL) тоже нет.")
+OWNER_PATCH = ("(?<![-\\w])(?<!\\bу )(рол", "(?<![-\\w])(рол")
+# Случаи ⑪ (карточка #720): форма-читатель без --db, идущая дольше предела. Первый запуск получает
+# отказ разборщика «--db», повторный — без --db — спит дольше предела и оставляет внука.
+SLOW_PROBE = ('import argparse, subprocess, sys, time\n'
+              'from pathlib import Path\n'
+              'ap = argparse.ArgumentParser(description="проба приёмки: читатель без --db, дольше предела")\n'
+              'ap.add_argument("--limit")\n'
+              'ap.parse_args()\n'
+              'child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(40)"],\n'
+              '                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n'
+              'Path(__file__).with_name("slow-probe.pid").write_text(str(child.pid))\n'
+              'time.sleep(40)\n')
+SLOW_LIMIT = "4"
+# поломка ⑪-бис: повторный запуск снова без перехвата предела (дефект карточки #720 дословно)
+UNCAUGHT_PATCH = ('argv = [x for x in argv if x not in ("--db", str(db_copy))]\n'
+                  '                r = run_bounded(argv, a.form_timeout, form_env)',
+                  'argv = [x for x in argv if x not in ("--db", str(db_copy))]\n'
+                  '                r = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", '
+                  'timeout=a.form_timeout, env=form_env)')
+# поломка ⑪-тер: гасится только прямой ребёнок, как у subprocess.run
+NO_TREE_PATCHES = [('subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True)', 'pass'),
+                   ('os.killpg(proc.pid, signal.SIGKILL)', 'pass')]
+# Случаи ⑫ (карточка #721): форма из клона шаблона, пишущая РЯДОМ С СОБОЙ, — как gen-schema.py,
+# чей вывод <свой каталог>/../../schema. В памяти — относительный путь «vnext/tools/», он ведёт
+# в корень шаблона. Корень здесь подставной (в стенде приёмки), настоящий клон не трогается вовсе.
+WRITE_NEAR_PROBE = ('import sys\n'
+                    'from pathlib import Path\n'
+                    'out = Path(__file__).resolve().parent.parent.parent / "schema" / "probe.sql"\n'
+                    'out.parent.mkdir(exist_ok=True)\n'
+                    'out.write_text("-- " + " ".join(sys.argv[1:]) + "\\n", encoding="utf-8")\n'
+                    'print("схема пробы записана:", out)\n')
+# поломка ⑫-бис: корень шаблона снова настоящий — форма идёт из клона, а не из копии в стенде
+REAL_ROOT_PATCH = ("        exe, form_env = in_stand(exe, work)\n", "        form_env = None\n")
+
+
+def pid_alive(pid):
+    """Жив ли процесс — только спросить, ничего не посылая (на Windows os.kill его бы убил)."""
+    if os.name == "nt":
+        import ctypes
+        k = ctypes.windll.kernel32
+        h = k.OpenProcess(0x1000, False, pid)        # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return False
+        code = ctypes.c_ulong()
+        k.GetExitCodeProcess(h, ctypes.byref(code))
+        k.CloseHandle(h)
+        return code.value == 259                    # STILL_ACTIVE
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
 
 
 def case(title, ok, detail, differ=False):
@@ -932,6 +1012,154 @@ def main() -> int:
                    broken(ROLE_HEADER_LINE, {"CORE"}) is not None,
                    "исход под поломкой: " + ("ОТКАЗ (ждём отказ)" if broken(ROLE_HEADER_LINE, {"CORE"})
                                              else "не отказ — поломка не различена"), differ=True)
+
+    # ═══ ⑩-септ…⑩-ундец КАРТОЧКА #722: три поломки границы и класс «у роли X нет …» ═══════════════
+    def verdicts(fn):
+        return {mark: fn(line, {"CORE"}) is not None for mark, line, _ in BOUNDARY_LINES}
+
+    if absent is not None:
+        want = {mark: refusal for mark, _, refusal in BOUNDARY_LINES}
+        got = verdicts(absent)
+        owner_hit = [t for t in OWNER_LINES if absent(t, {"PROTO"})]
+        ok &= case("⑩-септ целый признак: M1 «роли CORE-B нет» и M2 «… CORE не найден» за первым «нет» — "
+                   "не отказ; M3 «роли CORE нет» вторым куском строки — отказ; «у роли PROTO нет …» — не отказ",
+                   got == want and not owner_hit,
+                   "исходы " + " · ".join(f"{m} {'ОТКАЗ' if got[m] else 'не отказ'}" for m in got)
+                   + f" · «у роли …» засчитано отказом {len(owner_hit)} из {len(OWNER_LINES)} (ждём 0)",
+                   differ=True)
+        for mark, title in (("M1", "⑩-окт поломка M1 «имя без границы»"),
+                            ("M2", "⑩-нон поломка M2 «жадный кусок вместо ленивого»"),
+                            ("M3", "⑩-дец поломка M3 «один поиск вместо всех кусков строки»")):
+            broken, why_broken = role_absent_of([BOUNDARY_PATCHES[mark]], f"m-{mark}")
+            if broken is None:
+                ok &= case(f"{title}: меняется ровно своя строка", False, f"⛔ НЕ ЗАПУСТИЛАСЬ: {why_broken}",
+                           differ=True)
+                continue
+            under = verdicts(broken)
+            flipped = sorted(m for m in under if under[m] != want[m])
+            ok &= case(f"{title}: меняется РОВНО строка {mark}, две другие — как на целом",
+                       flipped == [mark], f"сменили исход под поломкой: {', '.join(flipped) or 'ни одна'}"
+                                          f" (ждём {mark})", differ=True)
+        broken, why_broken = role_absent_of([OWNER_PATCH], "owner")
+        if broken is None:
+            ok &= case("⑩-ундец поломка «у роли снова отказ»", False, f"⛔ НЕ ЗАПУСТИЛАСЬ: {why_broken}",
+                       differ=True)
+        else:
+            hit = [t for t in OWNER_LINES if broken(t, {"PROTO"})]
+            real = [t for t in ROLE_REFUSALS if broken(t, {"PROTO"})]
+            ok &= case("⑩-ундец поломка «у роли снова отказ»: все пять строк «у роли PROTO нет …» — снова "
+                       "отказ; значит, ⑩-септ держит именно эту границу",
+                       len(hit) == len(OWNER_LINES) and len(real) == len(ROLE_REFUSALS),
+                       f"«у роли …» отказом {len(hit)} из {len(OWNER_LINES)} · настоящих отказов "
+                       f"{len(real)} из {len(ROLE_REFUSALS)}", differ=True)
+
+    # ═══ ⑪ КАРТОЧКА #720: форма без --db дольше предела — строка «ВИСНЕТ», итог, внуки погашены ═══════
+    stand11, scripts11, db11 = sandbox()
+    (scripts11 / "check-slow-probe.py").write_text(SLOW_PROBE, encoding="utf-8")
+    path11 = str(scripts11).replace("\\", "/")
+    seed_source(db11, chr(10) + "```" + chr(10) + f"python {path11}/check-slow-probe.py --limit 1"
+                + chr(10) + "```" + chr(10))
+    pid_file = scripts11 / "slow-probe.pid"
+
+    def slow_run(tool):
+        if pid_file.exists():
+            pid_file.unlink()
+        r = subprocess.run([sys.executable, str(tool), "--scripts-root", str(scripts11), "--db", str(db11),
+                            "--only", "check-slow-probe", "--form-timeout", SLOW_LIMIT],
+                           capture_output=True, text=True, encoding="utf-8", timeout=300,
+                           # корень шаблона — явно, как у run_copy: копия проверки лежит в песочнице,
+                           # вне шаблона, и без него падала до первой формы (внук None, 04.11)
+                           env=mezo_stand.stand_env(stand11, MEZO_TEMPLATE=str(mezo_paths.template_root())))
+        out_ = (r.stdout or "") + (r.stderr or "")
+        pid = int(pid_file.read_text()) if pid_file.exists() else None
+        alive = False
+        if pid is not None:
+            for _ in range(10):                     # гашение дерева — не мгновенно
+                alive = pid_alive(pid)
+                if not alive:
+                    break
+                time.sleep(0.3)
+        return out_, r.returncode, pid, alive
+
+    out11, code11, pid11, alive11 = slow_run(TOOL)
+    hang11 = [l for l in out11.splitlines() if "ВИСНЕТ" in l]
+    ok &= case("⑪ форма-читатель без --db дольше предела: строка «ВИСНЕТ» о повторном запуске, итог есть, "
+               "трассировки нет, внук формы погашен",
+               "Traceback" not in out11 and "отвечают " in out11 and any("без --db" in l for l in hang11)
+               and pid11 is not None and not alive11,
+               f"код {code11} · строк «ВИСНЕТ» {len(hang11)} · итог {'есть' if 'отвечают ' in out11 else 'НЕТ'}"
+               f" · трассировка {'ЕСТЬ' if 'Traceback' in out11 else 'нет'} · "
+               + (f"внук {pid11}: {'ЖИВ' if alive11 else 'погашен'}" if pid11 is not None
+                  else "внук не записан — форма не запускалась: " + out11.strip()[:160]), differ=True)
+
+    uncaught, why_uncaught = tool_copy(stand11, [UNCAUGHT_PATCH])
+    if uncaught is None:
+        ok &= case("⑪-бис поломка «перехват снят»", False, f"⛔ НЕ ЗАПУСТИЛАСЬ: {why_uncaught}", differ=True)
+    else:
+        out11b, code11b, _, _ = slow_run(uncaught)
+        ok &= case("⑪-бис поломка «перехват снят»: проверка снова падает трассировкой и не доходит до итога "
+                   "— значит, ⑪ держит именно перехват повторного запуска",
+                   "TimeoutExpired" in out11b and "отвечают " not in out11b,
+                   f"код {code11b} · TimeoutExpired {'есть' if 'TimeoutExpired' in out11b else 'НЕТ'} · итог "
+                   f"{'есть' if 'отвечают ' in out11b else 'нет'}", differ=True)
+
+    no_tree, why_no_tree = tool_copy(stand11, NO_TREE_PATCHES)
+    if no_tree is None:
+        ok &= case("⑪-тер поломка «гасится только ребёнок»", False, f"⛔ НЕ ЗАПУСТИЛАСЬ: {why_no_tree}",
+                   differ=True)
+    else:
+        out11c, code11c, pid11c, alive11c = slow_run(no_tree)
+        ok &= case("⑪-тер поломка «гасится только ребёнок»: внук формы переживает проверку — значит, ⑪ "
+                   "держит именно гашение дерева",
+                   pid11c is not None and alive11c and "отвечают " in out11c,
+                   f"код {code11c} · " + (f"внук {pid11c}: " + ('жив (ждём жив) · сам уйдёт через 40 с' if alive11c
+                                                            else 'погашен — поломка не различена')
+                                          if pid11c is not None else
+                                          "внук не записан — форма не запускалась: " + out11c.strip()[:160]),
+                   differ=True)
+
+    # ═══ ⑫ КАРТОЧКА #721: форма из клона шаблона пишет в копию в стенде, а не в клон ═══════════════
+    stand12, scripts12, db12 = sandbox()
+    tpl12 = stand12 / "template-root"
+    (tpl12 / "scripts").mkdir(parents=True)
+    (tpl12 / "scripts" / "init-group.py").write_text("# маркер корня шаблона\n", encoding="utf-8")
+    (tpl12 / "vnext" / "tools").mkdir(parents=True)
+    (tpl12 / "vnext" / "tools" / "write-near-probe.py").write_text(WRITE_NEAR_PROBE, encoding="utf-8")
+    seed_source(db12, chr(10) + "```" + chr(10) + "python vnext/tools/write-near-probe.py" + chr(10) + "```" + chr(10))
+
+    def tree_state(root):
+        return {str(p.relative_to(root)): (p.stat().st_size, p.stat().st_mtime_ns)
+                for p in root.rglob("*") if p.is_file() and "__pycache__" not in p.parts}
+
+    def near_run(tool):
+        before = tree_state(tpl12)
+        r = subprocess.run([sys.executable, str(tool), "--scripts-root", str(scripts12), "--db", str(db12),
+                            "--only", "write-near-probe"],
+                           capture_output=True, text=True, encoding="utf-8", timeout=300,
+                           env=mezo_stand.stand_env(stand12, MEZO_TEMPLATE=str(tpl12)))
+        after = tree_state(tpl12)
+        changed = sorted(k for k in set(before) | set(after) if before.get(k) != after.get(k))
+        out_ = (r.stdout or "") + (r.stderr or "")
+        return out_, r.returncode, changed, forms(out_, "write-near-probe.py")["ok"]
+
+    out12, code12, changed12, ok12 = near_run(TOOL)
+    ok &= case("⑫ форма из клона шаблона, пишущая рядом с собой, отвечает — и в корне шаблона не изменилось "
+               "ни одного файла (запись ушла в копию корня в стенде)",
+               bool(ok12) and not changed12 and "📦 форм из клона шаблона 1" in out12,
+               f"код {code12} · форма {'отвечает' if ok12 else 'НЕ отвечает'} · изменено в корне шаблона "
+               f"{len(changed12)}: {', '.join(changed12) or '—'}", differ=True)
+
+    real_root, why_real_root = tool_copy(stand12, [REAL_ROOT_PATCH])
+    if real_root is None:
+        ok &= case("⑫-бис поломка «корень шаблона — настоящий»", False, f"⛔ НЕ ЗАПУСТИЛАСЬ: {why_real_root}",
+                   differ=True)
+    else:
+        out12b, code12b, changed12b, ok12b = near_run(real_root)
+        ok &= case("⑫-бис поломка «корень шаблона — настоящий»: форма снова пишет в корень шаблона — значит, "
+                   "⑫ держит именно запуск из копии",
+                   bool(ok12b) and "schema" + os.sep + "probe.sql" in changed12b,
+                   f"код {code12b} · изменено в корне шаблона {len(changed12b)}: {', '.join(changed12b) or '—'}"
+                   " (ждём schema/probe.sql)", differ=True)
 
     print()
     print(f"{'✅ ПРОВЕРКА ПРИНЯТА' if ok else '🔴 НЕ ПРИНЯТ'} — случаев {CASES}, различающих {DIFFER}"

@@ -29,6 +29,7 @@
 import argparse
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -99,6 +100,51 @@ SUB = re.compile(r"^\s+(?!-)([a-z][a-z0-9-]*)\b")
 # для них лжёт («работает дольше порога» ≠ «висит» — вторая половина карточки #203).
 # Форма сверяется по --help (разборщик аргументов тот же), о чём говорится вслух.
 LONG_BY_NATURE = {"bite-all.py": "полный прогон всех приёмок — минуты по своей природе"}
+FORM_LIMIT = 90   # с на одну форму; дольше — «ВИСНЕТ». Флаг --form-timeout — для приёмки (карточка #720)
+
+
+def kill_tree(proc):
+    """Гасит форму ВМЕСТЕ с её детьми — по номеру своего процесса, только своё дерево.
+
+    🩸 Карточка #720: предел subprocess.run(timeout=…) гасит лишь прямого ребёнка. 17.10 после
+    оборванных форм остались четыре процесса без родителя (вложенная проверка форм и --help двух
+    скриптов), а их трубы держали вывод — ожидание конца вывода само грозило повиснуть."""
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True)
+    else:
+        import signal
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            pass
+    try:
+        proc.kill()
+    except OSError:
+        pass
+
+
+def run_bounded(argv, limit, env=None):
+    """Запуск формы с пределом: CompletedProcess, или None — форма не уложилась в limit секунд.
+
+    ⚖️ ВСЕ запуски формы идут через эту функцию: --help долгой, первый с --db, повторный без --db.
+    Прежде повторный звал subprocess.run БЕЗ перехвата предела, и форма-читатель без --db, идущая
+    дольше 90 с, роняла ВСЮ проверку трассировкой вместо строки «ВИСНЕТ» (карточка #720: 17.10 два
+    прогона на живой памяти Atlas оборвались на разных формах, не дойдя до итога). Одна функция на
+    все три места — чтобы перехват не мог снова потеряться в одном из них."""
+    group = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"
+             else {"start_new_session": True})
+    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, encoding="utf-8", env=env, **group)
+    try:
+        out, err = proc.communicate(timeout=limit)
+    except subprocess.TimeoutExpired:
+        kill_tree(proc)
+        try:
+            proc.communicate(timeout=15)
+        except subprocess.TimeoutExpired:
+            pass   # трубу держит процесс вне дерева: итог проверки важнее хвоста вывода
+        return None
+    return subprocess.CompletedProcess(argv, proc.returncode, out, err)
 
 # ⚠️ ЗНАЧЕНИЯ ПОДСТАВЛЯЕМ СВОИ. В памяти на их месте заглушки (<РОЛЬ>, <нота.md>):
 # запуск с ними доказывал бы только то, что заглушка не является ролью.
@@ -159,8 +205,13 @@ def roles_from_data(db):
 # флаг --role) · НЕ запускались (нет …») засчитывалась отказом, хотя форма отвечала отчётом с кодом 1.
 # Нужны ОБЕ половины: без любой шапка снова совпадает. Настоящие отказы пакета ставят имя между
 # словом и «нет» («роли X нет среди читателей», «роли X нет в реестре») — граница их не теряет.
+# ⚖️ «У РОЛИ X НЕТ …» — РОЛЬ ЕСТЬ, НЕТ ДРУГОГО (карточка #722, находка OPSSRE, записка #5948):
+# «у роли X открытых карточек нет» (read-phoenix.py) · «У роли X нет раздела» (memory-records.py,
+# memory-archive.py) · «у роли X записей нет» · «у роли X нет ни одной записки» (signal-templates.py).
+# Притяжательное «у» предполагает, что роль есть; при коде ≠ 0 признак звал бы такую строку
+# отказом «роли нет». Настоящие отказы пакета «у» перед словом не ставят.
 ROLE_FLAGS = ("--role", "--actor", "--to", "--cc")
-ROLE_ABSENT = re.compile(r"(?<![-\w])(рол[ьиейю]|role)\b.{0,60}?\b(нет|не найден\w*|незнаком\w*|"
+ROLE_ABSENT = re.compile(r"(?<![-\w])(?<!\bу )(рол[ьиейю]|role)\b.{0,60}?\b(нет|не найден\w*|незнаком\w*|"
                          r"не заведен\w*|не существует|unknown|not found)", re.I)
 
 
@@ -297,6 +348,24 @@ def resolve(script, paths, root):
     return None, ("НЕТ ПО НАЗВАННОМУ ПУТИ" if named else "ПУТЬ НЕ НАЗВАН И РЯДОМ НЕТ")
 
 
+def in_stand(exe, work):
+    """Форма из клона шаблона идёт из КОПИИ корня шаблона в стенде → (путь к запуску, среда или None).
+
+    🩸 Карточка #721 (замер OPSSRE, записка #5943): форма, пишущая РЯДОМ С СОБОЙ, писала в настоящий
+    клон. gen-schema.py (вывод — <свой каталог>/../../schema) 17.10 переписал schema/mezosync_v6.sql
+    в клоне шаблона, а признак «✅ отвечает» побочной записи не различал. Копия делается один раз
+    за прогон, при первой такой форме; среда формы получает MEZO_TEMPLATE = копия, чтобы и поиск
+    корня шаблона внутри формы вёл в копию, а не в клон."""
+    try:
+        rel = Path(exe).resolve().relative_to(TEMPLATE_ROOT.resolve())
+    except (ValueError, OSError):
+        return exe, None
+    copy = work / "template"
+    if not copy.exists():
+        shutil.copytree(TEMPLATE_ROOT, copy, ignore=shutil.ignore_patterns(".git", "__pycache__"))
+    return copy / rel, dict(os.environ, MEZO_TEMPLATE=str(copy))
+
+
 def build_argv(exe, sub, flags, ctx, db_copy):
     """⚠️ --db идёт ДО подкоманды: у backlog.py и role-rights.py он объявлен в ОБЩЕМ разборщике,
     и в хвосте команда его не узнаёт. Первая редакция ставила его в конец и объявляла
@@ -321,6 +390,9 @@ def main() -> int:
                     help="какой каталог считать живым. Меняется, чтобы испытать КОПИЮ, а не оригинал")
     ap.add_argument("--only", help="подстрока ИМЕНИ ФАЙЛА механизма (не роли!); пустой отбор — отказ, не зелёное (карточка #368)")
     ap.add_argument("--verbose", action="store_true", help="показывать вывод падений целиком")
+    ap.add_argument("--form-timeout", type=float, default=FORM_LIMIT,
+                    help=f"сколько секунд ждать одну форму, по умолчанию {FORM_LIMIT}; дольше — «ВИСНЕТ». "
+                         "Меньший предел — для приёмки, чтобы не ждать минутами")
     a = ap.parse_args()
 
     root = Path(a.scripts_root)
@@ -351,7 +423,7 @@ def main() -> int:
     print("=" * 84)
 
     ok_n = red = skip = 0
-    matched = 0
+    matched = in_copy = 0
     reds, skips = [], []
     for (script, sub, flags), info in sorted(forms.items()):
         if a.only and a.only not in script:
@@ -404,10 +476,8 @@ def main() -> int:
         if exe.name in LONG_BY_NATURE:
             # «работает минуты» ≠ «висит»: полный прогон здесь лгал бы порогом (#203).
             # Форма сверяется разборщиком аргументов самой команды — --help с теми же флагами
-            try:
-                h = subprocess.run([sys.executable, str(exe), "--help"], capture_output=True,
-                                   text=True, encoding="utf-8", timeout=30)
-            except subprocess.TimeoutExpired:
+            h = run_bounded([sys.executable, str(exe), "--help"], 30)
+            if h is None:
                 red += 1
                 reds.append((shown, "🔴 даже --help не отвечает за 30 с", where))
                 continue
@@ -420,13 +490,15 @@ def main() -> int:
                 reds.append((shown, "🔴 --help отвечает отказом — файл есть, но не команда", where))
             continue
 
+        exe, form_env = in_stand(exe, work)
+        in_copy += form_env is not None
         argv = build_argv(exe, sub, flags, ctx, db_copy)
-        try:
-            r = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", timeout=90)
-        except subprocess.TimeoutExpired:
+        hangs = (f"🔴 ВИСНЕТ дольше {a.form_timeout:g} с (долгие ПО ПРИРОДЕ — в списке "
+                 "LONG_BY_NATURE, эта в него не входит)")
+        r = run_bounded(argv, a.form_timeout, form_env)
+        if r is None:
             red += 1
-            reds.append((shown, "🔴 ВИСНЕТ дольше 90 с (долгие ПО ПРИРОДЕ — в списке "
-                                "LONG_BY_NATURE, эта в него не входит)", where))
+            reds.append((shown, hangs, where))
             continue
         out = (r.stdout or "") + (r.stderr or "")
         # 🩸 ПРИЗНАКИ ОТКАЗА СУДЯТСЯ ТОЛЬКО ПРИ КОДЕ ≠ 0 (карточка #680, разбор 13.10 17:58 UTC).
@@ -441,8 +513,11 @@ def main() -> int:
             # пишущий на живой базе запускать НЕЛЬЗЯ, и это разные исходы, а не один
             if READING.match(exe.name):
                 argv = [x for x in argv if x not in ("--db", str(db_copy))]
-                r = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8",
-                                   timeout=90)
+                r = run_bounded(argv, a.form_timeout, form_env)
+                if r is None:
+                    red += 1
+                    reds.append((shown, hangs + " — повторный запуск, без --db", where))
+                    continue
                 out = (r.stdout or "") + (r.stderr or "")
                 how = "базу не указать — читал ЖИВУЮ (по имени механизм только читает)"
             else:
@@ -513,6 +588,9 @@ def main() -> int:
 
     print("-" * 84)
     print(f"отвечают {ok_n} · 🔴 ПАДАЮТ ИЛИ НЕТ ФАЙЛА {red} · ⚠️ не проверены {skip}")
+    if in_copy:
+        print(f"📦 форм из клона шаблона {in_copy} — запущены из копии корня шаблона в стенде "
+              f"({work / 'template'}): пишущая рядом с собой пишет в копию, а не в {TEMPLATE_ROOT}")
     if skip:
         print("⚠️ «не проверена» — это НЕ «в порядке»: у каждой названа причина, и её видно.")
     if red:
