@@ -45,7 +45,8 @@ MANDATORY = re.compile(r"(?<!не)обязател|required|нельзя без"
 # (?<!не): «НЕобязателен» содержит «обязателен» подстрокой — без просмотра назад признак
 # обвинял честный help (track.py --db, найдено прогоном 28.08). Отрицание — не обещание.
 # исключение к Б: обязательность, о которой говорит help, может навязываться НЕ argparse,
-# а отказом в теле — тогда рядом с dest обязан жить sys.exit/raise/refuse
+# а отказом в теле — тогда рядом с dest обязан жить sys.exit/raise/refuse, либо отказ стоит
+# в теле ветки if, чьё условие читает args.<dest> (enforced_by_branch, 04.11)
 ENFORCE = re.compile(r"sys\.exit|raise |refuse|return 2|печат\w+ отказ", re.I)
 # А-безымянность: обещание сосуда прозой — «признак «…»» без идентификатора
 # 🪤 re.I обязателен: первая редакция без него пропустила ЖИВОЙ исторический экземпляр —
@@ -102,6 +103,25 @@ def parse_args_of(tree):
     return out, flags
 
 
+def enforced_by_branch(tree, src, dest):
+    """Б, отказ ВДАЛИ от объявления: ветка if, чьё условие читает args.<dest>, а тело отказывает.
+
+    Окно «40 строк после add_argument» не видит проверки, вынесенной после разбора всех флагов:
+    new-bridge-letter.py требует --reply-to у answer и fix на строке 231 при объявлении на 187 —
+    на живом контуре это была единственная находка правила Б, и ложная (04.11, PR 78).
+    Судится связь «условие о флаге → отказ в теле этой же ветки», а не близость строк."""
+    attr = dest.replace("-", "_")
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If):
+            continue
+        if not any(isinstance(n, ast.Attribute) and n.attr == attr for n in ast.walk(node.test)):
+            continue
+        body = "\n".join(ast.get_source_segment(src, stmt) or "" for stmt in node.body)
+        if ENFORCE.search(body):
+            return True
+    return False
+
+
 def scan_file(path, names_in_db):
     """[(строка, правило, что)] — находки по одному файлу."""
     try:
@@ -116,8 +136,9 @@ def scan_file(path, names_in_db):
         # ── Б: help обещает обязательность, argparse не требует, отказа рядом нет
         if hlp and MANDATORY.search(hlp) and not req:
             window = "\n".join(src.splitlines()[max(0, ln - 1):ln + 40])
-            if not (re.search(rf"\b{re.escape(dest.replace('-', '_'))}\b", window)
-                    and ENFORCE.search(window)):
+            if not ((re.search(rf"\b{re.escape(dest.replace('-', '_'))}\b", window)
+                     and ENFORCE.search(window))
+                    or enforced_by_branch(tree, src, dest)):
                 finds.append((ln, "Б", f"--{dest}: help говорит «обязателен», а required "
                                        f"не стоит и отказа рядом нет — читатель верит слову,"
                                        f" код не держит"))
