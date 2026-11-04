@@ -51,9 +51,12 @@ def case(title, ok, detail, differ=False):
     return ok
 
 
-def run(*argv, env=None):
+def run(stand, *argv):
+    # Среда стенда (карточка #613): MEZO_CONTAINER — корень стенда stand (каталог копии базы),
+    # номер чата не передаётся. Прежде инструменты получали среду вызывающего, а сломанная
+    # копия случая ⑩ — MEZO_CONTAINER живого контура.
     r = subprocess.run([sys.executable, *argv], capture_output=True, text=True,
-                       encoding="utf-8", timeout=120, env=env)
+                       encoding="utf-8", timeout=120, env=mezo_stand.stand_env(stand))
     return (r.stdout or "") + (r.stderr or ""), r.returncode
 
 
@@ -91,7 +94,7 @@ def main() -> int:
     body1.write_text("тело пробы, редакция один\n" + "x" * 500, encoding="utf-8")
 
     # ── ① ЗАПИСЬ ТЕЛА СТАВИТ ОБЕ ДАТЫ, И ОНИ РАВНЫ (мера ③ варианта А) ────────
-    out, code = run(str(SAVE), "--db", str(db), "--role", "PROTO", "--section", "state",
+    out, code = run(d, str(SAVE), "--db", str(db), "--role", "PROTO", "--section", "state",
                     "--file", str(body1), "--allow-shrink")
     saved1, conf1, _ = stamps(db)
     ok &= case("① запись тела ставит ОБЕ даты, и они РАВНЫ (мера ③ варианта А)",
@@ -119,7 +122,7 @@ def main() -> int:
     # свежее записи» совпал бы с «взгляд равен записи» — оба состояния стали бы
     # неразличимы по построению, а приёмка — зелёной вслепую.
     time.sleep(1.1)
-    out, code = run(str(SAVE), "--db", str(db), "--role", "PROTO", "--section", "state",
+    out, code = run(d, str(SAVE), "--db", str(db), "--role", "PROTO", "--section", "state",
                     "--confirm")
     saved2, conf2, len2 = stamps(db)
     ok &= case("② --confirm ставит взгляд, не трогая тело и его возраст",
@@ -132,7 +135,7 @@ def main() -> int:
     #     «правили» после «признали верной» обязано снова дать пустой взгляд.
     body2 = d / "b2.md"
     body2.write_text("тело пробы, редакция ДВА\n" + "y" * 500, encoding="utf-8")
-    run(str(SAVE), "--db", str(db), "--role", "PROTO", "--section", "state",
+    run(d, str(SAVE), "--db", str(db), "--role", "PROTO", "--section", "state",
         "--file", str(body2), "--allow-shrink")
     saved3, conf3, _ = stamps(db)
     ok &= case("③ «правил» и «признал верной» НЕ дают один отпечаток",
@@ -141,15 +144,15 @@ def main() -> int:
                f"({conf2} > {saved2}) — два состояния, два разных отношения дат", differ=True)
 
     # ── ④ ЧТЕНИЕ ПАМЯТИ НАЗЫВАЕТ СОСТОЯНИЕ СЛОВАМИ ──────────────────────────
-    out, _ = run(str(READ), "--db", str(db), "--role", "PROTO", "--section", "state")
+    out, _ = run(d, str(READ), "--db", str(db), "--role", "PROTO", "--section", "state")
     ok &= case("④ чтение памяти говорит «после записи НЕ перечитывалось»",
                "после записи НЕ перечитывалось" in out,
                "до 16.08 экран читал равенство дат как «признано верным» — выдавала факт "
                "НАПИСАНИЯ за факт ПЕРЕЧИТЫВАНИЯ", differ=True)
 
     time.sleep(1.1)
-    run(str(SAVE), "--db", str(db), "--role", "PROTO", "--section", "state", "--confirm")
-    out, _ = run(str(READ), "--db", str(db), "--role", "PROTO", "--section", "state")
+    run(d, str(SAVE), "--db", str(db), "--role", "PROTO", "--section", "state", "--confirm")
+    out, _ = run(d, str(READ), "--db", str(db), "--role", "PROTO", "--section", "state")
     ok &= case("⑤ после подтверждения чтение говорит «перечитано и признано верным»",
                "перечитано и признано верным" in out,
                "две ветки экрана различаются — контрольная половина к случаю ④", differ=True)
@@ -160,14 +163,14 @@ def main() -> int:
                 "WHERE role='PROTO' AND section='state'")
     con.commit()
     con.close()
-    out, _ = run(str(READ), "--db", str(db), "--role", "PROTO", "--section", "state")
+    out, _ = run(d, str(READ), "--db", str(db), "--role", "PROTO", "--section", "state")
     ok &= case("⑥ подтверждение СТАРШЕ текста — экран КРАСНЕЕТ и называет причину",
                "СТАРШЕ текста" in out,
                "пара возникает только при правке мимо инструмента; молчать о ней значит "
                "выдавать протухшую отметку за свежую", differ=True)
 
     # ── ⑦ ОТКАЗЫ, КОТОРЫЕ ОБЯЗАНЫ БЫТЬ ──────────────────────────────────────
-    out, code = run(str(SAVE), "--db", str(db), "--role", "PROTO", "--section", "state",
+    out, code = run(d, str(SAVE), "--db", str(db), "--role", "PROTO", "--section", "state",
                     "--confirm", "--body", "текст")
     ok &= case("⑦ --confirm вместе с телом ОТКЛОНЁН",
                code != 0 and "НЕ принимает тело" in out,
@@ -180,7 +183,7 @@ def main() -> int:
     con.execute("DELETE FROM phoenix WHERE role='PROTO' AND section='history'")
     con.commit()
     con.close()
-    out, code = run(str(SAVE), "--db", str(db), "--role", "PROTO", "--section", "history",
+    out, code = run(d, str(SAVE), "--db", str(db), "--role", "PROTO", "--section", "history",
                     "--confirm")
     ok &= case("⑧ подтверждение НЕСУЩЕСТВУЮЩЕЙ секции отклонено",
                code != 0 and "подтверждать нечего" in out,
@@ -191,11 +194,11 @@ def main() -> int:
     #     Здоровая пара «текст свежий, взгляд свежее» обязана читаться как норма.
     fresh = d / "b3.md"
     fresh.write_text("редакция ТРИ\n" + "z" * 500, encoding="utf-8")
-    run(str(SAVE), "--db", str(db), "--role", "PROTO", "--section", "state",
+    run(d, str(SAVE), "--db", str(db), "--role", "PROTO", "--section", "state",
         "--file", str(fresh), "--allow-shrink")
     time.sleep(1.1)
-    run(str(SAVE), "--db", str(db), "--role", "PROTO", "--section", "state", "--confirm")
-    out, _ = run(str(READ), "--db", str(db), "--role", "PROTO", "--section", "state")
+    run(d, str(SAVE), "--db", str(db), "--role", "PROTO", "--section", "state", "--confirm")
+    out, _ = run(d, str(READ), "--db", str(db), "--role", "PROTO", "--section", "state")
     ok &= case("⑨ контроль: здоровая пара НЕ красная",
                "СТАРШЕ текста" not in out and "перечитано и признано верным" in out,
                "без этого случая краснота ⑥ ничего не доказывала бы: проверка, красящая всё, "
@@ -230,13 +233,12 @@ def main() -> int:
     body10 = broken_save_dir / "b10.md"
     body10.write_text("тело пробы поломки ⑩\n" + "w" * 500, encoding="utf-8")
     # ⚠️ КОПИЯ инструмента лежит ВНЕ .mezosync/scripts — по своему расположению она
-    # контур не найдёт (второй замок mezo_paths.container_root()). MEZO_CONTAINER
-    # указывает на РЕАЛЬНЫЙ контур для этого поиска; --db остаётся явным и целится
-    # в копию базы — какая база читается/пишется, решает --db, а не MEZO_CONTAINER
-    # (см. bite-archive-move-look.py, тот же приём для копий read-phoenix.py).
-    broken_env = mezo_stand.stand_env(mezo_paths.container_root())
-    out, code = run(str(broken_save), "--db", str(db10), "--role", "PROTO", "--section", "state",
-                    "--file", str(body10), "--allow-shrink", env=broken_env)
+    # контур не найдёт (второй замок mezo_paths.container_root()). Каталог группы ей даёт
+    # MEZO_CONTAINER — корень стенда этой поломки (карточка #613; прежде — живой контур
+    # вызывающего); --db остаётся явным и целится в копию базы — какая база читается и
+    # пишется, решает --db, а не MEZO_CONTAINER.
+    out, code = run(broken_save_dir, str(broken_save), "--db", str(db10), "--role", "PROTO",
+                    "--section", "state", "--file", str(body10), "--allow-shrink")
     saved10, conf10, _ = stamps(db10)
     hist10 = history_saved_at(db10)
     ok &= case("⑩ поломка (детерминированный сдвиг +1 сек) КРАСИТ: вернувшийся "
