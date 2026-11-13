@@ -940,7 +940,21 @@ def main() -> int:
         print(f"⚪ не проверено {len(SKIPPED)}: " + " · ".join(name for name, _ in SKIPPED))
     if not ok:
         return 1
-    return 2 if SKIPPED else 0
+    if SKIPPED:
+        # Пропуск при принятом вердикте — не отказ мерить: стенды убираются (карточка #729).
+        # Через getattr: часть приёмок берёт mezo_stand из УСТАНОВЛЕННОГО каталога контура
+        # (mezo_paths.live_scripts), и до установки он там прежний — прямой вызов ронял
+        # приёмку на AttributeError (поймано прогоном 13.11). Прежний помощник сохранит
+        # стенд по-старому, и об этом сказано СТРОКОЙ, а не молчанием.
+        declare_skips = getattr(mezo_stand, "accepted_with_skips", None)
+        if declare_skips is None:
+            print("⚠️ mezo_stand испытуемого каталога старше этой приёмки: объявления "
+                  "о пропуске в нём нет — стенды останутся как при отказе мерить "
+                  "(карточка #729)")
+        else:
+            declare_skips()
+        return 2
+    return 0
 
 
 if __name__ == "__main__":
