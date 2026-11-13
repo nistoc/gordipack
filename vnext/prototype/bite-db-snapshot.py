@@ -70,6 +70,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402 — пути машины выводятся, не впечатаны
+import mezo_target  # noqa: E402 — испытуемое через общий выбор копии (карточка #682)
 import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
 
 CASES = DIFFER = 0
@@ -196,7 +197,7 @@ def stage_case3(snapshot_fn=mezo_stand.snapshot_db, label=""):
     mezo = root / ".mezosync"
     (mezo / "scripts").mkdir(parents=True)
 
-    live_scripts = mezo_paths.live_scripts(__file__)     # scripts КОНТУРА, на который
+    live_scripts = mezo_target.scripts_root()     # scripts КОНТУРА, на который
     lease_py = live_scripts / "lease.py"                  # указывает MEZO_CONTAINER (песок)
     mezo_stand.copy_tool(lease_py, mezo / "scripts")
 

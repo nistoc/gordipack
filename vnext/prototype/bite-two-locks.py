@@ -85,9 +85,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
+import mezo_target  # noqa: E402 — испытуемое через общий выбор копии (карточка #682)
 import mezo_stand  # noqa: E402
 
-TOOLS_DIR = Path(mezo_paths.live_scripts(__file__))
+TOOLS_DIR = Path(mezo_target.scripts_root())
 PATHS_FILE = TOOLS_DIR / "mezo_paths.py"
 PATHS_SOURCE = PATHS_FILE.read_text(encoding="utf-8")
 # Два НАСТОЯЩИХ инструмента контура по разные стороны разбора — не выдуманные пробы:

@@ -42,9 +42,10 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
+import mezo_target  # noqa: E402 — испытуемое через общий выбор копии (карточка #682)
 import mezo_stand  # noqa: E402
 
-SCRIPTS = pathlib.Path(mezo_paths.live_scripts(__file__))
+SCRIPTS = pathlib.Path(mezo_target.scripts_root())
 LIVE = pathlib.Path(mezo_paths.live_db(__file__))
 STEP = SCRIPTS / "migrations" / "20260905-messages-archive.py"
 WRITER = SCRIPTS / "write-message.py"

@@ -69,6 +69,7 @@ import tokenize
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
+import mezo_target  # noqa: E402 — испытуемое через общий выбор копии (карточка #682)
 import mezo_sessions  # noqa: E402 — самопроверка подложного хранилища сессий (случаи ⑲–㉕)
 import mezo_stand  # noqa: E402
 
@@ -361,7 +362,7 @@ def main() -> int:
     break_name = BREAK_ALIASES.get(a.break_name, a.break_name)
 
     live_tool = pathlib.Path(__file__).resolve().parent / "signal-templates.py"
-    schema_step = mezo_paths.live_scripts(__file__) / "migrations" / "20260905-role-sessions.py"
+    schema_step = mezo_target.migration("20260905-role-sessions.py")
     if not live_tool.is_file():
         print(f"⛔ НЕ ЗАПУСТИЛСЯ: печатника нет: {live_tool}")
         return 2
@@ -726,7 +727,7 @@ def main() -> int:
         # Стойкий идентификатор сессии — переживает возобновление чата, в отличие от
         # короткого адреса «имя [код]». Шаг схемы накатывается ЗДЕСЬ, на ту же копию:
         # он идёт ПОСЛЕ 20260905-role-sessions.py и ничего не портит поверх него.
-        session_id_step = mezo_paths.live_scripts(__file__) / "migrations" / \
+        session_id_step = mezo_target.scripts_root() / "migrations" / \
             "20260913-role-sessions-session-id.py"
         code_session_id_step, output_session_id_step = call_tool(session_id_step, db)
         if code_session_id_step != 0:

@@ -118,7 +118,7 @@ def signs_at_printers():
     """
     container_root = Path(__file__).resolve().parent.parent
     printers = [
-        mezo_target.scripts_root() / "read-phoenix.py",
+        mezo_target.script("read-phoenix.py"),
         container_root / "atlas.archs" / "step04_opssre" / "tools" / "disk_layer.py",
     ]
     found, missing_files = set(), []

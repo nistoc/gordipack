@@ -84,8 +84,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
+import mezo_target  # noqa: E402 — испытуемое через общий выбор копии (карточка #682)
 
-SCRIPTS = mezo_paths.live_scripts()
+SCRIPTS = mezo_target.scripts_root()
 LIVE_DB = mezo_paths.live_db()
 sys.path.insert(0, str(SCRIPTS))
 import mezo_stand  # noqa: E402

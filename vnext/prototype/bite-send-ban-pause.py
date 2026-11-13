@@ -28,6 +28,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
+import mezo_target  # noqa: E402 — испытуемое через общий выбор копии (карточка #682)
 
 HERE = Path(__file__).resolve().parent
 TARGET = HERE / "sieve-role-memory.py"
@@ -63,7 +64,7 @@ def build_stand(break_name, revoked):
     (container / ".mezosync").mkdir(parents=True)
     db = mezo_stand.snapshot_db(mezo_paths.live_db(), container / ".mezosync" / "mezosync.db")
     # общий помощник статуса правил — туда, где его ищет проверка памяти (скрипты контура стенда)
-    mezo_stand.copy_tool(mezo_paths.live_scripts() / "rule_status.py",
+    mezo_stand.copy_tool(mezo_target.script("rule_status.py"),
                          container / ".mezosync" / "scripts")
     con = sqlite3.connect(str(db))
     con.execute("DELETE FROM phoenix WHERE role=?", (ROLE,))

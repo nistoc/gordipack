@@ -75,9 +75,10 @@ if "--keep" in sys.argv:
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
+import mezo_target  # noqa: E402 — испытуемое через общий выбор копии (карточка #682)
 import mezo_stand  # noqa: E402
 
-SCRIPTS = mezo_paths.live_scripts(__file__)          # .mezosync/scripts (живой, только на чтение)
+SCRIPTS = mezo_target.scripts_root()          # .mezosync/scripts (живой, только на чтение)
 CONTAINER = mezo_paths.container_root(__file__)      # <КОНТУР>
 LIVE_DB = mezo_paths.live_db(__file__)
 

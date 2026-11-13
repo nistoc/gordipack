@@ -72,10 +72,11 @@ import tempfile
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import mezo_paths  # noqa: E402
+import mezo_target  # noqa: E402 — испытуемое через общий выбор копии (карточка #682)
 import mezo_stand  # noqa: E402 — карточка #505/#624: согласованная копия живой базы
 
 TOOL = HERE / "memory-history-fold.py"
-MIGR = mezo_paths.live_scripts() / "migrations" / "20260905-phoenix-history-archive.py"
+MIGR = mezo_target.migration("20260905-phoenix-history-archive.py")
 BREAKS = {
     "rebirth": ('            if before and before[-1][0] not in keep:\n',
                 '            if False and before and before[-1][0] not in keep:\n'),
@@ -173,7 +174,7 @@ def main() -> int:
     stand_env = mezo_stand.stand_env(tmp)
     live_fp = file_fingerprint(src)
     tool = TOOL; broken_copy = None
-    save = mezo_paths.live_scripts() / "save-phoenix.py"  # нужен и посеву (ниже), и случаю ⑧
+    save = mezo_target.script("save-phoenix.py")  # нужен и посеву (ниже), и случаю ⑧
     seed_enabled = a.break_name != SEED_OFF_BREAK
     if a.break_name and a.break_name in BREAKS:
         was, became = BREAKS[a.break_name]

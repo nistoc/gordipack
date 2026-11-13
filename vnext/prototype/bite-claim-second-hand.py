@@ -44,10 +44,11 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402 — пути машины выводятся, не впечатаны
+import mezo_target  # noqa: E402 — испытуемое через общий выбор копии (карточка #682)
 
 import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
-SCRIPTS = mezo_paths.live_scripts()
+SCRIPTS = mezo_target.scripts_root()
 BACKLOG = SCRIPTS / "backlog.py"
 
 TABLES = ("backlog", "backlog_events", "tracks", "roles", "role_rights",

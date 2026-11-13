@@ -14,6 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_paths  # пути машины ВЫВОДЯТСЯ, не впечатаны (карточка #208)
+import mezo_target  # noqa: E402 — испытуемое через общий выбор копии (карточка #682)
 import mezo_stand  # копия живой базы — ТОЛЬКО через snapshot_db (карточка #505/#659)
 
 import shutil
@@ -23,7 +24,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-GUARD = mezo_paths.live_scripts() / "guard-command-targets.py"
+GUARD = mezo_target.script("guard-command-targets.py")
 LIVE_DB = mezo_paths.live_db()
 
 CASES = []

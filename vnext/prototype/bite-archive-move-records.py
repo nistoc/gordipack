@@ -66,8 +66,9 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402 — импорт из vnext-tools (своя копия), как велит карточка
+import mezo_target  # noqa: E402 — испытуемое через общий выбор копии (карточка #682)
 
-SCRIPTS = mezo_paths.live_scripts()
+SCRIPTS = mezo_target.scripts_root()
 sys.path.insert(0, str(SCRIPTS))
 # mezo_stand — из каталога самой приёмки, той же версии пакета (Э6: empty_db есть только с этой
 # версии; scripts/ живого контура до установки выпуска — прежней). Порядок поиска модулей для
