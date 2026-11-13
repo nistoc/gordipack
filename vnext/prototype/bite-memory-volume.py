@@ -70,7 +70,11 @@ import mezo_target
 
 GUARD = mezo_target.script("guard-all.py")
 READ_GUARD = mezo_target.script("guard-write-without-read.py")  # строка чтения ленты (случаи ⑪ ⑬ ⑮)
-LIVE_DB = mezo_paths.live_db()
+# Через помощник, а не live_db(): строка стои́т на уровне модуля, и на копии пакета без
+# объявленного контейнера приёмка умирала ДО первой своей строки — кодом 1 и ЧУЖИМ
+# текстом отказа, где её имени нет вовсе (замер 13.11 19:03 UTC). Теперь это код 2
+# и «⛔ НЕ ЗАПУСТИЛАСЬ: приёмка объёма памяти…» (карточка #689).
+LIVE_DB = mezo_paths.live_db_for_check(__file__, "приёмка объёма памяти ролей")
 
 CASES: list[tuple[str, bool, str]] = []
 
@@ -263,12 +267,19 @@ def run_zero_day_cases() -> None:
     """Случаи ④–⑯: нулевой день контура (заявка 29 пакета). Контур собирается из пакета."""
     pack = find_pack()
     if pack is None:
-        raise SystemExit("⛔ НЕ ЗАПУСТИЛАСЬ: пакета с scripts/init-group.py не нашлось (ни по mezo_paths."
-                         "template_root(), ни рядом) — свежий контур собрать не из чего, случаи ④–⑯ не "
-                         "состоялись. Это не «зелёное».")
+        # Код 2, а не 1, и исход ОБЪЯВЛЕН: это отказ мерить, а не провал случаев
+        # (карточка #689, критерий ②). Прежде отказ вылетал SystemExit со строкой —
+        # finish() не звучал, и стенд сохранялся с меткой «исход прогона не объявлен»,
+        # то есть разбирающий видел ровно то же, что при падении.
+        print("⛔ НЕ ЗАПУСТИЛАСЬ: пакета с scripts/init-group.py не нашлось (ни по mezo_paths."
+              "template_root(), ни рядом) — свежий контур собрать не из чего, случаи ④–⑯ не "
+              "состоялись. Это не «зелёное».")
+        raise SystemExit(mezo_stand.finish(2))
     fresh_root, fresh_db, build_note = build_fresh_circuit(pack)
     if fresh_db is None:
-        raise SystemExit(f"⛔ НЕ ЗАПУСТИЛАСЬ: сборщик init-group.py не собрал контур: {build_note}")
+        # Тот же отказ мерить: код 2 и объявленный исход (карточка #689, критерий ②).
+        print(f"⛔ НЕ ЗАПУСТИЛАСЬ: сборщик init-group.py не собрал контур: {build_note}")
+        raise SystemExit(mezo_stand.finish(2))
     used_db = mezo_stand.snapshot_db(fresh_db, fresh_root / ".mezosync" / "mezosync-used.db")
     con = sqlite3.connect(str(used_db))
     # Записка трёхчасовой давности: день уже не нулевой, а роль-автор вне окна активности проверки
