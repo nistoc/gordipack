@@ -144,6 +144,28 @@ def main() -> int:
                "ГРАНИЦА" in out and "ложная ПРИЧИНА" in out and "СРОК" in out,
                "молчание признака не должно читаться как «ложных строк нет»")
 
+    # ── ⑦ / ⑦б: отказ ВДАЛИ от объявления (04.11) — пара, различающая в обе стороны ──
+    # Живой экземпляр: new-bridge-letter.py объявляет --reply-to на строке 187, а требует его
+    # у answer и fix на строке 231 — за окном «40 строк», и прежний признак звал это ложью.
+    # ⑦ ловит прежнее окно (без суда по ветке — находка); ⑦б — суд, принимающий любое
+    # упоминание флага за отказ (ветка есть, но тело не отказывает — находка обязана остаться).
+    head = ('import argparse\nimport sys\nap = argparse.ArgumentParser()\n'
+            'ap.add_argument("--answer-to", default="", help="id письма (у ответа обязателен)")\n'
+            'args = ap.parse_args()\n' + "".join(f"pad_{i} = {i}\n" for i in range(50)))
+    far = tmp / "far_refusal.py"
+    far.write_text(head + 'if not args.answer_to:\n    sys.exit(2)\n', encoding="utf-8")
+    code, out7 = run_checker(tmp, "--file", str(far))
+    ok &= case("⑦ отказ в ветке if по флагу, за 50 строк от объявления — НЕ находка правила Б",
+               code == 0 and "[Б]" not in out7,
+               f"код {code}; так устроен new-bridge-letter.py --reply-to (объявление 187, отказ 231)",
+               differ=True)
+    far_b = tmp / "far_no_refusal.py"
+    far_b.write_text(head + 'if not args.answer_to:\n    print("пусто")\n', encoding="utf-8")
+    code, out7b = run_checker(tmp, "--file", str(far_b))
+    ok &= case("⑦б ВСТРЕЧНЫЙ: ветка по флагу есть, но тело не отказывает — находка правила Б остаётся",
+               code == 1 and "[Б]" in out7b and "--answer-to" in out7b,
+               f"код {code}; суд по ветке смотрит ТЕЛО, а не одно упоминание флага", differ=True)
+
     print()
     print(f"{'✅ ПРИЗНАК ПРИНЯТ' if ok else '🔴 ПРИЗНАК НЕ ПРИНЯТ'} — случаев {CASES}, "
           f"различающих {DIFFER}; исторические копии ИЗ GIT, не по памяти")
