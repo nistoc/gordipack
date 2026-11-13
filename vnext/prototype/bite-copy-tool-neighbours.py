@@ -43,9 +43,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
+import mezo_target  # noqa: E402 — испытуемое через общий выбор копии (карточка #682)
 import mezo_stand  # noqa: E402
 
-СКРИПТЫ = Path(mezo_paths.live_scripts(__file__))
+СКРИПТЫ = Path(mezo_target.scripts_root())
 ИНСТРУМЕНТЫ = Path(__file__).resolve().parent
 
 # Инструмент с ДЛИННОЙ цепочкой соседей: сам подключает одних, а те тянут других.

@@ -40,6 +40,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
+import mezo_target  # noqa: E402 — испытуемое через общий выбор копии (карточка #682)
 import mezo_stand  # noqa: E402
 
 CASES = DIFFER = PASSED = 0
@@ -109,7 +110,7 @@ def main() -> int:
     targets = {}
     for label, path in (("копия vnext-tools", here / "check-rules-mirror.py"),
                         ("копия рядом со скриптами — её зовёт общий прогон",
-                         mezo_paths.live_scripts(__file__) / "check-rules-mirror.py")):
+                         mezo_target.script("check-rules-mirror.py"))):
         if not path.is_file():
             sys.exit(f"⛔ НЕ ЗАПУСТИЛСЯ: check-rules-mirror.py нет: {path} ({label})")
         targets.setdefault(path.resolve(), label)

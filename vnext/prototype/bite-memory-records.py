@@ -51,6 +51,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 TOOL = HERE / "memory-records.py"
 sys.path.insert(0, str(HERE))
 import mezo_paths  # noqa: E402 — база контура выводится от расположения, не впечатана (перенос в образец 13.09)
+import mezo_target  # noqa: E402 — испытуемое через общий выбор копии (карточка #682)
 import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
 LIVE_DB = mezo_paths.live_db(__file__)
@@ -160,7 +161,7 @@ def ensure_subject(base_db: pathlib.Path) -> tuple[pathlib.Path, str, bool]:
     seed_dir = mezo_stand.new("bite-memory-records-seed-")
     seeded_db = seed_dir / "mezosync.db"
     mezo_stand.empty_db(base_db, seeded_db)
-    save_tool = mezo_paths.live_scripts(__file__) / "save-phoenix.py"
+    save_tool = mezo_target.script("save-phoenix.py")
     if not save_tool.is_file():
         sys.exit(f"⛔ НЕ ЗАПУСТИЛАСЬ: инструмента save-phoenix.py нет: {save_tool}")
     for role, section, body in ([(SEED_ROLE, s, b) for s, b in SEED_FIXTURES.items()]

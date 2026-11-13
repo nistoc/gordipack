@@ -26,10 +26,11 @@ import sqlite3
 import subprocess
 import sys
 import mezo_paths  # пути машины выводятся, не впечатаны (#153)
+import mezo_target  # noqa: E402 — испытуемое через общий выбор копии (карточка #682)
 
 import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
-SCRIPT = os.path.join(str(mezo_paths.live_scripts()), "migrations",
+SCRIPT = os.path.join(str(mezo_target.scripts_root()), "migrations",
                       "20260808-backfill-addressee.py")
 CASES = DIFFER = 0
 

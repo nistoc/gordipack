@@ -33,10 +33,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402  (пути выводятся, не впечатаны)
+import mezo_target  # noqa: E402 — испытуемое через общий выбор копии (карточка #682)
 import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
 
 LIVE_DB = mezo_paths.live_db()
-SCRIPTS = mezo_paths.live_scripts()
+SCRIPTS = mezo_target.scripts_root()
 SAVE = SCRIPTS / "save-phoenix.py"
 READ = SCRIPTS / "read-phoenix.py"
 CASES = DIFFER = 0

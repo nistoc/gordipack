@@ -76,10 +76,11 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402 — пути машины выводятся, не впечатаны (#153)
+import mezo_target  # noqa: E402 — испытуемое через общий выбор копии (карточка #682)
 
 import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
-GUARD_TOOL = mezo_paths.live_scripts() / "guard-scripts-drift.py"
+GUARD_TOOL = mezo_target.script("guard-scripts-drift.py")
 CASES = DIFFER = 0
 
 

@@ -26,12 +26,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
+import mezo_target  # noqa: E402 — испытуемое через общий выбор копии (карточка #682)
 
 # 🪤 Здесь стояли пути ЭТОЙ машины прямо в константах, и перенос в публичный образец
 # честно отказывался: обезличить исполняемую строку значит сломать инструмент у того,
 # кто его возьмёт. ⇒ путь ВЫВОДИТСЯ от расположения файла (норма R15a), а не вписывается.
 LIVE_DB = mezo_paths.live_db(__file__)
-DEFAULT_TOOL = Path(mezo_paths.live_scripts(__file__)) / "role-rights.py"
+DEFAULT_TOOL = Path(mezo_target.scripts_root()) / "role-rights.py"
 ВЫДУМАННЫЙ_ЧАС = "2026-08-08 15:56"
 
 

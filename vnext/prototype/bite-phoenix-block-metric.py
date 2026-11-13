@@ -41,8 +41,9 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
+import mezo_target  # noqa: E402 — испытуемое через общий выбор копии (карточка #682)
 
-СКРИПТЫ = mezo_paths.live_scripts()  # путь выводится, не впечатан (#248)
+СКРИПТЫ = mezo_target.scripts_root()  # путь выводится, не впечатан (#248)
 sys.path.insert(0, str(СКРИПТЫ))
 _sp = importlib.util.spec_from_file_location("saveph", СКРИПТЫ / "save-phoenix.py")
 saveph = importlib.util.module_from_spec(_sp)

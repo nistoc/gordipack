@@ -18,10 +18,11 @@ import sqlite3
 import subprocess
 import sys
 import mezo_paths  # пути машины выводятся, не впечатаны (#153)
+import mezo_target  # noqa: E402 — испытуемое через общий выбор копии (карточка #682)
 
 import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
-STEP = mezo_paths.live_scripts() / "migrations" / "20260807-addressed-by-unset.py"
+STEP = mezo_target.migration("20260807-addressed-by-unset.py")
 
 OLD_SCHEMA = """
 CREATE TABLE messages (

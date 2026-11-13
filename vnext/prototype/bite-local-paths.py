@@ -10,6 +10,11 @@
   чтение файла (mezo_paths.local_path)   R1–R9  четыре разных исхода · прежние источники не читаются
                                                   · выше своего контейнера поиск не поднимается (R9)
                                                   как значение · подсказка с готовой командой переноса
+  база для проверки (live_db_for_check)  M8–M10  контура нет, рядом пустышка 0 байт — отказ СЛОВАМИ
+                                                  с кодом 2, и пустой файл НАЗВАН (M8) · объявленный контейнер
+                                                  с пустым файлом базы — тот же отказ (M9) · КОНТРОЛЬ: прежний
+                                                  способ «база рядом со своим файлом» на том же каталоге
+                                                  ПАДАЕТ на «no such table» (M10) — карточка #689
   поиск корня (mezo_root/container_root) M1–M7  файл путей — третий источник · MEZO_CONTAINER без базы —
                                                   громкий отказ · стенд со своей базой не уходит в чужую
   приложения правил (annex_dir)          A1–A3  ключ annex_dir · стандартная раскладка без литерала
@@ -228,6 +233,17 @@ BREAKS = {
         "    for cand in (start, *start.parents):" + "\n"
         '        if _is_db_file(cand / ".mezosync" / DB_NAME):')], {"M7"},
         "container_root не слушает MEZO_CONTAINER первым"),
+    # ── база для проверки (карточка #689) ──────────────────────────────────────────────
+    "db-for-check-old-way": ("mezo_paths.py", [(
+        "    try:" + "\n"
+        "        db = live_db(script_file)",
+        "    try:" + "\n"
+        "        db = Path(script_file or __file__).resolve().parent.parent / DB_NAME")], {"M8"},
+        "live_db_for_check берёт базу рядом со своим файлом, как до починки: отказ поиска"
+        " корня не звучит вовсе"),
+    "db-for-check-empty-passes": ("mezo_paths.py", [(
+        "    if not _is_db_file(db):", "    if False:")], {"M9"},
+        "live_db_for_check принимает пустой файл базы за базу"),
     # ── приложения правил ─────────────────────────────────────────────────────────────────────────
     "annex-file-ignored": ("mezo_paths.py", [(
         "    if res.outcome == LOCAL_DECLARED:" + "\n"
@@ -528,6 +544,7 @@ BREAKS = {
 
 OK = FAIL = 0
 FAILED = []
+SKIPPED = []            # случаи, проверить которые было НЕ НА ЧЁМ (карточка #689)
 SELF_BREAK = None       # имя поломки, живущей в самой приёмке (у неё нет файла-цели); см. all_breaks_container
 
 
@@ -650,6 +667,19 @@ class Run:
         for d in dirs:
             (c / d).mkdir(parents=True, exist_ok=True)
         return c, db
+
+    def clone_like_dir(self, tag, inner=False):
+        """Каталог, похожий на КЛОН ПАКЕТА: пустой файл mezosync.db в 0 байт рядом с каталогом
+        инструментов, и контура ВЫШЕ нет. inner — вдобавок пустышка в .mezosync (так выглядит
+        объявленный контейнер без базы). Ровно эта обстановка роняла приёмки до карточки #689."""
+        self.counter += 1
+        c = self.box / f"{self.counter:02d}-{tag}"
+        (c / "scripts").mkdir(parents=True)
+        (c / "mezosync.db").write_bytes(b"")
+        if inner:
+            (c / ".mezosync").mkdir()
+            (c / ".mezosync" / "mezosync.db").write_bytes(b"")
+        return c, c / "scripts" / "probe.py"
 
     def outside_dir(self, tag, paths=None, raw=None):
         """Каталог случая БЕЗ базы и без .mezosync: копия вне контейнера. Файл путей — рядом с
@@ -833,6 +863,50 @@ def group_root(run: Run):
     got = out.strip().splitlines()[-1] if out.strip() else ""
     case("M7", "container_root: среда MEZO_CONTAINER по-прежнему первая (норма не ослаблена)",
          rc == 0 and same(got, other), f"код {rc} · взято {got!r}, ждали {other}")
+    # ── база для проверки: отказ СЛОВАМИ вместо падения позже (карточка #689) ───────────────
+    # ⚠️ Механизм live_db_for_check живёт в ИСПЫТУЕМОМ каталоге, а туда он попадает
+    # установкой — то есть ПОЗЖЕ прогонов приёмки на пакете. Нет его — говорим
+    # словами и объявляем пропуск, а не краснеем: красное здесь означало бы
+    # «механизм сломан», тогда как он просто ещё не установлен (класс карточки #729).
+    if "def live_db_for_check" not in (run.scripts / "mezo_paths.py").read_text(
+            encoding="utf-8"):
+        SKIPPED.extend(["M8", "M9", "M10"])
+        print("⚪ не проверено M8 M9 M10: в испытуемом каталоге mezo_paths старше"
+              " этой приёмки — live_db_for_check в нём нет. Поставь MEZO_SCRIPTS_ROOT"
+              " на каталог пакета либо установи механизм (карточка #689)")
+        return
+    # Проба делает то же, что приёмка: берёт базу, открывает её и спрашивает таблицу. Без
+    # второго шага случай не отличил бы отказ от «взяла пустышку и промолчала».
+    probe_body = ("import sqlite3\n"
+                  "db = m.live_db_for_check(%s, 'проба приёмки')\n"
+                  "print('ВЗЯЛА:', db)\n"
+                  "sqlite3.connect(str(db)).execute('SELECT count(*) FROM meta')\n"
+                  "print('ЗАПРОС ПРОШЁЛ')\n")
+    c8, x8 = run.clone_like_dir("m8")
+    rc, out = run.probe(c8, probe_body % repr(str(x8)))
+    case("M8", "live_db_for_check: контура нет, рядом пустышка 0 байт — отказ словами, код 2",
+         rc == 2 and "НЕ ЗАПУСТИЛАСЬ" in out and "контейнер группы НЕ НАЙДЕН" in out
+         and "0 байт" in out and "no such table" not in out, f"код {rc} · {out.strip()[-320:]}")
+    # M9 объявленный контейнер, а базы по нему нет — пустой файл: тот же отказ, и он НАЗВАН
+    c9, x9 = run.clone_like_dir("m9", inner=True)
+    rc, out = run.probe(c9, probe_body % repr(str(x9)), drop_container=False,
+                        MEZO_CONTAINER=str(c9))
+    case("M9", "live_db_for_check: объявленный контейнер с пустым файлом базы — отказ, код 2",
+         rc == 2 and "ПУСТ (0 байт)" in out and "no such table" not in out,
+         f"код {rc} · {out.strip()[-320:]}")
+    # M10 КОНТРОЛЬ, не различающий: прежний способ на ТОМ ЖЕ каталоге падает — этим и мерится,
+    # что починка меняет исход, а не только слова. Нарочной поломкой он не краснеет: кода
+    # механизма не касается вовсе (карточка #689, критерий ④).
+    old_way = ("import sqlite3, pathlib\n"
+               "db = pathlib.Path(%s).resolve().parent.parent / 'mezosync.db'\n"
+               "print('ВЗЯЛА:', db)\n"
+               "sqlite3.connect(str(db)).execute('SELECT count(*) FROM meta')\n"
+               "print('ЗАПРОС ПРОШЁЛ')\n")
+    rc, out = run.probe(c8, old_way % repr(str(x8)))
+    case("M10", "контроль: прежний способ (база рядом со своим файлом) на том же каталоге"
+         " ПАДАЕТ на «no such table»",
+         rc != 0 and "no such table" in out and "ЗАПРОС ПРОШЁЛ" not in out,
+         f"код {rc} · {out.strip()[-320:]}", differ=False)
 
 
 # ═══ ГРУППА A: приложения правил ══════════════════════════════════════════════════════════════════
@@ -1698,6 +1772,22 @@ def run_cases(break_name):
     if FAIL:
         print(f"🔴 НЕ ПРИНЯТО — случаев {total}, провалены: {' '.join(FAILED)}")
         return 1
+    if SKIPPED:
+        # Пропуск при принятом вердикте — не отказ мерить: механизм сам судит о стендах
+        # (карточка #729). Через getattr: mezo_stand испытуемого каталога может быть
+        # старше этой приёмки, и тогда стенды останутся как при отказе — но СКАЗАНО.
+        print(f"✅ ФАЙЛ ПУТЕЙ — ПРИНЯТО — случаев {OK} из {total}")
+        skipped_line = " ".join(SKIPPED)      # имена отдельно: обратной косой
+        # внутри f-строки старые сборки Python не разбирают
+        print(f"⚪ не проверено {len(SKIPPED)}: {skipped_line} — причина названа выше")
+        declare_skips = getattr(mezo_stand, "accepted_with_skips", None)
+        if declare_skips is None:
+            print("⚠️ mezo_stand испытуемого каталога старше этой приёмки: объявления"
+                  " о пропуске в нём нет — стенды останутся как при отказе мерить"
+                  " (карточка #729)")
+        else:
+            declare_skips()
+        return 2
     print(f"✅ ФАЙЛ ПУТЕЙ — ПРИНЯТО — случаев {OK} из {total}")
     return 0
 

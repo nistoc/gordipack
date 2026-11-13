@@ -26,10 +26,11 @@ import shutil
 import subprocess
 import sys
 import mezo_paths  # пути машины выводятся, не впечатаны (#153)
+import mezo_target  # noqa: E402 — испытуемое через общий выбор копии (карточка #682)
 
 import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
-GUARD = str(mezo_paths.live_scripts() / "guard-scripts-drift.py")
+GUARD = str(mezo_target.script("guard-scripts-drift.py"))
 cases, bad = [], 0
 
 

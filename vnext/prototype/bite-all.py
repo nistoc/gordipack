@@ -36,12 +36,42 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # Рычаг у приёмок был (mezo_target + переменные среды), но набор про него НЕ ЗНАЛ: прогон
 # «по шаблону» набирался рукой, то есть существовал как намерение, а не как механизм.
 # ⚖️ Умолчание — ЖИВОЙ контур: тот, кто просто позвал набор, получает привычное поведение.
-LIVE_SCRIPTS = str(mezo_paths.live_scripts())
+# ⚰️ Здесь стояло LIVE_SCRIPTS = str(mezo_paths.live_scripts()) — строка УРОВНЯ МОДУЛЯ.
+# Снято 2026-11-13 по карточке #682: набор, запущенный ИЗ КОПИИ пакета, умирал «контейнер
+# группы НЕ НАЙДЕН» ещё до разбора своих аргументов, то есть испытуемую копию нельзя было
+# даже НАЗВАТЬ (замер 19:35 UTC). Тот же класс чинился в mezo_target:23 этой же карточкой.
+_LIVE_CACHE = None
+
+
+def live_scripts_str() -> str:
+    """Живой каталог инструментов — строкой, лениво и один раз.
+
+    Не нашёлся — пустая строка, а не падение: набору живой каталог нужен лишь для слова
+    «live» и для решения «ставить ли запрет займа», и ни то ни другое не повод уронить
+    прогон по НАЗВАННОЙ копии (карточка #682).
+    """
+    global _LIVE_CACHE
+    if _LIVE_CACHE is None:
+        try:
+            _LIVE_CACHE = str(mezo_paths.live_scripts())
+        except SystemExit:
+            _LIVE_CACHE = ""
+    return _LIVE_CACHE
+
+
 TEMPLATE_SCRIPTS = os.path.normpath(os.path.join(HERE, "..", "..", "scripts"))
 
 
 def resolve_target(word: str) -> str:
-    return {"live": LIVE_SCRIPTS, "template": TEMPLATE_SCRIPTS}.get(word, word)
+    if word == "live":
+        live = live_scripts_str()
+        if not live:
+            sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: просили прогон по ЖИВОМУ контуру (--target live),"
+                     " а живого контура отсюда не видно.\n"
+                     "   Задай MEZO_CONTAINER=<контейнер> либо назови каталог прямо"
+                     " (--target <путь>). Код 2 — это отказ, а не провал (карточка #682).")
+        return live
+    return {"template": TEMPLATE_SCRIPTS}.get(word, word)
 
 
 def env_for(target: str, laid_out: bool = False) -> dict:
@@ -52,7 +82,12 @@ def env_for(target: str, laid_out: bool = False) -> dict:
     снимается, контур испытуемые находят по признаку, как на живом."""
     env = dict(os.environ)
     env["MEZO_SCRIPTS_ROOT"] = target
-    if os.path.normcase(os.path.abspath(target)) != os.path.normcase(os.path.abspath(LIVE_SCRIPTS)):
+    live = live_scripts_str()
+    # Живого контура отсюда не видно ⇒ целью заведомо названа КОПИЯ, и запрет займа ставится:
+    # сравнивать не с чем, а молчаливый заём из живого и есть дефект, ради которого всё это.
+    same_as_live = bool(live) and (os.path.normcase(os.path.abspath(target))
+                                   == os.path.normcase(os.path.abspath(live)))
+    if not same_as_live:
         env["MEZO_FORBID_LIVE"] = "1"
     else:
         env.pop("MEZO_FORBID_LIVE", None)
@@ -354,8 +389,11 @@ def main() -> int:
               "   Проверять нечего. Это НЕ «всё зелено».")
         return 2
 
-    live = os.path.normcase(os.path.abspath(target)) == os.path.normcase(
-        os.path.abspath(LIVE_SCRIPTS))
+    _live_dir = live_scripts_str()
+    # Живого контура отсюда не видно ⇒ целью названа копия: шапка скажет «КОПИЯ», а не соврёт
+    # «ЖИВОЙ КОНТУР» по сравнению, которое не с чем делать (карточка #682).
+    live = bool(_live_dir) and os.path.normcase(os.path.abspath(target)) == os.path.normcase(
+        os.path.abspath(_live_dir))
     # 🎯 Подпись СПРАШИВАЕТ, что испытано, и печатается ДО прогона и ПОСЛЕ него.
     #    Зашитая строка «испытан живой модуль» уже однажды соврала при работе по шаблону.
     banner = f"{'⚡ ЖИВОЙ КОНТУР' if live else '📦 КОПИЯ'}: {target}"

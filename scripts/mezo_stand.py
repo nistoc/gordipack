@@ -140,13 +140,15 @@ from pathlib import Path
 
 __all__ = ["new", "release", "finish", "keep_reason", "copy_tool", "neighbours_of", "stand_env",
            "snapshot_db", "empty_db", "seed_roles", "traces", "crlf_twin", "expected_break",
-           "known_prefixes", "prefixes_from_sources", "tool_dirs", "stand_size", "max_age_hours"]
+           "known_prefixes", "prefixes_from_sources", "tool_dirs", "stand_size", "max_age_hours",
+           "accepted_with_skips"]
 
 _stands: list[Path] = []
 _prefixes: set[str] = set()           # начала имён, которыми этот прогон заводил стенды
 _verdict: bool | None = None          # None — исход не объявлен, считаем провалом
 _exit_code: int | None = None         # код, объявленный finish(): различает отказ (2) и провал
 _expected_break = False               # приёмка объявила: ожидание нарочной поломки подтвердилось
+_accepted_with_skips = False          # приёмка объявила: вердикт «принята», часть случаев не проверена
 _ALWAYS_KEEP = os.environ.get("MEZO_KEEP_STANDS", "").strip().lower() in ("1", "yes", "true", "да")
 KEPT_MARKER = ".mezo_stand_kept"      # имя метки внутри сохранённого стенда (с точкой — служебное)
 _KIND_KEEP_ENV = "keep_env"           # вид исхода в метке: сохранено по MEZO_KEEP_STANDS
@@ -640,6 +642,8 @@ def finish(code: int) -> int:
 
     Ноль — успех, каталоги убираются. Любое другое число — провал, каталоги остаются.
     Код 2 — приёмка отказалась мерить: каталоги остаются так же, но называется это своими словами.
+    Код 2 ВМЕСТЕ с объявлением accepted_with_skips() — приёмка принята, часть случаев не проверена:
+    каталоги УБИРАЮТСЯ, разбирать в них нечего (карточка #729).
     """
     global _verdict, _exit_code
     _verdict = (code == 0)
@@ -670,6 +674,32 @@ def _break_confirmed() -> bool:
     return _expected_break and _exit_code == 1
 
 
+def accepted_with_skips() -> None:
+    """Приёмка объявляет: вердикт «ПРИНЯТА», но часть случаев проверить было НЕ НА ЧЁМ.
+
+    ЗАЧЕМ (карточка #729, замер COORD 28.10 17:03 UTC). Такая приёмка выходит кодом 2 —
+    тем же, которым выходит приёмка, отказавшаяся мерить вовсе. По коду они неотличимы,
+    и стенды сохранялись у обеих. У bite-launcher-forms.py это 41 каталог на прогон:
+    за 28.10 четыре прогона оставили 164 каталога с меткой «прогон отказался мерить»,
+    хотя все 25 случаев были приняты, а не проверен ОДИН — на свежем контуре не на чем.
+    Разбирать в такой обстановке нечего, а хранить её дорого.
+    РЕШЕНИЕ ЖИВЁТ ЗДЕСЬ, В МЕХАНИЗМЕ, а не в приёмках: приёмка объявляет ФАКТ пропуска,
+    а о стендах судит mezo_stand. Иначе правило «пропуск — не отказ» разошлось бы
+    по шести приёмкам шестью редакциями.
+    Код выхода приёмки этим НЕ меняется: код 2 читают общий прогон и сверка поломок.
+    Меняется только решение о стенде. Действует ТОЛЬКО вместе с finish(2): объявление
+    при провале (код 1) или без finish() стенд не убирает — провал и настоящий отказ
+    сохраняются по-прежнему (встречные случаи приёмки bite-stand-cleanup.py).
+    """
+    global _accepted_with_skips
+    _accepted_with_skips = True
+
+
+def _skips_confirmed() -> bool:
+    """Объявлен пропуск при принятом вердикте, и прогон кончился кодом 2."""
+    return _accepted_with_skips and _exit_code == 2
+
+
 def _outcome_kind() -> str:
     """Вид исхода для метки: keep_env · undeclared · refused · failed."""
     if _ALWAYS_KEEP:
@@ -685,7 +715,7 @@ def keep_reason() -> str | None:
         return "указано переменной окружения MEZO_KEEP_STANDS"
     if _verdict is None:
         return "исход прогона не объявлен (падение или прерывание) — сохранено на всякий случай"
-    if _verdict is False and not _break_confirmed():
+    if _verdict is False and not _break_confirmed() and not _skips_confirmed():
         return "прогон отказался мерить" if _exit_code == 2 else "прогон провалился"
     return None
 
@@ -1367,7 +1397,9 @@ def _at_exit() -> None:
           + (f" · занято другим процессом, останутся до уборки janitor-stands.py: {len(remaining)}"
              if remaining else "")
           + (" (ожидание нарочной поломки подтвердилось — для уборки это не провал)"
-             if _verdict is False and _break_confirmed() else ""))
+             if _verdict is False and _break_confirmed() else "")
+          + (" (приёмка принята, часть случаев не проверена — для уборки это не отказ)"
+             if _verdict is False and _skips_confirmed() else ""))
     for p in remaining:
         print(f"   {p}")
     if _CALL_KEY is not None:
