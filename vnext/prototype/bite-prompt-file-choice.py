@@ -46,6 +46,7 @@ r"""bite-prompt-file-choice.py — приёмка карточки #463 (зая�
   ⑯ правила в своде НЕТ — пара собирается, строка «спроси владельца, заводить ли сверки»
   ⑰ стартовая сводка при СНЯТОМ правиле — «будильника сверок нет», без «спроси владельца»
   ⑱ стартовая сводка, когда правила НЕТ — «спроси владельца» остаётся
+  ⑲ контроль (карточка #724): в ЖИВОЙ базе своих следов не ПРИБАВИЛОСЬ
 """
 import os
 import sqlite3
@@ -71,6 +72,18 @@ import mezo_stand  # noqa: E402
 OK = FAIL = 0
 LIVE_PROMPTS = Path(os.path.expanduser("~")) / ".claude" / "scheduled-tasks"
 RHYTHM_RULE = "sync-alarm-in-chat"
+
+# ⚖️ СНИМОК СВОИХ СЛЕДОВ В ЖИВОЙ БАЗЕ — ДО всякой работы (карточка #724). В сентябре
+# прогон этой приёмки записал в ЖИВУЮ таблицу ожиданий шесть строк с ролями ZZ*:
+# инструмент тогда звался без среды стенда, и проверка объявления о правке сочла
+# живую базу своей. Нашлось это через месяц сторонним запросом, а не прогоном —
+# значит судить об этом обязана сама приёмка, и каждый раз.
+OWN_ROLES = ("ZZS", "ZZT", "ZZU", "ZZV", "ZZY", "ZZZ")
+try:
+    LIVE_DB = mezo_paths.live_db()
+    TRACES_BEFORE, TRACES_WHY = mezo_stand.traces(LIVE_DB, OWN_ROLES), ""
+except Exception as e:  # noqa: BLE001 — назвать живую базу нечем: это ТРЕТИЙ исход
+    LIVE_DB, TRACES_BEFORE, TRACES_WHY = None, {}, f"{type(e).__name__}: {e}"
 
 
 def case(name, cond, detail=""):
@@ -294,6 +307,22 @@ neighbours = sorted(p.name for p in LIVE_PROMPTS.iterdir()) if LIVE_PROMPTS.exis
 own = [n for n in neighbours if n.lower().startswith(("zzs", "zzt", "zzu", "zzv"))]
 case("⑪ контроль: в живом каталоге поручений своих следов нет", not own,
      f"каталогов у соседей: {len(neighbours)} · моих: {len(own)}")
+
+# ═══ ⑲ контроль: живая база своими следами не тронута (карточка #724)
+# ⚠️ Сравнивается ПРИБАВКА, а не равенство нулю: шесть строк 13.09 из живой базы
+# не удалены (удаление строк — только по слову владельца), и ждать нуля значило бы
+# требовать уборки чужой истории. Прежние следы — история; беда — новые.
+if TRACES_WHY:
+    case("⑲ контроль: назвать живую базу нечем — следы НЕ проверены", False,
+         f"не зелёное и не красное по сути, но молчать нельзя: {TRACES_WHY}")
+else:
+    after = mezo_stand.traces(LIVE_DB, OWN_ROLES)
+    grown = {k: (TRACES_BEFORE.get(k, 0), v) for k, v in after.items()
+             if v > TRACES_BEFORE.get(k, 0)}
+    case("⑲ контроль: в живой базе своих следов не прибавилось", not grown,
+         f"живая база: {LIVE_DB} · роли {', '.join(OWN_ROLES)} · "
+         f"было {TRACES_BEFORE or 'ни одного'} · стало {after or 'ни одного'}"
+         + (f" · ПРИБАВИЛОСЬ: {grown}" if grown else ""))
 
 print(f"\n{'✅' if FAIL == 0 else '🔴'} ИТОГ: {OK} из {OK + FAIL}")
 sys.exit(mezo_stand.finish(0 if FAIL == 0 else 1))
