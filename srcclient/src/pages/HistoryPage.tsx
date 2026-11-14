@@ -5,7 +5,7 @@ import { useUrlEnum, useUrlParam } from '../useUrlState';
 import type { FlowPoint, RoleRow } from '../historyModel';
 import {
   DEFAULT_CLOSED_STATUSES, buildTimelines, computeByRole, computeByStatus, computeFlow,
-  dayRange, distinctRoles, distinctStatuses, orderStatusKeys, statusColor, statusRu, todayUtc,
+  dayRange, distinctRolesAll, distinctStatuses, orderStatusKeys, statusColor, statusRu, todayUtc,
 } from '../historyModel';
 
 /**
@@ -90,13 +90,16 @@ export function HistoryPage({ refreshMs }: { refreshMs: number }) {
     setShowRaw(isDefault ? null : [...current].sort().join(','));
   };
 
-  const allRoles = useMemo(() => (history.data ? distinctRoles(history.data.cards) : []), [history.data]);
+  const allRoles = useMemo(() => (history.data ? distinctRolesAll(history.data) : []), [history.data]);
 
   // ── агрегация (чистые функции historyModel.ts) ──────────────────────────
   const timelines = useMemo(() => (history.data ? buildTimelines(history.data) : []), [history.data]);
   const flow = useMemo(
-    () => (view === 'flow' ? computeFlow(timelines, days, closedSet, selectedRoles) : null),
-    [view, timelines, days, closedSet, selectedRoles],
+    () => (view === 'flow'
+      ? computeFlow(timelines, days, closedSet, selectedRoles,
+                    history.data?.steps ?? [], history.data?.notes ?? [])
+      : null),
+    [view, timelines, days, closedSet, selectedRoles, history.data],
   );
   const byStatus = useMemo(
     () => (view === 'status' ? computeByStatus(timelines, days, displayStatuses, selectedRoles) : null),
@@ -295,7 +298,21 @@ export function HistoryPage({ refreshMs }: { refreshMs: number }) {
           <div className="history-summary" data-group="history-flow-summary">
             новых <b>{flow.newTotal}</b> · закрыто <b>{flow.closedTotal}</b> · открыто было{' '}
             <b>{flow.openBefore}</b> → стало <b>{flow.points[flow.points.length - 1]?.openEnd ?? 0}</b>
+            {' · '}шагов по карточкам <b>{flow.stepsTotal}</b> · записок ленты <b>{flow.notesTotal}</b>
           </div>
+          <p className="muted" data-item="history-flow-caption">
+            шаг — движение, не результат; результат — закрытые карточки. График не сравнивает роли
+            между собой: у каждой свои задачи и своя цена шага.
+          </p>
+          {history.data && !history.data.stepsSupported && history.data.stepsNote && (
+            <p className="muted" data-item="history-flow-steps-note">⚠️ {history.data.stepsNote}</p>
+          )}
+          {history.data && !history.data.notesSupported && history.data.notesNote && (
+            <p className="muted" data-item="history-flow-notes-note">⚠️ {history.data.notesNote}</p>
+          )}
+          {history.data && history.data.notesSupported && history.data.notesNote && (
+            <p className="muted" data-item="history-flow-notes-partial">⚠️ {history.data.notesNote}</p>
+          )}
           <div className="history-chart-wrap">
             <FlowChart points={flow.points} />
           </div>
@@ -411,7 +428,10 @@ function FlowChart({ points }: { points: FlowPoint[] }) {
   const leftMax = Math.max(1, ...points.map((p) => Math.max(p.created, p.closed)));
   const leftTicks = axisTicks(leftMax);
   const leftYMax = leftTicks[leftTicks.length - 1] || leftMax;
-  const rightMax = Math.max(1, ...points.map((p) => p.openEnd));
+  // Правая шкала держит ТРИ линии: открыто на конец дня, шаги и записки. Все три —
+   // десятки, тогда как карточек в день единицы; посади их на левую шкалу, и столбцы
+   // новых и закрытых стали бы невидимой полоской у самого нуля.
+  const rightMax = Math.max(1, ...points.map((p) => Math.max(p.openEnd, p.steps, p.notes)));
   const rightTicks = axisTicks(rightMax);
   const rightYMax = rightTicks[rightTicks.length - 1] || rightMax;
 
@@ -425,9 +445,14 @@ function FlowChart({ points }: { points: FlowPoint[] }) {
   const barW = Math.max(1, groupW * 0.32);
   const tickIdx = tickDayIndices(points.length);
 
-  const linePoints = points
-    .map((p, i) => `${(padL + groupW * (i + 0.5)).toFixed(1)},${yRight(p.openEnd).toFixed(1)}`)
+  const lineOf = (pick: (p: FlowPoint) => number) => points
+    .map((p, i) => `${(padL + groupW * (i + 0.5)).toFixed(1)},${yRight(pick(p)).toFixed(1)}`)
     .join(' ');
+  const linePoints = lineOf((p) => p.openEnd);
+  // Пунктиром, а не цветом одним: линии состояния и линии движения не должны
+  // читаться как одна семья, даже когда цвета темы изменятся.
+  const stepsLine = lineOf((p) => p.steps);
+  const notesLine = lineOf((p) => p.notes);
 
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="history-svg" role="img" aria-label="Поток задач по дням — две шкалы: слева новых/закрыто, справа открыто">
@@ -458,7 +483,7 @@ function FlowChart({ points }: { points: FlowPoint[] }) {
         const cx = padL + groupW * i + groupW / 2;
         return (
           <g key={p.day}>
-            <title>{`${p.day} UTC — новых ${p.created} · закрыто ${p.closed} · открыто на конец дня ${p.openEnd}`}</title>
+            <title>{`${p.day} UTC — новых ${p.created} · закрыто ${p.closed} · открыто на конец дня ${p.openEnd} · шагов ${p.steps} · записок ${p.notes}`}</title>
             <rect x={cx - barW - 1} y={yLeft(p.created)} width={barW} height={Math.max(0, y0 - yLeft(p.created))} fill="var(--info)" />
             <rect x={cx + 1} y={yLeft(p.closed)} width={barW} height={Math.max(0, y0 - yLeft(p.closed))} fill="var(--good)" />
           </g>
@@ -466,6 +491,8 @@ function FlowChart({ points }: { points: FlowPoint[] }) {
       })}
 
       <polyline points={linePoints} fill="none" stroke="var(--warn)" strokeWidth={2} />
+      <polyline points={stepsLine} fill="none" stroke="var(--accent2)" strokeWidth={1.6} strokeDasharray="5 3" />
+      <polyline points={notesLine} fill="none" stroke="var(--accent)" strokeWidth={1.6} strokeDasharray="2 3" />
       {points.map((p, i) => (
         <circle key={`c-${p.day}`} cx={padL + groupW * (i + 0.5)} cy={yRight(p.openEnd)} r={2.6} fill="var(--warn)">
           <title>{`${p.day} UTC — открыто на конец дня: ${p.openEnd}`}</title>
@@ -498,6 +525,8 @@ function FlowLegend() {
       <span><i className="history-legend__swatch" style={{ background: 'var(--info)' }} /> новых</span>
       <span><i className="history-legend__swatch" style={{ background: 'var(--good)' }} /> закрыто</span>
       <span><i className="history-legend__swatch" style={{ background: 'var(--warn)' }} /> открыто на конец дня (правая шкала)</span>
+      <span><i className="history-legend__swatch" style={{ background: 'var(--accent2)' }} /> шаги по карточкам (правая шкала)</span>
+      <span><i className="history-legend__swatch" style={{ background: 'var(--accent)' }} /> записки ленты (правая шкала)</span>
     </div>
   );
 }

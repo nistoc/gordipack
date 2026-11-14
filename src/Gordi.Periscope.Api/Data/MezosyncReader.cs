@@ -216,9 +216,15 @@ public static class MezosyncReader
     /// </summary>
     public static TaskHistoryDto ReadTaskHistory(SqliteConnection c, SchemaCapabilities s)
     {
+        // Записки читаем ДО карточек: лента от backlog не зависит, и база без карточек,
+        // но с лентой обязана дать линию записок, а не общий отказ.
+        var (notesSupported, notesNote, notes) = ReadNoteDays(c, s);
+
         if (!s.Has("backlog"))
             return new TaskHistoryDto(false, "таблицы backlog в этой базе нет — динамику задач посчитать нечем",
-                [], false, null, []);
+                [], false, null, [], false,
+                "таблицы backlog в этой базе нет — шаги по карточкам считать не от чего", [],
+                notesSupported, notesNote, notes);
 
         var cards = new List<TaskHistoryCardDto>();
         using (var cmd = c.CreateCommand())
@@ -235,7 +241,10 @@ public static class MezosyncReader
         if (!s.Has("backlog_events"))
             return new TaskHistoryDto(true, null, cards, false,
                 "таблицы backlog_events в этой базе нет — история переходов статуса не хранится, " +
-                "посчитать можно только «новых», без «закрыто» и без вида «по статусам»", []);
+                "посчитать можно только «новых», без «закрыто» и без вида «по статусам»", [], false,
+                "таблицы backlog_events в этой базе нет — шаги по карточкам в ней и хранятся, " +
+                "поэтому линия шагов пуста не потому, что шагов не было", [],
+                notesSupported, notesNote, notes);
 
         var events = new List<TaskHistoryEventDto>();
         using (var cmd = c.CreateCommand())
@@ -251,7 +260,63 @@ public static class MezosyncReader
                     Row.Str(r, m, "from_status"), Row.Str(r, m, "to_status")));
         }
 
-        return new TaskHistoryDto(true, null, cards, true, null, events);
+        var steps = new List<TaskHistoryStepDto>();
+        using (var cmd = c.CreateCommand())
+        {
+            // Рождение карточки исключено: его считает линия «новых».
+            // Условие написано через IS NULL намеренно: «event_type <> 'created'» при
+            // пустом event_type даёт NULL, то есть НЕ истину, и такая строка МОЛЧА
+            // выпала бы из линии — а это шаг, у которого просто не записан вид.
+            cmd.CommandText =
+                "SELECT backlog_id, at, event_type, actor_role FROM backlog_events " +
+                "WHERE event_type IS NULL OR event_type <> 'created' ORDER BY id";
+            using var r = cmd.ExecuteReader();
+            var m = Row.Map(r);
+            while (r.Read())
+                steps.Add(new TaskHistoryStepDto(
+                    Row.Num(r, m, "backlog_id") ?? 0, Row.Str(r, m, "at"),
+                    Row.Str(r, m, "event_type"), Row.Str(r, m, "actor_role")));
+        }
+
+        return new TaskHistoryDto(true, null, cards, true, null, events,
+            true, null, steps, notesSupported, notesNote, notes);
+    }
+
+    /// <summary>
+    /// Записки ленты, сосчитанные по дню и роли автора. Лента живёт в представлении
+    /// messages_all (живые записки плюс перенесённые в историю); база без него, но
+    /// с таблицей messages считается по ней — и ГОВОРИТ об этом словом, потому что
+    /// такой счёт не включает перенесённое и меньше настоящего.
+    /// </summary>
+    private static (bool, string?, IReadOnlyList<TaskHistoryNoteDayDto>) ReadNoteDays(
+        SqliteConnection c, SchemaCapabilities s)
+    {
+        var source = s.Has("messages_all") ? "messages_all" : (s.Has("messages") ? "messages" : null);
+        if (source is null)
+            return (false, "ни представления messages_all, ни таблицы messages в этой базе нет — " +
+                           "записки ленты считать не от чего", []);
+
+        var note = source == "messages_all" ? null
+            : "представления messages_all в этой базе нет, считано по таблице messages: " +
+              "перенесённые в историю записки в это число НЕ входят, и оно меньше настоящего";
+
+        var rows = new List<TaskHistoryNoteDayDto>();
+        using (var cmd = c.CreateCommand())
+        {
+            cmd.CommandText =
+                $"SELECT substr(timestamp, 1, 10) AS day, writer_role, count(*) AS n FROM {source} " +
+                "WHERE timestamp IS NOT NULL AND timestamp <> '' GROUP BY 1, 2 ORDER BY 1, 2";
+            using var r = cmd.ExecuteReader();
+            var m = Row.Map(r);
+            while (r.Read())
+            {
+                var day = Row.Str(r, m, "day");
+                if (string.IsNullOrEmpty(day)) continue;
+                rows.Add(new TaskHistoryNoteDayDto(
+                    day, Row.Str(r, m, "writer_role"), Row.Num(r, m, "n") ?? 0));
+            }
+        }
+        return (true, note, rows);
     }
 
     // Причины устаревания одним запросом на весь список: последний status_change → dropped

@@ -292,6 +292,26 @@ public sealed record TaskHistoryEventDto(
     long TaskId, string? At, string? FromStatus, string? ToStatus);
 
 /// <summary>
+/// Шаг по карточке — ЛЮБОЕ её событие, кроме рождения самой карточки: комментарий,
+/// взятие, снятие взятия, смена статуса, критерий, приёмщик, переименование, перенос
+/// в набор. Рождение исключено намеренно: оно уже посчитано линией «новых», и, попади
+/// оно сюда, один и тот же факт лёг бы в две линии разом.
+/// Роль шага — ТОТ, КТО ЕГО СДЕЛАЛ (actor_role), а не владелец карточки: линия мерит
+/// движение чьей-то рукой, и шаг COORD по карточке PROTO — это работа COORD.
+/// </summary>
+public sealed record TaskHistoryStepDto(
+    long TaskId, string? At, string? Kind, string? Actor);
+
+/// <summary>
+/// Записок ленты за один день одной ролью. Это ЕДИНСТВЕННОЕ место страницы, где
+/// служба считает сама, а не отдаёт сырьё: записок тысячи, их тела здесь никому
+/// не нужны, а день и автор — всё, из чего строится линия, и отбор по ролям
+/// и периоду по этим двум полям работает так же, как по сырью.
+/// </summary>
+public sealed record TaskHistoryNoteDayDto(
+    string Day, string? Role, long Count);
+
+/// <summary>
 /// Сырьё для страницы «Динамика задач»: ВСЕ карточки и ВСЕ переходы статуса,
 /// без предпосчитанных сумм — агрегацию (по дням, ролям, статусам, фильтрам)
 /// делает клиент, чтобы любой набор фильтров считался без нового запроса.
@@ -309,4 +329,14 @@ public sealed record TaskHistoryDto(
     IReadOnlyList<TaskHistoryCardDto> Cards,
     bool EventsSupported,
     string? EventsNote,
-    IReadOnlyList<TaskHistoryEventDto> Events);
+    IReadOnlyList<TaskHistoryEventDto> Events,
+    // Ещё две ступени поддержки, по той же причине, что EventsSupported: пустой список
+    // при отсутствии таблицы читался бы как «шагов не было» или «никто не писал»,
+    // хотя верно «прочитать неоткуда». Записки не зависят от backlog вовсе — база
+    // без карточек, но с лентой даёт свою линию, а не отказ целиком.
+    bool StepsSupported,
+    string? StepsNote,
+    IReadOnlyList<TaskHistoryStepDto> Steps,
+    bool NotesSupported,
+    string? NotesNote,
+    IReadOnlyList<TaskHistoryNoteDayDto> Notes);

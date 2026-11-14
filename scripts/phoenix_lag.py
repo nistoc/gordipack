@@ -175,3 +175,29 @@ def lag_line(con):
             f"{STATE_CHANGE_NAMES}): {' · '.join(parts)}\n"
             f"      сохранить: python {save} --role <РОЛЬ> --section state --file <файл> · "
             f"перечитал, правок нет: python {save} --role <РОЛЬ> --section state --confirm")
+
+
+def _where_is_the_check() -> str:
+    """Где лежит проверка, считающая этим модулем. Ищу РЯДОМ, а не называю путь наугад:
+    в установленном контуре модуль лежит в .mezosync/scripts, в клоне пакета — в scripts/,
+    и проверка в этих двух случаях лежит в РАЗНЫХ местах.
+    """
+    here = Path(__file__).resolve().parent
+    for candidate in (here.parent.parent / "vnext-tools" / "guard-section-lag.py",
+                      here.parent / "vnext" / "prototype" / "guard-section-lag.py"):
+        if candidate.exists():
+            return "python " + candidate.as_posix()
+    return ("guard-section-lag.py — в контуре vnext-tools/, в пакете vnext/prototype/; "
+            "рядом с этим файлом не найден")
+
+
+if __name__ == "__main__":
+    # Прямой запуск. ПРЕЖДЕ он печатал ноль байт и выходил кодом 0 — неотличимо от пройденной
+    # проверки, и роль читала молчание как «отставших нет» (находка STUD, записка #6370).
+    # Код 2 говорит «нечем проверить», а не «проверено, чисто». SystemExit вместо sys.exit:
+    # в общем файле лишний импорт на уровне модуля дороже, чем выгода от привычной записи.
+    print("⛔ Это НЕ проверка, а общая функция отставания памяти: считать ею можно только из кода.")
+    print(f"   Проверка, которая этим считает: {_where_is_the_check()}")
+    print("   Прямой запуск не проверяет НИЧЕГО. Прежде он молчал и выходил кодом 0 —")
+    print("   то есть отвечал ровно так, как проверка, которая прошла.")
+    raise SystemExit(2)

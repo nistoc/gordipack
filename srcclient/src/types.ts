@@ -255,12 +255,30 @@ export interface TaskHistoryEvent {
   toStatus: string | null;
 }
 
+/** Шаг по карточке — любое её событие, КРОМЕ рождения карточки: комментарий, взятие,
+ *  смена статуса, критерий, приёмщик и прочее. Роль шага — кто его сделал. */
+export interface TaskHistoryStep {
+  taskId: number;
+  at: string | null;
+  kind: string | null;
+  actor: string | null;
+}
+
+/** Записок ленты за день одной ролью — единственное, что служба считает сама. */
+export interface TaskHistoryNoteDay {
+  day: string;
+  role: string | null;
+  count: number;
+}
+
 /**
  * Сырьё для страницы «Динамика задач»: без сумм — их считает клиент под любой набор
- * фильтров. Поддержка в ДВЕ ступени, как в `TaskHistoryDto` (../src/Model/Contracts.cs):
+ * фильтров. Поддержка в ЧЕТЫРЕ ступени, как в `TaskHistoryDto` (../src/Model/Contracts.cs):
  * `supported=false` — таблицы backlog в базе нет вовсе, графиков не будет совсем;
  * `eventsSupported=false` — карточки есть, а backlog_events нет: «новых» посчитать
- * можно, «закрыто» и «по статусам» — нет, это НЕ ноль, а «нечем посчитать».
+ * можно, «закрыто» и «по статусам» — нет, это НЕ ноль, а «нечем посчитать»;
+ * `stepsSupported=false` — то же отдельно для линии шагов;
+ * `notesSupported=false` — то же отдельно для линии записок (она от карточек не зависит).
  */
 export interface TaskHistory {
   supported: boolean;
@@ -269,4 +287,10 @@ export interface TaskHistory {
   eventsSupported: boolean;
   eventsNote: string | null;
   events: TaskHistoryEvent[];
+  stepsSupported: boolean;
+  stepsNote: string | null;
+  steps: TaskHistoryStep[];
+  notesSupported: boolean;
+  notesNote: string | null;
+  notes: TaskHistoryNoteDay[];
 }
