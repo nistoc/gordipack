@@ -33,7 +33,9 @@ FAILED = []
 
 def check(name, expect_code, expect_in, forbid_in, pack, install, container, tool=None):
     """Один случай: прогон проверки на пустышках и суд по коду и словам вывода."""
-    run = subprocess.run(
+    run = subprocess.run(  # env: caller — стенда нет вовсе: оба корня и контейнер даны
+                          # доводами, файл путей и база не читаются (ветвь resolve_paths
+                          # при --pack-dir и --install-dir не вызывается)
         [sys.executable, str(tool or TOOL),
          "--pack-dir", str(pack), "--install-dir", str(install), "--container", str(container)],
         capture_output=True, text=True, encoding="utf-8", errors="replace")

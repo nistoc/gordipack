@@ -99,7 +99,10 @@ def pointer_of(module_path):
 
 def run_direct(module_path):
     """Прямой запуск КОПИИ модуля отдельным процессом — так его зовёт рука роли."""
-    res = subprocess.run([sys.executable, str(module_path)],
+    res = subprocess.run([sys.executable, str(module_path)],  # env: caller — стенда нет:
+                         # испытуемое это КОПИЯ модуля в своей временной папке, а её блок
+                         # запуска только печатает и выходит кодом 2 — ни базы, ни файла
+                         # путей, ни переменных среды он не читает
                          capture_output=True, text=True, encoding="utf-8", errors="replace")
     return res.returncode, (res.stdout or ""), (res.stderr or "")
 
