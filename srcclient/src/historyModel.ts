@@ -1,4 +1,6 @@
-import type { TaskHistory, TaskHistoryCard, TaskHistoryEvent } from './types';
+import type {
+  TaskHistory, TaskHistoryCard, TaskHistoryEvent, TaskHistoryNoteDay, TaskHistoryStep,
+} from './types';
 
 /**
  * АГРЕГАЦИЯ ДЛЯ СТРАНИЦЫ «ДИНАМИКА ЗАДАЧ» — чистые функции, без React.
@@ -161,9 +163,30 @@ export function distinctRoles(cards: readonly TaskHistoryCard[]): string[] {
   return [...s].sort();
 }
 
+/**
+ * Все роли страницы, а не только владельцы карточек: роль, которая за период писала
+ * записки или двигала ЧУЖИЕ карточки, обязана быть в отборе. Иначе её работа входит
+ * в линии, но выбрать её одну нельзя — отбор молча не знал бы о ней.
+ */
+export function distinctRolesAll(history: TaskHistory): string[] {
+  const s = new Set<string>(distinctRoles(history.cards));
+  for (const step of history.steps) s.add(step.actor ?? '—');
+  for (const n of history.notes) s.add(n.role ?? '—');
+  return [...s].sort();
+}
+
 // ── вид а) «Поток» ───────────────────────────────────────────────────────────
 
-export interface FlowPoint { day: string; created: number; closed: number; openEnd: number }
+export interface FlowPoint {
+  day: string;
+  created: number;
+  closed: number;
+  openEnd: number;
+  /** Шагов по карточкам за день — движение, не результат. */
+  steps: number;
+  /** Записок ленты за день. */
+  notes: number;
+}
 
 export interface FlowResult {
   points: FlowPoint[];
@@ -171,17 +194,44 @@ export interface FlowResult {
   openBefore: number;
   newTotal: number;
   closedTotal: number;
+  stepsTotal: number;
+  notesTotal: number;
 }
 
+/**
+ * Шаги и записки приходят ОТДЕЛЬНЫМИ списками, а не выводятся из карточек: шаг
+ * засчитывается РОЛИ, СДЕЛАВШЕЙ ЕГО (actor), а карточка принадлежит другой роли, и
+ * считать шаг по владельцу карточки значило бы записывать работу COORD на PROTO.
+ * Аргументы обязательные, без значения по умолчанию: пропущенный список дал бы
+ * ровную линию в нуле, а она неотличима от «шагов не было».
+ */
 export function computeFlow(
   timelines: readonly CardTimeline[],
   days: readonly string[],
   closedSet: ReadonlySet<string>,
   roles: ReadonlySet<string> | null,
+  steps: readonly TaskHistoryStep[],
+  noteDays: readonly TaskHistoryNoteDay[],
 ): FlowResult {
   const inRole = (t: CardTimeline) => roles === null || roles.has(t.card.role ?? '—');
   const dayIndex = new Map(days.map((d, i) => [d, i] as const));
-  const points: FlowPoint[] = days.map((day) => ({ day, created: 0, closed: 0, openEnd: 0 }));
+  const points: FlowPoint[] = days.map((day) => ({
+    day, created: 0, closed: 0, openEnd: 0, steps: 0, notes: 0,
+  }));
+
+  for (const step of steps) {
+    if (roles !== null && !roles.has(step.actor ?? '—')) continue;
+    const d = dayOf(step.at);
+    if (d === null) continue;
+    const idx = dayIndex.get(d);
+    if (idx !== undefined) points[idx].steps += 1;
+  }
+
+  for (const n of noteDays) {
+    if (roles !== null && !roles.has(n.role ?? '—')) continue;
+    const idx = dayIndex.get(n.day);
+    if (idx !== undefined) points[idx].notes += n.count;
+  }
 
   for (const t of timelines) {
     if (!inRole(t) || t.createdDay === null) continue;
@@ -225,6 +275,8 @@ export function computeFlow(
     openBefore,
     newTotal: points.reduce((a, p) => a + p.created, 0),
     closedTotal: points.reduce((a, p) => a + p.closed, 0),
+    stepsTotal: points.reduce((a, p) => a + p.steps, 0),
+    notesTotal: points.reduce((a, p) => a + p.notes, 0),
   };
 }
 
