@@ -120,6 +120,7 @@ def _call(records_dir: pathlib.Path, at: dt.datetime, extra: list[str], db: path
          tool: pathlib.Path = TOOL) -> tuple[str, int]:
     r = subprocess.run([sys.executable, str(tool), *extra, "--db", str(db or roles_db()),
                         "--dir", str(records_dir), "--at", at.strftime("%Y-%m-%dT%H:%M:%S")],
+                       env=mezo_stand.stand_env(roles_db().parent),
                        capture_output=True, text=True, encoding="utf-8", timeout=300)
     return (r.stdout or "") + (r.stderr or ""), r.returncode
 
@@ -165,6 +166,7 @@ def _call_old_flags(records_dir: pathlib.Path, at: dt.datetime) -> tuple:
     r = subprocess.run([sys.executable, str(TOOL), "--роль", ROLE,
                         "--db", str(roles_db()), "--каталог", str(records_dir),
                         "--на", at.strftime("%Y-%m-%dT%H:%M:%S")],
+                       env=mezo_stand.stand_env(roles_db().parent),
                        capture_output=True, text=True, encoding="utf-8", timeout=300)
     return (r.stdout or "") + (r.stderr or ""), r.returncode
 
