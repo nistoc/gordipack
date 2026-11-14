@@ -23,9 +23,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
+import mezo_paths  # noqa: E402 — базу берём резолвером, а не по положению файла (карточка #689)
 
 HERE = Path(__file__).resolve().parent
-LIVE = HERE.parent / "mezosync.db"
+# База — РЕЗОЛВЕРОМ, а не «рядом с моим каталогом». В установленном контуре это один
+# и тот же путь, а в клоне пакета рядом лежит ПУСТОЙ mezosync.db в 0 байт: приёмка
+# снимала копию пустышки и падала позже на «no such table» (карточка #689, замер
+# 13.11 18:42 UTC). Базы нет — отказ словами с кодом 2, а не падение.
+LIVE = mezo_paths.live_db_for_check(__file__, "приёмка сводки открытых карточек")
 PY = sys.executable
 
 ok = True
@@ -59,9 +64,21 @@ _con.close()
 
 # роль с карточками и роль без — берём из самой базы, не из своей памяти
 con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
-rich = con.execute(
+_rich_row = con.execute(
     "SELECT role, count(*) c FROM backlog WHERE status IN ('open','in_progress','blocked','in_review') "
-    "AND role <> 'SHARED' GROUP BY role ORDER BY c DESC LIMIT 1").fetchone()[0]
+    "AND role <> 'SHARED' GROUP BY role ORDER BY c DESC LIMIT 1").fetchone()
+if _rich_row is None:
+    # Свежий контур: карточек нет НИ ОДНОЙ, и сводку мерить не на чем. Прежде здесь
+    # падало «TypeError: NoneType is not subscriptable» — беда среды выглядела бедой
+    # кода (замер 13.11 19:02 UTC на контуре, собранном init-group.py). Отказ словами
+    # с кодом 2, как велит карточка #689; признак «нулевой день» тут не нужен — пустой
+    # список карточек и есть прямой ответ на вопрос приёмки.
+    con.close()
+    print("⛔ НЕ ЗАПУСТИЛАСЬ: в базе нет ни одной открытой карточки (свежий контур) — сводку\n"
+          "   открытых карточек мерить не на чем. Это отказ приёмки, а не её провал: код 2\n"
+          "   (карточка #689).")
+    sys.exit(mezo_stand.finish(2))
+rich = _rich_row[0]
 known = [r for r, in con.execute("SELECT DISTINCT role FROM phoenix")]
 con.close()
 

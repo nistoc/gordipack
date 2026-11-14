@@ -304,6 +304,7 @@ def main():
         shutil.rmtree(d, ignore_errors=True)
 
     new_cases()
+    skip_cases()
 
     print("\n" + "=" * 78)
     print(f"{'ПРИЁМКА ПРОЙДЕНА' if OK else 'ПРИЁМКА ПРОВАЛЕНА'} — случаев {CASES}")
@@ -589,6 +590,78 @@ def new_cases():
                  ok and not bad,
                  f"на целой: {line} · на поломке "
                  f"{'провалился, как должен' if not bad else 'ПРОШЁЛ — приёмка слепа'}")
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+
+def skip_cases():
+    """(24)–(26): карточка #729 — пропуск при принятом вердикте не равен отказу мерить.
+
+    Приёмка, принявшая все свои случаи и не проверившая один (на свежем контуре не на чем),
+    выходит кодом 2 — тем же, что приёмка, отказавшаяся мерить вовсе. До этой правки стенды
+    сохранялись у обеих: замер COORD 28.10 17:03 UTC — 164 каталога bite-forms-* за сутки,
+    по 41 на прогон, все с меткой «прогон отказался мерить».
+    Решение живёт в механизме: приёмка объявляет ФАКТ пропуска (accepted_with_skips), а судит
+    о стенде mezo_stand. Поэтому здесь ТРИ случая, а не один: объявление убирает стенд ТОЛЬКО
+    при коде 2, а настоящий отказ и провал сохраняют его по-прежнему. У каждого случая СВОЯ
+    нарочная поломка — иначе случай не доказывает, что различение живое.
+    """
+    work = Path(tempfile.mkdtemp(prefix="skips-729-"))
+    try:
+        def broken_helper(needle, replacement):
+            """Копия помощника с одной нарочной поломкой (счёт мест проверяет broken_copy)."""
+            return broken_copy(work, needle, replacement).parent / "mezo_stand.py"
+
+        # (24) принято с пропуском: объявление + код 2 — стенд УБРАН и причина названа словами
+        def c24(helper):
+            st, out, rc = run_probe("mezo_stand.accepted_with_skips()\n"
+                                    "sys.exit(mezo_stand.finish(2))", helper=helper)
+            removed = st is not None and not st.exists()
+            if st is not None and st.exists():
+                shutil.rmtree(st, ignore_errors=True)
+            return removed and "не отказ" in out and rc == 2, out
+        ok24, out24 = c24(None)
+        bad24, _ = c24(broken_helper(" and not _skips_confirmed()", ""))
+        line24 = next((s.strip() for s in out24.splitlines() if "убрано временных" in s), "строки нет")
+        case("(24) приёмка ПРИНЯТА с пропуском (объявление + код 2) — стенд убран, причина названа; "
+             "поломка «объявление не читается» проваливает случай",
+             ok24 and not bad24,
+             f"на целой: {line24} · на поломке "
+             f"{'провалился, как должен' if not bad24 else 'ПРОШЁЛ — приёмка слепа'}")
+
+        # (25) ВСТРЕЧНЫЙ: код 2 БЕЗ объявления — настоящий отказ мерить, стенд СОХРАНЁН
+        def c25(helper):
+            st, out, rc = run_probe("sys.exit(mezo_stand.finish(2))", helper=helper)
+            kept = st is not None and st.exists()
+            if kept:
+                shutil.rmtree(st, ignore_errors=True)
+            return kept and "прогон отказался мерить" in out and rc == 2, out
+        ok25, out25 = c25(None)
+        bad25, _ = c25(broken_helper("    return _accepted_with_skips and _exit_code == 2",
+                                     "    return _exit_code == 2"))
+        case("(25) ВСТРЕЧНЫЙ: код 2 БЕЗ объявления — настоящий отказ мерить, стенд сохранён; "
+             "поломка «любой код 2 — не отказ» проваливает случай",
+             ok25 and not bad25,
+             f"на целой: стенд сохранён и назван отказом · на поломке "
+             f"{'провалился, как должен' if not bad25 else 'ПРОШЁЛ — приёмка слепа'}")
+
+        # (26) ВСТРЕЧНЫЙ: объявление + ПРОВАЛ (код 1) — стенд СОХРАНЁН, объявление провала не отменяет
+        def c26(helper):
+            st, out, rc = run_probe("mezo_stand.accepted_with_skips()\n"
+                                    "sys.exit(mezo_stand.finish(1))", helper=helper)
+            kept = st is not None and st.exists()
+            if kept:
+                shutil.rmtree(st, ignore_errors=True)
+            return kept and "прогон провалился" in out and rc == 1, out
+        ok26, out26 = c26(None)
+        bad26, _ = c26(broken_helper("_accepted_with_skips and _exit_code == 2",
+                                     "_accepted_with_skips"))
+        case("(26) ВСТРЕЧНЫЙ: объявление + провал (код 1) — стенд сохранён, объявление провала "
+             "не отменяет; поломка «объявление сильнее кода» проваливает случай",
+             ok26 and not bad26,
+             f"на целой: стенд сохранён и назван провалом · на поломке "
+             f"{'провалился, как должен' if not bad26 else 'ПРОШЁЛ — приёмка слепа'}")
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

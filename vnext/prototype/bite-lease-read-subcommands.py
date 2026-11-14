@@ -36,9 +36,10 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
+import mezo_target  # noqa: E402 — испытуемое через общий выбор копии (карточка #682)
 import mezo_stand  # noqa: E402
 
-SCRIPTS = mezo_paths.live_scripts()
+SCRIPTS = mezo_target.scripts_root()
 BACKLOG = str(SCRIPTS / "backlog.py")
 LIVE_DB = mezo_paths.live_db()
 

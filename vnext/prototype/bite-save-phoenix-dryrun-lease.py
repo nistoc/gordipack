@@ -36,10 +36,11 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import mezo_paths  # noqa: E402
+import mezo_target  # noqa: E402 — испытуемое через общий выбор копии (карточка #682)
 import mezo_stand  # noqa: E402 — карточка #505/#624: подставная база из схемы живой (Э6, карточка #680)
 
-LEASE = mezo_paths.live_scripts() / "lease.py"
-SAVE_PHOENIX = mezo_paths.live_scripts() / "save-phoenix.py"
+LEASE = mezo_target.script("lease.py")
+SAVE_PHOENIX = mezo_target.script("save-phoenix.py")
 LEASE_ROLE = "TAXO"          # объявление о правке берёт эта роль
 CALLER_ROLE = "ZZTEST629"    # холостой/настоящий прогон зовёт эта — не существующая в контуре
 TEST_SECTION = "state"

@@ -63,11 +63,12 @@ r"""МОЙ РИТМ НА СЕЙЧАС — ЗАМЕРОМ, А НЕ ПАМЯТЬЮ
      (карточка #686, 2026-10-17).
 
 Зовут так:
-    python <КОНТУР>/vnext-tools/measure-rhythm.py --роль CHROME
+    python <КОНТУР>/vnext-tools/measure-rhythm.py --role CHROME
     python <КОНТУР>/vnext-tools/measure-rhythm.py                  # весь контур
-    python <КОНТУР>/vnext-tools/measure-rhythm.py --роль COORD --на 2026-08-31T03:00
-    python <КОНТУР>/vnext-tools/measure-rhythm.py --каталог <копия> --роль CHROME
-    python <КОНТУР>/vnext-tools/measure-rhythm.py --db <копия базы> --роль CHROME
+    python <КОНТУР>/vnext-tools/measure-rhythm.py --role COORD --at 2026-08-31T03:00
+    python <КОНТУР>/vnext-tools/measure-rhythm.py --dir <копия> --role CHROME
+    python <КОНТУР>/vnext-tools/measure-rhythm.py --db <копия базы> --role CHROME
+    ⚖️ прежние флаги --роль --каталог --на --подробно остаются синонимами (карточка #719)
 """
 from __future__ import annotations
 
@@ -93,26 +94,26 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 # → иначе путь ВЫВОДИТСЯ из пути контейнера по правилу имён папок Claude Code (каждый знак, кроме
 # латинских букв и цифр, заменяется на «-»: <КОНТУР> → C--guts--atlas; папки лежат в
 # ~/.claude/projects) — и вывод печатается строкой, а не делается молча.
-ПАПКА_ПРОЕКТОВ = pathlib.Path.home() / ".claude" / "projects"
+PROJECTS_DIR = pathlib.Path.home() / ".claude" / "projects"
 
 
-def имя_папки_проекта(контейнер) -> str:
+def project_dir_name(container) -> str:
     """Имя папки проекта в ~/.claude/projects для данного пути контейнера."""
-    return re.sub(r"[^A-Za-z0-9]", "-", str(контейнер))
+    return re.sub(r"[^A-Za-z0-9]", "-", str(container))
 
 
-def каталог_записей():
+def chat_records_dir():
     """→ (путь, пояснение для печати, отказ). Отказ — слова, если файл путей не читается."""
-    контейнер = mezo_paths.container_root(__file__)
-    res = mezo_paths.local_path("chat_records", __file__, mezo_dir=контейнер / ".mezosync")
+    container = mezo_paths.container_root(__file__)
+    res = mezo_paths.local_path("chat_records", __file__, mezo_dir=container / ".mezosync")
     if res.outcome == mezo_paths.LOCAL_DECLARED:
         return res.path, f"каталог записей: {res.words}", None
     if res.outcome == mezo_paths.LOCAL_UNREADABLE:
         return None, None, res.words
-    имя = имя_папки_проекта(контейнер)
-    return (ПАПКА_ПРОЕКТОВ / имя,
+    name = project_dir_name(container)
+    return (PROJECTS_DIR / name,
             f"каталог записей не объявлен ({res.words}); выведен из пути контейнера "
-            f"{контейнер} по правилу имён папок Claude Code: {имя}", None)
+            f"{container} по правилу имён папок Claude Code: {name}", None)
 
 # Имена ролей берутся из таблицы roles (read_role_names), списка в файле НЕТ: состав живой
 # (роли рождаются, засыпают, закрываются), а впечатанный список молча не узнавал бы новую
@@ -125,10 +126,10 @@ ROLE_TOKEN_DATA = re.compile(r"--(?:role|роль)\s+([A-Z][A-Z0-9_-]{1,15})")
 #    с дефисом в имени засчитывалась как COORD (карточка #686, место 5, 2026-10-17). Теперь токен
 #    той же формы, что у ROLE_TOKEN_DATA, и целым словом: за ним не идёт латинская буква, цифра,
 #    «_» или «-» — иначе образец не берёт ничего, а не обрубок имени.
-ОБР_ТОКЕН = re.compile(r"--(?:role|роль)\s+([A-Z][A-Z0-9_-]{1,15})(?![A-Za-z0-9_-])")
-ОБР_НАКАЗ = re.compile(r"scheduled-tasks/([^/]+)/")
-ОБР_ШАГ_В_ИМЕНИ = re.compile(r"(\d+)\s*m$")
-БК = chr(92)
+ROLE_TOKEN_PATTERN = re.compile(r"--(?:role|роль)\s+([A-Z][A-Z0-9_-]{1,15})(?![A-Za-z0-9_-])")
+TASK_DIR_PATTERN = re.compile(r"scheduled-tasks/([^/]+)/")
+STEP_IN_NAME_PATTERN = re.compile(r"(\d+)\s*m$")
+BACKSLASH = chr(92)
 
 # 🔑 УДАР ОПОЗНАЁТСЯ ПОЛЯМИ ЗАПИСИ, А НЕ ВИДОМ ТЕКСТА И НЕ ЕГО ДЛИНОЙ.
 #
@@ -176,27 +177,27 @@ ROLE_TOKEN_DATA = re.compile(r"--(?:role|роль)\s+([A-Z][A-Z0-9_-]{1,15})")
 #    У ПРОВЕРКИ НЕ ДОЛЖНО БЫТЬ НИ ОДНОГО СВОЕГО ЧИСЛА. Порог длины — это мерка,
 #    вставленная внутрь мерки: она молча решает, что считать предметом, и её никто
 #    не проверяет, потому что она выглядит предосторожностью, а не решением.
-ПОЛЕ_ПОДАЧИ_МЕХАНИЗМОМ = "sdk"
-ПОЛЕ_МЕХАНИЗМА = "isMeta"   # true у машинной подачи; у набранного человеком поля нет вовсе
-ОБЁРТКА_СТАРАЯ = "<scheduled-task"   # 44 подачи 27–31.08 с ЛОЖНЫМ «человек» в происхождении
-РАЗРЫВ_РЯДА_Ч = 6.0       # промежуток больше этого рвёт ряд: дальше был ДРУГОЙ ритм
-ДОПУСК_ДОЛЯ = 1.5         # «свежесть» = шаг × это …
-ДОПУСК_ЗАПАС_МИН = 5.0    # … плюс это
+PROMPT_SOURCE_MACHINE = "sdk"
+MACHINE_FLAG_FIELD = "isMeta"   # true у машинной подачи; у набранного человеком поля нет вовсе
+OLD_WRAPPER_PREFIX = "<scheduled-task"   # 44 подачи 27–31.08 с ЛОЖНЫМ «человек» в происхождении
+RUN_BREAK_HOURS = 6.0       # промежуток больше этого рвёт ряд: дальше был ДРУГОЙ ритм
+TOLERANCE_FACTOR = 1.5         # «свежесть» = шаг × это …
+TOLERANCE_MARGIN_MIN = 5.0    # … плюс это
 
-ДЕРЖИТСЯ, НЕ_БЬЁТСЯ, НЕ_ЗАПУСКАЛАСЬ, НЕЧЕМ = 0, 1, 2, 3
+ALIVE, STALLED, NEVER_RAN, NO_STEP = 0, 1, 2, 3
 
 
-def час(строка: str | None) -> dt.datetime | None:
+def record_time(line: str | None) -> dt.datetime | None:
     """Час ЗАПИСИ. У этих меток пояс всегда стои́т («…Z»), догадываться не о чем."""
-    if not строка:
+    if not line:
         return None
     try:
-        return dt.datetime.fromisoformat(строка.replace("Z", "+00:00")).astimezone(dt.timezone.utc)
+        return dt.datetime.fromisoformat(line.replace("Z", "+00:00")).astimezone(dt.timezone.utc)
     except Exception:
         return None
 
 
-def час_рукой(строка: str) -> dt.datetime | None:
+def time_by_hand(line: str) -> dt.datetime | None:
     """Час, ЗАДАННЫЙ РУКОЙ (--на). Без пояса читается как UTC, и это сказано вслух.
 
     🩸 ПОЙМАНО ПРИЁМКОЙ ЭТОГО ЖЕ ИНСТРУМЕНТА 2026-09-04 21:56 UTC, и поймало НЕ чтение
@@ -209,7 +210,7 @@ def час_рукой(строка: str) -> dt.datetime | None:
     🎯 Это дословно беда, за которую контур платит весь день: местное под меткой UTC.
     """
     try:
-        d = dt.datetime.fromisoformat(строка.replace("Z", "+00:00"))
+        d = dt.datetime.fromisoformat(line.replace("Z", "+00:00"))
     except Exception:
         return None
     if d.tzinfo is None:
@@ -218,7 +219,7 @@ def час_рукой(строка: str) -> dt.datetime | None:
     return d.astimezone(dt.timezone.utc)
 
 
-def текст_записи(d: dict) -> str:
+def record_text(d: dict) -> str:
     c = (d.get("message") or {}).get("content")
     if isinstance(c, list):
         return " ".join(x.get("text", "") for x in c if isinstance(x, dict) and x.get("type") == "text")
@@ -254,29 +255,29 @@ def read_role_names(db_arg: str | None) -> tuple[frozenset[str] | None, str]:
     return names, str(db_path)
 
 
-def прочитать_чат(файл: pathlib.Path, names: frozenset[str] | None = None
+def read_chat(path: pathlib.Path, names: frozenset[str] | None = None
                   ) -> tuple[collections.Counter, list[tuple[dt.datetime, str]]]:
     """Возвращает (счётчик токенов роли, список ударов). Один проход по файлу.
 
     names — имена ролей из данных контура; None — база не прочиталась, токеном
     считается любое слово в верхнем регистре из 2–16 знаков после «--role» (образец).
     """
-    токены: collections.Counter = collections.Counter()
-    удары: list[tuple[dt.datetime, str]] = []
-    with файл.open(encoding="utf-8", errors="replace") as fh:
-        for строка in fh:
-            if "--role" in строка or "--роль" in строка:
+    tokens: collections.Counter = collections.Counter()
+    beats: list[tuple[dt.datetime, str]] = []
+    with path.open(encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            if "--role" in line or "--роль" in line:
                 if names is None:
-                    for t in ОБР_ТОКЕН.findall(строка):
-                        токены[t] += 1
+                    for t in ROLE_TOKEN_PATTERN.findall(line):
+                        tokens[t] += 1
                 else:
-                    for t in ROLE_TOKEN_DATA.findall(строка):
+                    for t in ROLE_TOKEN_DATA.findall(line):
                         if t in names:
-                            токены[t] += 1
-            if '"sdk"' not in строка:
+                            tokens[t] += 1
+            if '"sdk"' not in line:
                 continue
             try:
-                d = json.loads(строка)
+                d = json.loads(line)
             except Exception:
                 continue
             if d.get("type") != "user":
@@ -284,9 +285,9 @@ def прочитать_чат(файл: pathlib.Path, names: frozenset[str] | No
             # Удар = подача, поставленная в очередь МЕХАНИЗМОМ. Судим по полю; вид
             # и длина текста не участвуют вовсе. turnCompanion (тело навыка) отсеян
             # тем же полем — у него promptSource отсутствует.
-            if d.get("promptSource") != ПОЛЕ_ПОДАЧИ_МЕХАНИЗМОМ:
+            if d.get("promptSource") != PROMPT_SOURCE_MACHINE:
                 continue
-            t = " ".join(текст_записи(d).split())
+            t = " ".join(record_text(d).split())
             # ⛔ ПОЛЕ ПОДАЧИ ОДНО НЕ РЕШАЕТ. Оно значит «подачу поставил в очередь
             # механизм КЛИЕНТА», а реплики, НАБРАННЫЕ ВЛАДЕЛЬЦЕМ в этом приложении,
             # идут той же очередью и несут то же поле. Замер @OPSSRE (записка #4769,
@@ -312,75 +313,79 @@ def прочитать_чат(файл: pathlib.Path, names: frozenset[str] | No
             #      и терял 44 настоящих удара старой обёртки (у неё origin ЛОЖНО «human»)
             # ⇒ беру ОБА поля: удар обязан не иметь происхождения И быть помечен как
             #   поданный механизмом. Старая обёртка 27–31.08 — прежнее исключение по тексту.
-            происхождение = (d.get("origin") or {}).get("kind")
-            if not t.startswith(ОБЁРТКА_СТАРАЯ):
-                if происхождение is not None:
+            origin = (d.get("origin") or {}).get("kind")
+            if not t.startswith(OLD_WRAPPER_PREFIX):
+                if origin is not None:
                     continue
-                if d.get(ПОЛЕ_МЕХАНИЗМА) is not True:
+                if d.get(MACHINE_FLAG_FIELD) is not True:
                     continue
-            ч = час(d.get("timestamp"))
-            if ч:
-                удары.append((ч, t or "⟨подача без текста⟩"))
-    return токены, удары
+            moment = record_time(d.get("timestamp"))
+            if moment:
+                beats.append((moment, t or "⟨подача без текста⟩"))
+    return tokens, beats
 
 
-def имя_наказа(удары: list[tuple[dt.datetime, str]]) -> str | None:
-    for _, t in reversed(удары):
-        m = ОБР_НАКАЗ.search(t.replace(БК, "/"))
+def task_dir_name(beats: list[tuple[dt.datetime, str]]) -> str | None:
+    for _, t in reversed(beats):
+        m = TASK_DIR_PATTERN.search(t.replace(BACKSLASH, "/"))
         if m:
             return m.group(1)
     return None
 
 
-def ряд(удары_ч: list[dt.datetime]) -> list[dt.datetime]:
+def tail_run(beat_times: list[dt.datetime]) -> list[dt.datetime]:
     """Хвостовой ряд: удары, между которыми нет разрыва больше РАЗРЫВ_РЯДА_Ч.
 
     ⚖️ Зачем ряд, а не «все удары»: у CHROME 30–31.08 шаг был 60 минут, а с 04.09 —
     120. Средний по всем ударам не описывает НИ ОДИН из двух ритмов и выглядит
     вычисленным. Ряд отвечает про ритм, который бьётся СЕЙЧАС.
     """
-    if not удары_ч:
+    if not beat_times:
         return []
-    хвост = [удары_ч[-1]]
-    for a, b in zip(reversed(удары_ч[:-1]), reversed(удары_ч[1:])):
-        if (b - a).total_seconds() / 3600.0 > РАЗРЫВ_РЯДА_Ч:
+    tail = [beat_times[-1]]
+    for a, b in zip(reversed(beat_times[:-1]), reversed(beat_times[1:])):
+        if (b - a).total_seconds() / 3600.0 > RUN_BREAK_HOURS:
             break
-        хвост.insert(0, a)
-    return хвост
+        tail.insert(0, a)
+    return tail
 
 
-def мин(с: float) -> str:
-    з = "" if с >= 0 else "-"
-    с = abs(с)
-    ч_, м_ = int(с // 3600), int((с % 3600) // 60)
-    return f"{з}{ч_} ч {м_:02d} мин" if ч_ else f"{з}{м_} мин"
+def human_span(seconds: float) -> str:
+    sign = "" if seconds >= 0 else "-"
+    seconds = abs(seconds)
+    hours, minutes = int(seconds // 3600), int((seconds % 3600) // 60)
+    return f"{sign}{hours} ч {minutes:02d} мин" if hours else f"{sign}{minutes} мин"
 
 
-def судить(удары: list[tuple[dt.datetime, str]], сейчас: dt.datetime) -> dict:
-    видимые = [(ч, t) for ч, t in удары if ч <= сейчас]
-    видимые.sort()
-    итог: dict = {"ударов": len(видимые), "наказ": имя_наказа(видимые)}
-    if not видимые:
-        итог.update(исход=НЕ_ЗАПУСКАЛАСЬ, шаг=None, последний=None, тишина=None, ряд=0)
-        return итог
-    часы = [ч for ч, _ in видимые]
-    р = ряд(часы)
-    последний = часы[-1]
-    тишина = (сейчас - последний).total_seconds()
-    итог.update(последний=последний, тишина=тишина, ряд=len(р), первый=часы[0])
-    if len(р) < 2:
-        итог.update(исход=НЕЧЕМ, шаг=None)
-        return итог
-    промежутки = [(b - a).total_seconds() for a, b in zip(р, р[1:])]
-    шаг = statistics.median(промежутки)
-    разброс = max(промежутки) - min(промежутки)
+def judge(beats: list[tuple[dt.datetime, str]], now: dt.datetime) -> dict:
+    visible = [(moment, t) for moment, t in beats if moment <= now]
+    visible.sort()
+    verdict: dict = {"beats": len(visible), "task_dir": task_dir_name(visible)}
+    if not visible:
+        verdict.update(outcome=NEVER_RAN, step=None, last=None, silence=None)
+        # ⚖️ КЛЮЧОМ, А НЕ ДОВОДОМ (карточка #719): имя `tail_run` занято функцией
+        # хвостового ряда, а ключ словаря зовётся «run» — довод дал бы ДРУГОЙ ключ.
+        verdict["run"] = 0
+        return verdict
+    times = [moment for moment, _ in visible]
+    run = tail_run(times)
+    last = times[-1]
+    silence = (now - last).total_seconds()
+    verdict.update(last=last, silence=silence, first=times[0])
+    verdict["run"] = len(run)   # ключом, а не доводом — см. выше (карточка #719)
+    if len(run) < 2:
+        verdict.update(outcome=NO_STEP, step=None)
+        return verdict
+    gaps = [(b - a).total_seconds() for a, b in zip(run, run[1:])]
+    step = statistics.median(gaps)
+    spread = max(gaps) - min(gaps)
     # ⚠️ РЯД С МЕНЯВШИМСЯ ШАГОМ. Ряд рвётся по РАЗРЫВУ, но шаг меняют и БЕЗ разрыва:
     # удары идут подряд, просто реже. Тогда медиана не описывает НИ ОДИН из участков,
     # и допуск может выйти МЕНЬШЕ настоящего шага — то есть живой ритм объявят мёртвым
     # каждый цикл (случай @OPSSRE, записка #4769 §③: допуск 3 ч 09 при шаге 4 ч).
     # Форма её же: считать допуск от ПОСЛЕДНЕГО промежутка — он и есть нынешний ритм.
     # ⛔ Нового числа НЕ ввожу: сравниваю разброс с самим шагом.
-    менялся = разброс > шаг
+    changed = spread > step
     # ⚠️ БЕРЁМ БОЛЬШЕЕ ИЗ ДВУХ, А НЕ ПРОСТО ПОСЛЕДНЕЕ. Форма «допуск от последнего
     # промежутка» (@OPSSRE) верна, когда последний ДЛИННЕЕ медианы, и ЛОЖНА, когда
     # короче: у @PROTO ряд 1 ч 07 … 1 ч 52 с последней парой в 15 мин дал допуск
@@ -407,20 +412,20 @@ def судить(удары: list[tuple[dt.datetime, str]], сейчас: dt.dat
     #    Покраснели @RCC (ритм снят словом владельца, тишина 5 ч 07 при шаге 30 мин)
     #    и @CORE (тишина 5 ч 10 при шаге 2 ч — прежний допуск 7 ч 05 это ПРЯТАЛ).
     #    Контрольная пара @OPSSRE (смена 2 ч → 4 ч), 41 момент её ряда: расхождений 0.
-    удлинение_повторилось = len(промежутки) >= 2 and промежутки[-2] > шаг
-    от_последнего = bool(менялся and удлинение_повторилось)
-    основа = max(шаг, промежутки[-1]) if от_последнего else шаг
-    допуск = основа * ДОПУСК_ДОЛЯ + ДОПУСК_ЗАПАС_МИН * 60
-    итог.update(шаг=шаг, допуск=допуск, разброс=разброс, менялся=менялся,
-                основа_допуска=основа, промежутки=промежутки,
-                от_последнего=от_последнего,
-                удлинение_повторилось=удлинение_повторилось,
-                исход=ДЕРЖИТСЯ if тишина <= допуск else НЕ_БЬЁТСЯ)
+    longer_twice = len(gaps) >= 2 and gaps[-2] > step
+    from_last_gap = bool(changed and longer_twice)
+    base = max(step, gaps[-1]) if from_last_gap else step
+    tolerance = base * TOLERANCE_FACTOR + TOLERANCE_MARGIN_MIN * 60
+    verdict.update(step=step, tolerance=tolerance, spread=spread, changed=changed,
+                tolerance_base=base, gaps=gaps,
+                from_last_gap=from_last_gap,
+                longer_twice=longer_twice,
+                outcome=ALIVE if silence <= tolerance else STALLED)
     # Сдвиг: на какой минуте часа ложатся удары ряда и насколько эта минута устойчива.
-    минуты = [ч.minute * 60 + ч.second for ч in р]
-    итог["минута"] = statistics.median(минуты)
-    итог["минута_разброс"] = max(минуты) - min(минуты)
-    return итог
+    minutes = [moment.minute * 60 + moment.second for moment in run]
+    verdict["minute"] = statistics.median(minutes)
+    verdict["minute_spread"] = max(minutes) - min(minutes)
+    return verdict
 
 
 # ⚖️ ТЯЖЕСТЬ ИСХОДА ≠ ВЕЛИЧИНА ЕГО КОДА (карточка #551). Коды — договор с зовущим,
@@ -428,119 +433,125 @@ def судить(удары: list[tuple[dt.datetime, str]], сейчас: dt.dat
 # Сводя контур, берём худшее ПО ТЯЖЕСТИ: поломка тяжелее отказа мерить, отказ
 # тяжелее исправного. При равной тяжести побеждает больший код — чтобы ответ
 # не зависел от порядка обхода ролей.
-ТЯЖЕСТЬ = {ДЕРЖИТСЯ: 0, НЕ_ЗАПУСКАЛАСЬ: 1, НЕЧЕМ: 1, НЕ_БЬЁТСЯ: 2}
+SEVERITY = {ALIVE: 0, NEVER_RAN: 1, NO_STEP: 1, STALLED: 2}
 
 
-def по_тяжести(а: int, б: int) -> int:
+def worse_of(a: int, b: int) -> int:
     """→ тот из двух исходов, который ТЯЖЕЛЕЕ (а не тот, чей код больше)."""
-    return max(а, б, key=lambda и: (ТЯЖЕСТЬ[и], и))
+    return max(a, b, key=lambda code: (SEVERITY[code], code))
 
 
-ЗНАКИ = {
-    ДЕРЖИТСЯ: "🟢 ДЕРЖИТСЯ",
-    НЕ_БЬЁТСЯ: "🔴 НЕ БЬЁТСЯ",
-    НЕ_ЗАПУСКАЛАСЬ: "⚪ НЕ ЗАПУСКАЛАСЬ",
-    НЕЧЕМ: "⚖️ ШАГ ИЗМЕРИТЬ НЕЧЕМ",
+MARKS = {
+    ALIVE: "🟢 ДЕРЖИТСЯ",
+    STALLED: "🔴 НЕ БЬЁТСЯ",
+    NEVER_RAN: "⚪ НЕ ЗАПУСКАЛАСЬ",
+    NO_STEP: "⚖️ ШАГ ИЗМЕРИТЬ НЕЧЕМ",
 }
 
 
-def печатать(роль: str, чат: str, доля: float | None, и: dict, подробно: bool) -> None:
-    print(f"\n━━ {роль} · чат {чат} ━━")
-    if доля is not None:
-        print(f"   роль опознана замером: доля токена в вызовах {доля:.0%}")
-    print(f"   {ЗНАКИ[и['исход']]}")
-    if и["исход"] == НЕ_ЗАПУСКАЛАСЬ:
+def report(role: str, chat: str, share: float | None, verdict: dict, verbose: bool) -> None:
+    print(f"\n━━ {role} · чат {chat} ━━")
+    if share is not None:
+        print(f"   роль опознана замером: доля токена в вызовах {share:.0%}")
+    print(f"   {MARKS[verdict['outcome']]}")
+    if verdict["outcome"] == NEVER_RAN:
         print("   ударов ритма в записях НЕТ ВОВСЕ ⇒ свидетельств ритма нет.")
         print("   ⚖️ это НЕ «ритм снят»: так же выглядит чат, который ритма и не имел.")
         return
-    print(f"   последний удар ... {и['последний'].strftime('%Y-%m-%d %H:%M:%S')} UTC"
-          f"   (тишина {мин(и['тишина'])})")
-    if и["исход"] == НЕЧЕМ:
+    print(f"   последний удар ... {verdict['last'].strftime('%Y-%m-%d %H:%M:%S')} UTC"
+          f"   (тишина {human_span(verdict['silence'])})")
+    if verdict["outcome"] == NO_STEP:
         print("   удар в ряду РОВНО ОДИН ⇒ шага нет, и «держится» от «не бьётся» неотличимо.")
         print("   ⚖️ говорю «нечем», а не «не бьётся»: одно «ничего» на две разные беды —")
         print("      это как раз то, из-за чего зовущий гадает и гадает неверно.")
         return
-    слово = "шаг МЕНЯЛСЯ" if и.get("менялся") else "шаг ИЗМЕРЕН"
-    print(f"   {слово} ..... {мин(и['шаг'])}   (медиана по {и['ряд']} ударам ряда,"
-          f" разброс промежутков {мин(и['разброс'])})")
-    пр = и.get("промежутки") or []
-    показ = ", ".join(мин(x) for x in пр[-8:])
-    print(f"   промежутки ряда .. {показ}"
-          + ("   (показаны последние 8)" if len(пр) > 8 else ""))
+    word = "шаг МЕНЯЛСЯ" if verdict.get("changed") else "шаг ИЗМЕРЕН"
+    print(f"   {word} ..... {human_span(verdict['step'])}   (медиана по {verdict['run']} ударам ряда,"
+          f" разброс промежутков {human_span(verdict['spread'])})")
+    gaps = verdict.get("gaps") or []
+    shown = ", ".join(human_span(x) for x in gaps[-8:])
+    print(f"   промежутки ряда .. {shown}"
+          + ("   (показаны последние 8)" if len(gaps) > 8 else ""))
     print("   ⚖️ промежутки печатаются ВСЕГДА и не судятся: признак «разброс больше"
           " шага» слаб —")
     print("      на ряду самого автора (2 часа → 4 часа) он МОЛЧИТ. Смотри числа сам.")
-    if и.get("от_последнего"):
-        print(f"   допуск свежести .. {мин(и['допуск'])} = ПОСЛЕДНИЙ промежуток"
-              f" {мин(и['основа_допуска'])} × {ДОПУСК_ДОЛЯ} + {ДОПУСК_ЗАПАС_МИН:.0f} мин"
+    if verdict.get("from_last_gap"):
+        print(f"   допуск свежести .. {human_span(verdict['tolerance'])} = ПОСЛЕДНИЙ промежуток"
+              f" {human_span(verdict['tolerance_base'])} × {TOLERANCE_FACTOR} + {TOLERANCE_MARGIN_MIN:.0f} мин"
               " (медиана не взята: шаг менялся, и удлинение ПОВТОРИЛОСЬ)")
     else:
-        print(f"   допуск свежести .. {мин(и['допуск'])} = шаг × {ДОПУСК_ДОЛЯ} + {ДОПУСК_ЗАПАС_МИН:.0f} мин")
-        if и.get("менялся"):
+        print(f"   допуск свежести .. {human_span(verdict['tolerance'])} = шаг × {TOLERANCE_FACTOR} + {TOLERANCE_MARGIN_MIN:.0f} мин")
+        if verdict.get("changed"):
             print("      ⚖️ последний промежуток за основу НЕ взят: удлинение ОДИНОЧНО"
                   " (предпоследний не длиннее шага).")
             print("         Так выглядит ПАУЗА — снятое задание или простой, — а не новый ритм;"
                   " за паузой окно слепоты не растёт.")
-    print(f"   ⚠️ окно слепоты .. {мин(и['допуск'])}: сняли задание сейчас — ответ ещё"
+    print(f"   ⚠️ окно слепоты .. {human_span(verdict['tolerance'])}: сняли задание сейчас — ответ ещё"
           " будет «держится» столько времени")
-    м = и.get("минута", 0)
-    print(f"   удар ложится на .. минуту {int(м // 60):02d}:{int(м % 60):02d} часа"
-          f"   (разброс по ряду {и['минута_разброс']:.0f} c)")
-    наказ = и.get("наказ")
-    if наказ:
-        м_имя = ОБР_ШАГ_В_ИМЕНИ.search(наказ)
-        if м_имя:
-            обещано = int(м_имя.group(1)) * 60
-            если_врёт = abs(обещано - и["шаг"]) > 60
-            знак = "🔴 ИМЯ ЛЖЁТ" if если_врёт else "✅ сходится"
-            print(f"   имя каталога ..... {наказ} обещает {мин(обещано)} · измерено"
-                  f" {мин(и['шаг'])} ⇒ {знак}")
-            if если_врёт:
+    minute_of_hour = verdict.get("minute", 0)
+    print(f"   удар ложится на .. минуту {int(minute_of_hour // 60):02d}:{int(minute_of_hour % 60):02d} часа"
+          f"   (разброс по ряду {verdict['minute_spread']:.0f} c)")
+    task_dir = verdict.get("task_dir")
+    if task_dir:
+        step_in_name = STEP_IN_NAME_PATTERN.search(task_dir)
+        if step_in_name:
+            promised = int(step_in_name.group(1)) * 60
+            name_lies = abs(promised - verdict["step"]) > 60
+            mark = "🔴 ИМЯ ЛЖЁТ" if name_lies else "✅ сходится"
+            print(f"   имя каталога ..... {task_dir} обещает {human_span(promised)} · измерено"
+                  f" {human_span(verdict['step'])} ⇒ {mark}")
+            if name_lies:
                 print("      ⚖️ имя — записанное УТВЕРЖДЕНИЕ, то есть та же память, только на диске.")
                 print("         Судить по нему нельзя: оно переживает смену шага и молчит об этом.")
         else:
-            print(f"   имя каталога ..... {наказ} (шага в имени нет)")
+            print(f"   имя каталога ..... {task_dir} (шага в имени нет)")
     else:
         print("   каталога наказа .. в ударах не назван (подача идёт не наказ-файлом)")
-    if подробно:
-        print(f"   первый удар ...... {и['первый'].strftime('%Y-%m-%d %H:%M:%S')} UTC,"
-              f" всего ударов {и['ударов']}")
+    if verbose:
+        print(f"   первый удар ...... {verdict['first'].strftime('%Y-%m-%d %H:%M:%S')} UTC,"
+              f" всего ударов {verdict['beats']}")
 
 
 def main() -> int:
     p = argparse.ArgumentParser(add_help=True)
-    p.add_argument("--роль", dest="роль", default=None, help="токен роли; без него — весь контур")
-    p.add_argument("--каталог", dest="каталог", default=None, help="каталог записей (для опытов на копии)")
-    p.add_argument("--на", dest="на", default=None, help="судить НА этот час UTC (ISO), а не на сейчас")
-    p.add_argument("--подробно", action="store_true")
+    # ⚖️ ПРЕЖНИЕ РУССКИЕ ФЛАГИ ОСТАЮТСЯ СИНОНИМАМИ (карточка #719, слово владельца 07.09
+    # 15:47 UTC): имена кода — по-английски, но вызовы с прежними флагами живут в памяти
+    # ролей, в записках и в документах. Снять их — тихо сломать чужой вызов.
+    p.add_argument("--role", "--роль", dest="role", default=None,
+                   help="токен роли; без него — весь контур")
+    p.add_argument("--dir", "--каталог", dest="records_dir", default=None,
+                   help="каталог записей (для опытов на копии)")
+    p.add_argument("--at", "--на", dest="at", default=None,
+                   help="судить НА этот час UTC (ISO), а не на сейчас")
+    p.add_argument("--verbose", "--подробно", dest="verbose", action="store_true")
     p.add_argument("--db", dest="db", default=None,
                    help="база контура, откуда берутся имена ролей (по умолчанию — живая; "
                         "для опытов — копия)")
     a = p.parse_args()
 
-    if a.каталог:
-        корень = pathlib.Path(a.каталог)
+    if a.records_dir:
+        root = pathlib.Path(a.records_dir)
     else:
-        корень, пояснение, отказ = каталог_записей()
-        if отказ:
-            print(f"⛔ ОТКАЗ МЕРИТЬ: каталог записей не определён — {отказ}")
+        root, note, refusal = chat_records_dir()
+        if refusal:
+            print(f"⛔ ОТКАЗ МЕРИТЬ: каталог записей не определён — {refusal}")
             print("   Это НЕ «ритм не бьётся»: искать было негде. Разные беды — разные ответы.")
             return 2
-        print(f"ℹ️ {пояснение}")
-    if not корень.is_dir():
-        print(f"⛔ ОТКАЗ МЕРИТЬ: каталога записей нет — {корень}")
+        print(f"ℹ️ {note}")
+    if not root.is_dir():
+        print(f"⛔ ОТКАЗ МЕРИТЬ: каталога записей нет — {root}")
         print("   Это НЕ «ритм не бьётся»: искать было негде. Разные беды — разные ответы.")
         return 2
 
-    сейчас = час_рукой(a.на) if a.на else dt.datetime.now(dt.timezone.utc)
-    if a.на and сейчас is None:
-        print(f"⛔ ОТКАЗ: час «{a.на}» не разобран. Нужен ISO, например 2026-08-31T03:00")
+    now = time_by_hand(a.at) if a.at else dt.datetime.now(dt.timezone.utc)
+    if a.at and now is None:
+        print(f"⛔ ОТКАЗ: час «{a.at}» не разобран. Нужен ISO, например 2026-08-31T03:00")
         return 2
 
-    файлы = sorted(корень.glob("*.jsonl"))
-    print(f"📂 записей разговоров: {len(файлы)} файлов в {корень}")
-    print(f"🕐 сужу на {сейчас.strftime('%Y-%m-%d %H:%M:%S')} UTC"
-          + (f"  (час задан рукой «{a.на}» и прочитан КАК UTC)" if a.на else "  (час взят у системы)"))
+    files = sorted(root.glob("*.jsonl"))
+    print(f"📂 записей разговоров: {len(files)} файлов в {root}")
+    print(f"🕐 сужу на {now.strftime('%Y-%m-%d %H:%M:%S')} UTC"
+          + (f"  (час задан рукой «{a.at}» и прочитан КАК UTC)" if a.at else "  (час взят у системы)"))
 
     # Имена ролей — из таблицы roles (любое состояние жизни). Источник называется строкой
     # в выводе всегда: образец вместо данных — это другое поведение, и молчать о нём нельзя.
@@ -552,22 +563,22 @@ def main() -> int:
               f"букв, цифр, «_» или «-»), а не из данных контура: {names_note}. Образец "
               "принимает за роль и постороннее слово в верхнем регистре после «--role».")
 
-    по_ролям: dict[str, list[tuple[str, float, dict]]] = {}
-    безымянных = 0
-    for f in файлы:
-        токены, удары = прочитать_чат(f, names)
-        if not токены:
-            безымянных += 1
+    by_role: dict[str, list[tuple[str, float, dict]]] = {}
+    unnamed = 0
+    for f in files:
+        tokens, beats = read_chat(f, names)
+        if not tokens:
+            unnamed += 1
             continue
-        топ, счёт = токены.most_common(1)[0]
-        доля = счёт / sum(токены.values())
-        if доля < 0.80:
-            безымянных += 1
+        top, count = tokens.most_common(1)[0]
+        share = count / sum(tokens.values())
+        if share < 0.80:
+            unnamed += 1
             continue
-        по_ролям.setdefault(топ, []).append((f.name[:8], доля, судить(удары, сейчас)))
+        by_role.setdefault(top, []).append((f.name[:8], share, judge(beats, now)))
 
-    print(f"   чатов с опознанной ролью {sum(len(v) for v in по_ролям.values())}"
-          f" · роль не установлена у {безымянных}")
+    print(f"   чатов с опознанной ролью {sum(len(v) for v in by_role.values())}"
+          f" · роль не установлена у {unnamed}")
 
     # 🎯 КАРТОЧКА #551 ① (находка @RCC при приёмке карточки #369, 05.09 05:15 UTC).
     # ДВА ВХОДА В ОДНУ БЕДУ, И ПОТОМУ ОДНА ПРАВКА В ОДНОМ МЕСТЕ: каталог есть,
@@ -575,37 +586,37 @@ def main() -> int:
     # к «судить некого», и оба прежде отвечали кодом 0, то есть «всё в порядке».
     # ⚖️ Два одинаковых блока разошлись бы молча (класс @ING, оплачен 05.09 03:30 UTC),
     #    поэтому вход один: пусто ли то, по чему судим.
-    if not по_ролям:
+    if not by_role:
         print("\n⛔ ОТКАЗ МЕРИТЬ: судить некого — ни одного чата с опознанной ролью.")
-        if not файлы:
+        if not files:
             print("   Каталог есть, а записей разговоров в нём НЕТ ВОВСЕ.")
         else:
-            print(f"   Записи есть ({len(файлы)}), но роль не установлена НИ В ОДНОЙ.")
+            print(f"   Записи есть ({len(files)}), но роль не установлена НИ В ОДНОЙ.")
         print("   Это НЕ «ритм не бьётся» и не «всё держится»: мерить было нечего.")
         print("   ⚖️ Одно «ничего» на две разные беды — то самое, из-за чего зовущий")
         print("      гадает и гадает неверно. Поэтому отказ, а не зелёный код.")
-        return НЕ_ЗАПУСКАЛАСЬ
+        return NEVER_RAN
 
-    цель = a.роль.upper() if a.роль else None
-    if цель and цель not in по_ролям:
-        print(f"\n⛔ ОТКАЗ МЕРИТЬ: чата роли {цель} среди записей не нашлось.")
+    target = a.role.upper() if a.role else None
+    if target and target not in by_role:
+        print(f"\n⛔ ОТКАЗ МЕРИТЬ: чата роли {target} среди записей не нашлось.")
         print("   Это НЕ «ритм не бьётся»: чат мог быть в другом каталоге проектов")
         print("   или не сохранён вовсе. Пустота с названной причиной — не пустота-умолчание.")
         return 2
 
-    худший = ДЕРЖИТСЯ
-    for роль in sorted(по_ролям):
-        if цель and роль != цель:
+    worst = ALIVE
+    for role in sorted(by_role):
+        if target and role != target:
             continue
         # У роли бывает несколько чатов (пересоздание). Судим по чату с самым свежим ударом.
-        строки = sorted(по_ролям[роль],
-                        key=lambda x: (x[2]["последний"] or dt.datetime.min.replace(tzinfo=dt.timezone.utc)))
-        чат, доля, и = строки[-1]
-        печатать(роль, чат, доля, и, a.подробно)
-        if len(строки) > 1:
-            прочие = ", ".join(f"{c} ({'нет ударов' if s['ударов'] == 0 else s['последний'].strftime('%d.%m %H:%M')})"
-                               for c, _, s in строки[:-1])
-            print(f"   ещё чаты этой роли: {прочие} — сужу по самому свежему")
+        rows = sorted(by_role[role],
+                        key=lambda x: (x[2]["last"] or dt.datetime.min.replace(tzinfo=dt.timezone.utc)))
+        chat, share, verdict = rows[-1]
+        report(role, chat, share, verdict, a.verbose)
+        if len(rows) > 1:
+            others = ", ".join(f"{c} ({'нет ударов' if s['beats'] == 0 else s['last'].strftime('%d.%m %H:%M')})"
+                               for c, _, s in rows[:-1])
+            print(f"   ещё чаты этой роли: {others} — сужу по самому свежему")
         # 🎯 КАРТОЧКА #551 ②: сводим по ТЯЖЕСТИ, а не по величине кода. Коды — договор
         # с зовущим (0/1/2/3) и меняться не могут, но по ним нельзя брать максимум:
         # НЕЧЕМ=3 больше, чем НЕ_БЬЁТСЯ=1, и настоящая поломка пряталась за отказом
@@ -613,7 +624,7 @@ def main() -> int:
         # ⚖️ Здесь стояли ДВЕ ветки, делавшие одно и то же — след вопроса, который
         #    автор увидел и не дорешал. Оставлять такой след опаснее, чем ошибку:
         #    он выглядит как продуманное различение.
-        худший = по_тяжести(худший, и["исход"])
+        worst = worse_of(worst, verdict["outcome"])
 
     print("\n⛔ ЧЕГО ЭТОТ ОТВЕТ НЕ ЗНАЕТ:")
     print("   · реестра заданий планировщика на машине НЕТ — «не бьётся» выведено ИЗ ТИШИНЫ")
@@ -622,7 +633,7 @@ def main() -> int:
     print("     · задание снято ЗАКОННО, по слову владельца, а замена ему НЕ ЗАВЕДЕНА —")
     print("       роль осталась без самопробуждения молча (случай @STUD, записка #4778 §①)")
     print("   · внутри окна слепоты (напечатано выше) снятое задание ещё выглядит живым")
-    return худший
+    return worst
 
 
 if __name__ == "__main__":

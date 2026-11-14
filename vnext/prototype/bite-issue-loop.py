@@ -31,6 +31,8 @@ import mezo_target  # noqa: E402 — испытуемое (gordi-issue.py) бе�
                     # как остальные приёмки набора; live_scripts/live_db остаются для СОСЕДЕЙ
                     # (backlog.py) и снимка базы, а не для самого испытуемого механизма.
 
+# живой-каталог-умышленно (карточка #682): испытуемое здесь берётся через mezo_target.script(), а этот каталог оставлен СОСЕДЯМ
+# и снимку базы — так сказано и в пояснении ниже
 SCRIPTS = mezo_paths.live_scripts()
 LIVE_DB = mezo_paths.live_db()
 sys.path.insert(0, str(SCRIPTS))

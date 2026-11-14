@@ -81,8 +81,9 @@ import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402 — импорт из vnext-tools (своя копия), как велит карточка
+import mezo_target  # noqa: E402 — испытуемое через общий выбор копии (карточка #682)
 
-SCRIPTS = mezo_paths.live_scripts()
+SCRIPTS = mezo_target.scripts_root()
 # mezo_stand — из своего каталога, как у большинства приёмок (Э6, карточка #680): empty_db в нём
 # новая, и копия в S (.mezosync/scripts) получает её только при установке выпуска. До Э6 —
 # из S, по слову карточки #605: тогда помощник брал только new/copy_tool/finish, одинаковые в обеих.

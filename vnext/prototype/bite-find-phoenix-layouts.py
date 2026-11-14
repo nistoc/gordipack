@@ -56,8 +56,9 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402 — своя копия (own-каталог), как у bite-archive-move-records.py
+import mezo_target  # noqa: E402 — испытуемое через общий выбор копии (карточка #682)
 
-SCRIPTS = mezo_paths.live_scripts()
+SCRIPTS = mezo_target.scripts_root()
 FIND = SCRIPTS / "find-phoenix.py"
 READ = SCRIPTS / "read-phoenix.py"
 ARCHIVE = pathlib.Path(__file__).resolve().parent / "memory-archive.py"

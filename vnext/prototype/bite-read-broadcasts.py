@@ -90,7 +90,7 @@ def build_stand(tool_dir: Path) -> Path:
     shutil.copy2(LIVE_TOOL, tool_dir / "read-broadcasts.py")
     mezo_paths = HERE / "mezo_paths.py"
     shutil.copy2(mezo_paths, tool_dir / "mezo_paths.py")
-    local_time = mezo_target.scripts_root() / "local_time.py"
+    local_time = mezo_target.script("local_time.py")
     if local_time.exists():
         shutil.copy2(local_time, tool_dir / "local_time.py")
     return tool_dir / "read-broadcasts.py"

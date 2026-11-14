@@ -20,6 +20,7 @@ r"""ПРИЁМКА выбора испытуемой копии в общем н
 разложенная как клон пакета: скрипты отдельно, соседи — в vnext/prototype (случаи ⑪–⑬).
 """
 import os
+import pathlib
 import shutil
 import subprocess
 import sys
@@ -296,6 +297,141 @@ def cases(tmp) -> bool:
         if st_nb_bad:
             shutil.rmtree(st_nb_bad, ignore_errors=True)
 
+    # критерий ④ карточки #682 — разбор исходников, а не поведение набора
+    ok &= tested_choice_cases()
+
+    return ok
+
+
+# ═══ КРИТЕРИЙ ④ КАРТОЧКИ #682: НИКТО НЕ БЕРЁТ ИСПЫТУЕМОЕ МИМО ОБЩЕГО ВЫБОРА ═══════════════════
+# Прежние случаи судят ПОВЕДЕНИЕ набора на копии. Этот судит ИСХОДНИКИ: приёмка, достраивающая
+# имя инструмента к mezo_paths.live_scripts(), названной копии не слышит вовсе — и, направленная
+# на копию, испытывает живой файл. Поведением это не ловится: прогон зелен и там и там, пока
+# копия и живое совпадают (а они совпадают почти всегда — ровно поэтому беда прожила с 05.10).
+# 📏 Замер 13.11 19:18 UTC разбором дерева: таких мест было 41 в 37 приёмках, стало 0.
+def _tested_via_live(root: pathlib.Path):
+    """Приёмки, достраивающие имя инструмента к live_scripts(), минуя mezo_target.
+
+    Признак ОДИН и точный: путь ДЕЛИТСЯ на строку-литерал, кончающуюся на .py или .sql
+    (Path / "guard-all.py"), либо os.path.join с такой строкой. Прослеживаются и имена,
+    которым значение присвоено (SCRIPTS = live_scripts(); SCRIPTS / "backlog.py").
+    ⛔ ГРАНИЦА: разбор видит присвоения внутри ОДНОГО файла. Путь, уехавший в список, поле
+    объекта или другой модуль, он не увидит — и молча ни к чему не припишет.
+    """
+    import ast as _ast
+    out = []
+
+    def _called(node):
+        f, parts = node.func, []
+        while isinstance(f, _ast.Attribute):
+            parts.append(f.attr)
+            f = f.value
+        if isinstance(f, _ast.Name):
+            parts.append(f.id)
+        return ".".join(reversed(parts))
+
+    def _tool_literal(n):
+        return (isinstance(n, _ast.Constant) and isinstance(n.value, str)
+                and n.value.endswith((".py", ".sql")) and "*" not in n.value)
+
+    # 🎯 ОГОВОРКА ОБЪЯВЛЯЕТСЯ В КОДЕ, А НЕ В ГОЛОВЕ ПРОВЕРКИ. Разбор не умеет отличить
+    # испытуемое от СОСЕДА и от снимка базы: и то и другое — «путь плюс имя .py». Приёмка,
+    # берущая живой каталог НАМЕРЕННО, пишет рядом маркер MARK — и перестаёт быть находкой.
+    # Без маркера проверка краснела бы на верном коде и научила бы себя отключать.
+    MARK = "живой-каталог-умышленно"
+    for path in sorted(root.glob("bite-*.py")):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if "live_scripts" not in text:
+            continue
+        rows_src = text.splitlines()
+        try:
+            tree = _ast.parse(text)
+        except SyntaxError:
+            out.append((path.name, 0, "не разбирается — к разряду НЕ приписана"))
+            continue
+        # ⚠️ Признак судит МЕСТО, а не файл. Прежняя редакция пропускала приёмку, если та
+        # где-то зовёт mezo_target — и слепла на смешанных: одно место через общий выбор,
+        # другое напрямую через live_scripts. Поймано нарочной поломкой ⑮ 13.11 19:48 UTC:
+        # сломанная копия осталась «чистой», потому что её import mezo_target никуда не делся.
+        calls = []
+        for n in _ast.walk(tree):
+            if isinstance(n, _ast.Call) and _called(n).endswith("live_scripts"):
+                calls.append(n)
+        if not calls:
+            continue
+        named = {}
+        for n in _ast.walk(tree):
+            if isinstance(n, _ast.Assign) and n.value is not None:
+                inner = [c for c in _ast.walk(n.value) if c in calls]
+                if inner:
+                    for t in n.targets:
+                        if isinstance(t, _ast.Name):
+                            named[t.id] = inner[0].lineno
+
+        def _line(node):
+            inner = [c for c in _ast.walk(node) if c in calls]
+            if inner:
+                return inner[0].lineno
+            got = {x.id for x in _ast.walk(node) if isinstance(x, _ast.Name)} & set(named)
+            return named[next(iter(got))] if got else None
+
+        def _excused(ln):
+            """Маркер в строке вызова или в двух строках над ней — исключение ОБЪЯВЛЕНО."""
+            lo = max(0, ln - 3)
+            return any(MARK in r for r in rows_src[lo:ln])
+
+        for n in _ast.walk(tree):
+            if isinstance(n, _ast.BinOp) and isinstance(n.op, _ast.Div) and _tool_literal(n.right):
+                ln = _line(n.left)
+                if ln is not None and not _excused(ln):
+                    out.append((path.name, ln, (_ast.get_source_segment(text, n) or "")[:90]))
+            elif isinstance(n, _ast.Call) and _called(n).endswith("join") and n.args:
+                ln = _line(n.args[0])
+                if ln is not None and not _excused(ln) and any(_tool_literal(a) for a in n.args[1:]):
+                    out.append((path.name, ln, (_ast.get_source_segment(text, n) or "")[:90]))
+    # одно МЕСТО — одна находка: выражение «SCRIPTS / "x.py"» попадает в обход дважды
+    # (как употребление имени и как часть объемлющего выражения), и без этого счёт удваивался
+    seen, uniq = set(), []
+    for name, ln, seg in out:
+        if (name, ln) in seen:
+            continue
+        seen.add((name, ln))
+        uniq.append((name, ln, seg))
+    return uniq
+
+
+def tested_choice_cases() -> bool:
+    """Случаи ⑭ и ⑮ критерия ④ карточки #682."""
+    here = pathlib.Path(HERE)
+    found = _tested_via_live(here)
+    ok = case("⑭ ни одна приёмка не берёт испытуемое мимо общего выбора (разбор исходников)",
+              not found,
+              f"приёмок с такой формой: {len(found)}"
+              + ("" if not found else " — " + "; ".join(f"{n}:{ln}" for n, ln, _ in found[:6])),
+              differ=True)
+
+    # ⑮ НАРОЧНАЯ ПОЛОМКА: в КОПИИ одной приёмки возвращаем прежнюю форму. Копия кладётся
+    #    в отдельный каталог — живые файлы не трогаются (это проверяется случаем же: имя
+    #    поломанного файла печатается).
+    import tempfile as _tf
+    with _tf.TemporaryDirectory(prefix="bite-target-choice-") as tmp:
+        broken_dir = pathlib.Path(tmp) / "prototype"
+        broken_dir.mkdir()
+        sample = here / "bite-guard-all-retired-wiring.py"
+        text = sample.read_text(encoding="utf-8")
+        hurt = text.replace('mezo_target.script("guard-all.py")',
+                            'mezo_paths.live_scripts() / "guard-all.py"', 1)
+        if hurt == text:
+            return case("⑮ НАРОЧНАЯ ПОЛОМКА: образец для поломки не найден",
+                        False, f"в {sample.name} нет строки, которую можно сломать —"
+                        " случай ⑭ остался бы без различителя", differ=True) and ok
+        (broken_dir / sample.name).write_bytes(hurt.encode("utf-8"))
+        hurt_found = _tested_via_live(broken_dir)
+        ok &= case("⑮ НАРОЧНАЯ ПОЛОМКА: прежняя форма в копии приёмки ⇒ ⑭ её НАХОДИТ",
+                   len(hurt_found) == 1 and hurt_found[0][0] == sample.name,
+                   f"в поломанной копии найдено {len(hurt_found)} "
+                   + (f"({hurt_found[0][0]}:{hurt_found[0][1]})" if hurt_found else "— разбор слеп"),
+                   differ=True)
     return ok
 
 

@@ -21,9 +21,10 @@ import sys
 import tempfile
 from pathlib import Path
 import mezo_paths  # пути машины выводятся, не впечатаны (#153)
+import mezo_target  # noqa: E402 — испытуемое через общий выбор копии (карточка #682)
 import mezo_stand  # временный каталог убирается при успехе, сохраняется при провале
 
-GUARD = mezo_paths.live_scripts() / "guard-all.py"
+GUARD = mezo_target.script("guard-all.py")
 LIVE = mezo_paths.live_db()
 
 ORDER = r"python .mezosync\scripts\read-messages.py --role COORD"

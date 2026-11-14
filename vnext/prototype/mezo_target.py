@@ -20,18 +20,84 @@ import sys
 from pathlib import Path
 import mezo_paths  # пути машины выводятся, не впечатаны (#153)
 
-LIVE_SCRIPTS = mezo_paths.live_scripts()
+# ⚰️ Здесь стояло LIVE_SCRIPTS = mezo_paths.live_scripts() — строка УРОВНЯ МОДУЛЯ. Снято
+# 2026-11-13 по карточке #682: она зовёт поиск живого контура на ИМПОРТЕ, то есть прежде, чем
+# кто-либо прочитает MEZO_SCRIPTS_ROOT. Следствия, оба измерены:
+#   · прогон по НАЗВАННОЙ копии требовал живого контура и умирал там, где его нет
+#     (замер 19:09 UTC: import mezo_target код 1 на копии пакета, тогда как mezo_paths
+#     и mezo_stand импортируются чисто);
+#   · любая приёмка, зовущая этот модуль, умирала ДО СВОЕЙ ПЕРВОЙ СТРОКИ — её собственный
+#     отказ словами не успевал напечататься (попутная находка карточки #689).
+# ⇒ основание берётся ЛЕНИВО, а выбор испытуемого — у общего места (mezo_paths.tested_scripts),
+# чтобы правило жило в одном экземпляре, а не в двух расходящихся редакциях.
+_LIVE_CACHE = None
+
+
+def _live_scripts():
+    """Живой каталог инструментов — считается ОДИН раз и только когда он правда нужен.
+
+    Не нашёлся — возвращает None, а не роняет зовущего: «живого контура нет» значит, что
+    заём из живого невозможен, и проверять запрет займа не на чем (карточка #682).
+    """
+    global _LIVE_CACHE
+    if _LIVE_CACHE is None:
+        try:
+            _LIVE_CACHE = mezo_paths.live_scripts()
+        except SystemExit:
+            _LIVE_CACHE = False
+    return _LIVE_CACHE or None
+
+
+def __getattr__(name):
+    """LIVE_SCRIPTS остаётся ДОСТУПНЫМ ИМЕНЕМ, но считается лениво (PEP 562).
+
+    🩸 Оплачено моей же ошибкой 13.11 19:53 UTC: сняв строку уровня модуля, я сняла и ИМЯ,
+    которым пользуются шесть приёмок (bite-to-me-empty, bite-shift-end, bite-local-paths,
+    bite-bridge-own-letters, bite-phoenix-foreign-edit, bite-role-rights) — живой прогон
+    набора встал «AttributeError: module has no attribute LIVE_SCRIPTS», и четыре случая
+    приёмки выбора копии покраснели.
+    ⚖️ Класс: СНЯТИЕ СТРОКИ УРОВНЯ МОДУЛЯ СНИМАЕТ И ПУБЛИЧНОЕ ИМЯ, а зовущие его не в этом
+    файле — их молчание выглядит как отсутствие зовущих.
+    """
+    if name == "LIVE_SCRIPTS":
+        live = _live_scripts()
+        if live is None:
+            raise AttributeError(
+                "mezo_target.LIVE_SCRIPTS: живого контура отсюда не видно — задай"
+                " MEZO_CONTAINER=<контейнер>. Имя считается лениво (карточка #682).")
+        return live
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def scripts_root() -> Path:
-    return Path(os.environ.get("MEZO_SCRIPTS_ROOT") or LIVE_SCRIPTS)
+    """Испытуемый каталог — через общий выбор: одно правило на весь пакет (карточка #682).
+
+    ⚠️ Откат на прежнюю логику, когда рядом лежит СТАРЫЙ mezo_paths без общего выбора:
+    пакет раскатывается не атомарно, и в стендах с копией живого каталога соседом
+    оказывается модуль без tested_scripts. Падать на этом значило бы ломать прогоны
+    из-за порядка установки (замер 13.11 19:53 UTC).
+    """
+    chooser = getattr(mezo_paths, "tested_scripts", None)
+    if chooser is not None:
+        return chooser(__file__, "приёмка (выбор испытуемой копии)")
+    root = os.environ.get("MEZO_SCRIPTS_ROOT")
+    if root:
+        return Path(root)
+    live = _live_scripts()
+    if live is None:
+        sys.exit("⛔ НЕ ЗАПУСТИЛАСЬ: испытуемый каталог не назван (MEZO_SCRIPTS_ROOT пуст),"
+                 " а живого контура отсюда не видно. Код 2 — отказ, а не провал.")
+    return live
 
 
 def _check_not_live(p: Path, what: str) -> None:
     if os.environ.get("MEZO_FORBID_LIVE") != "1":
         return
+    live = _live_scripts()
+    if live is None:
+        return                       # живого контура нет — заимствовать из него нечего
     try:
-        p.resolve().relative_to(LIVE_SCRIPTS.resolve())
+        p.resolve().relative_to(live.resolve())
     except ValueError:
         return
     sys.exit(f"⛔ НЕ ЗАПУСТИЛАСЬ: {what} взят(о) ИЗ ЖИВОГО КОНТУРА ({p}).\n"
@@ -60,7 +126,12 @@ def label() -> str:
     ⇒ Подпись обязана СПРАШИВАТЬ, а не помнить: тогда она не может разойтись с делом.
     """
     root = scripts_root()
-    return "ЖИВОЙ контур" if str(root) == str(LIVE_SCRIPTS) else f"копия: {root}"
+    # ⚠️ Живое основание спрашиваем ТОЛЬКО когда копия не названа: иначе подпись сама
+    # потребовала бы живого контура, которого на прогоне по копии может не быть (карточка #682).
+    if os.environ.get("MEZO_SCRIPTS_ROOT"):
+        return f"копия: {root}"
+    live = _live_scripts()
+    return "ЖИВОЙ контур" if live is not None and str(root) == str(live) else f"копия: {root}"
 
 
 def migration(name: str) -> Path:

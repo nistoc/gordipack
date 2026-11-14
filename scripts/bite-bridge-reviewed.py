@@ -23,9 +23,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_stand  # noqa: E402 — временный каталог убирается при успехе, сохраняется при провале
+import mezo_paths  # noqa: E402 — базу берём резолвером, а не по положению файла (карточка #689)
 
 HERE = Path(__file__).resolve().parent
-LIVE = HERE.parent / "mezosync.db"
+# База — РЕЗОЛВЕРОМ, а не «рядом с моим каталогом». В установленном контуре это один
+# и тот же путь, а в клоне пакета рядом лежит ПУСТОЙ mezosync.db в 0 байт: приёмка
+# снимала копию пустышки и падала позже на «no such table» (карточка #689, замер
+# 13.11 18:42 UTC). Базы нет — отказ словами с кодом 2, а не падение.
+LIVE = mezo_paths.live_db_for_check(__file__, "приёмка разбора записки моста")
 PY = sys.executable
 FILE = "answer.probe-bite-bridge.md"          # имя, которого в ленте нет ни разу
 ok = True

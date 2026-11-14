@@ -91,6 +91,7 @@ import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
+import mezo_target  # noqa: E402 — испытуемое через общий выбор копии (карточка #682)
 import mezo_stand  # noqa: E402 — среда запуска испытуемого (карточка #613)
 
 CASES = DIFFER = GREENS = 0
@@ -214,7 +215,7 @@ def main() -> int:
                                          "условие-по-слову"])
     a = ap.parse_args()
 
-    live_tool = mezo_paths.live_scripts(__file__) / "messages-fold.py"
+    live_tool = mezo_target.script("messages-fold.py")
     if not live_tool.is_file():
         print(f"⚪ не проверено: инструмента переноса записок messages-fold.py нет в контуре "
               f"(ожидался в {live_tool}) — свежая выгрузка пакета собрана до его появления "
@@ -233,7 +234,7 @@ def main() -> int:
         # копия инструмента и его соседей рядом (он читает mezo_refs из своего каталога)
         tool = stand / "messages-fold.py"
         shutil.copy2(live_tool, tool)
-        shutil.copy2(mezo_paths.live_scripts(__file__) / "mezo_refs.py", stand / "mezo_refs.py")
+        shutil.copy2(mezo_target.script("mezo_refs.py"), stand / "mezo_refs.py")
         for name in ("read-broadcasts.py", "write-message.py"):
             src_file = mezo_paths.live_scripts(__file__) / name
             if src_file.is_file():

@@ -35,6 +35,8 @@ import mezo_target  # noqa: E402
 SUBJECT = mezo_target.script("write-message.py")
 print(f"⚖️ испытуется: {mezo_target.label()}")
 
+# живой-каталог-умышленно (карточка #682): соседние инструменты и снимок базы берутся из ЖИВОГО каталога намеренно: предмет этой
+# приёмки — граница холостого прогона, а не выбор испытуемой копии
 SCRIPTS = mezo_paths.live_scripts()
 LIVE_DB = mezo_paths.live_db()
 sys.path.insert(0, str(SCRIPTS))

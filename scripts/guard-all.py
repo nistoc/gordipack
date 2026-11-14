@@ -237,6 +237,129 @@ NO_COORDINATION, DECLARED_BY = _coordination_opt_out_declared()
 # (git checkout @opssre #2793, восстановление из бэкапа) без правки содержимого → вечно-красный
 # без вины. Не возвращать отсечку по времени: критерий неприкосновенности — расхождение с коммитом.
 
+
+# ═══ ЧТО ЗНАЕТ GIT О ЗАМОРОЖЕННЫХ md (карточка #687) ═══════════════════════════════════════════
+# Признак неприкосновенности — РАСХОЖДЕНИЕ С КОММИТОМ, значит и вопрос «а были ли такие файлы»
+# задаётся тому же судье. Прежний различитель смотрел на ленту («в контуре нет ни одной записки»)
+# и отвечал не на тот вопрос: у контура из пакета замороженных md нет никогда, а первая записка
+# включала «⚠️ … НОЛЬ» навсегда. Вопрос к git различает ТРИ разных пустоты: «git таких файлов не
+# знает» · «знает, а на диске их нет» · «спросить нечем».
+def _git_say(repo, args):
+    """Ответ git строкой либо None, если спросить не удалось. Возврата «пусто вместо ошибки» нет
+    намеренно: пустой вывод и неотвеченный вопрос — разные исходы, и путать их нельзя."""
+    try:
+        r = subprocess.run(["git", "-C", str(repo)] + list(args),
+                           capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.stdout if r.returncode == 0 else None
+
+
+def _git_repo_of(path):
+    """Репозиторий, который ДЕЙСТВИТЕЛЬНО содержит каталог, — ВОПРОСОМ к git, а не отсчётом уровней.
+
+    ⚰️ Здесь стоял отсчёт `COORDINATION.parents[1]`: он верен для раскладки Atlas
+    (coordination → .mezosync → atlas.archs) и неверен для раскладки пакета, где каталог
+    согласования лежит в корне контура — отсчёт указывал ВЫШЕ контура, на посторонний каталог.
+    → (корень репозитория, "") либо (None, причина).
+    """
+    out = _git_say(path, ["rev-parse", "--show-toplevel"])
+    if out is None:
+        return None, "каталог не под git"
+    top = out.strip()
+    if not top:
+        return None, "git не назвал корень репозитория"
+    return Path(top), ""
+
+
+def _dir_key(path):
+    """ОДИН ключ сравнения каталогов — разрешённый путь в едином регистре.
+
+    🩸 Оплачено замером 13.11 21:27 UTC (карточка #687): сравнение путей ОБЪЕКТАМИ Path
+    считало разными каталогами один и тот же. git называет корень репозитория длинным именем
+    пользователя и прямыми косыми, перечисление на диске — коротким («N1F27~1.TEM») и
+    обратными. Признак не пропускал НИ ОДНОГО ответа git, и положение «файл унесён с диска»
+    печатало зелёное: пустой ответ неотличим от чистоты.
+    """
+    try:
+        return os.path.normcase(os.path.realpath(str(path)))
+    except OSError:
+        return os.path.normcase(str(path))
+
+
+def _is_frozen_file(coord_keys, path):
+    """ТОТ ЖЕ признак замороженного файла, что у перечисления на диске, — одной функцией на обе
+    стороны. Два отдельных признака сошлись бы в день написания и разошлись молча.
+
+    coord_keys — (ключ каталога согласования, ключ его подкаталога phoenix) из _dir_key().
+    ⚠️ Признак нужен именно здесь, а не в образце пути для git: подстановочный знак в образце
+    пути git покрывает и косую черту (wildmatch без WM_PATHNAME), то есть «phoenix/*.md» у git
+    поймал бы и «phoenix/вложенный/x.md», которого перечисление на диске не видит.
+    """
+    if path.name == "sync.rules.md":
+        return False
+    parent = _dir_key(path.parent)
+    if parent == coord_keys[0]:
+        return path.name.startswith("sync.") and path.name.endswith(".md")
+    return parent == coord_keys[1] and path.name.endswith(".md")
+
+
+def _frozen_git_view(coord_dirs):
+    """Взгляд git на замороженные md по ВСЕМ каталогам согласования разом.
+
+    → {"state": "ответ" | "не-репозиторий" | "молчит", "known": [...], "missing": [имена],
+       "changed": [имена], "untracked": [имена], "why": строка, "partial": строка}
+    ⛔ ГРАНИЦА: каталог, по которому git не ответил, в счёт известных НЕ попадает и в «partial»
+    назван вслух — иначе частичный охват читался бы как полный.
+    """
+    known, missing, changed, untracked = [], [], [], []
+    unanswered, no_repo, answered = [], [], 0
+    for coord_dir in coord_dirs:
+        repo, why = _git_repo_of(coord_dir)
+        if repo is None:
+            (no_repo if why == "каталог не под git" else unanswered).append(
+                f"{coord_dir.as_posix()}: {why}")
+            continue
+        specs = [f"{coord_dir.as_posix()}/sync.*.md", f"{coord_dir.as_posix()}/phoenix/*.md"]
+        keys = (_dir_key(coord_dir), _dir_key(coord_dir / "phoenix"))
+        ls = _git_say(repo, ["ls-files", "--"] + specs)
+        st = _git_say(repo, ["status", "--porcelain", "--"] + specs)
+        if ls is None or st is None:
+            unanswered.append(f"{coord_dir.as_posix()}: git не ответил "
+                              f"({'ls-files' if ls is None else 'status'})")
+            continue
+        answered += 1
+        for line in ls.splitlines():
+            rel = line.strip().strip('"')
+            if rel and _is_frozen_file(keys, repo / rel):
+                known.append(repo / rel)
+        for line in st.splitlines():
+            if len(line) < 4:
+                continue
+            code, rel = line[:2], line[3:].strip().strip('"')
+            if not rel or not _is_frozen_file(keys, repo / rel):
+                continue
+            name = Path(rel).name
+            if "D" in code:
+                missing.append(name)          # git знает файл, а на диске его нет
+            elif code == "??":
+                untracked.append(name)        # на диске есть, под охраной НЕ стои́т
+            else:
+                changed.append(name)          # содержимое расходится с коммитом
+    if answered:
+        state, why = "ответ", ""
+    elif unanswered:
+        state, why = "молчит", "; ".join(unanswered)
+    elif no_repo:
+        state, why = "не-репозиторий", "; ".join(no_repo)
+    else:
+        state, why = "молчит", "каталогов согласования не названо"
+    partial = "; ".join(unanswered + no_repo) if answered and (unanswered or no_repo) else ""
+    return {"state": state, "known": known, "missing": sorted(set(missing)),
+            "changed": sorted(set(changed)), "untracked": sorted(set(untracked)),
+            "why": why, "partial": partial}
+
+
 RESULTS = []
 # ⚡ КРАТКИЙ ВЫВОД ПО УМОЛЧАНИЮ (карточка #593). FULL включается флагом --full в main().
 # ЗЕЛЁНЫЕ копит имена проверок, прошедших без слова — печатаются ОДНОЙ строкой перед итогом
@@ -1176,47 +1299,58 @@ def main():
                       for p in (list(coord_dir.glob("sync.*.md"))
                                 + list((coord_dir / "phoenix").glob("*.md")))
                       if p.name != "sync.rules.md"]
-            repo = COORDINATION.parents[1]  # …/atlas.archs (coordination → .mezosync → atlas.archs)
-            touched, git_ok = [], True
-        if frozen:
-            try:
-                r = subprocess.run(["git", "-C", str(repo), "status", "--porcelain", "--"]
-                                   + [str(p) for p in frozen],
-                                   capture_output=True, text=True, timeout=30)
-                git_ok = (r.returncode == 0)
-                # Файл, СОВПАДАЮЩИЙ с коммитом, в porcelain НЕ появляется (mtime не при чём). Любая
-                # строка вывода = файл отличается от коммита (изменён/индексирован/удалён/не отслежен).
-                for line in (r.stdout.splitlines() if git_ok else []):
-                    touched.append(line[3:].strip().strip('"').replace("\\", "/").split("/")[-1])
-            except (OSError, subprocess.SubprocessError):
-                git_ok = False
+            # ⛔ ВОПРОС К GIT ЗАДАЁТСЯ ОДИН РАЗ И О ТРЁХ ВЕЩАХ СРАЗУ (карточка #687): знает ли он
+            #    такие файлы · что с их содержимым · нет ли среди известных пропавших с диска.
+            #    Прежде git спрашивали ТОЛЬКО по файлам, найденным на диске, — унесённого в списке
+            #    нет, и о нём не спрашивали: пропажа ЧАСТИ замороженных файлов была невидима вовсе.
+            view = _frozen_git_view(COORDINATIONS)
         if outcome_recorded:
-            # ⚠️ Исход уже назван выше (каталога нет). Без этой ветки сюда пришло бы `git_ok=False`
-            #    и добавило ВТОРУЮ запись — зелёную, поверх только что вынесенного отказа.
+            # ⚠️ Исход уже назван выше (каталога нет). Без этой ветки сюда пришла бы ВТОРАЯ запись —
+            #    зелёная, поверх только что вынесенного отказа.
             pass
-        elif not frozen:
-            # Каталог найден, а охранять в нём нечего — это ДРУГОЕ, чем «проверено и цело».
+        elif view["state"] != "ответ" and not frozen:
+            # Спросить git нечем, и на диске пусто: сказать «цело» нельзя, но и «охранять нечего»
+            # звучало бы как упрёк контуру, который md-каналов, возможно, и не вёл.
             counted("замороженные md")
-            # ⚖️ НУЛЕВОЙ ДЕНЬ (заявка 29 пакета): у свежесобранного контура замороженных файлов нет по
-            # построению — замораживать было нечего. Это свойство нового контура: «ℹ️», а не «⚠️».
-            # Различитель тот же, что у объёма памяти (mezo_paths.is_zero_day: лента пуста вообще);
-            # первая записка в ленте возвращает «⚠️», как было.
-            if bool(getattr(mezo_paths, "is_zero_day", lambda _db: False)(conn)):
-                print(f"   ℹ️ замороженные md: каталог найден ({len(COORDINATIONS)} шт.), замороженных "
-                      "файлов нет — в ленте нет ни одной записки: это свойство нового контура, "
-                      "замораживать было нечего")
+            if view["state"] == "не-репозиторий":
+                print(f"   ℹ️ замороженные md: каталог найден ({len(COORDINATIONS)} шт.), файлов в нём "
+                      "нет, и сам он НЕ ПОД git — замораживание здесь не отслеживается, сверять "
+                      f"не с чем ({view['why']})")
             else:
-                print(f"   ⚠️ замороженные md: каталог найден ({len(COORDINATIONS)} шт.), "
-                      "но замороженных файлов НОЛЬ — охранять нечего. Не путать с «цело»")
-        elif git_ok:
-            check("замороженные md", not touched,
-                  f"СОДЕРЖИМОЕ изменено (git), под охраной {len(frozen)}: "
-                  + "; ".join(sorted(set(touched))))
-        else:
-            # git недоступен — содержимое проверить нечем. НЕ блокируем (иначе тот же вечно-красный),
+                print(f"   ⚠️ замороженные md: каталог найден ({len(COORDINATIONS)} шт.), файлов НОЛЬ, "
+                      f"а git не ответил ({view['why']}) — вёл ли контур md-каналы, спросить нечем. "
+                      "Не путать с «цело»")
+        elif view["state"] != "ответ":
+            # Файлы на диске есть, а судьи нет. НЕ блокируем (иначе вечно-красный у контура без git),
             # но честно говорим, что проверка не поставлена, а не рисуем зелёное как факт.
             check("замороженные md", True, "")
-            print("   ⚠️ замороженные md: git недоступен — содержимое НЕ проверено (mtime не смотрим)")
+            print(f"   ⚠️ замороженные md: на диске {len(frozen)}, но git не ответил ({view['why']}) — "
+                  "содержимое НЕ проверено (mtime не смотрим)")
+        elif not view["known"] and not frozen:
+            # ⚖️ ГЛАВНЫЙ ИСХОД КАРТОЧКИ #687: git таких файлов НЕ ЗНАЕТ — значит их и не было.
+            # Это свойство контура, а не упущение охраны: «ℹ️», и так оно будет всегда, сколько бы
+            # записок ни появилось в ленте. Прежний различитель смотрел на ленту и ошибался ровно
+            # здесь: первая записка свежего контура включала «⚠️ … НОЛЬ» навсегда.
+            counted("замороженные md")
+            print(f"   ℹ️ замороженные md: каталог найден ({len(COORDINATIONS)} шт.), и git таких "
+                  "файлов не знает ни одного — этот контур md-каналов не вёл, замораживать было нечего")
+        else:
+            trouble = []
+            if view["missing"]:
+                trouble.append(f"ПРОПАЛИ (git знает, на диске нет) {len(view['missing'])}: "
+                               + "; ".join(view["missing"]))
+            if view["changed"]:
+                trouble.append(f"СОДЕРЖИМОЕ изменено (git) {len(view['changed'])}: "
+                               + "; ".join(view["changed"]))
+            if view["untracked"]:
+                trouble.append(f"НЕ ОТСЛЕЖИВАЮТСЯ git {len(view['untracked'])}: "
+                               + "; ".join(view["untracked"]))
+            check("замороженные md", not trouble,
+                  (" · ".join(trouble) + f" · на диске {len(frozen)}, git знает {len(view['known'])}")
+                  if trouble else "")
+            if view["partial"]:
+                print(f"   ⚠️ замороженные md: часть каталогов git не охватил ({view['partial']}) — "
+                      "по ним ни пропажа, ни содержимое НЕ проверены")
 
     # ⑧ СВЕЖЕСТЬ СОХРАНЁННОЙ ПАМЯТИ: память роли не должна отставать от её последней записки.
     #

@@ -48,7 +48,7 @@ bite-lease-release-tells-waiters.py      Г1     done  0 15 0
 bite-local-dir.py                        Г1     done  0 67 0
 bite-memory-records.py                   Г3     done  0 23 0
 bite-memory-search.py                    Г4     done  0 11 0
-bite-memory-volume.py                    Г1     done  0 47 4
+bite-memory-volume.py                    Г1     done  0 46 5
 bite-messages-archive.py                 Г1     done  0 8 0
 bite-off-pool.py                         Г1     done  0 8 0
 bite-overdue-claim.py                    Г1     done  0 15 0
@@ -69,7 +69,7 @@ bite-rules-from-pack.py                  Г1     done  0 111 0
 bite-save-actor.py                       Г1     done  0 6 0
 bite-save-alongside.py                   Г1     own   0 8 0
 bite-save-phoenix-dryrun-lease.py        Г1     done  0 7 0
-bite-set-rule-revoke.py                  Г1     done  0 26 0
+bite-set-rule-revoke.py                  Г1     done  0 28 0
 bite-shown-count.py                      Г1     done  0 9 1
 bite-sleeping-addressee.py               Г1     done  0 11 0
 bite-tool-brevity.py                     Г1     done  0 23 0

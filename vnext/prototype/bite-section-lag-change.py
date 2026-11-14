@@ -61,7 +61,7 @@ import mezo_stand  # noqa: E402 — временный каталог убира
 LAG = mezo_target.script("phoenix_lag.py")
 # У собранного контура проверка лежит рядом с phoenix_lag.py в .mezosync/scripts — испытуем эту пару;
 # в пакете её там нет (она в vnext/prototype) — тогда копия из каталога приёмки.
-_installed = mezo_target.scripts_root() / "guard-section-lag.py"
+_installed = mezo_target.script("guard-section-lag.py")
 GUARD = _installed if _installed.exists() else HERE / "guard-section-lag.py"
 print(f"⚖️ испытуется: {mezo_target.label()} · проверка {GUARD.as_posix()}")
 
