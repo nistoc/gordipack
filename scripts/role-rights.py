@@ -416,23 +416,38 @@ def cmd_amend(a):
     if not a.by:
         sys.exit("⛔ нужен --by: кто правит. Правка без руки неотличима от того, что запись "
                  "всегда была такой.")
-    if a.granted_at is None and a.source_ref is None and a.note_append is None:
+    if (a.granted_at is None and a.source_ref is None and a.note_append is None
+            and a.revoked_why is None):
         sys.exit("⛔ нечего исправлять: назови --granted-at и/или --source-ref "
-                 "и/или --note-append.")
+                 "и/или --revoked-why и/или --note-append.")
     conn = connect(a.db)
     row = conn.execute("SELECT id, role, right_key, granted_at, source_ref, note, "
-                       "revoked_at, spent_at FROM role_rights WHERE id=?", (a.id,)).fetchone()
+                       "revoked_at, spent_at, revoked_why FROM role_rights WHERE id=?",
+                       (a.id,)).fetchone()
     if not row:
         conn.close()
         # ⛔ отсутствие записи — ОТКАЗ, а не тихий успех: «поправил» при нулевой правке
         # читается как сделанная работа (класс «одно ничего на две разные беды»).
         sys.exit(f"⛔ права #{a.id} нет. Ничего не изменено.")
-    _, role, key, old_when, old_src, old_note, revoked, spent = row
+    _, role, key, old_when, old_src, old_note, revoked, spent, old_rwhy = row
+    if a.revoked_why is not None and not revoked:
+        conn.close()
+        # ⛔ ВСТРЕЧНЫЙ СЛУЧАЙ: правка причины отзыва у ЖИВОГО права записала бы причину
+        # отзыва, которого не было, — и следующая роль прочла бы это как потерю права.
+        sys.exit(f"⛔ запись #{a.id} ({role} · {key}) НЕ ОТОЗВАНА: причины отзыва у неё "
+                 "нет и быть не должно. Ничего не изменено.")
     changes = []
     if a.granted_at is not None and a.granted_at != old_when:
         changes.append(("granted_at", old_when, a.granted_at))
     if a.source_ref is not None and a.source_ref != old_src:
         changes.append(("source_ref", old_src, a.source_ref))
+    if a.revoked_why is not None and a.revoked_why != old_rwhy:
+        # ⚖️ ГРАНИЦА, ИСПРАВЛЕННАЯ ПО КАРТОЧКЕ #503: revoked_why — это ПОЯСНЕНИЕ, чем
+        # отзыв обоснован, то есть СВИДЕТЕЛЬСТВО. Само действие несёт revoked_at, и его
+        # не трогает ничто. Прежде граница шла по ИМЕНИ поля («в нём есть слово revoked»),
+        # а не по природе поля, — и фактическая ошибка в причине отзыва жила вечно:
+        # запись #1 несла час «08.08 15:56 UTC», которого не существует.
+        changes.append(("revoked_why", old_rwhy, a.revoked_why))
     if not changes and a.note_append is None:
         conn.close()
         # ⚖️ ВСТРЕЧНЫЙ СЛУЧАЙ: новое значение равно старому. Молчать нельзя — роль решит,
@@ -474,7 +489,7 @@ def cmd_list(a):
     conn = connect(a.db)
     src = "role_rights" if a.all else "role_rights_live"
     sql = f"SELECT id, role, right_key, scope, kind, authorized_by, granted_at, spent_at, " \
-          f"revoked_at FROM {src}"
+          f"revoked_at, revoked_why FROM {src}"
     par = ()
     if a.role:
         # ⚠️ ОБЩИЕ права (role='ALL') КАСАЮТСЯ спросившего. Фильтр «только своё имя» отвечал бы
@@ -505,7 +520,10 @@ def cmd_list(a):
             print(f"   всего записей в таблице {total}. Права по-прежнему живут прозой в памяти")
             print("   ролей, и запрос «что мне разрешено» отвечает молчанием, а не «ничего».")
         return 0
-    for i, role, key, scope, kind, who, when, spent, revoked in rows:
+    # ⚠️ revoked_why добавлено В КОНЕЦ запроса НАМЕРЕННО: строки ниже разбираются
+    # и по НОМЕРУ столбца (r[7] потрачено · r[8] отозвано), и вставка в середину сдвинула
+    # бы счёт живых прав МОЛЧА — без ошибки и без признака.
+    for i, role, key, scope, kind, who, when, spent, revoked, rwhy in rows:
         mark = "🔒СТОЯЧЕЕ" if kind == "standing" else "1️⃣РАЗОВОЕ"
         state = ""
         if revoked:
@@ -515,6 +533,11 @@ def cmd_list(a):
         common = "🌐" if role == "ALL" else " "
         print(f"{common}#{i:<3} {role:8} {key:24} {mark}  {who:6} {when[:16]}"
               f"{'  · ' + scope if scope else '  · ОБЛАСТЬ НЕ НАЗВАНА'}{state}")
+        if revoked and rwhy:
+            # ⚖️ ПРИЧИНУ ОТЗЫВА роль обязана прочесть ПРЕЖДЕ, чем решить, что права нет:
+            # «отозвано» без причины не отличает уточнение области от потери права целиком.
+            # Печатается ЦЕЛИКОМ: обрезка скрыла бы от роли, что она чего-то не увидела.
+            print(f"      причина отзыва: {rwhy}")
     live_n = len([r for r in rows if not r[7] and not r[8]])
     print()
     if a.role:
@@ -590,6 +613,8 @@ def main() -> int:
     am.add_argument("--why", help="ЧЕМ старое значение опровергнуто (замер, запись разговора)")
     am.add_argument("--granted-at", dest="granted_at", help="верный час — из записи разговора")
     am.add_argument("--source-ref", dest="source_ref", help="верный источник")
+    am.add_argument("--revoked-why", dest="revoked_why",
+                    help="верная причина отзыва — ТОЛЬКО у отозванной записи")
     am.add_argument("--note-append", dest="note_append", help="дописать в примечание")
     am.set_defaults(fn=cmd_amend)
 

@@ -6,7 +6,8 @@
   "20260913-role-rights-revoked-by",
   "20260915-foreign-rebirth-marks",
   "20260924-role-sessions-transcript-id",
-  "20261031-read-mark-at-save"
+  "20261031-read-mark-at-save",
+  "20261114-owner-words"
  ],
  "tables": {
   "audit_log": {
@@ -164,6 +165,18 @@
   "meta": {
    "key": "TEXT",
    "value": "TEXT"
+  },
+  "owner_words": {
+   "chat": "TEXT",
+   "heard_by": "TEXT",
+   "id": "INTEGER",
+   "note": "TEXT",
+   "noted_at": "TEXT",
+   "said_at": "TEXT",
+   "source_file": "TEXT",
+   "source_line": "INTEGER",
+   "text_verbatim": "TEXT",
+   "verified_by": "TEXT"
   },
   "phoenix": {
    "body": "TEXT",
