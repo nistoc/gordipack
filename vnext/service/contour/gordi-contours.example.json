@@ -25,7 +25,7 @@
       },
       "tooling": {
         "version": "0b1bf2a3757a",
-        "source": "https://github.com/ideator-lab/gordipack",
+        "source": "https://github.com/nistoc/gordipack.git",
         "hash": "ЗАПОЛНЯЕТ УСТАНОВЩИК: отпечаток по СОДЕРЖИМОМУ установленных файлов, не по именам (карточка 771)",
         "installed_at": "2026-11-14T20:12:00Z"
       }
@@ -40,7 +40,7 @@
       },
       "tooling": {
         "version": "0b1bf2a3757a",
-        "source": "https://github.com/ideator-lab/gordipack",
+        "source": "https://github.com/nistoc/gordipack.git",
         "hash": "",
         "installed_at": "2026-11-14T20:12:00Z"
       }

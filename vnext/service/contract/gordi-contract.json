@@ -47,7 +47,7 @@
       "name": "memory_read",
       "mode": "read",
       "title": "Прочитать память роли",
-      "description": "Отдаёт сохранённую память роли: один раздел или все. Вместе с телом приходит номер версии раздела — он нужен для записи с условием.",
+      "description": "Вид для пробуждения: разделы, отметки подтверждения, машинный слой. Номера версии здесь НЕТ — для правки берут memory_read_for_edit.",
       "args": [
         { "name": "role",    "type": "string", "required": true,  "description": "Роль, чью память читаем (верхний регистр: COORD, PROTO, …)" },
         { "name": "section", "type": "string", "required": false, "enum": ["identity", "rebirth", "sources", "state", "plan", "history", "launcher"], "description": "Раздел; без него печатается вся память" }
@@ -72,7 +72,7 @@
         { "name": "role",    "type": "string", "required": true },
         { "name": "section", "type": "string", "required": true, "enum": ["identity", "rebirth", "sources", "state", "plan", "history", "launcher"] },
         { "name": "body",    "type": "text",   "required": true, "description": "Полное тело раздела" },
-        { "name": "expect_version", "type": "int", "required": true, "description": "Номер версии, прочитанной перед правкой (его отдаёт memory_read)" },
+        { "name": "expect_version", "type": "int", "required": true, "description": "Номер версии, прочитанной перед правкой. Его отдаёт memory_read_for_edit ПЕРВОЙ строкой — не memory_read" },
         { "name": "allow_shrink", "type": "bool", "required": false, "description": "Разрешить сокращение раздела. Без него сокращение ОТВЕРГАЕТСЯ: прежнее тело цело в истории, но молча терять его нельзя" }
       ],
       "exec": {
@@ -87,6 +87,26 @@
           { "arg": "allow_shrink",   "form": "switch", "flag": "--allow-shrink" }
         ],
         "mismatch_when": ["тело НЕ записано", "версии id=", "allow-shrink"]
+      }
+    },
+
+    {
+      "name": "memory_read_for_edit",
+      "mode": "read",
+      "title": "Прочитать раздел памяти ДЛЯ ПРАВКИ: тело и номер версии",
+      "description": "Первая строка ответа несёт номер версии — его и подают в memory_save как expect_version. Правится тело ИЗ ЭТОГО ЖЕ вызова: тело из другого чтения уже могло разойтись.",
+      "args": [
+        { "name": "role",    "type": "string", "required": true },
+        { "name": "section", "type": "string", "required": true, "enum": ["identity", "rebirth", "sources", "state", "plan", "history", "launcher"] }
+      ],
+      "exec": {
+        "dir": "runtime",
+        "script": "save-phoenix.py",
+        "pre": [["--db", "{db}"], ["--read"]],
+        "args": [
+          { "arg": "role",    "form": "flag", "flag": "--role" },
+          { "arg": "section", "form": "flag", "flag": "--section" }
+        ]
       }
     },
 

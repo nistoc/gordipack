@@ -30,8 +30,8 @@ DEFAULT_EXE = os.path.join(SERVICE, "GordiWall", "bin", "Debug", "net10.0", "gor
 
 # Записанный ожидаемый состав договора. Меняется РУКОЙ, когда договор меняют нарочно:
 # иначе «перечень вызовов тот же» нечем подтвердить — отпечаток пересчитается вместе с подменой.
-EXPECTED_TOOL_COUNT = 11
-EXPECTED_TOOLS_FINGERPRINT = "5491aecd286c"
+EXPECTED_TOOL_COUNT = 12
+EXPECTED_TOOLS_FINGERPRINT = "247dbfb31eaf"
 TOOL_COUNT_RANGE = (8, 12)
 
 CONTOUR_LIVE = "atlas"
