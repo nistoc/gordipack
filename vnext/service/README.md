@@ -46,8 +46,8 @@ dotnet build vnext/service/GordiWall
 {
   "mcpServers": {
     "gordi-wall": {
-      "command": "C:/github/gordipack/vnext/service/GordiWall/bin/Debug/net10.0/gordi-wall.exe",
-      "args": ["serve", "--contours", "C:/guts/.atlas/.mezosync/gordi-contours.json"]
+      "command": "<ПОДСТАВЬ: полный путь к собранному gordi-wall.exe>",
+      "args": ["serve", "--contours", "<ПОДСТАВЬ: полный путь к gordi-contours.json твоего контура>"]
     }
   }
 }
@@ -94,10 +94,10 @@ dotnet build vnext/service/GordiWall
 ## Приёмка
 
 ```
-python acceptance/check-wall.py --contours C:/guts/.atlas/.mezosync/gordi-contours.json
+python acceptance/check-wall.py --contours <ПОДСТАВЬ: полный путь к gordi-contours.json твоего контура>
 ```
 
-Судит семь критериев карточки 779 машинно, включая **две нарочные поломки**, каждая из которых
+Печатает час сборки рядом с часом последней правки исходников и сборку старше исходников НЕ судит (код выхода 3 — не провал и не проход). Судит семь критериев карточки 779 и четыре случая карточки 787 (кто исполняет требование договора) машинно, включая **две нарочные поломки**, каждая из которых
 обязана уронить РОВНО свой критерий. Два критерия — ⑥ (полный рабочий отрезок роли через стену)
 и ⑨ (подпись роли, которая службу не писала) — машиной не судятся, и приёмка говорит это вслух.
 

@@ -12,7 +12,17 @@
 Вызов:
     python check-wall.py --contours <манифест> [--exe <путь к gordi-wall.exe>] [--out <каталог проб>]
 
-Исход: 0 — все машинные критерии прошли; 1 — хоть один провалился; 2 — проверять было нечем.
+Карточка 787 добавила случаи о том, КТО исполняет требование договора (разбор договора, а не строка кода):
+пометка selects=contour, обязательность выбора контура, обязательность второго общего аргумента,
+отказ «без контура» по ТОЧНОЙ причине. Они печатаются отдельным перечнем после семи прежних.
+
+Перед судом приёмка печатает час сборки исполнимого файла и час последней правки исходников
+(*.cs, *.csproj). Сборку старше исходников она НЕ судит: это не провал и не проход.
+Файл договора в этот счёт НЕ входит: служба читает его при каждом запуске, в сборку он не вшит,
+и правка договора сборку не старит.
+
+Исход: 0 — все машинные критерии прошли; 1 — хоть один провалился; 2 — проверять было нечем;
+3 — сборка старше исходников, судить её нельзя (пересобрать и запустить снова).
 """
 import argparse
 import io
@@ -22,6 +32,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import datetime
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SERVICE = os.path.dirname(HERE)
@@ -148,6 +159,33 @@ def run_mode(exe, contract, contours, argv):
     return p.returncode, p.stdout, p.stderr
 
 
+def utc(ts):
+    return datetime.datetime.fromtimestamp(ts, datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def newest_source():
+    """Час последней правки исходников службы: *.cs и *.csproj, кроме bin/obj.
+
+    Договора здесь нет намеренно: он читается при запуске, а не вшивается в сборку."""
+    best = (0.0, None)
+    for root, dirs, files in os.walk(os.path.join(SERVICE, "GordiWall")):
+        dirs[:] = [d for d in dirs if d not in ("bin", "obj")]
+        for f in files:
+            if f.endswith(".cs") or f.endswith(".csproj"):
+                full = os.path.join(root, f)
+                m = os.path.getmtime(full)
+                if m > best[0]:
+                    best = (m, full)
+    return best
+
+
+def load_refusal(exe, contract_path, contours):
+    """Служба на этом договоре: код выхода и поток ошибок. Отказ при загрузке виден здесь, без разговора по протоколу."""
+    p = subprocess.run([exe, "tools", "--contract", contract_path, "--contours", contours],
+                       capture_output=True, encoding="utf-8", errors="replace", timeout=120)
+    return p.returncode, p.stderr
+
+
 def main():
     ap = argparse.ArgumentParser(description="приёмка стены контура gordi (этап Э1, карточка 779)")
     ap.add_argument("--contours", required=True, help="боевой манифест контуров этой машины")
@@ -167,6 +205,17 @@ def main():
         print("⛔ ПРОВЕРЯТЬ НЕЧЕМ: манифеста нет — %s" % args.contours)
         return 2
 
+    exe_time = os.path.getmtime(args.exe)
+    src_time, src_file = newest_source()
+    print("── ЧАС СБОРКИ И ИСХОДНИКОВ")
+    print("   сборка исполнимого файла ... %s" % utc(exe_time))
+    print("   последняя правка исходников  %s (%s)" % (utc(src_time), src_file))
+    if exe_time < src_time:
+        print("⏸ СБОРКА СТАРШЕ ИСХОДНИКОВ: приёмка её НЕ СУДИТ. Это не провал и не проход —")
+        print("   она проверила бы не то, что написано. Пересобрать: dotnet build %s, затем запустить снова."
+              % os.path.join(SERVICE, "GordiWall"))
+        return 3
+
     work = args.out or tempfile.mkdtemp(prefix="check-wall-")
     if not os.path.isdir(work):
         os.makedirs(work)
@@ -183,6 +232,13 @@ def main():
 
     v = Verdict()
     contract_doc = read_json(args.contract)
+    # Имя аргумента выбора контура приёмка берёт из договора по той же пометке, что и служба
+    contour_args = [a["name"] for a in contract_doc["common_args"] if a.get("selects") == "contour"]
+    if len(contour_args) != 1:
+        print("⛔ ПРОВЕРЯТЬ НЕЧЕМ: в договоре %s пометка selects=contour стоит у %d аргументов, нужен ровно один"
+              % (args.contract, len(contour_args)))
+        return 2
+    CARG = contour_args[0]
 
     # ─────────────────────────────────────── ① перечень вызовов из ОДНОГО файла
     code, out, err = run_mode(args.exe, args.contract, args.contours, ["contour_info", "--contour", CONTOUR_LIVE])
@@ -218,11 +274,14 @@ def main():
     # ─────────────────────────────────────── ③ контур приходит В ВЫЗОВЕ, без него — отказ
     s3a, t3a = w.call("memory_read", {"role": "PROTO", "section": "identity"})
     s3b, t3b = w.call("memory_read", {"contour": "atlas-typo", "role": "PROTO"})
-    ok3 = (s3a.get("outcome") == "refused" and "contour" in (s3a.get("error") or "")
+    # Судим по ТОЧНОЙ причине: «не передан обязательный аргумент «<имя>»». Подстрока имени ошибалась бы:
+    # она есть и в имени файла манифеста gordi-contours.json.
+    reason_3a = "не передан обязательный аргумент «%s»" % CARG
+    ok3 = (s3a.get("outcome") == "refused" and (s3a.get("error") or "").startswith(reason_3a)
            and s3b.get("outcome") == "refused" and "atlas-typo" in (s3b.get("error") or ""))
     v.add("③", ok3, "контур передаётся В ВЫЗОВЕ; без него и с неизвестным именем — отказ",
-          "без контура: %s — %s\nнеизвестный контур: %s — %s"
-          % (s3a.get("outcome"), (s3a.get("error") or "")[:120],
+          "без контура: %s — %s (ожидалась причина, начинающаяся с «%s»)\nнеизвестный контур: %s — %s"
+          % (s3a.get("outcome"), (s3a.get("error") or "")[:120], reason_3a,
              s3b.get("outcome"), (s3b.get("error") or "")[:120]))
 
     # ─────────────────────────────────────── ④ подмена переменных среды НЕ меняет поведение
@@ -336,6 +395,87 @@ def main():
           % ("ДА" if a_breaks_1 else "НЕТ", count_a, fp_a, "ДА" if a_keeps_5 else "НЕТ",
              "ДА" if b_breaks_2 else "НЕТ", s_b.get("outcome"), "ДА" if b_keeps_5 else "НЕТ"))
 
+    # ═══════════════════════════════════════ карточка 787: КТО исполняет требование договора
+    v2 = Verdict()
+    selects_msg = 'selects="contour"'
+
+    # ② пометки нет → отказ при загрузке, названо, чего не хватает
+    d2 = json.loads(json.dumps(contract_doc))
+    for a in d2["common_args"]:
+        a.pop("selects", None)
+    p2 = os.path.join(work, "contract-no-selects.json")
+    write_json(p2, d2)
+    c2a, e2a = load_refusal(args.exe, p2, args.contours)
+    # две пометки → тоже отказ
+    d2b = json.loads(json.dumps(contract_doc))
+    d2b["common_args"].append({"name": "contour_two", "type": "string", "required": True, "selects": "contour",
+                               "description": "второй выбор контура — нарочная поломка"})
+    p2b = os.path.join(work, "contract-two-selects.json")
+    write_json(p2b, d2b)
+    c2b, e2b = load_refusal(args.exe, p2b, args.contours)
+    # целый договор загружается (встречный случай)
+    c2ok, e2ok = load_refusal(args.exe, args.contract, args.contours)
+    ok_s2 = (c2a == 4 and "договор не читается" in e2a and selects_msg in e2a and "ни у одного" in e2a
+             and c2b == 4 and "договор не читается" in e2b and selects_msg in e2b and CARG in e2b and "contour_two" in e2b
+             and c2ok == 0)
+    v2.add("787-②", ok_s2, "какой аргумент выбирает контур, служба узнаёт ИЗ ДОГОВОРА; нет пометки или их две — отказ при загрузке",
+           "без пометки: код %s — %s\nдве пометки: код %s — %s\nцелый договор: код %s"
+           % (c2a, e2a.strip()[:200], c2b, e2b.strip()[:200], c2ok))
+
+    # ③ выбор контура не обязателен → договор не загружается, причина названа
+    d3 = json.loads(json.dumps(contract_doc))
+    for a in d3["common_args"]:
+        if a.get("selects") == "contour":
+            a["required"] = False
+    p3 = os.path.join(work, "contract-contour-optional.json")
+    write_json(p3, d3)
+    c3, e3 = load_refusal(args.exe, p3, args.contours)
+    ok_s3 = (c3 == 4 and "договор не читается" in e3 and CARG in e3
+             and "исполнять вызов без контура не на чем" in e3 and "угадывать" in e3)
+    v2.add("787-③", ok_s3, "договор с НЕобязательным выбором контура не загружается; причина названа",
+           "код %s — %s" % (c3, e3.strip()[:300]))
+
+    # ④ обязательность читается из договора на ВТОРОМ общем аргументе
+    base4 = json.loads(json.dumps(contract_doc))
+    base4["common_args"].append({"name": "stand_tag", "type": "string", "required": True,
+                                 "description": "нарочный второй общий аргумент приёмки"})
+    p4r = os.path.join(work, "contract-second-required.json")
+    write_json(p4r, base4)
+    w4r = Wall(args.exe, p4r, args.contours)
+    s4r_no, _ = w4r.call("memory_read", {"contour": CONTOUR_LIVE, "role": "PROTO", "section": "identity"})
+    s4r_yes, t4r_yes = w4r.call("memory_read", {"contour": CONTOUR_LIVE, "role": "PROTO", "section": "identity",
+                                                "stand_tag": "x"})
+    listed4 = w4r.list_tools()
+    w4r.close()
+    schema4 = [t for t in listed4 if t["name"] == "memory_read"][0]["inputSchema"]
+    base4o = json.loads(json.dumps(base4))
+    base4o["common_args"][-1]["required"] = False
+    p4o = os.path.join(work, "contract-second-optional.json")
+    write_json(p4o, base4o)
+    w4o = Wall(args.exe, p4o, args.contours)
+    s4o_no, t4o_no = w4o.call("memory_read", {"contour": CONTOUR_LIVE, "role": "PROTO", "section": "identity"})
+    listed4o = w4o.list_tools()
+    w4o.close()
+    schema4o = [t for t in listed4o if t["name"] == "memory_read"][0]["inputSchema"]
+    ok_s4 = (s4r_no.get("outcome") == "refused"
+             and (s4r_no.get("error") or "").startswith("не передан обязательный аргумент «stand_tag»")
+             and s4r_yes.get("outcome") == "passed"
+             and "stand_tag" in schema4["required"] and "stand_tag" in schema4["properties"]
+             and s4o_no.get("outcome") == "passed" and len(t4o_no) > 500
+             and "stand_tag" not in schema4o["required"] and "stand_tag" in schema4o["properties"])
+    v2.add("787-④", ok_s4, "обязательность общего аргумента читается из договора: required=true — отказ с его именем, required=false — проходит",
+           "required=true, без аргумента: %s — %s\nrequired=true, с аргументом: %s\n"
+           "required=false, без аргумента: %s (знаков %d)\n"
+           "схема MCP: required=true → в required: %s; required=false → в required: %s (в properties есть: %s)"
+           % (s4r_no.get("outcome"), (s4r_no.get("error") or "")[:110], s4r_yes.get("outcome"),
+              s4o_no.get("outcome"), len(t4o_no),
+              "stand_tag" in schema4["required"], "stand_tag" in schema4o["required"], "stand_tag" in schema4o["properties"]))
+
+    # ⑤ встречный на целом договоре: верный контур проходит
+    ok_s5 = ok5 and c2ok == 0
+    v2.add("787-⑤", ok_s5, "встречный случай: на ЦЕЛОМ договоре вызов с верным контуром проходит",
+           "исход %s · договор с пометкой selects=contour загружается (код %s)" % (s5.get("outcome"), c2ok))
+
     w.close()
 
     # ─────────────────────────────────────── вывод
@@ -345,18 +485,25 @@ def main():
     print("   манифест . %s" % args.contours)
     print("   копии для поломок ... %s" % work)
     print("")
+    print("── критерии карточки 779 (прежние семь)")
     v.print_all()
+    print("")
+    print("── случаи карточки 787 (кто исполняет требование договора)")
+    v2.print_all()
     print("")
     print("⚖️ ЭТИ ДВА КРИТЕРИЯ МАШИНА НЕ СУДИТ — говорю прямо, чтобы зелёное не прочлось шире:")
     print("   ⑥ полный рабочий отрезок роли через стену — доказывается работой роли (записка · память · карточка),")
     print("      а не этим файлом. Прогон приёмки отрезком НЕ является.")
     print("   ⑨ подпись приёмки ставит роль, которая службу НЕ писала. Свой прогон за чужую руку не считается.")
     print("")
-    bad = v.failed()
+    bad = v.failed() + v2.failed()
     if bad:
-        print("🔴 ПРОВАЛИЛОСЬ %d из %d: %s" % (len(bad), len(v.rows), " · ".join(r[0] for r in bad)))
+        print("🔴 ПРОВАЛИЛОСЬ %d: %s (карточка 779: %d из %d прошло · карточка 787: %d из %d прошло)"
+              % (len(bad), " · ".join(r[0] for r in bad),
+                 len(v.rows) - len(v.failed()), len(v.rows), len(v2.rows) - len(v2.failed()), len(v2.rows)))
         return 1
-    print("✅ ВСЕ МАШИННЫЕ КРИТЕРИИ ПРОШЛИ: %d из %d (⑥ и ⑨ — за человеком)" % (len(v.rows), len(v.rows)))
+    print("✅ ВСЕ МАШИННЫЕ КРИТЕРИИ ПРОШЛИ: карточка 779 — %d из %d · карточка 787 — %d из %d (⑥ и ⑨ карточки 779 — за человеком)"
+          % (len(v.rows), len(v.rows), len(v2.rows), len(v2.rows)))
     return 0
 
 

@@ -44,7 +44,8 @@ public sealed record ToolArg(
     string Type,
     bool Required,
     string? Description,
-    IReadOnlyList<string>? Enum);
+    IReadOnlyList<string>? Enum,
+    string? Selects = null);   // что выбирает значение аргумента; «contour» — контур, на котором исполняется вызов
 
 /// <summary>Как аргумент ложится в командную строку тела инструмента.</summary>
 public sealed record ArgMap(string Arg, string Form, string? Flag, string? ConstAfter);
@@ -80,9 +81,14 @@ public sealed class Contract
     public required string Description { get; init; }
     public required string Basis { get; init; }
     public required IReadOnlyList<ToolDef> Tools { get; init; }
-    public required ToolArg CommonContour { get; init; }
+    /// <summary>Все общие аргументы договора — весь массив common_args, а не первый его элемент.</summary>
+    public required IReadOnlyList<ToolArg> CommonArgs { get; init; }
+    /// <summary>Имя общего аргумента, выбирающего контур. Узнаётся из пометки selects=contour в договоре, в коде имени нет.</summary>
+    public required string ContourArgName { get; init; }
     public required string Fingerprint { get; init; }   // sha256 по СОДЕРЖИМОМУ файла договора
     public required string Path { get; init; }
+
+    public const string SelectsContour = "contour";
 
     public ToolDef? Find(string name) =>
         Tools.FirstOrDefault(t => string.Equals(t.Name, name, StringComparison.Ordinal));
@@ -99,7 +105,21 @@ public sealed class Contract
         foreach (var t in root.GetProperty("tools").EnumerateArray())
             tools.Add(ReadTool(t));
 
-        var common = ReadArg(root.GetProperty("common_args").EnumerateArray().First());
+        var common = new List<ToolArg>();
+        foreach (var a in root.GetProperty("common_args").EnumerateArray())
+            common.Add(ReadArg(a));
+
+        // Какой общий аргумент выбирает контур — говорит договор пометкой selects=contour. Угадывать нельзя.
+        var marked = common.Where(a => string.Equals(a.Selects, SelectsContour, StringComparison.Ordinal)).ToList();
+        if (marked.Count == 0)
+            throw new InvalidDataException($"в договоре {path} ни у одного общего аргумента нет пометки selects=\"{SelectsContour}\": "
+                                           + "служба не знает, какой аргумент выбирает контур, и угадывать не вправе");
+        if (marked.Count > 1)
+            throw new InvalidDataException($"в договоре {path} пометка selects=\"{SelectsContour}\" стоит у {marked.Count} общих аргументов "
+                                           + $"({string.Join(", ", marked.Select(a => a.Name))}): выбирать контур может ровно один");
+        if (!marked[0].Required)
+            throw new InvalidDataException($"в договоре {path} аргумент выбора контура «{marked[0].Name}» не обязателен (required не true): "
+                                           + "исполнять вызов без контура не на чем, а угадывать контур служба не вправе");
 
         return new Contract
         {
@@ -109,7 +129,8 @@ public sealed class Contract
             Description = Str(head, "description") ?? "",
             Basis = Str(head, "basis") ?? "",
             Tools = tools,
-            CommonContour = common,
+            CommonArgs = common,
+            ContourArgName = marked[0].Name,
             Fingerprint = fingerprint,
             Path = System.IO.Path.GetFullPath(path),
         };
@@ -146,7 +167,8 @@ public sealed class Contract
             Type: Str(a, "type") ?? "string",
             Required: a.TryGetProperty("required", out var jr) && jr.ValueKind == JsonValueKind.True,
             Description: Str(a, "description"),
-            Enum: values);
+            Enum: values,
+            Selects: Str(a, "selects"));
     }
 
     private static ToolExec ReadExec(JsonElement e)

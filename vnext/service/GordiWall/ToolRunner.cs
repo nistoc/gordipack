@@ -59,12 +59,15 @@ public sealed class ToolRunner(Contract contract, Manifest manifest, bool readOn
         if (tool is null)
             return Answer.Refuse($"вызова «{toolName}» в договоре нет. Есть: {string.Join(" · ", _contract.Tools.Select(t => t.Name))}");
 
-        // ── контур обязателен У КАЖДОГО вызова: стена не вычисляет его сама и не берёт из среды
-        var contourId = Val(given, "contour");
-        if (string.IsNullOrWhiteSpace(contourId))
-            return Answer.Refuse("не передан обязательный аргумент «contour». Стена НЕ вычисляет контур от своего расположения "
-                                 + $"и НЕ читает его из переменных среды. Известные контуры: {_manifest.KnownIds()}");
+        // ── общие аргументы и аргументы вызова проверяются ОДНИМ методом по одним полям договора (required, enum).
+        //    Какой из общих аргументов выбирает контур, говорит договор (selects=contour), а не код.
+        foreach (var a in _contract.CommonArgs)
+        {
+            var refusal = CheckArg(a, given);
+            if (refusal is not null) return Answer.Refuse(refusal);
+        }
 
+        var contourId = Val(given, _contract.ContourArgName)!;
         var contour = _manifest.Find(contourId);
         if (contour is null)
             return Answer.Refuse($"контур «{contourId}» в манифесте не объявлен (манифест: {_manifest.Path}). "
@@ -75,22 +78,33 @@ public sealed class ToolRunner(Contract contract, Manifest manifest, bool readOn
                                  + "Запись мимо службы отвергнута намеренно: иначе обход стены стал бы обычной дорогой.",
                                  contour.Id, ToolingVersion(contour));
 
-        // ── обязательные аргументы и перечни значений
         foreach (var a in tool.Args)
         {
-            var v = Val(given, a.Name);
-            if (a.Required && string.IsNullOrWhiteSpace(v))
-                return Answer.Refuse($"не передан обязательный аргумент «{a.Name}»: {a.Description ?? a.Title()}",
-                                     contour.Id, ToolingVersion(contour));
-            if (a.Enum is { Count: > 0 } && !string.IsNullOrWhiteSpace(v) && !a.Enum.Contains(v))
-                return Answer.Refuse($"у аргумента «{a.Name}» значение «{v}» вне перечня: {string.Join(" · ", a.Enum)}",
-                                     contour.Id, ToolingVersion(contour));
+            var refusal = CheckArg(a, given);
+            if (refusal is not null) return Answer.Refuse(refusal, contour.Id, ToolingVersion(contour));
         }
 
         if (tool.Exec.Kind == "builtin")
             return Builtin(tool, contour);
 
         return await RunPythonAsync(tool, contour, given, ct);
+    }
+
+    /// <summary>
+    /// Проверка одного аргумента по договору: обязательность и перечень значений. Единственное место,
+    /// где это делается, — и для общих аргументов, и для аргументов вызова. Отказ — текст или null.
+    /// </summary>
+    private string? CheckArg(ToolArg a, IReadOnlyDictionary<string, object?> given)
+    {
+        var v = Val(given, a.Name);
+        var hint = string.Equals(a.Name, _contract.ContourArgName, StringComparison.Ordinal)
+            ? $" Известные контуры: {_manifest.KnownIds()}"
+            : "";
+        if (a.Required && string.IsNullOrWhiteSpace(v))
+            return $"не передан обязательный аргумент «{a.Name}»: {a.Description ?? a.Title()}{hint}";
+        if (a.Enum is { Count: > 0 } && !string.IsNullOrWhiteSpace(v) && !a.Enum.Contains(v))
+            return $"у аргумента «{a.Name}» значение «{v}» вне перечня: {string.Join(" · ", a.Enum)}";
+        return null;
     }
 
     // ── «кто меня судит» отвечает сама стена: это единственный вызов, который обязан

@@ -98,11 +98,12 @@ public static class Program
         sb.AppendLine($"манифест контуров ...... {contoursPath ?? "НЕ НАЗВАН"}");
         sb.AppendLine($"вызовов ................ {contract.Tools.Count}");
         sb.AppendLine();
+        var commonNames = string.Join(" ", contract.CommonArgs.Select(a => a.Required ? a.Name : "[" + a.Name + "]"));
         foreach (var t in contract.Tools)
         {
             var mode = t.Mode == "write" ? "запись " : "чтение ";
             var argNames = t.Args.Count == 0 ? "—" : string.Join(" ", t.Args.Select(a => a.Required ? a.Name : "[" + a.Name + "]"));
-            sb.AppendLine($"  {mode} {t.Name,-18} contour {argNames}");
+            sb.AppendLine($"  {mode} {t.Name,-18} {commonNames} {argNames}");
         }
         await Console.Out.WriteAsync(sb.ToString());
         return 0;
@@ -123,7 +124,7 @@ public static class Program
 
         var tool = contract.Find(toolName);
         var given = new Dictionary<string, object?>(StringComparer.Ordinal);
-        var known = new HashSet<string>(StringComparer.Ordinal) { "contour" };
+        var known = new HashSet<string>(contract.CommonArgs.Select(c => c.Name), StringComparer.Ordinal);
         if (tool is not null) foreach (var a in tool.Args) known.Add(a.Name);
 
         for (var i = 0; i < args.Count; i++)
@@ -283,17 +284,10 @@ public static class Program
         var list = new JsonArray();
         foreach (var t in contract.Tools)
         {
-            var props = new JsonObject
-            {
-                [contract.CommonContour.Name] = new JsonObject
-                {
-                    ["type"] = "string",
-                    ["description"] = contract.CommonContour.Description,
-                },
-            };
-            var required = new JsonArray { contract.CommonContour.Name };
+            var props = new JsonObject();
+            var required = new JsonArray();
 
-            foreach (var a in t.Args)
+            foreach (var a in contract.CommonArgs.Concat(t.Args))
             {
                 var schema = new JsonObject { ["type"] = JsonType(a.Type) };
                 if (a.Type == "list<string>") schema["items"] = new JsonObject { ["type"] = "string" };

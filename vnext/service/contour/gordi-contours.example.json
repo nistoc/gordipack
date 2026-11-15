@@ -18,10 +18,10 @@
     {
       "id": "atlas",
       "title": "Atlas — платформа семантического слоя",
-      "storage": "C:/guts/.atlas/.mezosync/mezosync.db",
+      "storage": "<ПОДСТАВЬ: полный путь к mezosync.db твоего контура>",
       "tools": {
-        "runtime": "C:/guts/.atlas/.mezosync/scripts",
-        "vnext": "C:/guts/.atlas/vnext-tools"
+        "runtime": "<ПОДСТАВЬ: полный путь к каталогу инструментов runtime твоего контура>",
+        "vnext": "<ПОДСТАВЬ: полный путь к каталогу инструментов vnext твоего контура>"
       },
       "tooling": {
         "version": "0b1bf2a3757a",
@@ -33,10 +33,10 @@
     {
       "id": "atlas-sandbox",
       "title": "Песочница Atlas — копия базы для проб",
-      "storage": "C:/guts/.atlas/.mezosync/mezo_stand/mezosync.db",
+      "storage": "<ПОДСТАВЬ: полный путь к mezosync.db копии базы для проб>",
       "tools": {
-        "runtime": "C:/guts/.atlas/.mezosync/scripts",
-        "vnext": "C:/guts/.atlas/vnext-tools"
+        "runtime": "<ПОДСТАВЬ: полный путь к каталогу инструментов runtime твоего контура>",
+        "vnext": "<ПОДСТАВЬ: полный путь к каталогу инструментов vnext твоего контура>"
       },
       "tooling": {
         "version": "0b1bf2a3757a",
