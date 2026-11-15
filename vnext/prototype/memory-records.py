@@ -166,6 +166,23 @@ def has_table(conn) -> bool:
         "SELECT 1 FROM sqlite_master WHERE name='phoenix_records'").fetchone())
 
 
+# слой памяти записи: значение по умолчанию — живой слой (карточка #781, этап Э2)
+LAYER_DEFAULT = "hot"
+
+
+def has_layer(conn) -> bool:
+    """Сведён ли шаг схемы, заводящий поле слоя (20261115-phoenix-records-layer).
+
+    ⚖️ ПОЧЕМУ ПРОВЕРКА, А НЕ ТРЕБОВАНИЕ. Эти инструменты уезжают в другие контуры
+    пакетом, и там шаг схемы может быть не сведён. Запрос с несведённым полем падал бы
+    «no such column» на ровном месте, а падение инструмента памяти роль читает как
+    поломку памяти. Поэтому: поля нет — работаем без него и ГОВОРИМ об этом вслух
+    один раз, с точной командой. Молчать нельзя: тогда роль решит, что слой у записей
+    есть, и будет ждать переноса, которого не будет.
+    """
+    return any(r[1] == "layer" for r in conn.execute("PRAGMA table_info(phoenix_records)"))
+
+
 def rebuild(conn, role, section, actor):
     """Разобрать раздел ЗАНОВО после того, как тело изменилось, СОХРАНИВ ручные поля.
 
@@ -186,17 +203,34 @@ def rebuild(conn, role, section, actor):
     if not r:
         sys.exit(f"⛔ У роли {role} нет раздела «{section}»")
     body = r[0]
+    layer_known = has_layer(conn)
+    if not layer_known:
+        print("⚪ поля СЛОЯ памяти у записей в этой базе нет — шаг схемы не сведён.")
+        print("   Работаю без слоя; перенос по слоям в этой базе не действует.")
+        # ⚠️ ПУТЬ ЗАМЕНЁН НА ОБРАЗЕЦ. В правке Э2 здесь стоял путь ЭТОЙ машины
+        # (C:/guts/.atlas/…), а файл уезжает пакетом в чужие контуры, где его нет.
+        # Форма <КОНТУР> — своя же в шапке этого файла, строка 33.
+        print("   Свести: python <КОНТУР>/.mezosync/scripts/migrations/"
+              "20261115-phoenix-records-layer.py")
     previous = conn.execute(
         "SELECT body, subject, happened_at, source, expiry_cond, alive, revoked_at, "
-        "revoked_note FROM phoenix_records WHERE role=? AND section=?",
+        "revoked_note" + (", layer" if layer_known else "") +
+        " FROM phoenix_records WHERE role=? AND section=?",
         (role, section)).fetchall()
     if not previous:
         sys.exit(f"⛔ У {role}·{section} записей нет — это первый разбор, зови --разобрать")
     # ручные поля прежних записей, ключ — ТЕЛО дословно
+    # ⚡ СЛОЙ ВХОДИТ В ЭТОТ ОТБОР НАРАВНЕ С ИСТОЧНИКОМ И СРОКОМ ГОДНОСТИ (карточка #781, Э2).
+    # Прежде условие знало только источник, срок и снятие с хода — и запись, у которой есть
+    # ТОЛЬКО слой, в отбор не попадала ВОВСЕ. Её слой при правке текста уходил в значение
+    # по умолчанию МОЛЧА: ни переноса, ни строки о потере. Это и есть класс, ради которого
+    # этап заведён: поле исчезает без признака, а счёт потерь о нём не знает.
     had_fields = {}
-    for rec_body, subj, when, src, cond, alive, rev_at, rev_note in previous:
-        if src or cond or alive != "active":
-            had_fields[rec_body] = (subj, when, src, cond, alive, rev_at, rev_note)
+    for row in previous:
+        rec_body, subj, when, src, cond, alive, rev_at, rev_note = row[:8]
+        layer = row[8] if layer_known else LAYER_DEFAULT
+        if src or cond or alive != "active" or layer != LAYER_DEFAULT:
+            had_fields[rec_body] = (subj, when, src, cond, alive, rev_at, rev_note, layer)
 
     chunks, method = _ma.блоки(body)
     today = datetime.datetime.now(datetime.UTC).date()
@@ -236,15 +270,20 @@ def rebuild(conn, role, section, actor):
         old_id = next((i for i in free_ids if i not in used_ids), None)
         manual_fields = had_fields.get(chunk["тело"])
         if manual_fields:
-            subj, when, src, cond, alive, rev_at, rev_note = manual_fields
+            subj, when, src, cond, alive, rev_at, rev_note, layer = manual_fields
             fields_kept += 1
         else:
-            subj, when, src, cond, alive, rev_at, rev_note = (
+            subj, when, src, cond, alive, rev_at, rev_note, layer = (
                 subject_of_block(chunk["тело"]), time_of_block(chunk["тело"], today),
-                None, None, "active", None, None)
+                None, None, "active", None, None, LAYER_DEFAULT)
         if old_id is not None:
             used_ids.add(old_id)
             ids_kept += 1
+            # ⚖️ СЛОЯ В ЭТОМ ОБНОВЛЕНИИ НЕТ НАМЕРЕННО, И ЭТО НЕ ЗАБЫВЧИВОСТЬ.
+            # Запись найдена по НОМЕРУ, и слой уже лежит на этой самой строке — не трогая
+            # его, мы сохраняем его ТОЧНО. А перенос из отбора ручных полей ключуется ТЕЛОМ,
+            # и у двух записей с дословно одинаковыми телами он мог бы их перепутать.
+            # Правило: что можно сохранить по номеру — сохраняем по номеру, не по телу.
             conn.execute(
                 "UPDATE phoenix_records SET subject=?, body_chars=?, happened_at=?, "
                 "source=?, expiry_cond=?, alive=?, revoked_at=?, revoked_note=?, "
@@ -253,12 +292,15 @@ def rebuild(conn, role, section, actor):
                  old_id))
         else:
             new_count += 1
+            # у новой записи слой ставится явно — чтобы редкий случай «тел-двойников
+            # больше, чем свободных номеров» не уронил слой в значение по умолчанию молча
             conn.execute(
                 "INSERT INTO phoenix_records (role, section, subject, body, body_chars, "
                 "happened_at, source, expiry_cond, alive, revoked_at, revoked_note, "
-                "ord, origin_chars, created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "ord, origin_chars, created_by" + (", layer" if layer_known else "") +
+                ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?" + (",?" if layer_known else "") + ")",
                 (role, section, subj, chunk["тело"], chunk["знаков"], when, src, cond, alive, rev_at,
-                 rev_note, n, len(body), actor))
+                 rev_note, n, len(body), actor) + ((layer,) if layer_known else ()))
     # исчезнувшие: их тела больше нет в разделе
     all_previous_ids = {i for id_list in previous_by_body.values() for i in id_list}
     to_remove = all_previous_ids - used_ids
@@ -286,10 +328,22 @@ def rebuild(conn, role, section, actor):
         # имя — ЧТО ИМЕННО переставить рукой. Без имён роль не знает, куда смотреть.
         print(f"  ⚠️ ПОЛЯ ПОТЕРЯНЫ у {len(orphaned)} записей — их текст изменился, "
               f"и переносить поля было бы утверждением о непроверенном:")
+        layers_lost = 0
         for rec_body in orphaned:
             first_line = rec_body.strip().splitlines()[0] if rec_body.strip() else ""
-            print(f"       🔸 «{first_line[:70]}»")
+            lost_layer = had_fields[rec_body][7]
+            mark = ""
+            if lost_layer != LAYER_DEFAULT:
+                layers_lost += 1
+                mark = f"  [слой был: {lost_layer}]"
+            print(f"       🔸 «{first_line[:70]}»{mark}")
         print("     👉 проставь заново: --поля <id> --источник … --условие …")
+        if layers_lost:
+            # ⚡ СЛОЙ НАЗЫВАЕТСЯ ОТДЕЛЬНОЙ СТРОКОЙ, А НЕ ТОНЕТ В ОБЩЕМ ЧИСЛЕ ПОЛЕЙ:
+            # он один решает, читается запись при пробуждении или нет. Потеряв его молча,
+            # роль получила бы обратно в живой слой то, что сама оттуда унесла.
+            print(f"     ⚠️ из них СЛОЙ ПАМЯТИ потерян у {layers_lost} записей — они вернулись "
+                  f"в живой слой «{LAYER_DEFAULT}». Перенеси заново, если унос был намеренным")
     else:
         print("  ✅ осиротевших полей нет — ни одна запись с полями не изменилась")
     print(f"  сборка: {len(assembled)} = тело {len(body)}  "
@@ -417,12 +471,30 @@ def show(conn, role):
           f"это РЕШЕНИЕ, а не пустота")
 
 
+def _fold(text):
+    """Свернуть регистр СРЕДСТВАМИ PYTHON, а не базы.
+
+    ⚖️ ПОЧЕМУ НЕ lower() БАЗЫ. Встроенные функции регистра SQLite работают только
+    с латиницей: lower('ПЕРИСКОП') возвращает 'ПЕРИСКОП' БЕЗ ИЗМЕНЕНИЯ, и отбор
+    по русскому слову в другом написании МОЛЧА давал ноль. Перемерено 2026-11-15
+    16:36 UTC на SQLite 3.50.4; на моих же записях «владелец» → 10, «ВЛАДЕЛЕЦ» → 0,
+    и код выхода у обоих был 0. Нашла COORD, карточка #784.
+    ⛔ ЧЕГО ЭТА ФУНКЦИЯ НЕ ДЕЛАЕТ, и инструмент говорит это вслух при нуле находок:
+    не сближает «ё» с «е» и «й» с «и» — это РАЗНЫЕ буквы; не ловит латинскую букву
+    внутри русского слова («budить» вместо «будить»). Оба вида — отдельные предметы
+    той же карточки, и молчать о них нельзя: роль прочтёт «не нашлось» как «такого нет».
+    """
+    return (text or "").casefold()
+
+
 def select(conn, role, query=None, on_date=None, revoked=False, no_condition=False,
              full=False):
     clauses, params = ["role=?"], [role]
     heading = []
     if query:
-        clauses.append("(subject LIKE ? OR lower(body) LIKE lower(?))")
+        # регистр сворачивает Python, а не база: см. _fold и карточку #784
+        conn.create_function("fold", 1, _fold, deterministic=True)
+        clauses.append("(fold(subject) LIKE fold(?) OR fold(body) LIKE fold(?))")
         params += [f"%{query}%", f"%{query}%"]
         heading.append(f"предмет или слово «{query}»")
         # ⚖️ Запись, у которой «{что}» — ПРОИГРАВШИЙ соперник спора, в выборку тоже
@@ -450,10 +522,26 @@ def select(conn, role, query=None, on_date=None, revoked=False, no_condition=Fal
         # на две беды заставляет спрашивающего гадать, и гадает он неверно.
         total = conn.execute("SELECT COUNT(*) FROM phoenix_records WHERE role=?",
                              (role,)).fetchone()[0]
-        print(f"⚪ совпадений нет. Записей у роли {total} — "
-              + ("значит под отбор ничего не подошло."
-                 if total else "память ещё НЕ РАЗОБРАНА, то есть искать было негде."))
-        return
+        if not total:
+            print(f"⚪ записей у роли {role} НЕТ ВОВСЕ — память на записи не разобрана,")
+            print(f"   то есть искать было НЕГДЕ. Разобрать: --role {role} "
+                  f"--section <раздел> --разобрать")
+            return 3
+        # ⛔ ПРИЧИНУ НУЛЯ ЗДЕСЬ НЕ НАЗЫВАЕМ, И ЭТО НЕ СКУПОСТЬ НА СЛОВА.
+        # Прежде стояло «значит под отбор ничего не подошло» — вывод о ПРЕДМЕТЕ,
+        # сделанный из собственного молчания. Пока регистр сворачивала база, строка
+        # была прямой ложью: русское слово в другом написании давало ноль, а инструмент
+        # УВЕРЕННО объявлял, что искать было нечего. Поэтому говорим, что отбор сделал
+        # и чего он не умеет, а вывод оставляем спрашивающему.
+        print(f"⚪ совпадений нет. Записи у роли {role} ЕСТЬ ({total}) — "
+              f"под этот отбор не подошла ни одна")
+        print("   чем свёрнут регистр: средствами Python ⇒ «ВЛАДЕЛЕЦ» и «владелец» "
+              "для отбора одно и то же")
+        print("   ⛔ чего отбор НЕ умеет: «ё» и «е» — РАЗНЫЕ буквы (как «й» и «и»); "
+              "латинская буква внутри русского слова («budить») не ловится ничем")
+        print("   👉 то же слово в архиве роли: memory-archive.py --role <РОЛЬ> "
+              "--find <слово>")
+        return 2
     # ⚖️ ОТВЕТ — СПИСОК ЗАПИСЕЙ, А НЕ ПОТОК ТЕКСТА. Ровно затем задача и заводилась:
     # владелец спрашивает «покажи всё про права» ЧТОБЫ НЕ ЧИТАТЬ двадцать тысяч знаков.
     # Отбор, отвечающий телами, возвращает его в ту же беду, только с фильтром
@@ -485,7 +573,7 @@ def select(conn, role, query=None, on_date=None, revoked=False, no_condition=Fal
                     print(f"      {line_}")
             print("-" * 96)
         print("👉 тела записей целиком — тем же отбором с ключом --целиком")
-        return
+        return 0
     for id_, sect, subj, chars, when, alive, src, cond, body in rows:
         mark = "✅" if alive == "active" else "⚰️ СНЯТА"
         print(f"\n📄 #{id_} · {sect} · предмет «{subj}» · {chars}б · час {when} · {mark}")
@@ -494,6 +582,7 @@ def select(conn, role, query=None, on_date=None, revoked=False, no_condition=Fal
         print("   " + "─" * 88)
         for line_ in body.splitlines():
             print(f"   {line_}")
+    return 0
 
 
 def assemble(conn, role, section):
@@ -634,8 +723,9 @@ def main() -> int:
             sys.exit("⛔ нужен --section")
         return assemble(conn, role, a.section)
     if a.select or a.on_date or a.revoked or a.no_condition:
-        select(conn, role, a.select, a.on_date, a.revoked, a.no_condition, a.full)
-        return 0
+        # исход отбора НЕСЁТСЯ кодом выхода: нашлось 0 · не нашлось при живых
+        # записях 2 · записей нет вовсе 3 (карточка #784, критерий ④)
+        return select(conn, role, a.select, a.on_date, a.revoked, a.no_condition, a.full)
     show(conn, role)
     return 0
 
