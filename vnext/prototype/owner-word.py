@@ -27,16 +27,31 @@
 намеренно: сверка по одному куску объявляла бы дословным текст, у которого верна только
 середина.
 
-⚖️ ЗАВИСИМОСТЬ МЕЖДУ КАТАЛОГАМИ, НАЗВАННАЯ ВСЛУХ: инструмент живёт рядом с базой
-координации (`.mezosync/scripts`), а зовёт `find-owner-word.py` из `vnext-tools`. Путь
-берётся умолчанием от расположения контейнера и переопределяется ключом `--finder`:
-жёсткая строка здесь сломала бы свежий контур, собранный из образца по другому пути.
+⚖️ ПУТИ ПО УМОЛЧАНИЮ СЧИТАЮТСЯ ОТ РАСПОЛОЖЕНИЯ СКРИПТА, А НЕ ОТ РАБОЧЕГО КАТАЛОГА
+(карточка #780). Искатель — файл `find-owner-word.py` РЯДОМ с этим скриптом. База — тем же
+выбором, каким её берут соседние инструменты (`mezo_paths.default_db`: подъём от скрипта
+по признаку файла базы, затем MEZO_CONTAINER). Прежняя редакция считала искатель от
+каталога на два уровня выше и базу — на уровень выше скрипта: из `vnext-tools` обе строки
+вели мимо (база в `.atlas/mezosync.db`, искатель в `guts/vnext-tools`). Оба умолчания
+переопределяются ключами `--db` и `--finder`; явно названный, но несуществующий путь
+по-прежнему ОТКАЗЫВАЕТ и называет путь — подстановки своего пути нет.
+
+🔠 ПОИСК: РЕГИСТР СВОРАЧИВАЕТ PYTHON, А НЕ БАЗА (карточка #785). В SQLite этой сборки
+`lower()`, `LIKE` и `COLLATE NOCASE` сворачивают регистр ТОЛЬКО для латиницы:
+`'ПЕРИСКОП' LIKE '%периск%'` даёт 0. Поэтому в базу регистрируется функция `fold`
+(та же, под тем же именем, что в `memory-records.py`, карточка #784), и свёрнуты ОБЕ стороны
+сравнения. Поиск идёт по двум полям — дословному тексту и пояснению роли; у каждой находки
+печатается, В КАКОМ поле совпало.
+⛔ ЧЕГО ПОИСК НЕ ДЕЛАЕТ: «ё» и «е» остаются РАЗНЫМИ буквами; латинская буква внутри русского
+слова («budить» вместо «будить») не ловится. Нулевой ответ говорит об этом вслух и не
+делает вывода о предмете.
 
 ИСХОДЫ (коды выхода):
   0 — сделано (слово записано · прочитано · найдено)
-  1 — не найдено (нет такого номера · поиск пуст)
+  1 — не найдено (нет такого номера · по куску совпадений нет при непустом хранилище)
   2 — ОТКАЗ записать: сверка дословности не прошла. Запись НЕ сделана
   3 — ошибка вызова (нет обязательного ключа, не найден искатель, база недоступна)
+  4 — хранилище пусто: искать негде (отличается от «не найдено» при живом хранилище)
 """
 import argparse
 import io
@@ -50,9 +65,58 @@ import datetime
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CONTAINER = os.path.dirname(os.path.dirname(HERE))
-DEFAULT_DB = os.path.join(os.path.dirname(HERE), 'mezosync.db')
-DEFAULT_FINDER = os.path.join(CONTAINER, 'vnext-tools', 'find-owner-word.py')
+# Искатель — файл рядом со скриптом (карточка #780), а не путь от каталога контейнера.
+DEFAULT_FINDER = os.path.join(HERE, 'find-owner-word.py')
+
+# Имя функции регистра в базе. Одной строкой, чтобы запрос не расходился с регистрацией.
+FOLD = 'fold'
+
+
+def default_db():
+    """База по умолчанию — от РАСПОЛОЖЕНИЯ СКРИПТА, не от рабочего каталога (карточка #780).
+
+    Первым — выбор соседних инструментов (`mezo_paths.default_db`): подъём от скрипта по
+    признаку файла базы, затем MEZO_CONTAINER (так стенд приёмки подменяет контейнер).
+    Не вышло — база в каталоге `.mezosync` уровнем выше скрипта (раскладка `vnext-tools`).
+    Не нашлось и там — отказ словами с причиной от общего выбора, код 3.
+
+    ⛔ Контейнер, НАЗВАННЫЙ средой, сильнее запасного пути. Если MEZO_CONTAINER задана, а базы
+    по ней нет, запасной путь НЕ берётся: молча взять базу рядом со скриптом значило бы
+    подставить свой путь вместо названного — и `add` записал бы слово не в тот контур.
+    """
+    refusal = None
+    try:
+        import mezo_paths
+        return os.path.abspath(str(mezo_paths.default_db(__file__)))
+    except SystemExit as e:           # общий выбор отказывает словами — запомнить их
+        refusal = e.code if isinstance(e.code, str) else str(e.code)
+    except ImportError as e:
+        refusal = f'общий выбор путей (mezo_paths) не подключился: {e}'
+    named = os.environ.get('MEZO_CONTAINER')
+    beside = os.path.join(os.path.dirname(HERE), '.mezosync', 'mezosync.db')
+    if not named and os.path.isfile(beside):
+        return beside
+    why = (f'контейнер НАЗВАН средой (MEZO_CONTAINER={named}), а базы по нему нет; база рядом '
+           'со скриптом молча НЕ подставляется' if named
+           else 'общий выбор отказал, и в каталоге .mezosync уровнем выше скрипта базы нет')
+    print(f'⛔ базу по умолчанию найти не удалось (от расположения скрипта {HERE}): {why}\n'
+          f'{refusal}\n'
+          '   👉 назови базу ключом --db <путь> или задай MEZO_CONTAINER=<контейнер>',
+          file=sys.stderr)
+    sys.exit(3)
+
+
+def fold_text(text):
+    """Свернуть регистр СРЕДСТВАМИ PYTHON, а не базы (карточка #785; образец — `_fold`
+    в `memory-records.py`, карточка #784: то же тело и то же имя функции в базе).
+
+    ⚖️ Встроенные функции регистра SQLite работают только с латиницей: lower('ПЕРИСКОП')
+    возвращает 'ПЕРИСКОП' без изменения. Общего модуля для этой функции нет — она лежит
+    внутри `memory-records.py`, а подключать оттуда скрипт с дефисом в имени ради одной
+    строки значило бы тянуть за ним весь разбор его ключей.
+    ⛔ НЕ делает: «ё» не равна «е»; латинская буква внутри русского слова не ловится.
+    """
+    return (text or "").casefold()
 
 
 def now_utc():
@@ -195,8 +259,10 @@ def cmd_add(conn, a):
     return 0
 
 
-def show_row(row, full=True):
+def show_row(row, full=True, matched=None):
     print(f'слово #{row["id"]}')
+    if matched:
+        print(f'  совпало в ..... {matched}')
     print(f'  сказано ....... {row["said_at"]} · чат {row["chat"]}')
     print(f'  услышала ...... {row["heard_by"]} · записано {row["noted_at"]}')
     src = row['source_file'] or '—'
@@ -225,20 +291,40 @@ def cmd_show(conn, a):
     return 0
 
 
+# Куда попал кусок: два поля поиска и три названия находки (карточка #785, пункт ③).
+IN_TEXT, IN_NOTE = 'дословный текст', 'пояснение'
+IN_BOTH = 'оба: дословный текст и пояснение'
+
+# Граница поиска, печатаемая и в справке, и при нуле находок.
+FIND_BOUNDARY = ('регистр свёрнут средствами Python; НЕ лечится: «ё» против «е» (разные буквы) '
+                 'и латинская буква внутри русского слова')
+
+
 def cmd_find(conn, a):
+    conn.create_function(FOLD, 1, fold_text, deterministic=True)
+    total = conn.execute("SELECT COUNT(*) FROM owner_words").fetchone()[0]
     rows = conn.execute(
-        "SELECT * FROM owner_words WHERE text_verbatim LIKE ? OR note LIKE ?"
-        " ORDER BY said_at DESC", (f'%{a.word}%', f'%{a.word}%')).fetchall()
+        f"SELECT *, ({FOLD}(text_verbatim) LIKE {FOLD}(?)) AS in_text,"
+        f" ({FOLD}(note) LIKE {FOLD}(?)) AS in_note FROM owner_words"
+        f" WHERE in_text OR in_note ORDER BY said_at DESC",
+        (f'%{a.word}%', f'%{a.word}%')).fetchall()
     if not rows:
-        print(f'🔴 по куску «{a.word}» ничего. Слов в хранилище: '
-              f'{conn.execute("SELECT COUNT(*) FROM owner_words").fetchone()[0]}')
-        print('⚠️ пустой ответ НЕ доказывает, что слова не было: он доказывает, что слово')
-        print('   не ЗАПИСАНО. Поиск по самим записям разговоров — find-owner-word.py')
+        if total == 0:
+            print(f'🔴 хранилище пусто: слов 0 — искать негде (по куску «{a.word}»).')
+            return 4
+        # ⚖️ Причина нуля НЕ выдумывается: инструмент не знает, нет слова или не сошлась
+        # буква, и не говорит «слово не записано» — это вывод о предмете из своего молчания.
+        print(f'🔴 по куску «{a.word}» совпадений нет. Слов в хранилище: {total}')
+        print(f'⚠️ граница поиска: {FIND_BOUNDARY}.')
+        print('   Пустой ответ не отвечает, было ли слово: проверь написание куска или ищи по')
+        print('   самим записям разговоров — find-owner-word.py')
         return 1
     print(f'найдено слов: {len(rows)}')
     for row in rows:
+        where = IN_BOTH if (row['in_text'] and row['in_note']) else (
+            IN_TEXT if row['in_text'] else IN_NOTE)
         print('-' * 70)
-        show_row(row, full=False)
+        show_row(row, full=False, matched=where)
     return 0
 
 
@@ -262,9 +348,11 @@ def main():
     ap = argparse.ArgumentParser(
         description='Хранилище слов владельца: запись со сверкой дословности, '
                     'чтение по номеру, поиск по куску текста (карточка #554)')
-    ap.add_argument('--db', default=DEFAULT_DB)
-    ap.add_argument('--finder', default=DEFAULT_FINDER,
-                    help='путь к find-owner-word.py — им сверяется дословность')
+    ap.add_argument('--db', default=None,
+                    help='база; по умолчанию — от расположения скрипта, не от рабочего каталога')
+    ap.add_argument('--finder', default=None,
+                    help='путь к find-owner-word.py — им сверяется дословность; по умолчанию — '
+                         'файл рядом со скриптом')
     sub = ap.add_subparsers(dest='cmd', required=True)
 
     ad = sub.add_parser('add', help='записать слово владельца (со сверкой по записям)')
@@ -282,13 +370,20 @@ def main():
     sh = sub.add_parser('show', help='прочесть слово по номеру')
     sh.add_argument('number', type=int)
 
-    fd = sub.add_parser('find', help='поиск по куску текста')
+    fd = sub.add_parser('find', help='поиск по куску текста (регистр свёрнут; ё≠е и латиница '
+                        'внутри русского слова НЕ лечатся)',
+                        description='Поиск по дословному тексту и пояснению роли: '
+                        + FIND_BOUNDARY + '.')
     fd.add_argument('word')
 
     ls = sub.add_parser('list', help='перечень последних слов')
     ls.add_argument('--limit', type=int, default=10)
 
     a = ap.parse_args()
+    if a.finder is None:
+        a.finder = DEFAULT_FINDER
+    if a.db is None:
+        a.db = default_db()
     if not os.path.isfile(a.db):
         sys.exit(f'⛔ базы нет: {a.db}')
     conn = sqlite3.connect(a.db)
