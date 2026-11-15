@@ -1,0 +1,49 @@
+{
+  "manifest": "gordi-contours/1",
+  "comment": [
+    "Манифест контуров: ЧЕМ стена отвечает на имя контура, переданное В ВЫЗОВЕ.",
+    "Служба НЕ вычисляет путь от своего расположения и НЕ читает переменные среды —",
+    "это и есть лечение класса «инструмент считал путь сам» (карточки 613, 668, 761, 772, 773).",
+    "Имя контура, которого здесь нет, даёт исход refused, а не догадку.",
+    "О ВЕРСИИ ТУЛИНГА манифест НЕ судит: её пишет установщик в таблицу meta хранилища",
+    "(template_commit · template_source · template_recorded_at · template_files_sha — отпечатки по СОДЕРЖИМОМУ).",
+    "Поле tooling здесь — только запас на случай, когда хранилище не отвечает, и оно так и подписано в ответе."
+  ],
+  "python": "python",
+  "limits": {
+    "timeout_seconds": 120,
+    "max_output_chars": 60000
+  },
+  "contours": [
+    {
+      "id": "atlas",
+      "title": "Atlas — платформа семантического слоя",
+      "storage": "C:/guts/.atlas/.mezosync/mezosync.db",
+      "tools": {
+        "runtime": "C:/guts/.atlas/.mezosync/scripts",
+        "vnext": "C:/guts/.atlas/vnext-tools"
+      },
+      "tooling": {
+        "version": "0b1bf2a3757a",
+        "source": "https://github.com/ideator-lab/gordipack",
+        "hash": "ЗАПОЛНЯЕТ УСТАНОВЩИК: отпечаток по СОДЕРЖИМОМУ установленных файлов, не по именам (карточка 771)",
+        "installed_at": "2026-11-14T20:12:00Z"
+      }
+    },
+    {
+      "id": "atlas-sandbox",
+      "title": "Песочница Atlas — копия базы для проб",
+      "storage": "C:/guts/.atlas/.mezosync/mezo_stand/mezosync.db",
+      "tools": {
+        "runtime": "C:/guts/.atlas/.mezosync/scripts",
+        "vnext": "C:/guts/.atlas/vnext-tools"
+      },
+      "tooling": {
+        "version": "0b1bf2a3757a",
+        "source": "https://github.com/ideator-lab/gordipack",
+        "hash": "",
+        "installed_at": "2026-11-14T20:12:00Z"
+      }
+    }
+  ]
+}

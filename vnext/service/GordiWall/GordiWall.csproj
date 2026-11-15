@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Служба-стена контура gordi. Внешних пакетов НЕТ намеренно:
+       восстановление пакетов с внутреннего источника уже дважды держало работу
+       (вопросы соседнего контура про nuget-feed), а стена обязана подниматься
+       на машине, где источник пакетов недоступен. Всё нужное есть в самой платформе. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>gordi-wall</AssemblyName>
+    <RootNamespace>GordiWall</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Предупреждения — ошибки: молчащее предупреждение в стене стоит дороже сборки -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+</Project>
