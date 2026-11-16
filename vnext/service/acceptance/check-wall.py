@@ -21,6 +21,10 @@
 Файл договора в этот счёт НЕ входит: служба читает его при каждом запуске, в сборку он не вшит,
 и правка договора сборку не старит.
 
+Карточка 791 добавила случаи о форме ответа: длинный вывод выдаётся ЧАСТЯМИ (К1, К7), предупреждения тела — отдельным
+полем (К2, К1б), «не запустилось» не выбирается подстрокой (К3), чужая и выдуманная метка продолжения — отказ (К-метка).
+Случаи с телом инструмента работают на ЗАГЛУШКАХ в черновом каталоге; случай К7 — на своей копии базы стенда.
+
 Исход: 0 — все машинные критерии прошли; 1 — хоть один провалился; 2 — проверять было нечем;
 3 — сборка старше исходников, судить её нельзя (пересобрать и запустить снова).
 """
@@ -186,6 +190,284 @@ def load_refusal(exe, contract_path, contours):
     return p.returncode, p.stderr
 
 
+# ═══════════════════════════════════════ карточка 791: части вместо обрезки, предупреждения отдельно, честный «не запустилось»
+
+STUB_LIMIT = 2000          # предел знаков в манифесте заглушек и в случае К7
+WARNINGS_END = "── конец предупреждений ──\n"
+
+
+def build_big_text():
+    """Вывод заглушки ≈2,5 предела: первая строка HEAD-MARK, длинная строка с MID-MARK, последняя TAIL-MARK."""
+    lines = ["HEAD-MARK stub begin"]
+    lines += ["filler-a-%02d %s" % (i, "a" * 85) for i in range(14)]
+    lines.append("MID-MARK " + "m" * 2300)      # строка длиннее предела: её приходится резать по пределу
+    lines += ["filler-b-%02d %s" % (i, "b" * 85) for i in range(14)]
+    lines.append("TAIL-MARK stub end")
+    return "\n".join(lines) + "\n"
+
+
+def body_of(out):
+    """Из вывода режима run достаёт текст тела: после блока предупреждений или после шапки."""
+    i = out.find(WARNINGS_END)
+    if i >= 0:
+        rest = out[i + len(WARNINGS_END):]
+        return rest[1:] if rest.startswith("\n") else rest
+    j = out.find("\n\n")
+    return out[j + 2:] if j >= 0 else ""
+
+
+def sha(text):
+    import hashlib
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def collect_serve(w, tool, args, carg):
+    """Идёт по частям через службу до последней. Отдаёт список (структурный ответ, текст роли)."""
+    s, t = w.call(tool, args)
+    got = [(s, t)]
+    while s.get("next_part") and len(got) < 100:
+        s, t = w.call(tool, {carg: args[carg], "next_part": s["next_part"]})
+        got.append((s, t))
+    return got
+
+
+def collect_run(exe, contract, contours, tool, argv, carg):
+    """То же мимо службы: каждая часть — отдельный процесс. Отдаёт список (код выхода, вывод, поток ошибок)."""
+    import re
+    code, out, err = run_mode(exe, contract, contours, [tool] + argv)
+    got = [(code, out, err)]
+    while code == 5 and len(got) < 100:
+        m = re.search(r"--next-part ([0-9a-f]{32}\.[0-9]+)", out)
+        if not m:
+            break
+        contour_value = argv[argv.index("--" + carg) + 1]
+        code, out, err = run_mode(exe, contract, contours,
+                                  [tool, "--" + carg, contour_value, "--next-part", m.group(1)])
+        got.append((code, out, err))
+    return got
+
+
+def cases_791(args, work, manifest, contract_doc, carg, v3, s2c):
+    import copy
+    import re
+
+    stubs = os.path.join(work, "stubs-791")
+    if not os.path.isdir(stubs):
+        os.makedirs(stubs)
+
+    def put_stub(name, source):
+        io.open(os.path.join(stubs, name), "w", encoding="utf-8", newline="\n").write(source)
+
+    big = build_big_text()
+    marker_file = os.path.join(work, "stub-791-started.txt")
+    if os.path.exists(marker_file):
+        os.remove(marker_file)
+
+    # заглушки: тело пишет байты прямо в поток, чтобы переводы строки не зависели от платформы
+    put_stub("stub-big.py", "import sys\nsys.stdout.buffer.write(%r)\nsys.stderr.buffer.write(b'WARN-MARK stub warning\\n')\n"
+             % big.encode("utf-8"))
+    put_stub("stub-warn.py", "import sys\nsys.stdout.buffer.write(b'short body\\n')\nsys.stderr.buffer.write(b'WARN-MARK stub warning\\n')\n")
+    put_stub("stub-k3-stdout.py", "import sys\nsys.stdout.write('No such file or directory\\n')\nsys.exit(1)\n")
+    put_stub("stub-k3-stderr.py", "import sys\nsys.stdout.write('some output\\n')\nsys.stderr.write('No such file or directory\\n')\nsys.exit(2)\n")
+    put_stub("stub-k3-interpreter.py", "import sys\nsys.stderr.write(\"python.exe: can't open file 'x.py': [Errno 2] No such file or directory\\n\")\nsys.exit(2)\n")
+    put_stub("stub-marker.py", "import sys\nopen(%r, 'w').write('started')\nsys.stdout.write('marker stub ran\\n')\n" % marker_file)
+
+    # манифест заглушек: малый предел знаков, оба каталога инструментов — каталог заглушек
+    m_stub = copy.deepcopy(manifest)
+    m_stub["limits"] = {"timeout_seconds": 120, "max_output_chars": STUB_LIMIT}
+    for c in m_stub["contours"]:
+        c["tools"] = {"runtime": stubs, "vnext": stubs}
+    m_stub_path = os.path.join(work, "contours-stubs-791.json")
+    write_json(m_stub_path, m_stub)
+
+    def stub_contract(tag, mapping):
+        d = copy.deepcopy(contract_doc)
+        for t in d["tools"]:
+            if t["name"] in mapping:
+                t["exec"]["script"] = mapping[t["name"]]
+        p = os.path.join(work, "contract-791-%s.json" % tag)
+        write_json(p, d)
+        return p
+
+    big_contract = stub_contract("big", {"rules_get": "stub-big.py"})
+
+    # ───────────── К1: длинный вывод выдаётся ЧАСТЯМИ, ничего не режется (находка С1)
+    w1 = Wall(args.exe, big_contract, m_stub_path)
+    sv = collect_serve(w1, "rules_get", {carg: CONTOUR_STAND, "list": True}, carg)
+    w1.close()
+    sv_texts = [s.get("text", "") for s, _ in sv]
+    sv_join = "".join(sv_texts)
+    sv_first, sv_last = sv[0][0], sv[-1][0]
+    ok_sv = (len(sv) >= 3
+             and sv_first.get("outcome") == "partial" and "HEAD-MARK" in sv_texts[0] and "TAIL-MARK" not in sv_texts[0]
+             and sv_last.get("outcome") == "passed" and "TAIL-MARK" in sv_texts[-1] and not sv_last.get("next_part")
+             and len(sv_join) == len(big) and sha(sv_join) == sha(big)
+             and all(s.get("outcome") == "partial" and s.get("final_outcome") == "passed" for s, _ in sv[:-1])
+             and all(s.get("outcome") != "passed" for s, _ in sv[:-1])
+             and all(s.get("truncated") is False for s, _ in sv)
+             and all(s.get("part") == i + 1 and s.get("parts") == len(sv) for i, (s, _) in enumerate(sv))
+             and all(len(x) <= STUB_LIMIT for x in sv_texts))
+
+    rn = collect_run(args.exe, big_contract, m_stub_path, "rules_get", ["--" + carg, CONTOUR_STAND, "--list"], carg)
+    rn_bodies = [body_of(o) for _, o, _ in rn]
+    rn_join = "".join(rn_bodies)
+    ok_rn = (len(rn) >= 3
+             and rn[0][0] == 5 and "HEAD-MARK" in rn_bodies[0] and "TAIL-MARK" not in rn_bodies[0]
+             and rn[-1][0] == 0 and "TAIL-MARK" in rn_bodies[-1]
+             and all(c == 5 for c, _, _ in rn[:-1])
+             and "исход: частично" in rn[0][1] and "--next-part" in rn[0][1]
+             and len(rn_join) == len(big) and sha(rn_join) == sha(big))
+    v3.add("791-К1", ok_sv and ok_rn,
+           "длинный вывод тела выдаётся ЧАСТЯМИ: ничего не режется, склейка частей равна выводу знак в знак (служба И режим run)",
+           "служба: частей %d · исходы %s · начало HEAD-MARK в первой: %s · TAIL-MARK не в первой: %s · TAIL-MARK в последней: %s\n"
+           "служба: длина склейки %d при длине вывода %d · sha256 совпал: %s · усечено нигде: %s\n"
+           "режим run: частей %d · коды выхода %s · длина склейки %d · sha256 совпал: %s"
+           % (len(sv), [s.get("outcome") for s, _ in sv],
+              "HEAD-MARK" in sv_texts[0], "TAIL-MARK" not in sv_texts[0], "TAIL-MARK" in sv_texts[-1],
+              len(sv_join), len(big), sha(sv_join) == sha(big), all(s.get("truncated") is False for s, _ in sv),
+              len(rn), [c for c, _, _ in rn], len(rn_join), sha(rn_join) == sha(big)))
+
+    # ───────────── К1б: предупреждения тела при выдаче частями — целиком в первой части и повторены в последней
+    ok_w_first_last = ("WARN-MARK" in sv_first.get("warnings", "") and "WARN-MARK" in sv_last.get("warnings", ""))
+    ok_w_mid = all("WARN-MARK" not in s.get("warnings", "") for s, _ in sv[1:-1])
+    v3.add("791-К1б", ok_w_first_last and ok_w_mid,
+           "при выдаче частями предупреждения тела — целиком в первой части и повторены в последней",
+           "в первой: %s · в последней: %s · в средних нет: %s"
+           % ("WARN-MARK" in sv_first.get("warnings", ""), "WARN-MARK" in sv_last.get("warnings", ""), ok_w_mid))
+
+    # ───────────── К2: предупреждения — ОТДЕЛЬНЫМ полем, к тексту не приклеены (находка С2)
+    warn_contract = stub_contract("warn", {"rules_get": "stub-warn.py"})
+    w2 = Wall(args.exe, warn_contract, m_stub_path)
+    s2, t2 = w2.call("rules_get", {carg: CONTOUR_STAND, "list": True})
+    w2.close()
+    c2, o2, _ = run_mode(args.exe, warn_contract, m_stub_path, ["rules_get", "--" + carg, CONTOUR_STAND, "--list"])
+    ok_k2 = ("WARN-MARK" in s2.get("warnings", "") and "WARN-MARK" not in s2.get("text", "")
+             and s2.get("outcome") == "passed" and s2.get("part") == 1 and s2.get("parts") == 1
+             and s2.get("next_part") is None
+             and c2 == 0 and WARNINGS_END in o2 and "WARN-MARK" in o2 and "WARN-MARK" not in body_of(o2)
+             and "short body" in body_of(o2))
+    v3.add("791-К2", ok_k2, "предупреждения тела — отдельным полем warnings, в тексте вывода тела их нет; режим run печатает блок предупреждений",
+           "служба: исход %s · WARN-MARK в warnings: %s · WARN-MARK в тексте тела: %s\n"
+           "режим run: код %s · блок предупреждений напечатан: %s · WARN-MARK в тексте тела: %s"
+           % (s2.get("outcome"), "WARN-MARK" in s2.get("warnings", ""), "WARN-MARK" in s2.get("text", ""),
+              c2, WARNINGS_END in o2, "WARN-MARK" in body_of(o2)))
+
+    # ───────────── К3: «не запустилось» не выбирается подстрокой (находка С3)
+    k3_contract = stub_contract("k3", {"rules_get": "stub-k3-stdout.py", "owner_words_find": "stub-k3-stderr.py",
+                                        "memory_read": "stub-k3-interpreter.py"})
+    w3 = Wall(args.exe, k3_contract, m_stub_path)
+    s3a, _ = w3.call("rules_get", {carg: CONTOUR_STAND, "list": True})
+    s3b, _ = w3.call("owner_words_find", {carg: CONTOUR_STAND, "text": "x"})
+    s3c, _ = w3.call("memory_read", {carg: CONTOUR_STAND, "role": "PROTO"})
+    w3.close()
+    ok_k3 = (s3a.get("outcome") == "cannot_verify" and s3b.get("outcome") != "not_started"
+             and s3c.get("outcome") == "not_started" and s2c.get("outcome") == "not_started")
+    v3.add("791-К3", ok_k3, "фраза «No such file or directory» в выводе отработавшего тела НЕ даёт «не запустилось»; сообщение интерпретатора и отсутствие тела на месте — дают",
+           "фраза в stdout, код 1: исход %s (ждали cannot_verify)\n"
+           "фраза в stderr, код 2, stdout непуст: исход %s (ждали НЕ not_started)\n"
+           "интерпретатор «can't open file», код 2, stdout пуст: исход %s (ждали not_started)\n"
+           "тела нет на месте (прежний случай): исход %s (ждали not_started)"
+           % (s3a.get("outcome"), s3b.get("outcome"), s3c.get("outcome"), s2c.get("outcome")))
+
+    # ───────────── К-метка: выдуманная метка — отказ, тело не запускалось
+    mark_contract = stub_contract("mark", {"rules_get": "stub-big.py", "owner_words_find": "stub-marker.py"})
+    wm = Wall(args.exe, mark_contract, m_stub_path)
+    fake_a, _ = wm.call("owner_words_find", {carg: CONTOUR_STAND, "text": "x", "next_part": "выдумка"})
+    fake_b, _ = wm.call("owner_words_find", {carg: CONTOUR_STAND, "text": "x", "next_part": "0123456789abcdef0123456789abcdef.2"})
+    started_after_fakes = os.path.exists(marker_file)
+    ok_fake = (fake_a.get("outcome") == "refused" and "метк" in (fake_a.get("error") or "")
+               and fake_b.get("outcome") == "refused" and "метк" in (fake_b.get("error") or "")
+               and not started_after_fakes)
+    v3.add("791-Кметка", ok_fake, "выдуманная или просроченная метка продолжения — отказ с причиной, тело НЕ запускалось",
+           "метка-слово: исход %s — %s\nметка нужного вида, которой стена не выдавала: исход %s — %s\nфайл-отметка запуска тела есть: %s (ждали: нет)"
+           % (fake_a.get("outcome"), (fake_a.get("error") or "")[:90],
+              fake_b.get("outcome"), (fake_b.get("error") or "")[:90], started_after_fakes))
+
+    # ───────────── К-метка-чужая: настоящая метка другого вызова или другого контура — отказ, тело не запускалось
+    own, _ = wm.call("rules_get", {carg: CONTOUR_STAND, "list": True})
+    label = own.get("next_part")
+    if not label:
+        v3.add("791-Кметка-чужая", False, "настоящая метка ДРУГОГО вызова или ДРУГОГО контура — отказ, тело не запускалось",
+               "ПРОВЕРЯТЬ НЕЧЕМ: первый вызов не выдал метку продолжения (исход %s, частей %s)" % (own.get("outcome"), own.get("parts")))
+    else:
+        other_tool, _ = wm.call("owner_words_find", {carg: CONTOUR_STAND, "text": "x", "next_part": label})
+        started_after_foreign = os.path.exists(marker_file)
+        other_contour, _ = wm.call("rules_get", {carg: CONTOUR_LIVE, "list": True, "next_part": label})
+        same_ok, _ = wm.call("rules_get", {carg: CONTOUR_STAND, "next_part": label})
+        ok_foreign = (other_tool.get("outcome") == "refused" and not started_after_foreign
+                      and other_contour.get("outcome") == "refused"
+                      and same_ok.get("outcome") in ("partial", "passed"))
+        v3.add("791-Кметка-чужая", ok_foreign, "настоящая метка ДРУГОГО вызова или ДРУГОГО контура — отказ, тело не запускалось; своя метка работает",
+               "метка вызова rules_get отдана вызову owner_words_find: %s — %s\nфайл-отметка запуска тела есть: %s (ждали: нет)\n"
+               "метка контура %s отдана контуру %s: %s — %s\nсвоя метка тем же вызовом и контуром: исход %s"
+               % (other_tool.get("outcome"), (other_tool.get("error") or "")[:90], started_after_foreign,
+                  CONTOUR_STAND, CONTOUR_LIVE, other_contour.get("outcome"), (other_contour.get("error") or "")[:90],
+                  same_ok.get("outcome")))
+
+    # встречный к К-метке: тот же вызов без метки тело ЗАПУСКАЕТ — иначе «отметки нет» ничего не значит
+    wm.call("owner_words_find", {carg: CONTOUR_STAND, "text": "x"})
+    wm.close()
+    marker_works = os.path.exists(marker_file)
+    v3.add("791-Кметка-цела", marker_works, "встречный случай к К-метке: вызов без метки тело запускает (заглушка пишет файл-отметку)",
+           "файл-отметка после обычного вызова есть: %s" % marker_works)
+
+    # ───────────── К7: чтение ленты через стену на малом пределе — ключ подтверждения собирается из двух половин (находка С7)
+    stand_db = [c for c in manifest["contours"] if c.get("id") == CONTOUR_STAND][0]["storage"]
+    k7_dir = os.path.join(work, "k7")
+    if not os.path.isdir(k7_dir):
+        os.makedirs(k7_dir)
+    k7_db = os.path.join(k7_dir, "mezosync.db")
+    for suffix in ("", "-wal", "-shm"):
+        if os.path.exists(stand_db + suffix):
+            shutil.copyfile(stand_db + suffix, k7_db + suffix)
+    m7 = copy.deepcopy(manifest)
+    m7["limits"] = {"timeout_seconds": 120, "max_output_chars": STUB_LIMIT}
+    for c in m7["contours"]:
+        if c.get("id") == CONTOUR_STAND:
+            c["storage"] = k7_db
+    m7_path = os.path.join(k7_dir, "contours-k7.json")
+    write_json(m7_path, m7)
+
+    w7 = Wall(args.exe, args.contract, m7_path)     # без --read-only: ключ подтверждения пишет отметку
+    picked = None
+    for role in ("PROTO", "COORD", "CORE", "ING", "STUD", "TAXO", "OPSSRE", "RCC"):
+        s7, t7 = w7.call("feed_read", {carg: CONTOUR_STAND, "role": role})
+        if "[begin-of-batch]" in s7.get("text", ""):
+            picked = (role, s7)
+            break
+    if picked is None:
+        v3.add("791-К7", False, "лента через стену на малом пределе: ключ подтверждения собирается из двух половин и подтверждается",
+               "ПРОВЕРЯТЬ НЕЧЕМ: ни у одной проверенной роли на копии базы нет непрочитанного — случай не может пройти молча")
+        w7.close()
+    else:
+        role, first = picked
+        got7 = [(first, "")]
+        s = first
+        while s.get("next_part") and len(got7) < 200:
+            s, _ = w7.call("feed_read", {carg: CONTOUR_STAND, "next_part": s["next_part"]})
+            got7.append((s, ""))
+        texts7 = [x.get("text", "") for x, _ in got7]
+        last7 = got7[-1][0]
+        m_first = re.search(r"ПЕРВАЯ половина ([0-9a-f]+)", texts7[0])
+        m_second = re.search(r"--ack <первая>-([0-9a-f]+)", texts7[-1])
+        key = (m_first.group(1) + "-" + m_second.group(1)) if (m_first and m_second) else None
+        ack_outcome = None
+        if key:
+            ack, _ = w7.call("feed_ack", {carg: CONTOUR_STAND, "role": role, "key": key})
+            ack_outcome = ack.get("outcome")
+        w7.close()
+        ok7 = (len(got7) >= 2 and "[begin-of-batch]" in texts7[0] and "[end-of-batch]" in texts7[-1]
+               and "[end-of-batch]" not in texts7[0]
+               and all(x.get("outcome") == "partial" for x, _ in got7[:-1])
+               and last7.get("outcome") == "passed" and key is not None and ack_outcome == "passed")
+        v3.add("791-К7", ok7, "лента через стену на малом пределе: первая часть несёт начало партии, последняя — конец со второй половиной ключа; склеенный ключ подтверждается",
+               "роль %s · предел знаков %d · частей %d · исходы первой и последней: %s и %s\n"
+               "начало партии в первой части: %s · конец партии в последней: %s · половины ключа найдены: %s\n"
+               "подтверждение склеенным ключом на копии базы: %s"
+               % (role, STUB_LIMIT, len(got7), got7[0][0].get("outcome"), last7.get("outcome"),
+                  "[begin-of-batch]" in texts7[0], "[end-of-batch]" in texts7[-1], key is not None, ack_outcome))
+
+
 def main():
     ap = argparse.ArgumentParser(description="приёмка стены контура gordi (этап Э1, карточка 779)")
     ap.add_argument("--contours", required=True, help="боевой манифест контуров этой машины")
@@ -302,13 +584,28 @@ def main():
     s2a, t2a = w.call("memory_save", {"contour": CONTOUR_STAND, "role": "PROTO", "section": "state",
                                       "body": "проба приёмки стены — записана НЕ должна быть",
                                       "expect_version": 1})
-    # (б) усечение: тот же вызов на манифесте с низким пределом знаков
-    low = dict(manifest)
+    # (б) усечение. С карточки 791 длинный ВЫВОД тела не режется, а выдаётся частями (случаи К1 и К7);
+    #     отсекать стена вправе только предупреждения тела длиннее предела — это и есть «настоящее» усечение.
+    #     Заглушка печатает 5000 знаков в поток ошибок; манифест с низким пределом знаков ведёт на каталог заглушки.
+    stub2 = os.path.join(work, "stub-2b")
+    if not os.path.isdir(stub2):
+        os.makedirs(stub2)
+    io.open(os.path.join(stub2, "stub-warn-long.py"), "w", encoding="utf-8", newline="\n").write(
+        "import sys\nsys.stderr.write('WARN-HEAD ' + 'w' * 5000 + ' WARN-TAIL\\n')\n")
+    low = json.loads(json.dumps(manifest))
     low["limits"] = {"timeout_seconds": 120, "max_output_chars": 2000}
+    for c in low["contours"]:
+        c["tools"] = {"runtime": stub2, "vnext": stub2}
     low_path = os.path.join(work, "contours-low-limit.json")
     write_json(low_path, low)
-    w_low = Wall(args.exe, args.contract, low_path)
-    s2b, t2b = w_low.call("memory_read", {"contour": CONTOUR_LIVE, "role": "PROTO", "section": "identity"})
+    long_warn = json.loads(json.dumps(contract_doc))
+    for t in long_warn["tools"]:
+        if t["name"] == "rules_get":
+            t["exec"]["script"] = "stub-warn-long.py"
+    long_warn_path = os.path.join(work, "contract-long-warnings.json")
+    write_json(long_warn_path, long_warn)
+    w_low = Wall(args.exe, long_warn_path, low_path)
+    s2b, t2b = w_low.call("rules_get", {"contour": CONTOUR_LIVE, "list": True})
     w_low.close()
     # (в) тело не на месте: копия договора с несуществующим файлом инструмента
     gone = json.loads(json.dumps(contract_doc))
@@ -323,10 +620,12 @@ def main():
 
     ok2 = (s2a.get("outcome") == "mismatch" and s2a.get("child_exit") not in (None, 0)
            and s2b.get("truncated") is True and "предел знаков" in (s2b.get("truncate_reason") or "")
+           and "WARN-HEAD" in s2b.get("warnings", "") and "WARN-TAIL" in s2b.get("warnings", "")
+           and "вырезано" in s2b.get("warnings", "") and len(s2b.get("warnings", "")) <= 2000
            and s2c.get("outcome") == "not_started" and s2c.get("child_exit") is None)
     v.add("②", ok2, "исход — из закрытого перечня, усечение названо, код выхода НЕ договор",
           "расхождение состояния: исход %s, код тела %s\n"
-          "усечение: признак %s, причина «%s», знаков %d\n"
+          "усечение (предупреждения тела длиннее предела; длинный вывод идёт частями — случаи К1 и К7): признак %s, причина «%s», знаков в ответе %d\n"
           "тела нет на месте: исход %s, код тела %s (кода нет вовсе — судить по нему было бы нечем)"
           % (s2a.get("outcome"), s2a.get("child_exit"),
              s2b.get("truncated"), s2b.get("truncate_reason"), len(t2b),
@@ -478,6 +777,10 @@ def main():
 
     w.close()
 
+    # ═══════════════════════════════════════ карточка 791: части вместо обрезки, предупреждения отдельно, честный «не запустилось»
+    v3 = Verdict()
+    cases_791(args, work, manifest, contract_doc, CARG, v3, s2c)
+
     # ─────────────────────────────────────── вывод
     print("── ПРИЁМКА СТЕНЫ КОНТУРА GORDI · этап Э1 · карточка 779")
     print("   сборка ... %s" % args.exe)
@@ -491,19 +794,23 @@ def main():
     print("── случаи карточки 787 (кто исполняет требование договора)")
     v2.print_all()
     print("")
+    print("── случаи карточки 791 (части вместо обрезки · предупреждения отдельно · честный «не запустилось»)")
+    v3.print_all()
+    print("")
     print("⚖️ ЭТИ ДВА КРИТЕРИЯ МАШИНА НЕ СУДИТ — говорю прямо, чтобы зелёное не прочлось шире:")
     print("   ⑥ полный рабочий отрезок роли через стену — доказывается работой роли (записка · память · карточка),")
     print("      а не этим файлом. Прогон приёмки отрезком НЕ является.")
     print("   ⑨ подпись приёмки ставит роль, которая службу НЕ писала. Свой прогон за чужую руку не считается.")
     print("")
-    bad = v.failed() + v2.failed()
+    bad = v.failed() + v2.failed() + v3.failed()
     if bad:
-        print("🔴 ПРОВАЛИЛОСЬ %d: %s (карточка 779: %d из %d прошло · карточка 787: %d из %d прошло)"
+        print("🔴 ПРОВАЛИЛОСЬ %d: %s (карточка 779: %d из %d прошло · карточка 787: %d из %d прошло · карточка 791: %d из %d прошло)"
               % (len(bad), " · ".join(r[0] for r in bad),
-                 len(v.rows) - len(v.failed()), len(v.rows), len(v2.rows) - len(v2.failed()), len(v2.rows)))
+                 len(v.rows) - len(v.failed()), len(v.rows), len(v2.rows) - len(v2.failed()), len(v2.rows),
+                 len(v3.rows) - len(v3.failed()), len(v3.rows)))
         return 1
-    print("✅ ВСЕ МАШИННЫЕ КРИТЕРИИ ПРОШЛИ: карточка 779 — %d из %d · карточка 787 — %d из %d (⑥ и ⑨ карточки 779 — за человеком)"
-          % (len(v.rows), len(v.rows), len(v2.rows), len(v2.rows)))
+    print("✅ ВСЕ МАШИННЫЕ КРИТЕРИИ ПРОШЛИ: карточка 779 — %d из %d · карточка 787 — %d из %d · карточка 791 — %d из %d (⑥ и ⑨ карточки 779 — за человеком)"
+          % (len(v.rows), len(v.rows), len(v2.rows), len(v2.rows), len(v3.rows), len(v3.rows)))
     return 0
 
 

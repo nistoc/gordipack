@@ -12,6 +12,8 @@ public enum Outcome
     NotStarted,
     CannotVerify,
     Refused,
+    /// <summary>Тело отработало, но ответ отдан НЕ целиком: есть продолжение (аргумент next_part).</summary>
+    Partial,
 }
 
 public static class OutcomeNames
@@ -24,7 +26,19 @@ public static class OutcomeNames
         Outcome.NotStarted => "not_started",
         Outcome.CannotVerify => "cannot_verify",
         Outcome.Refused => "refused",
+        Outcome.Partial => "partial",
         _ => "cannot_verify",
+    };
+
+    public static Outcome? Parse(string? id) => id switch
+    {
+        "passed" => Outcome.Passed,
+        "mismatch" => Outcome.Mismatch,
+        "not_started" => Outcome.NotStarted,
+        "cannot_verify" => Outcome.CannotVerify,
+        "refused" => Outcome.Refused,
+        "partial" => Outcome.Partial,
+        _ => null,
     };
 
     public static string Title(Outcome o) => o switch
@@ -34,6 +48,7 @@ public static class OutcomeNames
         Outcome.NotStarted => "не запустилось",
         Outcome.CannotVerify => "не смог проверить",
         Outcome.Refused => "отказ",
+        Outcome.Partial => "частично",
         _ => "не смог проверить",
     };
 }

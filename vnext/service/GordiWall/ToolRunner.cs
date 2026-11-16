@@ -6,6 +6,8 @@ namespace GordiWall;
 /// <summary>
 /// Ответ стены. Поля обязательны все, кроме error: роль не обязана догадываться,
 /// полон ли текст и кто её судит.
+/// Предупреждения тела (поток ошибок) идут ОТДЕЛЬНЫМ полем и к тексту не приклеиваются.
+/// Длинный вывод выдаётся частями: part / parts / next_part; у ответа не по частям part=1, parts=1.
 /// </summary>
 public sealed record Answer(
     Outcome Outcome,
@@ -15,8 +17,17 @@ public sealed record Answer(
     string Contour,
     string ToolingVersion,
     int? ChildExit,
-    string? Error)
+    string? Error,
+    string Warnings = "",
+    int Part = 1,
+    int Parts = 1,
+    string? NextPart = null,
+    Outcome? FinalOutcome = null,
+    string? NextHint = null)
 {
+    /// <summary>Строка, которой кончается блок предупреждений: по ней отделяют предупреждения от текста.</summary>
+    public const string WarningsEnd = "── конец предупреждений ──";
+
     public static Answer Refuse(string why, string contour = "", string toolingVersion = "") =>
         new(Outcome.Refused, false, null, "", contour, toolingVersion, null, why);
 
@@ -25,10 +36,17 @@ public sealed record Answer(
     {
         var sb = new StringBuilder();
         sb.Append("исход: ").Append(OutcomeNames.Title(Outcome));
+        if (Parts > 1) sb.Append(" · часть ").Append(Part).Append(" из ").Append(Parts);
+        if (FinalOutcome is { } fin) sb.Append(" · итоговый исход тела: ").Append(OutcomeNames.Title(fin));
         sb.Append(" · усечено: ").Append(Truncated ? "ДА — " + (TruncateReason ?? "без причины") : "нет");
         if (!string.IsNullOrEmpty(Contour)) sb.Append(" · контур: ").Append(Contour);
         if (!string.IsNullOrEmpty(ToolingVersion)) sb.Append(" · версия тулинга: ").Append(ToolingVersion);
         if (ChildExit is { } code) sb.Append(" · код тела: ").Append(code).Append(" (справочно, не договор)");
+        if (NextPart is not null && NextHint is not null)
+        {
+            sb.AppendLine();
+            sb.Append("ответ отдан НЕ целиком, продолжение: ").Append(NextHint);
+        }
         return sb.ToString();
     }
 
@@ -37,6 +55,12 @@ public sealed record Answer(
         var sb = new StringBuilder();
         sb.AppendLine(Header());
         if (!string.IsNullOrEmpty(Error)) sb.Append("причина: ").AppendLine(Error);
+        if (!string.IsNullOrEmpty(Warnings))
+        {
+            sb.AppendLine("── предупреждения тела (поток ошибок; к ответу НЕ относятся) ──");
+            sb.AppendLine(Warnings.TrimEnd('\r', '\n'));
+            sb.AppendLine(WarningsEnd);
+        }
         if (!string.IsNullOrEmpty(Text)) sb.AppendLine().Append(Text);
         return sb.ToString();
     }
@@ -52,6 +76,9 @@ public sealed class ToolRunner(Contract contract, Manifest manifest, bool readOn
     // Манифест её НЕ держит как истину: установщик пишет версию в таблицу meta,
     // и второй список версий расходился бы с первым молча.
     private readonly Dictionary<string, string> _versionCache = new(StringComparer.Ordinal);
+
+    /// <summary>Имя общего аргумента «метка продолжения». Объявлен в договоре; имя нужно и коду, как имя вызова contour_info.</summary>
+    public const string NextPartArg = "next_part";
 
     public async Task<Answer> CallAsync(string toolName, IReadOnlyDictionary<string, object?> given, CancellationToken ct)
     {
@@ -77,6 +104,12 @@ public sealed class ToolRunner(Contract contract, Manifest manifest, bool readOn
             return Answer.Refuse($"вызов «{tool.Name}» пишет, а стена поднята в режиме только-чтение. "
                                  + "Запись мимо службы отвергнута намеренно: иначе обход стены стал бы обычной дорогой.",
                                  contour.Id, ToolingVersion(contour));
+
+        // Вызов с next_part тело НЕ запускает: отдаёт следующую часть уже сохранённого ответа.
+        // Аргументы вызова при этом не требуются — они были в первом вызове.
+        var nextLabel = Val(given, NextPartArg);
+        if (!string.IsNullOrWhiteSpace(nextLabel))
+            return ContinuePart(tool, contour, nextLabel);
 
         foreach (var a in tool.Args)
         {
@@ -220,23 +253,45 @@ public sealed class ToolRunner(Contract contract, Manifest manifest, bool readOn
             var stderr = await stderrTask;
             var exit = p.ExitCode;
 
-            var text = stdout;
-            if (!string.IsNullOrWhiteSpace(stderr))
-                text = string.IsNullOrEmpty(text) ? stderr : text + "\n--- поток ошибок тела ---\n" + stderr;
-
-            var truncated = false;
-            string? reason = null;
-            if (text.Length > _manifest.MaxOutputChars)
-            {
-                truncated = true;
-                reason = $"предел знаков {_manifest.MaxOutputChars} (было {text.Length})";
-                text = text[.._manifest.MaxOutputChars];
-            }
-
             var outcome = Judge(tool, exit, stdout, stderr);
             string? error = outcome == Outcome.Passed ? null : ShortReason(outcome, stderr, stdout);
 
-            return new Answer(outcome, truncated, reason, text, contour.Id, ToolingVersion(contour), exit, error);
+            // Поток ошибок — ОТДЕЛЬНОЕ поле. Отсечение допустимо только здесь, и оно названо.
+            var maxChars = _manifest.MaxOutputChars;
+            var (warnings, warnCut, warnReason) = FitWarnings(stderr, maxChars);
+
+            if (stdout.Length <= maxChars)
+                return new Answer(outcome, warnCut, warnReason, stdout, contour.Id, ToolingVersion(contour), exit, error, warnings);
+
+            // Вывод длиннее предела не режется, а делится на части; весь ответ ложится на диск.
+            var parts = PartSpool.Split(stdout, maxChars);
+            var entry = new SpoolEntry
+            {
+                Tool = tool.Name,
+                Contour = contour.Id,
+                ToolingVersion = ToolingVersion(contour),
+                FinalOutcome = OutcomeNames.Id(outcome),
+                ChildExit = exit,
+                Error = error,
+                Warnings = warnings,
+                Truncated = warnCut,
+                TruncateReason = warnReason,
+                Parts = parts,
+            };
+            string id;
+            try
+            {
+                id = PartSpool.Save(entry);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                return new Answer(Outcome.CannotVerify, false, null, "", contour.Id, ToolingVersion(contour), exit,
+                                  $"ответ тела длиннее предела ({stdout.Length} знаков при пределе {maxChars}), а сохранить его части на диск не удалось: {e.Message}. "
+                                  + "Отдать часть без остальных стена не вправе: молча обрезанный ответ ввёл бы в заблуждение.",
+                                  warnings);
+            }
+
+            return PartAnswer(entry, id, 1, tool.Name);
         }
         catch (System.ComponentModel.Win32Exception e)
         {
@@ -258,17 +313,98 @@ public sealed class ToolRunner(Contract contract, Manifest manifest, bool readOn
     {
         if (exit == 0) return Outcome.Passed;
 
-        var all = stdout + "\n" + stderr;
-        if (all.Contains("can't open file", StringComparison.OrdinalIgnoreCase)
-            || all.Contains("No such file or directory", StringComparison.OrdinalIgnoreCase))
+        // «Не запустилось» — только когда тело и впрямь не начало работу: интерпретатор сказал, что не открывает
+        // файл (код 2, stdout пуст, первая непустая строка потока ошибок — его сообщение). Фраза «No such file or
+        // directory» где-либо в выводе — это слова отработавшего тела, а не отказ запуска.
+        if (exit == 2 && string.IsNullOrWhiteSpace(stdout) && InterpreterCannotOpen(stderr))
             return Outcome.NotStarted;
 
+        var all = stdout + "\n" + stderr;
         foreach (var mark in tool.Exec.MismatchWhen)
             if (all.Contains(mark, StringComparison.OrdinalIgnoreCase))
                 return Outcome.Mismatch;
 
         // Тело запустилось и отказало по своей причине: ответа по предмету нет.
         return Outcome.CannotVerify;
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex InterpreterMessage =
+        new(@"python[^\r\n]*: can't open file", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    /// <summary>Первая непустая строка потока ошибок — сообщение интерпретатора «…python…: can't open file …».</summary>
+    private static bool InterpreterCannotOpen(string stderr)
+    {
+        var first = stderr.Split('\n').Select(l => l.Trim()).FirstOrDefault(l => l.Length > 0);
+        return first is not null && InterpreterMessage.IsMatch(first);
+    }
+
+    /// <summary>
+    /// Предупреждения тела укладываются в предел: если длиннее — начало и конец, между ними строка «вырезано N знаков».
+    /// Это единственное место, где стена вправе отсечь, и отсечение названо признаком и причиной.
+    /// </summary>
+    private static (string Text, bool Cut, string? Reason) FitWarnings(string stderr, int maxChars)
+    {
+        var text = stderr.TrimEnd('\r', '\n');
+        if (string.IsNullOrWhiteSpace(text)) return ("", false, null);
+        if (text.Length <= maxChars) return (text, false, null);
+
+        var keep = Math.Max(2, maxChars - 60);   // 60 знаков — запас под строку «вырезано N знаков»
+        var head = keep / 2;
+        var tail = keep - head;
+        var cut = text.Length - head - tail;
+        var fitted = text[..head] + $"\n… вырезано {cut} знаков …\n" + text[^tail..];
+        return (fitted, true, $"предупреждения тела длиннее предела: предел знаков {maxChars} (было {text.Length}), вырезано {cut}");
+    }
+
+    /// <summary>Часть number из сохранённого ответа: все части, кроме последней, имеют исход «частично».</summary>
+    private Answer PartAnswer(SpoolEntry entry, string id, int number, string toolName)
+    {
+        var total = entry.Parts.Count;
+        var last = number == total;
+        var final = OutcomeNames.Parse(entry.FinalOutcome) ?? Outcome.CannotVerify;
+        var next = last ? null : PartSpool.MakeLabel(id, number + 1);
+        // Предупреждения целиком идут в первой части и повторяются в последней.
+        var warnings = number == 1 || last ? entry.Warnings : "";
+        return new Answer(
+            last ? final : Outcome.Partial,
+            entry.Truncated,
+            entry.TruncateReason,
+            entry.Parts[number - 1],
+            entry.Contour,
+            entry.ToolingVersion,
+            entry.ChildExit,
+            last ? entry.Error : null,
+            warnings,
+            number,
+            total,
+            next,
+            last ? null : final,
+            next is null ? null : NextHint(toolName, entry.Contour, next));
+    }
+
+    /// <summary>Точная форма следующего вызова — для службы и для режима run.</summary>
+    private string NextHint(string toolName, string contourId, string label)
+    {
+        var contourArg = _contract.ContourArgName;
+        var runArg = "--" + NextPartArg.Replace('_', '-');
+        return $"вызвать «{toolName}» с аргументами {contourArg}=\"{contourId}\" и {NextPartArg}=\"{label}\" "
+               + $"(мимо службы: gordi-wall run {toolName} --{contourArg.Replace('_', '-')} {contourId} {runArg} {label})";
+    }
+
+    /// <summary>Отдаёт следующую часть сохранённого ответа. Метка привязана к вызову и контуру.</summary>
+    private Answer ContinuePart(ToolDef tool, ContourInfo contour, string label)
+    {
+        if (!PartSpool.TryLoad(label, out var entry, out var number, out var why))
+            return Answer.Refuse(why, contour.Id, ToolingVersion(contour));
+
+        if (!string.Equals(entry!.Tool, tool.Name, StringComparison.Ordinal)
+            || !string.Equals(entry.Contour, contour.Id, StringComparison.Ordinal))
+            return Answer.Refuse($"метка продолжения «{label}» выдана для вызова «{entry.Tool}» на контуре «{entry.Contour}», "
+                                 + $"а просят «{tool.Name}» на контуре «{contour.Id}». Чужую метку стена не принимает; тело не запускалось.",
+                                 contour.Id, ToolingVersion(contour));
+
+        var id = label.Trim().Split('.')[0];
+        return PartAnswer(entry, id, number, tool.Name);
     }
 
     private static string ShortReason(Outcome outcome, string stderr, string stdout)

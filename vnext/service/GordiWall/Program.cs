@@ -142,7 +142,8 @@ public static class Program
 
         var answer = await runner.CallAsync(toolName, given, CancellationToken.None);
         await Console.Out.WriteAsync(answer.ForRole());
-        if (!answer.ForRole().EndsWith('\n')) await Console.Out.WriteLineAsync();
+        // У ответа по частям текст печатается как есть: лишний перевод строки сломал бы точность склейки частей
+        if (answer.Parts == 1 && !answer.ForRole().EndsWith('\n')) await Console.Out.WriteLineAsync();
 
         // Код выхода ПОВТОРЯЕТ типизированный исход, а не заменяет его: договор — в тексте
         return answer.Outcome switch
@@ -151,6 +152,7 @@ public static class Program
             Outcome.Mismatch => 1,
             Outcome.NotStarted => 2,
             Outcome.CannotVerify => 3,
+            Outcome.Partial => 5,       // ответ отдан частями: есть продолжение (аргумент next_part)
             _ => 4,
         };
     }
@@ -259,6 +261,12 @@ public static class Program
             ["outcome_title"] = OutcomeNames.Title(answer.Outcome),
             ["truncated"] = answer.Truncated,
             ["truncate_reason"] = answer.TruncateReason,
+            ["text"] = answer.Text,
+            ["warnings"] = answer.Warnings,
+            ["part"] = answer.Part,
+            ["parts"] = answer.Parts,
+            ["next_part"] = answer.NextPart,
+            ["final_outcome"] = answer.FinalOutcome is { } fin ? OutcomeNames.Id(fin) : null,
             ["contour"] = answer.Contour,
             ["tooling_version"] = answer.ToolingVersion,
             ["child_exit"] = answer.ChildExit,
