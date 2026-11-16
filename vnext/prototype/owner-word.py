@@ -161,6 +161,10 @@ def stamp_from(line):
 CHAT_LINE = re.compile(r'^\s*чат: (.+?) / ([0-9A-Za-z-]{8})…\s*$')
 # Префикс записи разговора, названный в --chat вместо имени роли.
 PREFIX = re.compile(r'^[0-9a-f]{8}$')
+# Форма строки «чат:» самого искателя — «C--guts--atlas / c0812f28…». Роль копирует её из вывода
+# как есть; отказ на неё учил переписывать префикс руками (находка PROTO Н4, записка #6547:
+# в этой форме лежат 6 из 12 строк живого хранилища). «…» на конце необязательно.
+CHAT_ARG = re.compile(r'^(?P<project>.+?)\s*/\s*(?P<prefix>[0-9A-Za-z-]{8})…?$')
 
 
 def findings_from(stdout):
@@ -201,10 +205,17 @@ def chat_prefixes(conn, chat):
             problems.append(f'{table}: {e}')
     if found:
         return found, f'чаты роли {role} по role_sessions · role_sessions_history', None
-    if PREFIX.match(name.lower()):
-        return {name.lower()}, 'префикс записи разговора, названный в --chat', None
+    bare = name.rstrip('…').strip()
+    if PREFIX.match(bare.lower()):
+        return {bare.lower()}, 'префикс записи разговора, названный в --chat', None
+    m = CHAT_ARG.match(name)
+    if m and PREFIX.match(m.group('prefix').lower()):
+        return ({m.group('prefix').lower()},
+                f'префикс записи разговора из формы «проект / префикс» (проект {m.group("project")})',
+                None)
     why = (f'чат «{name}» базе неизвестен: нет ни роли с записями разговоров в role_sessions и '
-           'role_sessions_history, ни префикса записи (8 знаков, как в строке «чат:» искателя)')
+           'role_sessions_history, ни префикса записи (8 знаков, как в строке «чат:» искателя, — '
+           'сам префикс или вся строка «проект / префикс»)')
     if problems:
         why += ' · ' + ' · '.join(problems)
     return set(), None, why
@@ -255,7 +266,14 @@ def verify_verbatim(text, said_at, finder):
         mark = outcome_line(run.stdout, run.returncode)
         marks.append(mark)
         per_line.append(findings_from(run.stdout))
-        report.append(f'   · «{probe[:60]}…» → код {run.returncode} · {mark[:120]}')
+        here = per_line[-1]
+        if run.returncode == 0 and here:
+            # ⚖️ Исход одной находки здесь не печатается: какая из них сверит час, решает чат
+            # из --chat ниже, а первая по порядку вывода — случайность сортировки (находка PROTO Н3)
+            report.append(f'   · «{probe[:60]}…» → код 0 · находок {len(here)} в чатах '
+                          f'{", ".join(sorted({p for _, p, _ in here}))}')
+        else:
+            report.append(f'   · «{probe[:60]}…» → код {run.returncode} · {mark[:120]}')
         if run.returncode != 0:
             report.append(f'   🔴 ЭТА СТРОКА НЕ ПОДТВЕРЖДЕНА (код {run.returncode}): '
                           '0 — сказал владелец · 1 — не найдено · 2 — искать негде · '
@@ -314,6 +332,7 @@ def cmd_add(conn, a):
         print('   «чем сверено» это будет видно следующему читателю. Чат по той же причине')
         print('   НЕ сверен.')
         checked = 'час и чат НЕ сверены: час в выводе искателя не распознан'
+        outcome = 'первая находка искателя, чат не сверен: ' + ' | '.join(marks)
     elif not any(per_line):
         print()
         print('⛔ ОТКАЗ: чат находки в выводе искателя не распознан (строки «чат:» под строкой')
@@ -369,6 +388,20 @@ def cmd_add(conn, a):
                   'записываю час, названный в --said-at')
         print(f'✅ час сверен с записью разговора В НАЗВАННОМ ЧАТЕ {a.chat} знак в знак: {a.said_at}')
         checked = f'час сверен в чате {a.chat} (записи {", ".join(sorted(prefixes))})'
+        # 🧾 ИСХОД — ТОЙ НАХОДКИ, С КОТОРОЙ СВЕРЕН ЧАС (находка PROTO Н3, записка #6547). Прежде
+        # в поле «чем сверено» шёл исход ПЕРВОЙ находки искателя: при часе 12:54:24 чата STUD там
+        # стоял час 12:54:01 чата CORE — в одной строке хранилища два часа, и перепроверяющий
+        # видел несходство. Тот же дефект «первое совпадение», что в карточке #777, только в поле
+        # доказательства.
+        chosen = []
+        for fl in per_line:
+            for s, p, o in fl:
+                if p in prefixes and s == a.said_at:
+                    if o not in chosen:
+                        chosen.append(o)
+                    break
+        outcome = ' | '.join(chosen)
+        print(f'🧾 исход находки, с которой сверен час: {outcome}')
 
     try:
         cur = conn.execute(
@@ -377,7 +410,7 @@ def cmd_add(conn, a):
             (a.said_at, a.chat, text, a.source_file, a.source_line,
              f'find-owner-word.py, прогон {now_utc()}, строк сверено '
              f'{len([l for l in text.splitlines() if l.strip()])}, все с кодом 0; '
-             f'исход искателя: {" | ".join(marks)}; {checked}',
+             f'исход искателя: {outcome}; {checked}',
              a.heard_by, now_utc(), a.note))
         conn.commit()
     except sqlite3.IntegrityError as e:
@@ -494,7 +527,9 @@ def main():
     ad = sub.add_parser('add', help='записать слово владельца (со сверкой по записям)')
     ad.add_argument('--said-at', dest='said_at', required=True,
                     help='час, когда сказано: «ГГГГ-ММ-ДД ЧЧ:ММ:СС UTC»')
-    ad.add_argument('--chat', required=True, help='чат, где сказано (например COORD)')
+    ad.add_argument('--chat', required=True,
+                    help='чат, где сказано: имя роли (COORD), префикс записи разговора (c0812f28) '
+                         'или строка «чат:» искателя целиком («C--guts--atlas / c0812f28…»)')
     ad.add_argument('--text', help='ДОСЛОВНЫЙ текст (короткий)')
     ad.add_argument('--text-file', dest='text_file',
                     help='файл с дословным текстом — для длинного и многострочного')
