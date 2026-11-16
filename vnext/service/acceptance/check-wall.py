@@ -25,6 +25,11 @@
 полем (К2, К1б), «не запустилось» не выбирается подстрокой (К3), чужая и выдуманная метка продолжения — отказ (К-метка).
 Случаи с телом инструмента работают на ЗАГЛУШКАХ в черновом каталоге; случай К7 — на своей копии базы стенда.
 
+Часть II карточки 791: сборка называет свой commit (К4), пустая запись установщика названа прямо (К5), незнакомый
+аргумент — отказ (К6), читающий вызов меняет только служебные таблицы, перечисленные в договоре, сводка по ВСЕМ
+таблицам до и после (К8); в раздел карточки 787 добавлены случаи TAXO E9 (переименованный общий аргумент выбора
+контура) и E10 (перечень значений у общего аргумента).
+
 Исход: 0 — все машинные критерии прошли; 1 — хоть один провалился; 2 — проверять было нечем;
 3 — сборка старше исходников, судить её нельзя (пересобрать и запустить снова).
 """
@@ -45,6 +50,9 @@ DEFAULT_EXE = os.path.join(SERVICE, "GordiWall", "bin", "Debug", "net10.0", "gor
 
 # Записанный ожидаемый состав договора. Меняется РУКОЙ, когда договор меняют нарочно:
 # иначе «перечень вызовов тот же» нечем подтвердить — отпечаток пересчитается вместе с подменой.
+# Карточка 791: в договор добавлены общий аргумент next_part (часть I) и поле service_writes у читающих вызовов
+# (часть II). Новых ВЫЗОВОВ нет: число прежнее — 12, отпечаток перечня считается по именам и режимам вызовов и поэтому
+# тоже прежний. Если число или отпечаток когда-нибудь сменятся, это решение человека, а не пересчёт приёмки.
 EXPECTED_TOOL_COUNT = 12
 EXPECTED_TOOLS_FINGERPRINT = "247dbfb31eaf"
 TOOL_COUNT_RANGE = (8, 12)
@@ -245,6 +253,98 @@ def collect_run(exe, contract, contours, tool, argv, carg):
                                   [tool, "--" + carg, contour_value, "--next-part", m.group(1)])
         got.append((code, out, err))
     return got
+
+
+# ═══════════════════════════════════════ карточка 791, часть II: отметка сборки · пустая запись установщика ·
+#                                          незнакомый аргумент · служебные записи читающих вызовов
+
+def stand_copy(work, manifest, tag):
+    """Своя копия базы стенда и копия манифеста с подменённым storage. Общую копию стенда новые случаи не меняют."""
+    stand_db = [c for c in manifest["contours"] if c.get("id") == CONTOUR_STAND][0]["storage"]
+    d = os.path.join(work, tag)
+    if not os.path.isdir(d):
+        os.makedirs(d)
+    db = os.path.join(d, "mezosync.db")
+    for suffix in ("", "-wal", "-shm"):
+        if os.path.exists(db + suffix):
+            os.remove(db + suffix)
+        if os.path.exists(stand_db + suffix):
+            shutil.copyfile(stand_db + suffix, db + suffix)
+    import copy
+    m = copy.deepcopy(manifest)
+    for c in m["contours"]:
+        if c.get("id") == CONTOUR_STAND:
+            c["storage"] = db
+    mp = os.path.join(d, "contours-%s.json" % tag)
+    write_json(mp, m)
+    return db, mp
+
+
+def table_digests(db_path):
+    """По каждой таблице базы: (число строк, sha256 по содержимому). Читается только на чтение."""
+    import hashlib
+    import sqlite3
+    conn = sqlite3.connect("file:%s?mode=ro" % db_path.replace("\\", "/"), uri=True)
+    out = {}
+    try:
+        names = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY 1")]
+        for n in names:
+            rows = sorted(repr(r) for r in conn.execute('SELECT * FROM "%s"' % n))
+            h = hashlib.sha256()
+            for r in rows:
+                h.update(r.encode("utf-8"))
+            out[n] = (len(rows), h.hexdigest()[:12])
+    finally:
+        conn.close()
+    return out
+
+
+def strip_credentials(url):
+    import re
+    return re.sub(r"^([a-zA-Z+]+://)[^/@]+@", r"\1", url.strip())
+
+
+def git_out(cwd, *argv):
+    """Вывод git в каталоге или None, если git не ответил."""
+    try:
+        p = subprocess.run(["git", "-C", cwd] + list(argv), capture_output=True, encoding="utf-8",
+                           errors="replace", timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return p.stdout.strip() if p.returncode == 0 else None
+
+
+def sync_backoff_writers(runtime_dir):
+    """Какие функции установленной копии sync_backoff.py пишут в таблицу sync_backoff: (имя, строка def, строка записи)."""
+    import ast
+    path = os.path.join(runtime_dir, "sync_backoff.py")
+    if not os.path.exists(path):
+        return path, []
+    tree = ast.parse(io.open(path, encoding="utf-8").read())
+    found = []
+    for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                text = node.value.strip().upper()
+                if text.startswith(("INSERT INTO SYNC_BACKOFF", "UPDATE SYNC_BACKOFF", "DELETE FROM SYNC_BACKOFF")):
+                    found.append((fn.name, fn.lineno, node.lineno))
+    return path, sorted(set(found), key=lambda x: x[2])
+
+
+# пробный вызов каждого читающего вызова договора на своей копии базы стенда
+K8_PROBES = {
+    "memory_read": {"role": "PROTO"},
+    "memory_read_for_edit": {"role": "PROTO", "section": "state"},
+    # два варианта: обычное чтение и отбор to_me. Отбор обязан задеть cursor_segments — иначе замер его не видел
+    "feed_read": [("", {"role": "COORD"}, None), (" to_me", {"role": "COORD", "to_me": True}, "cursor_segments")],
+    "cards_list": {"role": "PROTO"},
+    "cards_show": {"card": 1},
+    "rules_get": {"list": True},
+    "owner_words_find": {"text": "слово"},
+    "contour_info": {},
+}
+# роли для чтения ленты: берём первую, у которой чтение что-то записало (иначе случай ничего бы не измерил)
+K8_FEED_ROLES = ("COORD", "CORE", "PROTO", "TAXO", "ING", "STUD")
 
 
 def cases_791(args, work, manifest, contract_doc, carg, v3, s2c):
@@ -466,6 +566,162 @@ def cases_791(args, work, manifest, contract_doc, carg, v3, s2c):
                "подтверждение склеенным ключом на копии базы: %s"
                % (role, STUB_LIMIT, len(got7), got7[0][0].get("outcome"), last7.get("outcome"),
                   "[begin-of-batch]" in texts7[0], "[end-of-batch]" in texts7[-1], key is not None, ack_outcome))
+
+    # ═══════════ часть II карточки 791
+
+    # ───────────── К4: «кто меня судит» называет commit сборки и адрес исходника (находка С4)
+    root_dir = SERVICE
+    head = git_out(root_dir, "rev-parse", "HEAD")
+    origin = git_out(root_dir, "remote", "get-url", "origin")
+    code4, out4, _ = run_mode(args.exe, args.contract, args.contours, ["contour_info", "--" + carg, CONTOUR_STAND])
+    w4 = Wall(args.exe, args.contract, args.contours)
+    server_commit = (w4.init.get("result", {}).get("serverInfo", {}) or {}).get("build_commit")
+    w4.close()
+    m4 = re.search(r"commit сборки \.+ ([0-9a-f]{40})", out4)
+    built = m4.group(1) if m4 else None
+    if head is None:
+        v3.add("791-К4", False, "contour_info называет commit сборки и адрес исходника",
+               "ПРОВЕРЯТЬ НЕЧЕМ: git не ответил в дереве %s — сверить commit не с чем" % root_dir)
+    else:
+        same = built == head
+        ok4 = (same and "vnext/service/GordiWall" in out4
+               and (origin is None or strip_credentials(origin) in out4)
+               and server_commit == head)
+        why = ""
+        if not same:
+            why = ("\nПЕРЕСОБРАТЬ: сборка сделана из другого commit (или не из git), чем HEAD этого дерева. "
+                   "dotnet build %s, затем запустить приёмку снова" % os.path.join(SERVICE, "GordiWall"))
+        v3.add("791-К4", ok4, "contour_info называет commit сборки (равен HEAD дерева) и адрес исходника; serverInfo несёт тот же commit",
+               "commit в ответе: %s\nHEAD дерева ........ %s\nстрока пути исходника есть: %s · адрес origin в ответе: %s\n"
+               "serverInfo.build_commit: %s%s"
+               % (built or ("НЕ НАЙДЕН (в ответе: %s)" % [l for l in out4.splitlines() if "commit сборки" in l][:1]), head,
+                  "vnext/service/GordiWall" in out4,
+                  (strip_credentials(origin) in out4) if origin else "origin не задан",
+                  server_commit, why))
+
+    # ───────────── К5: хранилище ответило, записи установщика нет — так и сказано (находка С5)
+    db5, mp5 = stand_copy(work, manifest, "k5")
+    import sqlite3
+    c5 = sqlite3.connect(db5)
+    removed5 = c5.execute("DELETE FROM meta WHERE key LIKE 'template_%'").rowcount
+    c5.commit()
+    c5.close()
+    _, out5, _ = run_mode(args.exe, args.contract, mp5, ["contour_info", "--" + carg, CONTOUR_STAND])
+    _, out5ok, _ = run_mode(args.exe, args.contract, args.contours, ["contour_info", "--" + carg, CONTOUR_STAND])
+    ok5e = (removed5 > 0
+            and "записи установщика НЕТ" in out5 and "нечем проверить" in out5
+            and "это и есть источник" not in out5
+            and "это и есть источник о версии" in out5ok and "записи установщика НЕТ" not in out5ok)
+    v3.add("791-К5", ok5e, "пустая запись установщика: блок из хранилища говорит «записи установщика НЕТ — нечем проверить» и не зовёт себя источником о версии",
+           "на своей копии удалено строк template_*: %d\n"
+           "копия: «записи установщика НЕТ»: %s · «нечем проверить»: %s · «это и есть источник» (ждали: нет): %s\n"
+           "встречный, целая запись: «это и есть источник о версии» есть: %s · «записи установщика НЕТ» нет: %s"
+           % (removed5, "записи установщика НЕТ" in out5, "нечем проверить" in out5, "это и есть источник" in out5,
+              "это и есть источник о версии" in out5ok, "записи установщика НЕТ" not in out5ok))
+
+    # ───────────── К6: незнакомый аргумент — отказ с его именем, тело не запускалось (находка С6)
+    k6_marker = os.path.join(work, "stub-791-k6-started.txt")
+    if os.path.exists(k6_marker):
+        os.remove(k6_marker)
+    put_stub("stub-k6-marker.py", "import sys\nopen(%r, 'w').write('started')\nsys.stdout.write('k6 stub ran\\n')\n" % k6_marker)
+    k6_contract = stub_contract("k6", {"feed_read": "stub-k6-marker.py"})
+    w6 = Wall(args.exe, k6_contract, m_stub_path)
+    s6, _ = w6.call("feed_read", {carg: CONTOUR_STAND, "role": "PROTO", "limt": 5})
+    started6 = os.path.exists(k6_marker)
+    s6ok, _ = w6.call("feed_read", {carg: CONTOUR_STAND, "role": "PROTO", "limit": 5})
+    started6ok = os.path.exists(k6_marker)
+    schema6 = [t for t in w6.list_tools() if t["name"] == "feed_read"][0]["inputSchema"]
+    w6.close()
+    if os.path.exists(k6_marker):
+        os.remove(k6_marker)
+    c6, o6, _ = run_mode(args.exe, k6_contract, m_stub_path, ["feed_read", "--" + carg, CONTOUR_STAND, "--role", "PROTO", "--limt", "5"])
+    started6run = os.path.exists(k6_marker)
+    ok6 = (s6.get("outcome") == "refused" and "limt" in (s6.get("error") or "") and not started6
+           and s6ok.get("outcome") == "passed" and started6ok
+           and c6 == 4 and "limt" in o6 and "исход: отказ" in o6 and not started6run
+           and schema6.get("additionalProperties") is False)
+    v3.add("791-К6", ok6, "незнакомый аргумент (limt вместо limit) — отказ с его именем в службе и в режиме run, тело не запускалось; верный аргумент проходит; в схеме additionalProperties=false",
+           "служба: исход %s — %s · тело запускалось: %s (ждали: нет)\n"
+           "служба, верный limit: исход %s · тело запускалось: %s (ждали: да)\n"
+           "режим run: код %s · «limt» в тексте: %s · тело запускалось: %s (ждали: нет)\n"
+           "additionalProperties в схеме вызова: %s"
+           % (s6.get("outcome"), (s6.get("error") or "")[:130], started6, s6ok.get("outcome"), started6ok,
+              c6, "limt" in o6, started6run, schema6.get("additionalProperties")))
+
+    # ───────────── К8: читающий вызов меняет только перечисленные в договоре служебные таблицы (находка С8)
+    read_tools = [t for t in contract_doc["tools"] if t.get("mode") == "read"]
+    rows8 = []
+    problems8 = []
+    any_write = False
+    last_db8 = None
+    for t in read_tools:
+        name = t["name"]
+        declared = t.get("service_writes")
+        if declared is None:
+            problems8.append("%s: у читающего вызова в договоре нет поля service_writes" % name)
+            declared = []
+        probe = K8_PROBES.get(name)
+        if probe is None:
+            problems8.append("%s: для читающего вызова нет пробного вызова в приёмке (K8_PROBES)" % name)
+            continue
+        roles = K8_FEED_ROLES if name == "feed_read" else (None,)
+        # вариант пробы: (подпись, аргументы, таблица, которую вариант ОБЯЗАН задеть, или None)
+        variants = probe if isinstance(probe, list) else [("", probe, None)]
+        for label, variant_args, must_touch in variants:
+            changed = set()
+            used = ""
+            for role in roles:
+                db8, mp8 = stand_copy(work, manifest, "k8")
+                last_db8 = db8
+                before = table_digests(db8)
+                call_args = dict(variant_args)
+                call_args[carg] = CONTOUR_STAND
+                if role:
+                    call_args["role"] = role
+                    used = role
+                w8 = Wall(args.exe, args.contract, mp8)      # без --read-only: так служба поднята у ролей
+                s8, _ = w8.call(name, call_args)
+                w8.close()
+                after = table_digests(db8)
+                changed = set(k for k in before if before[k] != after.get(k))
+                if s8.get("outcome") not in ("passed", "partial"):
+                    problems8.append("%s%s: пробный вызов дал исход %s — замер недействителен"
+                                     % (name, label, s8.get("outcome")))
+                if not role or (must_touch in changed if must_touch else changed):
+                    break
+            any_write = any_write or bool(changed)
+            if must_touch and must_touch not in changed:
+                problems8.append("ПРОВЕРЯТЬ НЕЧЕМ: %s%s ни у одной роли из %s не задел %s — замер этого варианта ничего не видел"
+                                 % (name, label, ", ".join(roles), must_touch))
+            extra = sorted(changed - set(declared))
+            if extra:
+                problems8.append("%s%s: изменил таблицы, которых нет в service_writes: %s" % (name, label, ", ".join(extra)))
+            rows8.append("%-22s%s изменил: %-34s объявлено: %s"
+                         % (name + label, (" (роль %s)" % used) if used else "", ", ".join(sorted(changed)) or "ничего",
+                            ", ".join(declared) or "—"))
+    if not any_write:
+        problems8.append("ПРОВЕРЯТЬ НЕЧЕМ: ни один читающий вызов ничего не изменил на копии — замер, видимо, не работает")
+    runtime_dir = [c for c in manifest["contours"] if c.get("id") == CONTOUR_STAND][0]["tools"]["runtime"]
+    sb_path, sb_writers = sync_backoff_writers(runtime_dir)
+    rule_state = None
+    try:
+        import sqlite3 as _sq
+        _c = _sq.connect("file:%s?mode=ro" % last_db8.replace("\\", "/"), uri=True)
+        _r = _c.execute("SELECT status FROM rules WHERE rule_key='sync-sleep-backoff'").fetchone()
+        _c.close()
+        rule_state = _r[0] if _r else None
+    except Exception:
+        pass
+    writers_text = ", ".join("%s (def :%d, запись :%d)" % w for w in sb_writers) or "не найдены разбором"
+    who = ("next_sleep — функция разгона сна (правило sync-sleep-backoff действует)" if rule_state == "active"
+           else "news — счёт нового (правило sync-sleep-backoff на копии стенда: %s, строку сна не печатает)" % rule_state)
+    v3.add("791-К8", not problems8, "читающий вызов меняет только служебные таблицы, перечисленные у него в service_writes (сводка по ВСЕМ таблицам до и после)",
+           "\n".join(rows8) + "\n"
+           + "запись в sync_backoff делают функции установленной копии %s: %s\n"
+             "цепочка при чтении ленты: read-messages.py → sync_backoff.reader_line → %s\n"
+             "отбор to_me чтения ленты измерен отдельной строкой: он записывает в cursor_segments, что тела показаны, отметку прочитанного не двигает"
+             % (sb_path, writers_text, who)
+           + ("\nПРОБЛЕМЫ:\n" + "\n".join(problems8) if problems8 else ""))
 
 
 def main():
@@ -775,6 +1031,47 @@ def main():
     v2.add("787-⑤", ok_s5, "встречный случай: на ЦЕЛОМ договоре вызов с верным контуром проходит",
            "исход %s · договор с пометкой selects=contour загружается (код %s)" % (s5.get("outcome"), c2ok))
 
+    # ⑨ E9 (TAXO): имя общего аргумента выбора контура берётся из договора, а не из кода
+    d9 = json.loads(json.dumps(contract_doc))
+    for a in d9["common_args"]:
+        if a.get("selects") == "contour":
+            a["name"] = "where"
+    p9 = os.path.join(work, "contract-where.json")
+    write_json(p9, d9)
+    w9 = Wall(args.exe, p9, args.contours)
+    s9_where, _ = w9.call("memory_read", {"where": CONTOUR_STAND, "role": "PROTO", "section": "identity"})
+    s9_old, _ = w9.call("memory_read", {"contour": CONTOUR_STAND, "role": "PROTO", "section": "identity"})
+    w9.close()
+    c9r, o9r, _ = run_mode(args.exe, p9, args.contours,
+                           ["memory_read", "--where", CONTOUR_STAND, "--role", "PROTO", "--section", "identity"])
+    ok_e9 = (s9_where.get("outcome") == "passed" and s9_where.get("contour") == CONTOUR_STAND
+             and s9_old.get("outcome") == "refused" and "where" in (s9_old.get("error") or "")
+             and c9r == 0 and "исход: прошло" in o9r)
+    v2.add("787-E9", ok_e9, "общий аргумент выбора контура переименован в договоре в «where»: вызовы с where работают, вызов с contour — отказ с именем where",
+           "с where (служба): исход %s, контур в ответе «%s»\nс contour (служба): %s — %s\nс --where (режим run): код %s"
+           % (s9_where.get("outcome"), s9_where.get("contour"), s9_old.get("outcome"), (s9_old.get("error") or "")[:130], c9r))
+
+    # ⑩ E10 (TAXO): перечень значений (enum) общего аргумента читается из договора
+    d10 = json.loads(json.dumps(contract_doc))
+    d10["common_args"].append({"name": "stand_mode", "type": "string", "required": False, "enum": ["alpha", "beta"],
+                               "description": "нарочный второй общий аргумент приёмки с перечнем значений"})
+    p10 = os.path.join(work, "contract-second-enum.json")
+    write_json(p10, d10)
+    w10 = Wall(args.exe, p10, args.contours)
+    s10_bad, _ = w10.call("memory_read", {"contour": CONTOUR_STAND, "role": "PROTO", "section": "identity", "stand_mode": "gamma"})
+    s10_ok, _ = w10.call("memory_read", {"contour": CONTOUR_STAND, "role": "PROTO", "section": "identity", "stand_mode": "alpha"})
+    s10_none, _ = w10.call("memory_read", {"contour": CONTOUR_STAND, "role": "PROTO", "section": "identity"})
+    schema10 = [t for t in w10.list_tools() if t["name"] == "memory_read"][0]["inputSchema"]
+    w10.close()
+    ok_e10 = (s10_bad.get("outcome") == "refused" and "gamma" in (s10_bad.get("error") or "")
+              and "stand_mode" in (s10_bad.get("error") or "")
+              and s10_ok.get("outcome") == "passed" and s10_none.get("outcome") == "passed"
+              and schema10["properties"]["stand_mode"].get("enum") == ["alpha", "beta"])
+    v2.add("787-E10", ok_e10, "у второго общего аргумента есть перечень значений: вне перечня — отказ, из перечня — проходит",
+           "gamma (вне перечня): %s — %s\nalpha (из перечня): %s\nбез аргумента: %s\nenum в схеме MCP: %s"
+           % (s10_bad.get("outcome"), (s10_bad.get("error") or "")[:130], s10_ok.get("outcome"), s10_none.get("outcome"),
+              schema10["properties"]["stand_mode"].get("enum")))
+
     w.close()
 
     # ═══════════════════════════════════════ карточка 791: части вместо обрезки, предупреждения отдельно, честный «не запустилось»
@@ -794,7 +1091,7 @@ def main():
     print("── случаи карточки 787 (кто исполняет требование договора)")
     v2.print_all()
     print("")
-    print("── случаи карточки 791 (части вместо обрезки · предупреждения отдельно · честный «не запустилось»)")
+    print("── случаи карточки 791 (части вместо обрезки · предупреждения отдельно · честный «не запустилось» · отметка сборки · пустая запись · незнакомый аргумент · служебные записи)")
     v3.print_all()
     print("")
     print("⚖️ ЭТИ ДВА КРИТЕРИЯ МАШИНА НЕ СУДИТ — говорю прямо, чтобы зелёное не прочлось шире:")

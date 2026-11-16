@@ -82,7 +82,10 @@ public sealed record ToolDef(
     string Title,
     string? Description,
     IReadOnlyList<ToolArg> Args,
-    ToolExec Exec);
+    ToolExec Exec,
+    // Служебные таблицы, которые вызов вправе менять. null — поле в договоре не объявлено (у пишущих вызовов
+    // так и бывает; у читающего это нарушение, его ловит приёмка); пустой список — читающий вызов не пишет ничего.
+    IReadOnlyList<string>? ServiceWrites = null);
 
 /// <summary>
 /// Договор, прочитанный из ОДНОГО файла. И служба, и однократный вызов мимо службы
@@ -164,7 +167,17 @@ public sealed class Contract
             Title: Str(t, "title") ?? "",
             Description: Str(t, "description"),
             Args: args,
-            Exec: ReadExec(t.GetProperty("exec")));
+            Exec: ReadExec(t.GetProperty("exec")),
+            ServiceWrites: ReadServiceWrites(t));
+    }
+
+    private static List<string>? ReadServiceWrites(JsonElement t)
+    {
+        if (!t.TryGetProperty("service_writes", out var jw) || jw.ValueKind != JsonValueKind.Array) return null;
+        var list = new List<string>();
+        foreach (var w in jw.EnumerateArray())
+            if (w.GetString() is { } s) list.Add(s);
+        return list;
     }
 
     private static ToolArg ReadArg(JsonElement a)

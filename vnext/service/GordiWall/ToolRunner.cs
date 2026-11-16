@@ -100,6 +100,17 @@ public sealed class ToolRunner(Contract contract, Manifest manifest, bool readOn
             return Answer.Refuse($"контур «{contourId}» в манифесте не объявлен (манифест: {_manifest.Path}). "
                                  + $"Известные: {_manifest.KnownIds()}", contourId);
 
+        // Незнакомый аргумент — отказ, а не молчаливое «не поедет в тело»: опечатка вроде limt вместо limit иначе
+        // давала бы ответ на ДРУГОЙ вопрос и выглядела бы как «прошло». Место одно — для службы и для режима run.
+        var extra = given.Keys.Where(k => !IsDeclared(tool, k)).OrderBy(k => k, StringComparer.Ordinal).ToList();
+        if (extra.Count > 0)
+            return Answer.Refuse(
+                $"в вызове «{tool.Name}» есть аргумент, которого договор не объявляет: «{string.Join("», «", extra)}». "
+                + $"Объявлены общие: {string.Join(", ", _contract.CommonArgs.Select(a => a.Name))}; "
+                + $"вызова: {(tool.Args.Count == 0 ? "нет" : string.Join(", ", tool.Args.Select(a => a.Name)))}. "
+                + "Тело не запускалось: молча выбросить лишний аргумент значило бы ответить на другой вопрос.",
+                contour.Id, ToolingVersion(contour));
+
         if (_readOnly && !string.Equals(tool.Mode, "read", StringComparison.Ordinal))
             return Answer.Refuse($"вызов «{tool.Name}» пишет, а стена поднята в режиме только-чтение. "
                                  + "Запись мимо службы отвергнута намеренно: иначе обход стены стал бы обычной дорогой.",
@@ -122,6 +133,11 @@ public sealed class ToolRunner(Contract contract, Manifest manifest, bool readOn
 
         return await RunPythonAsync(tool, contour, given, ct);
     }
+
+    /// <summary>Аргумент объявлен в договоре: среди общих или среди аргументов вызова.</summary>
+    private bool IsDeclared(ToolDef tool, string name) =>
+        _contract.CommonArgs.Any(a => string.Equals(a.Name, name, StringComparison.Ordinal))
+        || tool.Args.Any(a => string.Equals(a.Name, name, StringComparison.Ordinal));
 
     /// <summary>
     /// Проверка одного аргумента по договору: обязательность и перечень значений. Единственное место,
@@ -159,6 +175,8 @@ public sealed class ToolRunner(Contract contract, Manifest manifest, bool readOn
         sb.AppendLine($"вызовов в договоре ..... {_contract.Tools.Count}, отпечаток перечня {_contract.ToolsFingerprint()}");
         sb.AppendLine($"режим стены ............ {(_readOnly ? "только-чтение" : "чтение и запись")}");
         sb.AppendLine($"манифест контуров ...... {_manifest.Path}");
+        foreach (var line in BuildInfo.Lines())
+            sb.AppendLine(line);
 
         // Вторая половина — из ХРАНИЛИЩА контура: там установщик и пишет версию.
         // Манифест её не держит намеренно: два списка версий расходятся молча.
@@ -166,7 +184,17 @@ public sealed class ToolRunner(Contract contract, Manifest manifest, bool readOn
         const string sql = "SELECT key, value FROM meta WHERE key IN "
             + "('group_name','template_commit','template_source','template_recorded_at','template_checkout','md_phase') "
             + "UNION ALL SELECT 'template_files_count', count(*) FROM json_each((SELECT value FROM meta WHERE key='template_files_sha'))";
-        if (AskStorage(contour, sql, out var meta))
+        var answered = AskStorage(contour, sql, out var meta);
+        if (answered && !HasInstallerRecord(meta))
+        {
+            // Хранилище ответило, но установщик в него ничего не записал: это не «всё совпадает» и не «ответ есть».
+            sb.AppendLine("── из хранилища контура: хранилище ответило, записи установщика НЕТ — нечем проверить");
+            sb.AppendLine(meta.TrimEnd());
+            sb.Append("⚠️ в таблице meta нет строк template_* (commit, источник, час записи, отпечатки). Версия тулинга и отпечаток установки "
+                      + "НЕ ПРОЧИТАНЫ: нечем проверить, а не «всё совпадает». "
+                      + Or(contour.Tooling.Version, "Запасного поля в манифесте тоже нет"));
+        }
+        else if (answered)
         {
             sb.AppendLine("── из хранилища контура (запись установщика; это и есть источник о версии тулинга)");
             sb.Append(meta.TrimEnd());
@@ -183,6 +211,11 @@ public sealed class ToolRunner(Contract contract, Manifest manifest, bool readOn
 
         return new Answer(Outcome.Passed, false, null, sb.ToString(), contour.Id, ToolingVersion(contour), null, null);
     }
+
+    /// <summary>В ответе хранилища есть хотя бы одна строка установщика (template_commit и соседние). Счётчик файлов есть всегда — он не признак.</summary>
+    private static bool HasInstallerRecord(string meta) =>
+        meta.Split('\n').Select(l => l.Split('\t')[0].Trim())
+            .Any(k => k.StartsWith("template_", StringComparison.Ordinal) && k != "template_files_count");
 
     private async Task<Answer> RunPythonAsync(ToolDef tool, ContourInfo contour,
                                               IReadOnlyDictionary<string, object?> given, CancellationToken ct)

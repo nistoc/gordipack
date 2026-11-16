@@ -104,6 +104,8 @@ public static class Program
             var mode = t.Mode == "write" ? "запись " : "чтение ";
             var argNames = t.Args.Count == 0 ? "—" : string.Join(" ", t.Args.Select(a => a.Required ? a.Name : "[" + a.Name + "]"));
             sb.AppendLine($"  {mode} {t.Name,-18} {commonNames} {argNames}");
+            if (t.ServiceWrites is { Count: > 0 } writes)
+                sb.AppendLine($"          служебные записи: {string.Join(", ", writes)}");
         }
         await Console.Out.WriteAsync(sb.ToString());
         return 0;
@@ -115,17 +117,17 @@ public static class Program
     {
         if (args.Count == 0 || args[0].StartsWith('-'))
         {
-            await Console.Error.WriteLineAsync("отказ: не назван вызов. Форма: gordi-wall run <вызов> --contour <контур> [--аргумент значение]");
+            // Имя аргумента выбора контура — из договора, а не литерал: договор вправе его переименовать
+            await Console.Error.WriteLineAsync("отказ: не назван вызов. Форма: gordi-wall run <вызов> --"
+                + contract.ContourArgName.Replace('_', '-') + " <контур> [--аргумент значение]");
             return 4;
         }
 
         var toolName = args[0];
         args.RemoveAt(0);
 
-        var tool = contract.Find(toolName);
+        // Незнакомый аргумент отвергает сам ToolRunner.CallAsync — одно место для службы и для режима run
         var given = new Dictionary<string, object?>(StringComparer.Ordinal);
-        var known = new HashSet<string>(contract.CommonArgs.Select(c => c.Name), StringComparer.Ordinal);
-        if (tool is not null) foreach (var a in tool.Args) known.Add(a.Name);
 
         for (var i = 0; i < args.Count; i++)
         {
@@ -133,8 +135,6 @@ public static class Program
             var name = args[i][2..].Replace('-', '_');
             var hasValue = i + 1 < args.Count && !args[i + 1].StartsWith("--", StringComparison.Ordinal);
             given[name] = hasValue ? args[++i] : true;
-            if (!known.Contains(name) && tool is not null)
-                await Console.Error.WriteLineAsync($"⚠️ аргумент «{name}» в договоре вызова «{toolName}» не объявлен — он не поедет в тело инструмента");
         }
 
         await Console.Error.WriteLineAsync("⚠️ вызов идёт МИМО службы, режим только-чтение: служба MCP либо не поднята, либо её обошли. "
@@ -196,6 +196,8 @@ public static class Program
                             {
                                 ["name"] = "gordi-wall",
                                 ["version"] = contract.Version,
+                                // commit, из которого собрана стена: «кто меня судит» с точностью до сборки
+                                ["build_commit"] = BuildInfo.CommitForServerInfo,
                             },
                             ["instructions"] = contract.Description,
                         }));
@@ -309,12 +311,15 @@ public static class Program
             list.Add(new JsonObject
             {
                 ["name"] = t.Name,
-                ["description"] = string.IsNullOrEmpty(t.Description) ? t.Title : t.Title + ". " + t.Description,
+                ["description"] = (string.IsNullOrEmpty(t.Description) ? t.Title : t.Title + ". " + t.Description)
+                                  + (t.ServiceWrites is { Count: > 0 } sw ? " Служебные записи: " + string.Join(", ", sw) + "." : ""),
                 ["inputSchema"] = new JsonObject
                 {
                     ["type"] = "object",
                     ["properties"] = props,
                     ["required"] = required,
+                    // Незнакомый аргумент стена отвергает отказом (ToolRunner.CallAsync); схема говорит о том же заранее
+                    ["additionalProperties"] = false,
                 },
             });
         }
