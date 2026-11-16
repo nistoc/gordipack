@@ -442,10 +442,25 @@ public sealed class ToolRunner(Contract contract, Manifest manifest, bool readOn
         return PartAnswer(entry, id, number, tool.Name);
     }
 
+    // Признаки ошибки, которыми инструменты контура начинают строку с причиной отказа.
+    private static readonly string[] ReasonMarks = { "ERR", "🔴", "⛔", "❌", "ОТКАЗ" };
+
+    /// <summary>Первая строка текста, начинающаяся с признака ошибки; нет такой — null.</summary>
+    private static string? MarkedLine(string text) =>
+        text.Split('\n').Select(l => l.Trim())
+            .FirstOrDefault(l => l.Length > 0 && ReasonMarks.Any(m => l.StartsWith(m, StringComparison.Ordinal)));
+
+    /// <summary>
+    /// Короткая причина отказа — ОДНА строка тела. Сперва ищется строка с признаком ошибки: в потоке ошибок,
+    /// затем в stdout; берётся ПЕРВАЯ такая. Признака нет ни в одном потоке — последняя непустая строка потока ошибок,
+    /// а при пустом потоке ошибок — stdout: так кончаются разбор аргументов и необработанное исключение Python.
+    /// Прежде бралась только последняя строка, и причиной становился хвост подсказки (находка COORD Н2, карточка 791).
+    /// </summary>
     private static string ShortReason(Outcome outcome, string stderr, string stdout)
     {
         var src = !string.IsNullOrWhiteSpace(stderr) ? stderr : stdout;
-        var line = src.Split('\n', StringSplitOptions.RemoveEmptyEntries).LastOrDefault()?.Trim() ?? "";
+        var line = MarkedLine(stderr) ?? MarkedLine(stdout)
+                   ?? src.Split('\n').Select(l => l.Trim()).LastOrDefault(l => l.Length > 0) ?? "";
         if (line.Length > 400) line = line[..400] + "…";
         return outcome switch
         {

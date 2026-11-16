@@ -40,6 +40,9 @@
 Защита живого контура: функция guard_live_call и исключение LiveContourRefusal. На живом контуре (CONTOUR_LIVE) приёмка САМА
 отказывается звать всё, кроме contour_info, rules_get и memory_read с непустым section; отказ — в Wall.call и run_mode ДО отправки,
 в main — «ПРИЁМКА ОСТАНОВЛЕНА», код 2. Случай К10 проверяет саму функцию без запуска процессов.
+Находка COORD Н2: причина отказа (поле error) — строка тела с признаком ошибки в начале, а не последняя строка вывода.
+Случай К11 судит это на трёх заглушках: признак первой строкой stdout перед подсказкой; признак во второй строке потока
+ошибок; признака нет — берётся последняя непустая строка (так кончается необработанное исключение).
 
 Исход: 0 — все машинные критерии прошли; 1 — хоть один провалился; 2 — проверять было нечем;
 3 — сборка старше исходников, судить её нельзя (пересобрать и запустить снова).
@@ -828,6 +831,46 @@ def cases_791(args, work, manifest, contract_doc, carg, v3, s2c):
               k9b.get("outcome"), (k9b.get("error") or "").startswith("тело отказало:"), k9b.get("child_exit"),
               mismatch_mark, k9c.get("outcome"), k9c.get("child_exit"),
               k9d.get("outcome"), k9d.get("truncated")))
+
+    # ───────────── К11: причина отказа — строка тела С ПРИЗНАКОМ ОШИБКИ, а не хвост вывода (находка COORD Н2)
+    # Заглушки пишут байты прямо в поток: текст причины не зависит от кодировки консоли.
+    k11_out_text = ("🔴 по куску «X» совпадений нет\n\nподсказка: проверь регистр и букву ё\n"
+                    "искать шире — по самим записям разговоров: find-owner-word.py\n\n")
+    k11_err_text = ("предупреждение: память роли велика\nERR: нет такой роли: ZZZ\n"
+                    "подсказка: перечень ролей — правило role-roster-and-zones\n")
+    k11_trace_text = ("Traceback (most recent call last):\n  File \"x.py\", line 1, in <module>\n"
+                      "ValueError: плохое значение\n")
+    put_stub("stub-k11-stdout-mark.py", "import sys\nsys.stdout.buffer.write(%r)\nsys.exit(1)\n" % k11_out_text.encode("utf-8"))
+    put_stub("stub-k11-stderr-mark.py", "import sys\nsys.stdout.buffer.write(b'some output\\n')\nsys.stderr.buffer.write(%r)\nsys.exit(1)\n"
+             % k11_err_text.encode("utf-8"))
+    put_stub("stub-k11-trace.py", "import sys\nsys.stderr.buffer.write(%r)\nsys.exit(1)\n" % k11_trace_text.encode("utf-8"))
+    k11_contract = stub_contract("k11", {"owner_words_find": "stub-k11-stdout-mark.py", "rules_get": "stub-k11-stderr-mark.py",
+                                          "cards_list": "stub-k11-trace.py"})
+    w11 = Wall(args.exe, k11_contract, m_stub_path)
+    k11a, _ = w11.call("owner_words_find", {carg: CONTOUR_STAND, "text": "X"})
+    k11b, _ = w11.call("rules_get", {carg: CONTOUR_STAND, "list": True})
+    k11c, _ = w11.call("cards_list", {carg: CONTOUR_STAND, "role": "PROTO"})
+    w11.close()
+    k11_code, k11_run_out, k11_run_err = run_mode(args.exe, k11_contract, m_stub_path,
+                                                  ["owner_words_find", "--" + carg, CONTOUR_STAND, "--text", "X"])
+    k11_run = (k11_run_out or "") + (k11_run_err or "")
+    e11a, e11b, e11c = (k11a.get("error") or ""), (k11b.get("error") or ""), (k11c.get("error") or "")
+    ok_k11a = (k11a.get("outcome") == "tool_failed" and k11a.get("child_exit") == 1
+               and "совпадений нет" in e11a and "find-owner-word.py" not in e11a and "подсказка" not in e11a
+               and k11_code == 6 and "совпадений нет" in k11_run)
+    ok_k11b = (k11b.get("outcome") == "tool_failed" and k11b.get("child_exit") == 1
+               and "нет такой роли" in e11b and "подсказка" not in e11b and "предупреждение" not in e11b)
+    ok_k11c = (k11c.get("outcome") == "tool_failed" and k11c.get("child_exit") == 1
+               and "ValueError: плохое значение" in e11c and "Traceback" not in e11c)
+    v3.add("791-К11", ok_k11a and ok_k11b and ok_k11c,
+           "причина отказа — строка тела с признаком ошибки, а не последняя строка вывода; без признака — последняя непустая",
+           "(а) stdout: строка с признаком первой, за ней пустые строки и подсказка: исход %s · код тела %s · error «%s» "
+           "(ждали «совпадений нет» без слов подсказки) · режим run: код %s (ждали 6), причина в тексте: %s\n"
+           "(б) поток ошибок: признак во ВТОРОЙ строке из трёх: исход %s · код тела %s · error «%s» (ждали «нет такой роли» без подсказки)\n"
+           "(в) признака нет, необработанное исключение: исход %s · код тела %s · error «%s» (ждали последнюю строку — само исключение)"
+           % (k11a.get("outcome"), k11a.get("child_exit"), e11a[:120], k11_code, "совпадений нет" in k11_run,
+              k11b.get("outcome"), k11b.get("child_exit"), e11b[:120],
+              k11c.get("outcome"), k11c.get("child_exit"), e11c[:120]))
 
     # ───────────── К10: защита живого контура — чистая проверка функции, процессы не запускаются
     def refused_live(tool, a):
