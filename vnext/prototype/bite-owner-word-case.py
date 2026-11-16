@@ -112,6 +112,12 @@ ROWS = [
     ("2026-11-08 10:00:00 UTC", "Pilot flies", None),
 ]
 
+# Чат для вызовов add. С карточки 777 owner-word.py отказывает по чату, которого база
+# не знает, ДО запуска искателя; стенд здесь без строк role_sessions, поэтому чат назван
+# префиксом записи разговора (8 знаков) — эту форму инструмент принимает как есть.
+# С прежним «ОПЫТ» случаи ⑤ ⑥ ⑩ ⑩-б не доходили до проверки искателя вовсе.
+STAND_CHAT = "0a1b2c3d"
+
 failures = []
 
 
@@ -272,6 +278,22 @@ def case_empty(ctx):
         f"{'да' if 'хранилище пусто' in out else 'НЕТ'}")
 
 
+def finder_words(out, found, yes, no):
+    """Слова о поиске искателя для строки случая.
+
+    Если add отказал РАНЬШЕ, чем дошёл до искателя (например, чат базе неизвестен), «искатель НЕ
+    найден» называло бы не ту причину: читающий провал шёл бы чинить пути. Тогда печатается строка
+    отказа самого инструмента (замечание COORD к карточке 777, записка 6548)."""
+    if found:
+        return yes
+    if "искатель не найден" in out:
+        return no
+    refusal = next((line.strip() for line in out.splitlines() if "⛔ ОТКАЗ" in line), "")
+    if refusal:
+        return f"до искателя НЕ ДОШЛО — {refusal[:140]}"
+    return no
+
+
 def case_defaults(ctx):
     """⑤ пути по умолчанию из трёх чужих рабочих каталогов."""
     ok, said = True, []
@@ -280,7 +302,7 @@ def case_defaults(ctx):
         c1, o1 = run(ctx["copy"], cwd, ctx["container"], "find", "ящерица")
         n, _ = parse(o1)
         c2, o2 = run(ctx["copy"], cwd, ctx["container"], "add",
-                     "--said-at", "2026-11-09 10:00:00 UTC", "--chat", "ОПЫТ",
+                     "--said-at", "2026-11-09 10:00:00 UTC", "--chat", STAND_CHAT,
                      "--text", "зззз такого текста в записях нет", "--heard-by", "ОПЫТ",
                      home=ctx["home"])
         finder_found = ("искатель не найден" not in o2) and ("→ код" in o2)
@@ -288,7 +310,7 @@ def case_defaults(ctx):
                 and count_words(ctx["db"]) == before)
         ok &= good
         said.append(f"{label}: база {'найдена' if (c1 == 0 and n == 1) else 'НЕ найдена'} (найдено {n}, код {c1}) · искатель найден: "
-                    f"{'да' if finder_found else 'НЕТ'} (код {c2})")
+                    f"{finder_words(o2, finder_found, 'да', 'НЕТ')} (код {c2})")
     return ok, "; ".join(said)
 
 
@@ -300,7 +322,7 @@ def case_explicit(ctx):
     nofinder = ctx["stand"] / "нет-искателя.py"
     c2, o2 = run(ctx["copy"], ctx["cwd"], ctx["container"], "--db", str(ctx["db"]),
                  "--finder", str(nofinder), "add", "--said-at", "2026-11-09 10:00:00 UTC",
-                 "--chat", "ОПЫТ", "--text", "зззз другой текст", "--heard-by", "ОПЫТ")
+                 "--chat", STAND_CHAT, "--text", "зззз другой текст", "--heard-by", "ОПЫТ")
     ok1 = c1 != 0 and "базы нет" in o1 and str(nodb) in o1
     ok2 = (c2 == 2 and "сверить дословность нечем" in o2 and str(nofinder) in o2
            and count_words(ctx["db"]) == before)
@@ -353,14 +375,14 @@ def installed_case(ctx, variant):
         c1, o1 = run(copy, cwd, ctx["container"], "find", "ящерица", bare=True)
         n, _ = parse(o1)
         c2, o2 = run(copy, cwd, ctx["container"], "add",
-                     "--said-at", "2026-11-09 10:00:00 UTC", "--chat", "ОПЫТ",
+                     "--said-at", "2026-11-09 10:00:00 UTC", "--chat", STAND_CHAT,
                      "--text", "зззз такого текста в записях нет", "--heard-by", "ОПЫТ",
                      home=ctx["home"], bare=True)
         finder_found = ("искатель не найден" not in o2) and ("→ код" in o2)
         good = (c1 == 0 and n == 1 and finder_found and count_words(ctx["db"]) == before)
         flags.append(good)
-        said.append(f"{label}: " + (f"найдено {n} (код {c1}) · искатель "
-                                    f"{'найден' if finder_found else 'НЕ найден'}"))
+        said.append(f"{label}: " + (f"найдено {n} (код {c1}) · "
+                                    f"{finder_words(o2, finder_found, 'искатель найден', 'искатель НЕ найден')}"))
     via = probe_shared_choice(copy, ctx["foreign_cwds"][0][1])
     return all(flags), "; ".join(said) + f" · путь к базе: {via}", flags
 
