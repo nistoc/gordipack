@@ -112,6 +112,12 @@ ROWS = [
     ("2026-11-08 10:00:00 UTC", "Pilot flies", None),
 ]
 
+# Чат для вызовов add. С карточки 777 owner-word.py отказывает по чату, которого база
+# не знает, ДО запуска искателя; стенд здесь без строк role_sessions, поэтому чат назван
+# префиксом записи разговора (8 знаков) — эту форму инструмент принимает как есть.
+# С прежним «ОПЫТ» случаи ⑤ ⑥ ⑩ ⑩-б не доходили до проверки искателя вовсе.
+STAND_CHAT = "0a1b2c3d"
+
 failures = []
 
 
@@ -280,7 +286,7 @@ def case_defaults(ctx):
         c1, o1 = run(ctx["copy"], cwd, ctx["container"], "find", "ящерица")
         n, _ = parse(o1)
         c2, o2 = run(ctx["copy"], cwd, ctx["container"], "add",
-                     "--said-at", "2026-11-09 10:00:00 UTC", "--chat", "ОПЫТ",
+                     "--said-at", "2026-11-09 10:00:00 UTC", "--chat", STAND_CHAT,
                      "--text", "зззз такого текста в записях нет", "--heard-by", "ОПЫТ",
                      home=ctx["home"])
         finder_found = ("искатель не найден" not in o2) and ("→ код" in o2)
@@ -300,7 +306,7 @@ def case_explicit(ctx):
     nofinder = ctx["stand"] / "нет-искателя.py"
     c2, o2 = run(ctx["copy"], ctx["cwd"], ctx["container"], "--db", str(ctx["db"]),
                  "--finder", str(nofinder), "add", "--said-at", "2026-11-09 10:00:00 UTC",
-                 "--chat", "ОПЫТ", "--text", "зззз другой текст", "--heard-by", "ОПЫТ")
+                 "--chat", STAND_CHAT, "--text", "зззз другой текст", "--heard-by", "ОПЫТ")
     ok1 = c1 != 0 and "базы нет" in o1 and str(nodb) in o1
     ok2 = (c2 == 2 and "сверить дословность нечем" in o2 and str(nofinder) in o2
            and count_words(ctx["db"]) == before)
@@ -353,7 +359,7 @@ def installed_case(ctx, variant):
         c1, o1 = run(copy, cwd, ctx["container"], "find", "ящерица", bare=True)
         n, _ = parse(o1)
         c2, o2 = run(copy, cwd, ctx["container"], "add",
-                     "--said-at", "2026-11-09 10:00:00 UTC", "--chat", "ОПЫТ",
+                     "--said-at", "2026-11-09 10:00:00 UTC", "--chat", STAND_CHAT,
                      "--text", "зззз такого текста в записях нет", "--heard-by", "ОПЫТ",
                      home=ctx["home"], bare=True)
         finder_found = ("искатель не найден" not in o2) and ("→ код" in o2)
