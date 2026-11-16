@@ -278,6 +278,22 @@ def case_empty(ctx):
         f"{'да' if 'хранилище пусто' in out else 'НЕТ'}")
 
 
+def finder_words(out, found, yes, no):
+    """Слова о поиске искателя для строки случая.
+
+    Если add отказал РАНЬШЕ, чем дошёл до искателя (например, чат базе неизвестен), «искатель НЕ
+    найден» называло бы не ту причину: читающий провал шёл бы чинить пути. Тогда печатается строка
+    отказа самого инструмента (замечание COORD к карточке 777, записка 6548)."""
+    if found:
+        return yes
+    if "искатель не найден" in out:
+        return no
+    refusal = next((line.strip() for line in out.splitlines() if "⛔ ОТКАЗ" in line), "")
+    if refusal:
+        return f"до искателя НЕ ДОШЛО — {refusal[:140]}"
+    return no
+
+
 def case_defaults(ctx):
     """⑤ пути по умолчанию из трёх чужих рабочих каталогов."""
     ok, said = True, []
@@ -294,7 +310,7 @@ def case_defaults(ctx):
                 and count_words(ctx["db"]) == before)
         ok &= good
         said.append(f"{label}: база {'найдена' if (c1 == 0 and n == 1) else 'НЕ найдена'} (найдено {n}, код {c1}) · искатель найден: "
-                    f"{'да' if finder_found else 'НЕТ'} (код {c2})")
+                    f"{finder_words(o2, finder_found, 'да', 'НЕТ')} (код {c2})")
     return ok, "; ".join(said)
 
 
@@ -365,8 +381,8 @@ def installed_case(ctx, variant):
         finder_found = ("искатель не найден" not in o2) and ("→ код" in o2)
         good = (c1 == 0 and n == 1 and finder_found and count_words(ctx["db"]) == before)
         flags.append(good)
-        said.append(f"{label}: " + (f"найдено {n} (код {c1}) · искатель "
-                                    f"{'найден' if finder_found else 'НЕ найден'}"))
+        said.append(f"{label}: " + (f"найдено {n} (код {c1}) · "
+                                    f"{finder_words(o2, finder_found, 'искатель найден', 'искатель НЕ найден')}"))
     via = probe_shared_choice(copy, ctx["foreign_cwds"][0][1])
     return all(flags), "; ".join(said) + f" · путь к базе: {via}", flags
 
