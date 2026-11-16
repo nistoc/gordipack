@@ -1041,15 +1041,22 @@ def main():
     w9 = Wall(args.exe, p9, args.contours)
     s9_where, _ = w9.call("memory_read", {"where": CONTOUR_STAND, "role": "PROTO", "section": "identity"})
     s9_old, _ = w9.call("memory_read", {"contour": CONTOUR_STAND, "role": "PROTO", "section": "identity"})
+    # Находка TAXO (16.11): служба может отказывать верно, а КЛИЕНТУ объявлять контур необязательным —
+    # схему MCP судим отдельно: новое имя есть в required и в properties, прежнего имени в properties нет.
+    schema9 = [t for t in w9.list_tools() if t["name"] == "memory_read"][0]["inputSchema"]
+    req9, props9 = schema9.get("required") or [], schema9.get("properties") or {}
     w9.close()
     c9r, o9r, _ = run_mode(args.exe, p9, args.contours,
                            ["memory_read", "--where", CONTOUR_STAND, "--role", "PROTO", "--section", "identity"])
     ok_e9 = (s9_where.get("outcome") == "passed" and s9_where.get("contour") == CONTOUR_STAND
              and s9_old.get("outcome") == "refused" and "where" in (s9_old.get("error") or "")
-             and c9r == 0 and "исход: прошло" in o9r)
-    v2.add("787-E9", ok_e9, "общий аргумент выбора контура переименован в договоре в «where»: вызовы с where работают, вызов с contour — отказ с именем where",
-           "с where (служба): исход %s, контур в ответе «%s»\nс contour (служба): %s — %s\nс --where (режим run): код %s"
-           % (s9_where.get("outcome"), s9_where.get("contour"), s9_old.get("outcome"), (s9_old.get("error") or "")[:130], c9r))
+             and c9r == 0 and "исход: прошло" in o9r
+             and "where" in req9 and "where" in props9 and "contour" not in props9)
+    v2.add("787-E9", ok_e9, "общий аргумент выбора контура переименован в договоре в «where»: вызовы с where работают, вызов с contour — отказ с именем where, схема MCP объявляет where обязательным",
+           "с where (служба): исход %s, контур в ответе «%s»\nс contour (служба): %s — %s\nс --where (режим run): код %s\n"
+           "схема MCP: where в required: %s · where в properties: %s · contour в properties: %s (ждали: нет)"
+           % (s9_where.get("outcome"), s9_where.get("contour"), s9_old.get("outcome"), (s9_old.get("error") or "")[:130], c9r,
+              "where" in req9, "where" in props9, "contour" in props9))
 
     # ⑩ E10 (TAXO): перечень значений (enum) общего аргумента читается из договора
     d10 = json.loads(json.dumps(contract_doc))
