@@ -225,7 +225,7 @@ def origin_of(rec: dict) -> str:
     return "человек" if kind == "human" else f"иное: {kind}"
 
 
-def user_turns(file_name: pathlib.Path):
+def user_turns(file_name: pathlib.Path, where: dict | None = None):
     """Выдать (час, вид, текст, происхождение, служебные_метки, ответ_окна) для реплик роли
     «user» и для вложений queued_command (пришедшее посреди хода).
 
@@ -236,13 +236,18 @@ def user_turns(file_name: pathlib.Path):
     происхождение: 'человек' · 'не записано' · 'иное: <вид>' — см. origin_of().
     служебные_метки: подсадка навыка (isMeta) и сводка сжатия (isCompactSummary) —
     у них поля нет ЗАКОННО, и в «не записано» им не место.
+    where: словарь, в который пишется номер строки файла (с 1), разбираемой сейчас, —
+    адрес источника находки (карточка #795). Форма выдачи не меняется: строки yield служат
+    образцами нарочных поломок приёмки bite-find-owner-word.py.
     """
     try:
         fh = open(file_name, encoding="utf-8", errors="replace")
     except OSError:
         return
     with fh:
-        for line in fh:
+        for lineno, line in enumerate(fh, 1):
+            if where is not None:
+                where["line"] = lineno
             if ('"type":"user"' not in line and '"type": "user"' not in line
                     and "queued_command" not in line):
                 continue
@@ -490,6 +495,9 @@ def main() -> int:
     files_read = 0
     # четыре корзины, и это НЕ оформление — у каждой свой следующий шаг читателя
     by_human, by_choice, no_origin, machine = [], [], [], []
+    # 📍 АДРЕС ИСТОЧНИКА НАХОДКИ (карточка #795): (час, имя файла, текст) → (полный путь, номер строки).
+    # Отдельным словарём, а не полем записи: записи корзин разбираются по местам в пяти местах ниже.
+    addr: dict = {}
     summaries = 0
     # ДВА СЧЁТА ОХВАТА РАЗДЕЛЬНО (карточка #635, предложение RCC 11.10): сколько реплик, набранных
     # текстом, и сколько ответов в окне вопросов просмотрено за отбор — независимо от искомого
@@ -536,7 +544,8 @@ def main() -> int:
             except OSError:
                 pass          # не смогли узнать время правки — читаем, а не пропускаем
         files_read += 1
-        for ts, kind, text, origin, marks, window in user_turns(f):
+        where: dict = {}
+        for ts, kind, text, origin, marks, window in user_turns(f, where):
             if a.date and not ts.startswith(a.date):
                 continue
             if kind in ("выбор", "посреди-хода"):
@@ -549,6 +558,7 @@ def main() -> int:
                 summaries += 1
                 continue
             entry = (ts, f.parent.name, f.name, text)
+            addr.setdefault((ts, f.name, text), (f.resolve().as_posix(), where.get("line")))
             if kind == "выбор":
                 by_choice.append(entry + (window,))
                 continue
@@ -608,11 +618,18 @@ def main() -> int:
         print(f"       Читать всё равно ВСЕ: добавь --all-files")
     print("=" * 92)
 
+    def print_source(src) -> None:
+        """Строка «файл:» — СРАЗУ под строкой «чат:»: owner-word.py берёт из неё адрес слова.
+        Полный путь и номер строки (с 1) записи разговора, где лежит найденная реплика."""
+        if src and src[1]:
+            print(f"   файл: {src[0]}:{src[1]}")
+
     for ts, project, file_name, text, hint in sorted(by_human):
         shown = text.strip() if a.verbose else text.strip()[:200]
         print()
         print(f"📝 НАБРАНО ЧЕЛОВЕКОМ · {ts}")
         print(f"   чат: {project} / {file_name[:8]}…")
+        print_source(addr.get((ts, file_name, text)))
         print(f"   ⏱ час записи ТОЧЕН (до миллисекунды) — час, когда текст лёг в чат")
         print(f"   ✍ происхождение ЗАПИСАНО в самой записи: «человек» (поле origin).")
         print(f"      Кто именно из людей — запись не знает; в этих чатах человек один.")
@@ -636,6 +653,7 @@ def main() -> int:
         else:
             print(f"🔘 НАЙДЕНО ВЫБОРОМ (интерфейс вариантов) · {ts}")
         print(f"   чат: {project} / {file_name[:8]}…")
+        print_source(addr.get((ts, file_name, text)))
         print(f"   ⚖️ час — ВЕРХНЯЯ ГРАНИЦА: это приход ответа в чат. Сколько владелец")
         print(f"      держал выбор открытым до нажатия, запись не знает и знать не может")
         i, n = w["of"]

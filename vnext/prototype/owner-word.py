@@ -57,12 +57,26 @@
 отдельно с пометкой «не годятся». Несколько совпадений в одном чате печатаются все, и выбор —
 за ролью: записывается только час, названный в --said-at.
 
+📍 АДРЕС ИСТОЧНИКА БЕРЁТСЯ ИЗ ТОЙ ЖЕ НАХОДКИ, ЧТО ЧАС (карточка #795). Критерий ① карточки
+#554 требует у слова «ссылку на файл-источник с номером строки», а ключи --source-file и
+--source-line были необязательны, и инструмент адреса сам не брал: на 16.11 у 17 слов из 20
+файла не было, номера строки не было ни у одного. Теперь искатель печатает под строкой «чат:»
+строку «файл: <полный путь>:<номер строки>», и add берёт адрес из находки, с которой сверен час.
+⛔ Адреса у такой находки нет — ОТКАЗ, слово не записано: текст и час найдены этой находкой,
+значит адрес у искателя ЕСТЬ, и его пропажа — поломка связи двух инструментов (старый искатель
+рядом), а не нехватка данных. Громкая строка вместо отказа оставила бы хранилище пополняться
+словами без адреса — ровно то, что чинится. Адрес, названный ключами, сверяется с находкой;
+расхождение — отказ (подставленный адрес неотличим от измеренного, как и час).
+Уже записанным словам адрес дописывает команда `source` — тем же поиском; по умолчанию холостой
+прогон, запись — с --apply. Записанный файл, расходящийся с найденным, она не перезаписывает.
+
 ИСХОДЫ (коды выхода):
-  0 — сделано (слово записано · прочитано · найдено)
+  0 — сделано (слово записано · прочитано · найдено · адрес дописан всем, кому был нужен)
   1 — не найдено (нет такого номера · по куску совпадений нет при непустом хранилище)
   2 — ОТКАЗ записать: сверка дословности не прошла. Запись НЕ сделана
   3 — ошибка вызова (нет обязательного ключа, не найден искатель, база недоступна)
   4 — хранилище пусто: искать негде (отличается от «не найдено» при живом хранилище)
+  source: 1 — у части слов адрес не найден (каждое названо номером с причиной)
 """
 import argparse
 import io
@@ -165,26 +179,100 @@ PREFIX = re.compile(r'^[0-9a-f]{8}$')
 # как есть; отказ на неё учил переписывать префикс руками (находка PROTO Н4, записка #6547:
 # в этой форме лежат 6 из 12 строк живого хранилища). «…» на конце необязательно.
 CHAT_ARG = re.compile(r'^(?P<project>.+?)\s*/\s*(?P<prefix>[0-9A-Za-z-]{8})…?$')
+# Адрес находки (карточка #795): «   файл: C:/…/c0812f28-….jsonl:412» — полный путь записи
+# разговора и номер строки в ней (с 1). Искатель печатает её СРАЗУ под строкой «чат:».
+FILE_LINE = re.compile(r'^\s*файл: (?P<path>.+):(?P<line>\d+)\s*$')
+
+
+class Finding(tuple):
+    """Находка искателя — ТРОЙКА (час, префикс чата, строка исхода), как до карточки #795;
+    адрес источника — атрибутом src: (полный путь, номер строки) или None.
+
+    ⚠️ Почему не четвёртое поле: строки, разбирающие тройку («s, p, _ in fl»), — якоря нарочных
+    поломок приёмки bite-owner-word-chat.py. Четвёртое поле меняло эти строки, и поломка
+    молча переставала строиться. Сравнение и множества работают по трём полям, как прежде."""
+
+    def __new__(cls, stamp, prefix, outcome, src=None):
+        self = super().__new__(cls, (stamp, prefix, outcome))
+        self.src = src
+        return self
 
 
 def findings_from(stdout):
-    """ВСЕ находки искателя: [(час «… UTC», префикс записи разговора, строка исхода)].
+    """ВСЕ находки искателя: [Finding(час «… UTC», префикс записи разговора, строка исхода)].
+
+    адрес (Finding.src) — (полный путь, номер строки) из строки «файл:», стоящей СРАЗУ под строкой «чат:»
+    (карточка #795); нет такой строки — None. Строка «файл:» в другом месте вывода не берётся:
+    приписать адрес не той находке хуже, чем не найти его вовсе.
 
     ⚡ Карточка #777: прежняя сверка брала час ПЕРВОЙ строки исхода и не смотрела, в каком
     чате она лежит. Первое по порядку вывода — случайность сортировки (искатель ставит
     находки по часу), а не чат роли. Находка без строки чата сюда не попадает: сверять её
     с названным чатом не с чем."""
-    out, pending = [], None
+    out, pending, after_chat = [], None, False
     for line in (stdout or '').splitlines():
         s = line.strip()
+        if after_chat:
+            after_chat = False
+            f = FILE_LINE.match(line)
+            if f:
+                out[-1].src = (f.group('path'), int(f.group('line')))
+                continue
         if any(s.startswith(m) for m in OUTCOME_MARKS) and STAMP.search(s):
             pending = (stamp_from(s), ' '.join(s.split()))
             continue
         m = CHAT_LINE.match(line)
         if m and pending:
-            out.append((pending[0], m.group(2).lower(), pending[1]))
+            out.append(Finding(pending[0], m.group(2).lower(), pending[1]))
             pending = None
+            after_chat = True
     return out
+
+
+def same_path(x, y):
+    """Один ли файл: регистр и вид разделителя на Windows не различают файлы."""
+    return os.path.normcase(os.path.normpath(x)) == os.path.normcase(os.path.normpath(y))
+
+
+def sources_of(per_line, prefixes, said_at):
+    """Адреса находок, с которыми сверен час: по одной на строку текста, без повторов."""
+    found = []
+    for fl in per_line:
+        for f in fl:
+            s, p, _ = f
+            if p in prefixes and s == said_at:
+                if f.src and f.src not in found:
+                    found.append(f.src)
+                break
+    return found
+
+
+def settle_source(found, a):
+    """Адрес слова при записи (карточка #795): из находки, а ключи только сверяются с ней."""
+    if not found:
+        print()
+        print('⛔ ОТКАЗ: у находки нет адреса — под строкой «чат:» искатель не напечатал строку')
+        print('   «файл: <путь>:<строка>». Слово без адреса НЕ записывается (карточка #795): текст и час')
+        print('   найдены этой находкой, значит адрес у искателя есть, и его пропажа — поломка связи')
+        print(f'   двух инструментов, а не нехватка данных. Искатель: {a.finder}')
+        print('   👉 рядом должен лежать искатель не старше карточки #795. Слово НЕ записано.')
+        sys.exit(2)
+    path, line = found[0]
+    if (a.source_file and not same_path(a.source_file, path)) or (
+            a.source_line is not None and a.source_line != line):
+        print()
+        print('⛔ ОТКАЗ: адрес, названный ключами, РАСХОДИТСЯ с находкой. Слово НЕ записано.')
+        named_line = a.source_line if a.source_line is not None else '—'
+        print(f'   назван ....... {a.source_file or "—"}:{named_line}')
+        print(f'   найден ....... {path}:{line}')
+        print('   Подставленный адрес неотличим от измеренного — как и час. Верный вызов: без ключей')
+        print('   --source-file и --source-line, адрес инструмент берёт сам.')
+        sys.exit(2)
+    if len(found) > 1:
+        print(f'📌 строки текста лежат в {len(found)} разных строках записей: '
+              + ' · '.join(f'{fp}:{fl}' for fp, fl in found) + ' — записываю адрес первой')
+    print(f'📍 адрес источника — из той же находки: {path}:{line}')
+    return path, line
 
 
 def chat_prefixes(conn, chat):
@@ -325,6 +413,7 @@ def cmd_add(conn, a):
     # по нему судят, какое из двух слов новее, и по нему строятся встречные случаи
     # приёмок (оплаченный класс: граница «новее 07:51» находила файл 07:51:41 —
     # записка #6408 §⑤). Час, объявленный ролью, ничем не отличим от часа измеренного.
+    src_file, src_line = a.source_file, a.source_line
     found = sorted(s for s in (stamp_from(m) for m in marks) if s)
     if not found:
         print('⚠️ час события в выводе искателя не распознан — сверить said_at не с чем.')
@@ -332,6 +421,7 @@ def cmd_add(conn, a):
         print('   «чем сверено» это будет видно следующему читателю. Чат по той же причине')
         print('   НЕ сверен.')
         checked = 'час и чат НЕ сверены: час в выводе искателя не распознан'
+        print('   Адрес источника по той же причине НЕ сверен: записан, только если назван ключами.')
         outcome = 'первая находка искателя, чат не сверен: ' + ' | '.join(marks)
     elif not any(per_line):
         print()
@@ -402,12 +492,13 @@ def cmd_add(conn, a):
                     break
         outcome = ' | '.join(chosen)
         print(f'🧾 исход находки, с которой сверен час: {outcome}')
+        src_file, src_line = settle_source(sources_of(per_line, prefixes, a.said_at), a)
 
     try:
         cur = conn.execute(
             "INSERT INTO owner_words (said_at, chat, text_verbatim, source_file, source_line,"
             " verified_by, heard_by, noted_at, note) VALUES (?,?,?,?,?,?,?,?,?)",
-            (a.said_at, a.chat, text, a.source_file, a.source_line,
+            (a.said_at, a.chat, text, src_file, src_line,
              f'find-owner-word.py, прогон {now_utc()}, строк сверено '
              f'{len([l for l in text.splitlines() if l.strip()])}, все с кодом 0; '
              f'исход искателя: {outcome}; {checked}',
@@ -513,6 +604,83 @@ def cmd_list(conn, a):
     return 0
 
 
+def cmd_source(conn, a):
+    """Дописать адрес источника уже записанным словам (карточка #795).
+
+    Тем же поиском, что при записи: сверка дословности, час в названном чате, адрес из находки.
+    По умолчанию — холостой прогон. Пишет только туда, где номера строки нет; записанный файл,
+    расходящийся с найденным, не перезаписывает, а называет."""
+    if a.ids:
+        marks = ','.join('?' * len(a.ids))
+        rows = conn.execute(f"SELECT * FROM owner_words WHERE id IN ({marks}) ORDER BY id",
+                            a.ids).fetchall()
+        absent = sorted(set(a.ids) - {r['id'] for r in rows})
+        if absent:
+            print(f'🔴 таких номеров нет: {", ".join(f"слово #{x}" for x in absent)}')
+            return 1
+    else:
+        rows = conn.execute("SELECT * FROM owner_words WHERE coalesce(source_file,'')='' "
+                            "OR source_line IS NULL ORDER BY id").fetchall()
+    mode = ('ЗАПИСЬ (--apply)' if a.apply else
+            '⟨ХОЛОСТОЙ ПРОГОН⟩ база не изменится; записать — тот же вызов с --apply')
+    print(f'📍 АДРЕС ИСТОЧНИКА уже записанным словам · {mode}')
+    print(f'   к разбору слов: {len(rows)} '
+          + ('(названы номерами)' if a.ids else '(у них нет файла или номера строки)'))
+    planned, left = [], []
+    for row in rows:
+        n, said_at = row['id'], row['said_at']
+        if row['source_file'] and row['source_line']:
+            print(f'   слово #{n}: адрес уже есть — {row["source_file"]}:{row["source_line"]}')
+            continue
+        prefixes, _, refusal = chat_prefixes(conn, row['chat'])
+        if refusal:
+            left.append((n, refusal))
+            continue
+        ok, _, _, per_line = verify_verbatim(row['text_verbatim'], said_at, a.finder)
+        if not ok:
+            left.append((n, f'текст не найден в записях разговоров за {said_at[:10]} '
+                            '(запись могла быть сжата или удалена)'))
+            continue
+        found = sources_of(per_line, prefixes, said_at)
+        if not found:
+            left.append((n, f'в чате {row["chat"]} нет находки с часом {said_at} и строкой «файл:»'))
+            continue
+        path, line = found[0]
+        if row['source_file'] and not same_path(row['source_file'], path):
+            left.append((n, f'записанный файл {row["source_file"]} РАСХОДИТСЯ с найденным '
+                            f'{path}:{line} — не перезаписываю'))
+            continue
+        if row['source_line'] is not None and row['source_line'] != line:
+            left.append((n, f'записанный номер строки {row["source_line"]} РАСХОДИТСЯ с найденным '
+                            f'{path}:{line} — не перезаписываю'))
+            continue
+        planned.append((n, path, line))
+        print(f'   слово #{n} → {path}:{line}'
+              + (f'  (строк текста в разных строках записей: {len(found)}, взят адрес первой)'
+                 if len(found) > 1 else ''))
+    written = 0
+    if a.apply and planned:
+        note = f'; адрес источника дописан owner-word.py source, прогон {now_utc()}'
+        for n, path, line in planned:
+            cur = conn.execute("UPDATE owner_words SET source_file=?, source_line=?, "
+                               "verified_by=verified_by || ? WHERE id=? "
+                               "AND (coalesce(source_file,'')='' OR source_line IS NULL)",
+                               (path, line, note, n))
+            written += cur.rowcount
+        conn.commit()
+    for n, why in left:
+        print(f'   🔴 слово #{n}: {why}')
+    if a.apply:
+        print(f'ИТОГ: записано адресов {written} из {len(planned)} найденных · '
+              f'без адреса осталось {len(left)}')
+        if written != len(planned):
+            print('   ⚠️ записано меньше найденного: у части слов адрес появился между поиском')
+            print('      и записью (другая рука) — их строки не тронуты')
+    else:
+        print(f'ИТОГ: будет записано адресов {len(planned)} · без адреса останется {len(left)}')
+    return 1 if left else 0
+
+
 def main():
     ap = argparse.ArgumentParser(
         description='Хранилище слов владельца: запись со сверкой дословности, '
@@ -534,8 +702,11 @@ def main():
     ad.add_argument('--text-file', dest='text_file',
                     help='файл с дословным текстом — для длинного и многострочного')
     ad.add_argument('--heard-by', dest='heard_by', required=True, help='роль, услышавшая слово')
-    ad.add_argument('--source-file', dest='source_file', help='файл-источник')
-    ad.add_argument('--source-line', dest='source_line', type=int, help='номер строки в нём')
+    ad.add_argument('--source-file', dest='source_file',
+                    help='файл-источник — НЕ нужен: адрес берётся из находки искателя; названный '
+                         'сверяется с ней, расхождение — отказ (карточка #795)')
+    ad.add_argument('--source-line', dest='source_line', type=int,
+                    help='номер строки в нём — то же: берётся из находки, названный сверяется')
     ad.add_argument('--note', help='ПОЯСНЕНИЕ роли — не речь владельца')
 
     sh = sub.add_parser('show', help='прочесть слово по номеру')
@@ -549,6 +720,12 @@ def main():
 
     ls = sub.add_parser('list', help='перечень последних слов')
     ls.add_argument('--limit', type=int, default=10)
+
+    so = sub.add_parser('source', help='дописать адрес источника уже записанным словам '
+                        '(по умолчанию холостой прогон; запись — --apply)')
+    so.add_argument('ids', nargs='*', type=int,
+                    help='номера слов; без номеров — все, у кого нет файла или номера строки')
+    so.add_argument('--apply', action='store_true', help='записать найденные адреса в базу')
 
     a = ap.parse_args()
     if a.finder is None:
@@ -565,7 +742,7 @@ def main():
                  'migrations/20261114-owner-words.py (карточка #554, часть ①)')
 
     sys.exit({'add': cmd_add, 'show': cmd_show, 'find': cmd_find,
-              'list': cmd_list}[a.cmd](conn, a))
+              'list': cmd_list, 'source': cmd_source}[a.cmd](conn, a))
 
 
 if __name__ == '__main__':
