@@ -46,6 +46,17 @@
 слова («budить» вместо «будить») не ловится. Нулевой ответ говорит об этом вслух и не
 делает вывода о предмете.
 
+💬 ЧАС СВЕРЯЕТСЯ В НАЗВАННОМ ЧАТЕ, А НЕ ПО ПЕРВОМУ СОВПАДЕНИЮ (карточка #777). Одно слово
+владельца лежит в нескольких чатах с разными часами («да», «отложи» он говорит многим ролям).
+Прежняя редакция брала час ПЕРВОЙ находки искателя, а чат из --chat в сверке не участвовал:
+роль с ВЕРНЫМ часом своего чата получала отказ, с ЧУЖИМ — запись и подпись «сверен знак
+в знак» (замер STUD 13.11, записка #6455 §②). Теперь --chat разбирается в записи разговоров:
+имя роли — по role_sessions и role_sessions_history (поле transcript_id), иначе сам префикс
+записи (8 знаков, как в строке «чат:» вывода искателя). Чат, которого база не знает, —
+отказ ДО запуска искателя. Час берётся только среди находок ЭТОГО чата; чужие печатаются
+отдельно с пометкой «не годятся». Несколько совпадений в одном чате печатаются все, и выбор —
+за ролью: записывается только час, названный в --said-at.
+
 ИСХОДЫ (коды выхода):
   0 — сделано (слово записано · прочитано · найдено)
   1 — не найдено (нет такого номера · по куску совпадений нет при непустом хранилище)
@@ -145,6 +156,73 @@ def stamp_from(line):
     return f'{m.group(1)} {m.group(2)} UTC' if m else None
 
 
+# Строка чата находки: «   чат: C--guts--atlas / 83ea29c6…» — каталог проекта и ПЕРВЫЕ ВОСЕМЬ
+# знаков имени файла записи разговора. Искатель печатает её строкой НИЖЕ строки исхода.
+CHAT_LINE = re.compile(r'^\s*чат: (.+?) / ([0-9A-Za-z-]{8})…\s*$')
+# Префикс записи разговора, названный в --chat вместо имени роли.
+PREFIX = re.compile(r'^[0-9a-f]{8}$')
+
+
+def findings_from(stdout):
+    """ВСЕ находки искателя: [(час «… UTC», префикс записи разговора, строка исхода)].
+
+    ⚡ Карточка #777: прежняя сверка брала час ПЕРВОЙ строки исхода и не смотрела, в каком
+    чате она лежит. Первое по порядку вывода — случайность сортировки (искатель ставит
+    находки по часу), а не чат роли. Находка без строки чата сюда не попадает: сверять её
+    с названным чатом не с чем."""
+    out, pending = [], None
+    for line in (stdout or '').splitlines():
+        s = line.strip()
+        if any(s.startswith(m) for m in OUTCOME_MARKS) and STAMP.search(s):
+            pending = (stamp_from(s), ' '.join(s.split()))
+            continue
+        m = CHAT_LINE.match(line)
+        if m and pending:
+            out.append((pending[0], m.group(2).lower(), pending[1]))
+            pending = None
+    return out
+
+
+def chat_prefixes(conn, chat):
+    """Префиксы записей разговоров (8 знаков, как печатает искатель) у чата из --chat.
+
+    Имя роли → записи её чатов по role_sessions и role_sessions_history: так контур знает,
+    какой чат чей. Роли с записями нет — --chat принимается как сам префикс записи.
+    Возвращает (префиксы, как найдены, отказ или None)."""
+    name = (chat or '').strip()
+    role = name.upper()
+    found, problems = set(), []
+    for table in ('role_sessions', 'role_sessions_history'):
+        try:
+            for (tid,) in conn.execute(f"SELECT transcript_id FROM {table} WHERE role=?", (role,)):
+                if tid:
+                    found.add(tid[:8].lower())
+        except sqlite3.OperationalError as e:
+            problems.append(f'{table}: {e}')
+    if found:
+        return found, f'чаты роли {role} по role_sessions · role_sessions_history', None
+    if PREFIX.match(name.lower()):
+        return {name.lower()}, 'префикс записи разговора, названный в --chat', None
+    why = (f'чат «{name}» базе неизвестен: нет ни роли с записями разговоров в role_sessions и '
+           'role_sessions_history, ни префикса записи (8 знаков, как в строке «чат:» искателя)')
+    if problems:
+        why += ' · ' + ' · '.join(problems)
+    return set(), None, why
+
+
+def chat_owners(conn):
+    """{префикс записи: роль} — чтобы назвать ЧУЖОЙ чат именем роли, а не восемью знаками."""
+    owners = {}
+    for table in ('role_sessions_history', 'role_sessions'):
+        try:
+            for role, tid in conn.execute(f"SELECT role, transcript_id FROM {table}"):
+                if tid:
+                    owners[tid[:8].lower()] = role
+        except sqlite3.OperationalError:
+            pass
+    return owners
+
+
 def outcome_line(stdout, code):
     """Строка исхода из вывода искателя — по ЗНАКУ исхода, а не по положению в выводе."""
     for line in (stdout or '').splitlines():
@@ -156,18 +234,19 @@ def outcome_line(stdout, code):
 def verify_verbatim(text, said_at, finder):
     """Сверка дословности прогоном искателя по записям разговоров.
 
-    Возвращает (прошло, отчёт, исходы). Прошло только когда КАЖДАЯ непустая строка
-    текста найдена с исходом «сказал владелец» (код 0 искателя).
+    Возвращает (прошло, отчёт, исходы, находки по строкам). Прошло только когда КАЖДАЯ
+    непустая строка текста найдена с исходом «сказал владелец» (код 0 искателя).
+    Находки по строкам — для сверки часа с названным чатом (карточка #777).
     """
     if not os.path.isfile(finder):
-        return False, f'искатель не найден по пути {finder} — сверить дословность нечем', []
+        return False, f'искатель не найден по пути {finder} — сверить дословность нечем', [], []
 
     day = said_at[:10]
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     if not lines:
-        return False, 'текст пуст — сверять нечего', []
+        return False, 'текст пуст — сверять нечего', [], []
 
-    report, marks = [], []
+    report, marks, per_line = [], [], []
     for line in lines:
         probe = line if len(line) <= 200 else line[:200]
         run = subprocess.run(
@@ -175,13 +254,14 @@ def verify_verbatim(text, said_at, finder):
             capture_output=True, text=True, encoding='utf-8', errors='replace')
         mark = outcome_line(run.stdout, run.returncode)
         marks.append(mark)
+        per_line.append(findings_from(run.stdout))
         report.append(f'   · «{probe[:60]}…» → код {run.returncode} · {mark[:120]}')
         if run.returncode != 0:
             report.append(f'   🔴 ЭТА СТРОКА НЕ ПОДТВЕРЖДЕНА (код {run.returncode}): '
                           '0 — сказал владелец · 1 — не найдено · 2 — искать негде · '
                           '3 — найдено, но происхождение машинное или неизвестное')
-            return False, '\n'.join(report), marks
-    return True, '\n'.join(report), marks
+            return False, '\n'.join(report), marks, per_line
+    return True, '\n'.join(report), marks, per_line
 
 
 def cmd_add(conn, a):
@@ -194,8 +274,19 @@ def cmd_add(conn, a):
     if not text or not text.strip():
         sys.exit('⛔ нужен дословный текст: --text «…» или --text-file <файл>')
 
+    # 💬 ЧАТ РАЗБИРАЕТСЯ ДО СВЕРКИ (карточка #777): чат, чьих записей база не знает, сверить
+    # не с чем, и запускать долгий искатель ради заведомого отказа незачем.
+    prefixes, chat_how, chat_refusal = chat_prefixes(conn, a.chat)
+    if chat_refusal:
+        print(f'⛔ ОТКАЗ: {chat_refusal}. Слово НЕ записано.')
+        print('   Час сверяется среди находок НАЗВАННОГО чата; чат без записей сверить не с чем.')
+        print('   Назови роль, чей чат записан в role_sessions, или префикс записи разговора')
+        print('   из строки «чат:» вывода find-owner-word.py.')
+        sys.exit(2)
+    print(f'💬 чат {a.chat}: записи разговоров {", ".join(sorted(prefixes))} ({chat_how})')
+
     print('🔎 СВЕРКА ДОСЛОВНОСТИ — ищу этот текст в записях разговоров:')
-    ok, report, marks = verify_verbatim(text, a.said_at, a.finder)
+    ok, report, marks, per_line = verify_verbatim(text, a.said_at, a.finder)
     print(report)
     if not ok:
         print()
@@ -220,19 +311,64 @@ def cmd_add(conn, a):
     if not found:
         print('⚠️ час события в выводе искателя не распознан — сверить said_at не с чем.')
         print('   Записываю с часом, названным ролью, и говорю об этом вслух: в поле')
-        print('   «чем сверено» это будет видно следующему читателю.')
-    elif found[0] != a.said_at:
+        print('   «чем сверено» это будет видно следующему читателю. Чат по той же причине')
+        print('   НЕ сверен.')
+        checked = 'час и чат НЕ сверены: час в выводе искателя не распознан'
+    elif not any(per_line):
         print()
-        print(f'⛔ ОТКАЗ: час НЕ СОВПАЛ. Слово НЕ записано.')
-        print(f'   роль назвала ... {a.said_at}')
-        print(f'   запись говорит . {found[0]}' + (f' (и ещё: {", ".join(found[1:])})'
-                                                   if len(found) > 1 else ''))
-        print('   Текст дословен, но час — отдельное свойство, и угадывать его за роль')
-        print('   инструмент не станет: подставленный молча час неотличим от измеренного.')
-        print(f'   Верный вызов: --said-at "{found[0]}"')
+        print('⛔ ОТКАЗ: чат находки в выводе искателя не распознан (строки «чат:» под строкой')
+        print('   исхода нет) — сверить час с названным чатом не с чем. Слово НЕ записано.')
         sys.exit(2)
     else:
-        print(f'✅ час сверен с записью разговора знак в знак: {found[0]}')
+        owners = chat_owners(conn)
+
+        def named(p):
+            return f'{owners[p]} · {p}' if p in owners else p
+
+        # час — только среди находок НАЗВАННОГО чата (карточка #777)
+        mine = [sorted({s for s, p, _ in fl if p in prefixes}) for fl in per_line]
+        foreign = sorted({(s, p) for fl in per_line for s, p, _ in fl if p not in prefixes})
+
+        def print_foreign():
+            if foreign:
+                print(f'   в ЧУЖИХ чатах — для --chat {a.chat} их час НЕ годится:')
+                for s, p in foreign:
+                    print(f'      {s} · чат {named(p)}')
+
+        missing = [i + 1 for i, m in enumerate(mine) if not m]
+        if missing:
+            print()
+            print(f'⛔ ОТКАЗ: в чате {a.chat} этот текст НЕ найден (строк текста без находки в нём: '
+                  f'{len(missing)} из {len(mine)}). Слово НЕ записано.')
+            print_foreign()
+            print('   Чужой час под своим чатом не записывается: пара «час + чат» вышла бы ложной.')
+            print('   Если слово сказано в другом чате — назови в --chat ТОТ чат.')
+            sys.exit(2)
+        common = sorted(set(mine[0]).intersection(*map(set, mine[1:])))
+        if a.said_at not in common:
+            print()
+            print(f'⛔ ОТКАЗ: час НЕ СОВПАЛ ни с одной находкой в чате {a.chat}. Слово НЕ записано.')
+            print(f'   роль назвала ... {a.said_at}')
+            if common:
+                print(f'   в чате {a.chat} совпадений {len(common)}:')
+                for s in common:
+                    print(f'      {s}')
+            else:
+                print(f'   в чате {a.chat} нет часа, общего всем строкам текста: по строкам {mine}')
+            print_foreign()
+            print('   Текст дословен, но час — отдельное свойство, и угадывать его за роль')
+            print('   инструмент не станет: подставленный молча час неотличим от измеренного.')
+            if len(common) == 1:
+                print(f'   Верный вызов: --said-at "{common[0]}"')
+            elif len(common) > 1:
+                print('   👉 ВЫБОР ЗА РОЛЬЮ: в одном чате несколько совпадений — назови в --said-at')
+                print('      час того ответа, который записываешь.')
+            sys.exit(2)
+        if len(common) > 1:
+            print(f'📌 в чате {a.chat} совпадений {len(common)}: {", ".join(common)} — '
+                  'записываю час, названный в --said-at')
+        print(f'✅ час сверен с записью разговора В НАЗВАННОМ ЧАТЕ {a.chat} знак в знак: {a.said_at}')
+        checked = f'час сверен в чате {a.chat} (записи {", ".join(sorted(prefixes))})'
 
     try:
         cur = conn.execute(
@@ -241,7 +377,7 @@ def cmd_add(conn, a):
             (a.said_at, a.chat, text, a.source_file, a.source_line,
              f'find-owner-word.py, прогон {now_utc()}, строк сверено '
              f'{len([l for l in text.splitlines() if l.strip()])}, все с кодом 0; '
-             f'исход искателя: {" | ".join(marks)}',
+             f'исход искателя: {" | ".join(marks)}; {checked}',
              a.heard_by, now_utc(), a.note))
         conn.commit()
     except sqlite3.IntegrityError as e:
