@@ -31,6 +31,22 @@ r"""ПРИЁМКА проверки «в образце нет путей одн
   ⑭ строка-КОМАНДА в той же шапке → красное                         ВСТРЕЧНЫЙ к ⑬
   ⑮ команда с окружением впереди («ИМЯ=значение python …») → красное РАЗЛИЧАЮЩИЙ
   ⑯ команды python3 · pythonw · «& путь» в шапке → красное каждая     РАЗЛИЧАЮЩИЙ
+  ⑰ каталог БЕЗ git, в файле `.cs` в комментарии путь этой машины →    РАЗЛИЧАЮЩИЙ
+     найден ровно он (обход диска читает и `.cs`)
+  ⑱ дерево git, --root на ПОДКАТАЛОГ с файлом `.cs` и путём →         РАЗЛИЧАЮЩИЙ
+     способ «публикуемое», путь найден, файл из соседнего каталога дерева не судится
+  ⑲ `.cs` и `.csproj` без путей машины → находок нет                  ВСТРЕЧНЫЙ к ⑰ и ⑱
+  ⑳ `.cs`: путь в строковом литерале → красное                         РАЗЛИЧАЮЩИЙ
+     Службу C# ведёт литерал; ⑰ и ⑱ (комментарий → проза) — встречные к нему
+  ㉑ `.cs`: `//` внутри литерала, комментарий после него и блочный      ВСТРЕЧНЫЙ к ⑳
+     `/* */` на двух строках → жёлтое, красного нет
+  ㉒ `.csproj`: путь в `<HintPath>` → красное (конфиг сборки)           РАЗЛИЧАЮЩИЙ
+  ㉓ дерево git, --root на подкаталог, где git ничего не отслеживает →  РАЗЛИЧАЮЩИЙ
+     предупреждение и обход диска, а не «файлов 0 — чисто»
+  ㉔ каталог obj (порождения сборки) не читается; тот же файл вне obj —  РАЗЛИЧАЮЩИЙ
+     читается (встречная половина внутри случая)
+  ㉔-бис --root лежит ВНУТРИ каталога с именем obj → чтению не мешает     РАЗЛИЧАЮЩИЙ
+     (имена пропуска судятся от --root, а не по всему пути)
 
 Нарочные поломки (--break), каждая на своей копии guard-machine-paths.py в стенде:
   no-head ........... верхний каталог пути не проверяется на существование → ⑩
@@ -40,6 +56,12 @@ r"""ПРИЁМКА проверки «в образце нет путей одн
   doc-all-prose ..... шапка судится прозой целиком, команды в ней тоже     → ⑭ ⑯
   no-env-prefix ..... образец команды не понимает «ИМЯ=значение» впереди   → ⑮
   no-cmd-variants ... образец знает только «python», без версии, окна и «&» → ⑯
+  no-cs-suffix ...... расширение .cs убрано из белого списка обхода диска   → ⑰ ⑳ ㉑
+  no-subdir-git ..... git-режим только когда .git лежит в самом --root      → ⑱ ㉓
+  cs-all-prose ...... ветка `.cs` в разборе убрана: всё в `.cs` — проза     → ⑳
+  csproj-not-config . `.csproj` не считается конфигом                       → ㉒
+  no-untracked-fallback пустой перечень git возвращается как есть           → ㉓
+  no-obj-skip ....... каталог obj снова читается                            → ㉔
 
 ⛔ Живого контура не касается: всё во временном каталоге.
 """
@@ -93,6 +115,26 @@ BREAKS = {
           + "\n",
           r'                        r"(?:(?:python|py|dotnet|npm|node|git|cd|powershell|pwsh|sh|bash"' + "\n")],
         {"⑯"}),
+    "no-cs-suffix": (
+        [('           ".paths", ".txt", ".cfg", ".ini", ".toml", ".cs", ".csproj"}\n',
+          '           ".paths", ".txt", ".cfg", ".ini", ".toml", ".csproj"}\n')],
+        {"⑰", "⑳", "㉑"}),
+    "no-subdir-git": (
+        [("    if inside_git_tree(root):\n", '    if (root / ".git").exists():\n')],
+        {"⑱", "㉓"}),
+    "cs-all-prose": (
+        [('            elif path.suffix.lower() == ".cs" and n <= len(cs_code) and any(\n',
+          '            elif path.suffix.lower() == ".cs" and False and any(\n')],
+        {"⑳"}),
+    "csproj-not-config": (
+        [('".json", ".yml", ".yaml", ".csproj"}\n', '".json", ".yml", ".yaml"}\n')],
+        {"㉒"}),
+    "no-untracked-fallback": (
+        [("            if out.strip():\n", "            if True:\n")],
+        {"㉓"}),
+    "no-obj-skip": (
+        [('"venv", "obj"}\n', '"venv"}\n')],
+        {"㉔"}),
 }
 
 
@@ -309,6 +351,100 @@ def main() -> int:
                code16 == 1 and lines16 == [2, 3, 4],
                f"код {code16}; красных строк {len(lines16)} из 3 — каждая из трёх форм ловится сама, "
                "а не за компанию с соседней", differ=True)
+
+    # ⑰ Обход диска (дерево без git) читает и файлы `.cs`: прежде их расширения в белом списке
+    #    не было, и путь в комментарии Program.cs проверка не находила (код 0, «чисто»).
+    cs_plain = tree("cs-plain", {
+        "GordiWall/Program.cs": f"// сломалось на пути {MINE}\\.mezosync — оттуда и правило\nclass P {{ }}\n"})
+    out17, code17 = run(cs_plain)
+    ok &= case("⑰ каталог без git: путь в комментарии файла .cs — найден ровно он",
+               code17 == 0 and "обход диска" in out17 and "в прозе 1" in out17
+               and "Program.cs:1" in out17,
+               f"код {code17}; файл .cs обязан читаться наравне с .py и .md", differ=True)
+
+    # ⑱ Дерево git, --root на подкаталог: прежде способ включался, только если .git лежит в самом
+    #    --root, и подкаталог клона судился обходом по белому списку (5 файлов из 14).
+    git_tree = tree("git-sub", {
+        "svc/Sub/Program.cs": f"// сломалось на пути {MINE}\\.mezosync — оттуда и правило\nclass P {{ }}\n",
+        "other/note.md": f"Урок: сломалось на пути {MINE}\\.mezosync\n"})
+    git_ok = all(subprocess.run(["git", "-C", str(git_tree), *cmd], capture_output=True).returncode == 0
+                 for cmd in (["init", "-q"], ["add", "-A"]))
+    out18, code18 = run(git_tree / "svc") if git_ok else ("git в стенде не поднялся", -1)
+    ok &= case("⑱ дерево git, --root на подкаталог: способ «публикуемое», путь найден",
+               git_ok and code18 == 0 and "публикуемое" in out18 and "файлов 1" in out18
+               and "в прозе 1" in out18 and "Program.cs:1" in out18,
+               f"код {code18}; файл из соседнего каталога дерева не судится, подкаталог — по git", differ=True)
+
+    # ⑲ ВСТРЕЧНЫЙ к ⑰ и ⑱: те же расширения без путей машины — молчат. Иначе чтение `.cs`
+    #    могло бы обвинять любой файл.
+    cs_clean = tree("cs-clean", {
+        "GordiWall/Program.cs": 'class P { const string Url = "http://localhost:5173"; }\n',
+        "GordiWall/GordiWall.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n"})
+    out19, code19 = run(cs_clean)
+    ok &= case("⑲ ВСТРЕЧНЫЙ к ⑰ и ⑱: .cs и .csproj без путей машины — находок нет",
+               code19 == 0 and "живых путей одной машины нет" in out19 and "в прозе 0" in out19
+               and "Program.cs:" not in out19,
+               f"код {code19}; чтение новых расширений не должно красить чистое", differ=True)
+
+    # ⑳ ПУТЬ В СТРОКОВОМ ЛИТЕРАЛЕ C# — служба его исполнит, у чужого она не заработает.
+    #    Прежде любой путь в `.cs` был жёлтым, и код выхода 0 молчал о литерале.
+    cs_lit = tree("cs-literal", {
+        "Program.cs": f'class P {{\n    var p = "{MINE}\\.mezosync";\n}}\n'})
+    out20, code20 = run(cs_lit)
+    ok &= case("⑳ путь в строковом литерале .cs — красное",
+               code20 == 1 and "живых 1" in out20 and "🔴 Program.cs:2" in out20,
+               f"код {code20}; литерал ведёт службу, а не читателя", differ=True)
+
+    # ㉑ ВСТРЕЧНЫЙ к ⑳: `//` внутри литерала комментария не начинает, а комментарий после литерала
+    #    и блочный на двух строках — проза.
+    cs_comments = tree("cs-comments", {
+        "Program.cs": (f'var u = "http://localhost:5173"; // урок: {MINE}\\.mezosync\n'
+                       f'/* начало\n   {MINE}\\.mezosync */\n')})
+    out21, code21 = run(cs_comments)
+    ok &= case("㉑ ВСТРЕЧНЫЙ к ⑳: комментарии после литерала и блочный — не красное, но названы",
+               code21 == 0 and "живых 0" in out21 and "в прозе 2" in out21,
+               f"код {code21}; путь в комментарии — предмет урока, как в ③", differ=True)
+
+    # ㉒ `.csproj` — конфиг сборки: путь в нём исполняет сборка.
+    cs_proj = tree("csproj", {
+        "App.csproj": f'<Project>\n  <HintPath>{MINE}\\lib\\x.dll</HintPath>\n</Project>\n'})
+    out22, code22 = run(cs_proj)
+    ok &= case("㉒ путь в HintPath файла .csproj — красное",
+               code22 == 1 and "живых 1" in out22,
+               f"код {code22}; конфиг исполняет сборка, любая находка в нём красная", differ=True)
+
+    # ㉓ Дерево git, но под --root git ничего не отслеживает: пустой перечень не должен читаться
+    #    как «чисто» (прежде такой каталог обходился по диску).
+    git_other = tree("git-untracked", {
+        "tracked/a.txt": "строка\n",
+        "free/tool.py": f'DB = r"{MINE}\\x.db"\n'})
+    git_ok23 = all(subprocess.run(["git", "-C", str(git_other), *cmd], capture_output=True).returncode == 0
+                   for cmd in (["init", "-q"], ["add", "tracked/a.txt"]))
+    out23, code23 = run(git_other / "free") if git_ok23 else ("git в стенде не поднялся", -1)
+    ok &= case("㉓ дерево git, под --root ничего не отслеживается — предупреждение и обход диска",
+               git_ok23 and code23 == 1 and "живых 1" in out23
+               and "отслеживаемых файлов под --root нет" in out23,
+               f"код {code23}; «файлов 0 — чисто» здесь было бы молчащим отказом", differ=True)
+
+    # ㉔ obj — порождения сборки: не читаем; тот же файл вне obj читаем (встречная половина).
+    obj_in = tree("obj-in", {
+        "obj/x.json": f'{{"p": "{MINE}\\\\x"}}\n', "Program.cs": "class P { }\n"})
+    out24, code24 = run(obj_in)
+    obj_out = tree("obj-out", {
+        "src/x.json": f'{{"p": "{MINE}\\\\x"}}\n', "Program.cs": "class P { }\n"})
+    out24b, code24b = run(obj_out)
+    ok &= case("㉔ каталог obj не читается, тот же файл вне obj читается",
+               code24 == 0 and "живых 0" in out24 and code24b == 1 and "живых 1" in out24b,
+               f"код {code24} в obj, {code24b} вне его; порождения компилятора не долг образца",
+               differ=True)
+
+    # ㉔-бис --root лежит ВНУТРИ каталога с именем obj: имена пропуска судятся от --root, иначе
+    #    обход молча даёт ноль файлов.
+    obj_root = tree("obj-root", {"obj/inner/x.json": f'{{"p": "{MINE}\\\\x"}}\n'})
+    out24c, code24c = run(obj_root / "obj" / "inner")
+    ok &= case("㉔-бис --root внутри каталога obj — читается",
+               code24c == 1 and "живых 1" in out24c,
+               f"код {code24c}; имя каталога выше --root чтению не мешает", differ=True)
 
     print()
     print(f"{'✅ ПРОВЕРКА ПУТЕЙ ПРИНЯТА' if ok else '🔴 НЕ ПРИНЯТА'} — "

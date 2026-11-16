@@ -30,6 +30,17 @@
 таблицам до и после (К8); в раздел карточки 787 добавлены случаи TAXO E9 (переименованный общий аргумент выбора
 контура) и E10 (перечень значений у общего аргумента).
 
+Находка TAXO F′ расширила это на все вызовы: случай 787-F судит схему MCP КАЖДОГО вызова из tools/list на целом договоре
+(аргумент выбора контура есть и в required, и в properties), а E9 теперь тоже судит все вызовы, а не один memory_read.
+Находка COORD Н1: обычное чтение ленты в К8 обязано задеть таблицу read_batches (цикл по ролям идёт до роли с непрочитанным;
+не задело ни у одной — «ПРОВЕРЯТЬ НЕЧЕМ», случай не проходит).
+Новый исход договора 1.3.0 «тело отказало» (tool_failed, код выхода run 6): К3 теперь ждёт его для «фраза в stdout, код 1»,
+случай К9 судит его на заглушках (код 1 с причиной в потоке ошибок, код 3 с причиной в stdout, признак расхождения по-прежнему
+даёт mismatch, обрыв по времени — cannot_verify с усечением на манифесте с пределом 2 с).
+Защита живого контура: функция guard_live_call и исключение LiveContourRefusal. На живом контуре (CONTOUR_LIVE) приёмка САМА
+отказывается звать всё, кроме contour_info, rules_get и memory_read с непустым section; отказ — в Wall.call и run_mode ДО отправки,
+в main — «ПРИЁМКА ОСТАНОВЛЕНА», код 2. Случай К10 проверяет саму функцию без запуска процессов.
+
 Исход: 0 — все машинные критерии прошли; 1 — хоть один провалился; 2 — проверять было нечем;
 3 — сборка старше исходников, судить её нельзя (пересобрать и запустить снова).
 """
@@ -59,6 +70,50 @@ TOOL_COUNT_RANGE = (8, 12)
 
 CONTOUR_LIVE = "atlas"
 CONTOUR_STAND = "atlas-stand"
+
+
+class LiveContourRefusal(Exception):
+    """Приёмка отказалась звать на живом контуре вызов, который не измерен как не пишущий."""
+
+
+# На живом контуре приёмка вправе звать ТОЛЬКО измеренное как не пишущее (случай К8 меряет на копии стенда):
+# contour_info и rules_get не меняют ничего; memory_read не меняет ничего ТОЛЬКО при непустом section —
+# без раздела он отмечает подсказку в живой базе (таблица hint_seen). cards_list и feed_read пишут служебные таблицы.
+LIVE_ALWAYS_OK = ("contour_info", "rules_get")
+LIVE_OK_WITH_SECTION = ("memory_read",)
+
+
+def guard_live_call(tool, args):
+    """Отказывает (LiveContourRefusal), если вызов идёт на живой контур и не входит в измеренное как не пишущее.
+
+    args — словарь аргументов вызова (служба) ИЛИ список argv режима run без имени вызова.
+    Контур ищется по значению CONTOUR_LIVE у ЛЮБОГО аргумента: имя аргумента выбора контура договор вправе
+    переименовать, а промах здесь стоит записи в живую базу. Вызовы на стенде, без контура и с выдуманным
+    контуром защита не трогает: живой базы они не касаются."""
+    if isinstance(args, dict):
+        on_live = any(isinstance(x, str) and x == CONTOUR_LIVE for x in args.values())
+        section = args.get("section")
+        has_section = isinstance(section, str) and section.strip() != ""
+    else:
+        argv = [str(x) for x in args]
+        on_live = CONTOUR_LIVE in argv
+        has_section = False
+        if "--section" in argv:
+            i = argv.index("--section")
+            has_section = i + 1 < len(argv) and not argv[i + 1].startswith("--") and argv[i + 1].strip() != ""
+    if not on_live:
+        return
+    if tool in LIVE_ALWAYS_OK:
+        return
+    if tool in LIVE_OK_WITH_SECTION and has_section:
+        return
+    if tool in LIVE_OK_WITH_SECTION:
+        why = "без аргумента section он отметил бы подсказку в живой базе (таблица hint_seen)"
+    else:
+        why = "он не измерен как не пишущий: такие вызовы пишут служебные таблицы живой базы"
+    raise LiveContourRefusal("вызов «%s» на живом контуре «%s» запрещён приёмке: %s. "
+                             "На живом контуре разрешены только contour_info, rules_get и memory_read с непустым section."
+                             % (tool, CONTOUR_LIVE, why))
 
 
 class Verdict(object):
@@ -122,7 +177,9 @@ class Wall(object):
         return self._recv()["result"]["tools"]
 
     def call(self, name, args):
-        """Возвращает (структурный ответ, текст роли). Отказ службы — тоже ответ, не исключение."""
+        """Возвращает (структурный ответ, текст роли). Отказ службы — тоже ответ, не исключение.
+        Отказ самой приёмки звать вызов на живом контуре — исключение LiveContourRefusal, ДО отправки."""
+        guard_live_call(name, args)
         self._send({"jsonrpc": "2.0", "id": self._id(), "method": "tools/call",
                     "params": {"name": name, "arguments": args}})
         answer = self._recv()
@@ -163,7 +220,10 @@ def write_json(path, data):
 
 
 def run_mode(exe, contract, contours, argv):
-    """Однократный вызов мимо службы. Отдаёт код выхода, вывод и поток ошибок целиком."""
+    """Однократный вызов мимо службы. Отдаёт код выхода, вывод и поток ошибок целиком.
+    Защита живого контура срабатывает ДО запуска процесса."""
+    if argv:
+        guard_live_call(argv[0], argv[1:])
     env = dict(os.environ)
     env["PYTHONUTF8"] = "1"
     p = subprocess.run([exe, "run"] + argv + ["--contract", contract, "--contours", contours],
@@ -335,15 +395,18 @@ def sync_backoff_writers(runtime_dir):
 K8_PROBES = {
     "memory_read": {"role": "PROTO"},
     "memory_read_for_edit": {"role": "PROTO", "section": "state"},
-    # два варианта: обычное чтение и отбор to_me. Отбор обязан задеть cursor_segments — иначе замер его не видел
-    "feed_read": [("", {"role": "COORD"}, None), (" to_me", {"role": "COORD", "to_me": True}, "cursor_segments")],
+    # два варианта: обычное чтение и отбор to_me. Каждый обязан задеть свою таблицу — иначе замер её не видел:
+    # обычное чтение — read_batches (запись о показанной партии; у роли без непрочитанного её нет, и цикл по ролям идёт дальше),
+    # отбор to_me — cursor_segments
+    "feed_read": [("", {"role": "COORD"}, "read_batches"), (" to_me", {"role": "COORD", "to_me": True}, "cursor_segments")],
     "cards_list": {"role": "PROTO"},
     "cards_show": {"card": 1},
     "rules_get": {"list": True},
     "owner_words_find": {"text": "слово"},
     "contour_info": {},
 }
-# роли для чтения ленты: берём первую, у которой чтение что-то записало (иначе случай ничего бы не измерил)
+# роли для чтения ленты: берём первую, у которой чтение задело ОБЯЗАТЕЛЬНУЮ таблицу варианта (иначе случай ничего бы не измерил);
+# если не задела ни у одной — случай говорит «ПРОВЕРЯТЬ НЕЧЕМ» и не проходит
 K8_FEED_ROLES = ("COORD", "CORE", "PROTO", "TAXO", "ING", "STUD")
 
 
@@ -460,10 +523,10 @@ def cases_791(args, work, manifest, contract_doc, carg, v3, s2c):
     s3b, _ = w3.call("owner_words_find", {carg: CONTOUR_STAND, "text": "x"})
     s3c, _ = w3.call("memory_read", {carg: CONTOUR_STAND, "role": "PROTO"})
     w3.close()
-    ok_k3 = (s3a.get("outcome") == "cannot_verify" and s3b.get("outcome") != "not_started"
+    ok_k3 = (s3a.get("outcome") == "tool_failed" and s3b.get("outcome") != "not_started"
              and s3c.get("outcome") == "not_started" and s2c.get("outcome") == "not_started")
     v3.add("791-К3", ok_k3, "фраза «No such file or directory» в выводе отработавшего тела НЕ даёт «не запустилось»; сообщение интерпретатора и отсутствие тела на месте — дают",
-           "фраза в stdout, код 1: исход %s (ждали cannot_verify)\n"
+           "фраза в stdout, код 1: исход %s (ждали tool_failed)\n"
            "фраза в stderr, код 2, stdout непуст: исход %s (ждали НЕ not_started)\n"
            "интерпретатор «can't open file», код 2, stdout пуст: исход %s (ждали not_started)\n"
            "тела нет на месте (прежний случай): исход %s (ждали not_started)"
@@ -724,7 +787,105 @@ def cases_791(args, work, manifest, contract_doc, carg, v3, s2c):
            + ("\nПРОБЛЕМЫ:\n" + "\n".join(problems8) if problems8 else ""))
 
 
+    # ───────────── К9: тело кончилось ненулевым кодом — исход «тело отказало» (tool_failed), а не «не смог проверить»
+    put_stub("stub-k9-stderr.py", "import sys\nsys.stderr.write('нет такой роли: ZZZ\\n')\nsys.exit(1)\n")
+    put_stub("stub-k9-stdout3.py", "import sys\nsys.stdout.write('причина только в stdout: ключ подтверждения неверен\\n')\nsys.exit(3)\n")
+    mismatch_marks = [t for t in contract_doc["tools"] if t["name"] == "memory_save"][0]["exec"].get("mismatch_when") or []
+    mismatch_mark = mismatch_marks[0] if mismatch_marks else None
+    put_stub("stub-k9-mismatch.py", "import sys\nsys.stdout.write(%r + '\\n')\nsys.exit(1)\n" % (mismatch_mark or ""))
+    put_stub("stub-k9-sleep.py", "import time\ntime.sleep(60)\n")
+    k9_contract = stub_contract("k9", {"rules_get": "stub-k9-stderr.py", "owner_words_find": "stub-k9-stdout3.py",
+                                        "memory_save": "stub-k9-mismatch.py"})
+    w9k = Wall(args.exe, k9_contract, m_stub_path)
+    k9a, _ = w9k.call("rules_get", {carg: CONTOUR_STAND, "list": True})
+    k9b, _ = w9k.call("owner_words_find", {carg: CONTOUR_STAND, "text": "x"})
+    k9c, _ = w9k.call("memory_save", {carg: CONTOUR_STAND, "role": "PROTO", "section": "state", "body": "заглушка", "expect_version": 1})
+    w9k.close()
+    k9a_code, k9a_out, _ = run_mode(args.exe, k9_contract, m_stub_path, ["rules_get", "--" + carg, CONTOUR_STAND, "--list"])
+    ok_k9a = (k9a.get("outcome") == "tool_failed" and (k9a.get("error") or "").startswith("тело отказало:")
+              and "нет такой роли" in (k9a.get("error") or "") and k9a.get("child_exit") == 1
+              and k9a_code == 6 and "исход: тело отказало" in k9a_out)
+    ok_k9b = (k9b.get("outcome") == "tool_failed" and (k9b.get("error") or "").startswith("тело отказало:")
+              and k9b.get("child_exit") == 3)
+    ok_k9c = mismatch_mark is not None and k9c.get("outcome") == "mismatch" and k9c.get("child_exit") == 1
+    # (г) обрыв по времени: копия манифеста с пределом 2 с, заглушка спит 60 с
+    m_t = copy.deepcopy(m_stub)
+    m_t["limits"] = {"timeout_seconds": 2, "max_output_chars": STUB_LIMIT}
+    m_t_path = os.path.join(work, "contours-stubs-791-timeout.json")
+    write_json(m_t_path, m_t)
+    k9t_contract = stub_contract("k9t", {"rules_get": "stub-k9-sleep.py"})
+    w9t = Wall(args.exe, k9t_contract, m_t_path)
+    k9d, _ = w9t.call("rules_get", {carg: CONTOUR_STAND, "list": True})
+    w9t.close()
+    ok_k9d = k9d.get("outcome") == "cannot_verify" and k9d.get("truncated") is True
+    v3.add("791-К9", ok_k9a and ok_k9b and ok_k9c and ok_k9d,
+           "тело кончилось ненулевым кодом — исход «тело отказало» (tool_failed) с причиной и кодом тела; признак расхождения из договора по-прежнему даёт mismatch; обрыв по времени — cannot_verify с усечением",
+           "(а) код 1, причина в потоке ошибок: исход %s · error «%s» · код тела %s · режим run: код выхода %s (ждали 6), «исход: тело отказало» в тексте: %s\n"
+           "(б) код 3, причина только в stdout: исход %s · error начинается с «тело отказало:»: %s · код тела %s\n"
+           "(в) код 1 и признак расхождения «%s» из договора: исход %s · код тела %s (ждали mismatch)\n"
+           "(г) обрыв по времени (предел 2 с, заглушка спит 60 с): исход %s · truncated %s (ждали cannot_verify и true)"
+           % (k9a.get("outcome"), (k9a.get("error") or "")[:80], k9a.get("child_exit"), k9a_code, "исход: тело отказало" in k9a_out,
+              k9b.get("outcome"), (k9b.get("error") or "").startswith("тело отказало:"), k9b.get("child_exit"),
+              mismatch_mark, k9c.get("outcome"), k9c.get("child_exit"),
+              k9d.get("outcome"), k9d.get("truncated")))
+
+    # ───────────── К10: защита живого контура — чистая проверка функции, процессы не запускаются
+    def refused_live(tool, a):
+        try:
+            guard_live_call(tool, a)
+        except LiveContourRefusal as e:
+            return str(e)
+        return None
+
+    k10_cases = [
+        # (подпись, вызов, аргументы, ждём отказ?)
+        ("memory_read без section на живом", "memory_read", {carg: CONTOUR_LIVE, "role": "PROTO"}, True),
+        ("memory_read с пустым section на живом", "memory_read", {carg: CONTOUR_LIVE, "role": "PROTO", "section": ""}, True),
+        ("memory_read с section на живом", "memory_read", {carg: CONTOUR_LIVE, "role": "PROTO", "section": "identity"}, False),
+        ("cards_list на живом", "cards_list", {carg: CONTOUR_LIVE, "role": "PROTO"}, True),
+        ("feed_read на живом", "feed_read", {carg: CONTOUR_LIVE, "role": "PROTO"}, True),
+        ("feed_write на живом", "feed_write", {carg: CONTOUR_LIVE, "role": "PROTO", "to": "COORD", "body": "x"}, True),
+        ("contour_info на живом", "contour_info", {carg: CONTOUR_LIVE}, False),
+        ("rules_get на живом", "rules_get", {carg: CONTOUR_LIVE, "list": True}, False),
+        ("memory_read без section при ДРУГОМ имени аргумента контура", "memory_read", {"where": CONTOUR_LIVE, "role": "PROTO"}, True),
+        ("memory_read без section на стенде", "memory_read", {carg: CONTOUR_STAND, "role": "PROTO"}, False),
+        ("cards_list на стенде", "cards_list", {carg: CONTOUR_STAND, "role": "PROTO"}, False),
+        ("feed_read на стенде", "feed_read", {carg: CONTOUR_STAND, "role": "PROTO"}, False),
+        ("feed_read с выдуманным контуром", "feed_read", {carg: "atlas-typo", "role": "PROTO"}, False),
+        ("feed_read без контура", "feed_read", {"role": "PROTO"}, False),
+        # те же вызовы в форме argv режима run (без имени вызова)
+        ("argv: memory_read без --section на живом", "memory_read", ["--" + carg, CONTOUR_LIVE, "--role", "PROTO"], True),
+        ("argv: memory_read с --section без значения на живом", "memory_read", ["--" + carg, CONTOUR_LIVE, "--role", "PROTO", "--section"], True),
+        ("argv: memory_read с --section identity на живом", "memory_read", ["--" + carg, CONTOUR_LIVE, "--role", "PROTO", "--section", "identity"], False),
+        ("argv: cards_list на живом", "cards_list", ["--" + carg, CONTOUR_LIVE, "--role", "PROTO"], True),
+        ("argv: feed_read на живом", "feed_read", ["--" + carg, CONTOUR_LIVE, "--role", "PROTO"], True),
+        ("argv: contour_info на живом", "contour_info", ["--" + carg, CONTOUR_LIVE], False),
+        ("argv: cards_list на стенде", "cards_list", ["--" + carg, CONTOUR_STAND, "--role", "PROTO"], False),
+        ("argv: feed_read на стенде", "feed_read", ["--" + carg, CONTOUR_STAND, "--role", "PROTO"], False),
+    ]
+    k10_bad = []
+    k10_rows = []
+    for label, tool, a, want_refusal in k10_cases:
+        got = refused_live(tool, a)
+        good = (got is not None) == want_refusal and (got is None or (tool in got and CONTOUR_LIVE in got))
+        k10_rows.append("%s %s: %s" % ("ок" if good else "НЕ ТАК", label, "отказ" if got is not None else "разрешено"))
+        if not good:
+            k10_bad.append(label)
+    v3.add("791-К10", not k10_bad,
+           "защита живого контура: на живом приёмке разрешены только contour_info, rules_get и memory_read с непустым section; cards_list, feed_read, memory_read без раздела — отказ с названием вызова; на стенде, без контура и с выдуманным контуром — не трогает",
+           "проверено случаев %d (процессы не запускались), не так: %d\n%s"
+           % (len(k10_cases), len(k10_bad), "\n".join(k10_rows)))
+
+
 def main():
+    try:
+        return run_acceptance()
+    except LiveContourRefusal as e:
+        print("⛔ ПРИЁМКА ОСТАНОВЛЕНА: %s" % e)
+        return 2
+
+
+def run_acceptance():
     ap = argparse.ArgumentParser(description="приёмка стены контура gordi (этап Э1, карточка 779)")
     ap.add_argument("--contours", required=True, help="боевой манифест контуров этой машины")
     ap.add_argument("--exe", default=DEFAULT_EXE)
@@ -1042,21 +1203,44 @@ def main():
     s9_where, _ = w9.call("memory_read", {"where": CONTOUR_STAND, "role": "PROTO", "section": "identity"})
     s9_old, _ = w9.call("memory_read", {"contour": CONTOUR_STAND, "role": "PROTO", "section": "identity"})
     # Находка TAXO (16.11): служба может отказывать верно, а КЛИЕНТУ объявлять контур необязательным —
-    # схему MCP судим отдельно: новое имя есть в required и в properties, прежнего имени в properties нет.
-    schema9 = [t for t in w9.list_tools() if t["name"] == "memory_read"][0]["inputSchema"]
-    req9, props9 = schema9.get("required") or [], schema9.get("properties") or {}
+    # схему MCP судим отдельно — у ВСЕХ вызовов tools/list: новое имя есть в required и в properties, прежнего имени в properties нет.
+    tools9 = w9.list_tools()
     w9.close()
+    bad9 = []
+    for t9 in tools9:
+        sch9 = t9.get("inputSchema") or {}
+        r9, pr9 = sch9.get("required") or [], sch9.get("properties") or {}
+        if "where" not in r9 or "where" not in pr9 or "contour" in pr9:
+            bad9.append(t9["name"])
+    req9_all = bool(tools9) and all("where" in ((t9.get("inputSchema") or {}).get("required") or []) for t9 in tools9)
+    props9_all = bool(tools9) and all("where" in ((t9.get("inputSchema") or {}).get("properties") or {}) for t9 in tools9)
+    old_in_props9 = any("contour" in ((t9.get("inputSchema") or {}).get("properties") or {}) for t9 in tools9)
     c9r, o9r, _ = run_mode(args.exe, p9, args.contours,
                            ["memory_read", "--where", CONTOUR_STAND, "--role", "PROTO", "--section", "identity"])
     ok_e9 = (s9_where.get("outcome") == "passed" and s9_where.get("contour") == CONTOUR_STAND
              and s9_old.get("outcome") == "refused" and "where" in (s9_old.get("error") or "")
              and c9r == 0 and "исход: прошло" in o9r
-             and "where" in req9 and "where" in props9 and "contour" not in props9)
+             and bool(tools9) and not bad9)
     v2.add("787-E9", ok_e9, "общий аргумент выбора контура переименован в договоре в «where»: вызовы с where работают, вызов с contour — отказ с именем where, схема MCP объявляет where обязательным",
            "с where (служба): исход %s, контур в ответе «%s»\nс contour (служба): %s — %s\nс --where (режим run): код %s\n"
-           "схема MCP: where в required: %s · where в properties: %s · contour в properties: %s (ждали: нет)"
+           "схема MCP (все %d вызовов tools/list): where в required у всех: %s · where в properties у всех: %s · contour в properties у кого-либо: %s (ждали: нет)\n"
+           "вызовы-нарушители: %s"
            % (s9_where.get("outcome"), s9_where.get("contour"), s9_old.get("outcome"), (s9_old.get("error") or "")[:130], c9r,
-              "where" in req9, "where" in props9, "contour" in props9))
+              len(tools9), req9_all, props9_all, old_in_props9, ", ".join(bad9) or "нет"))
+
+    # F (TAXO, находка F′): на ЦЕЛОМ договоре схема MCP КАЖДОГО вызова объявляет аргумент выбора контура обязательным
+    listed_f = listed
+    bad_f = []
+    for tf in listed_f:
+        schf = tf.get("inputSchema") or {}
+        if CARG not in (schf.get("required") or []) or CARG not in (schf.get("properties") or {}):
+            bad_f.append(tf["name"])
+    ok_f = len(listed_f) == EXPECTED_TOOL_COUNT and not bad_f
+    v2.add("787-F", ok_f, "на целом договоре схема MCP КАЖДОГО вызова объявляет аргумент выбора контура обязательным (есть и в required, и в properties)",
+           "аргумент выбора контура (из договора по пометке selects=contour): «%s»\n"
+           "вызовов в tools/list: %d (ждали %d) · объявили его обязательным: %d\n"
+           "вызовы-нарушители: %s"
+           % (CARG, len(listed_f), EXPECTED_TOOL_COUNT, len(listed_f) - len(bad_f), ", ".join(bad_f) or "нет"))
 
     # ⑩ E10 (TAXO): перечень значений (enum) общего аргумента читается из договора
     d10 = json.loads(json.dumps(contract_doc))

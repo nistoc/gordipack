@@ -14,6 +14,8 @@ public enum Outcome
     Refused,
     /// <summary>Тело отработало, но ответ отдан НЕ целиком: есть продолжение (аргумент next_part).</summary>
     Partial,
+    /// <summary>Тело запустилось и кончилось ненулевым кодом: определённый отказ по его правилам или сбой внутри тела.</summary>
+    ToolFailed,
 }
 
 public static class OutcomeNames
@@ -27,6 +29,7 @@ public static class OutcomeNames
         Outcome.CannotVerify => "cannot_verify",
         Outcome.Refused => "refused",
         Outcome.Partial => "partial",
+        Outcome.ToolFailed => "tool_failed",
         _ => "cannot_verify",
     };
 
@@ -38,6 +41,7 @@ public static class OutcomeNames
         "cannot_verify" => Outcome.CannotVerify,
         "refused" => Outcome.Refused,
         "partial" => Outcome.Partial,
+        "tool_failed" => Outcome.ToolFailed,
         _ => null,
     };
 
@@ -49,6 +53,7 @@ public static class OutcomeNames
         Outcome.CannotVerify => "не смог проверить",
         Outcome.Refused => "отказ",
         Outcome.Partial => "частично",
+        Outcome.ToolFailed => "тело отказало",
         _ => "не смог проверить",
     };
 }

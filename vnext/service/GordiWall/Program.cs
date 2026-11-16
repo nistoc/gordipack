@@ -153,6 +153,7 @@ public static class Program
             Outcome.NotStarted => 2,
             Outcome.CannotVerify => 3,
             Outcome.Partial => 5,       // ответ отдан частями: есть продолжение (аргумент next_part)
+            Outcome.ToolFailed => 6,    // тело запустилось и отказало определённо (ненулевой код тела), причина — в error
             _ => 4,
         };
     }

@@ -357,8 +357,10 @@ public sealed class ToolRunner(Contract contract, Manifest manifest, bool readOn
             if (all.Contains(mark, StringComparison.OrdinalIgnoreCase))
                 return Outcome.Mismatch;
 
-        // Тело запустилось и отказало по своей причине: ответа по предмету нет.
-        return Outcome.CannotVerify;
+        // Тело запустилось и кончилось ненулевым кодом: это ОПРЕДЕЛЁННЫЙ ответ тела («нет такой роли», неверный ключ
+        // подтверждения, сбой внутри): служба его получила и отдаёт как есть. «Не смог проверить» здесь не годится:
+        // оно оставлено службе для случаев, когда ответа тела по предмету она НЕ получила (обрыв по времени, потеря частей).
+        return Outcome.ToolFailed;
     }
 
     private static readonly System.Text.RegularExpressions.Regex InterpreterMessage =
