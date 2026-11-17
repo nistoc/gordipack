@@ -70,6 +70,12 @@
 Уже записанным словам адрес дописывает команда `source` — тем же поиском; по умолчанию холостой
 прогон, запись — с --apply. Записанный файл, расходящийся с найденным, она не перезаписывает.
 
+НЕПРОЧИТАННОЕ ИСКАТЕЛЕМ (карточка #797). Искатель читает записи разговоров с пределом тишины и
+называет файлы, чтение которых не вернулось (строки «не прочитан: <путь> — <причина>»; при «не
+найдено» — код 4 «искал не везде»). add: слово найдено и час сверен в прочитанной записи названного
+чата — пишет и называет непрочитанное; не прочитан файл НАЗВАННОГО чата, а в прочитанном слова нет —
+ОТКАЗ «запись разговора не прочитана», код 2. source: у такого слова та же причина, адрес не пишется.
+
 ИСХОДЫ (коды выхода):
   0 — сделано (слово записано · прочитано · найдено · адрес дописан всем, кому был нужен)
   1 — не найдено (нет такого номера · по куску совпадений нет при непустом хранилище)
@@ -182,6 +188,11 @@ CHAT_ARG = re.compile(r'^(?P<project>.+?)\s*/\s*(?P<prefix>[0-9A-Za-z-]{8})…?$
 # Адрес находки (карточка #795): «   файл: C:/…/c0812f28-….jsonl:412» — полный путь записи
 # разговора и номер строки в ней (с 1). Искатель печатает её СРАЗУ под строкой «чат:».
 FILE_LINE = re.compile(r'^\s*файл: (?P<path>.+):(?P<line>\d+)\s*$')
+# Непрочитанный файл (карточка #797): «   не прочитан: C:/…/c0812f28-….jsonl — <причина>». Искатель
+# печатает такие строки у итога, когда чтение файла не вернулось за предел или читающий процесс упал.
+UNREAD_LINE = re.compile(r'^\s*не прочитан: (?P<path>.+?) — (?P<why>.+?)\s*$')
+# Та же строка в отчёте сверки — её кладёт verify_verbatim, оттуда её берут add и source.
+UNREAD_IN_REPORT = re.compile(r'^\s*📂 не прочитан искателем: (?P<path>.+?) — (?P<why>.+?)\s*$', re.M)
 
 
 class Finding(tuple):
@@ -322,8 +333,26 @@ def chat_owners(conn):
     return owners
 
 
+def unread_in(report):
+    """Непрочитанные искателем файлы из отчёта сверки: [(полный путь, причина)] без повторов."""
+    out = []
+    for m in UNREAD_IN_REPORT.finditer(report or ''):
+        item = (m.group('path'), m.group('why'))
+        if item not in out:
+            out.append(item)
+    return out
+
+
+def of_chat(unread, prefixes):
+    """Те из непрочитанных, что принадлежат названному чату: префикс имени файла — из --chat."""
+    return [p for p, _ in unread if os.path.basename(p)[:8].lower() in prefixes]
+
+
 def outcome_line(stdout, code):
     """Строка исхода из вывода искателя — по ЗНАКУ исхода, а не по положению в выводе."""
+    if code == 4:
+        # у «искал не везде» знака исхода нет нарочно: это не исход о слове, а отказ судить
+        return '⛔ искал не везде: часть записей разговоров не прочитана (код 4)'
     for line in (stdout or '').splitlines():
         if any(mark in line for mark in OUTCOME_MARKS):
             return ' '.join(line.split())
@@ -355,6 +384,12 @@ def verify_verbatim(text, said_at, finder):
         marks.append(mark)
         per_line.append(findings_from(run.stdout))
         here = per_line[-1]
+        for u in (run.stdout or '').splitlines():
+            um = UNREAD_LINE.match(u)
+            if um:
+                entry = f'   📂 не прочитан искателем: {um.group("path")} — {um.group("why")}'
+                if entry not in report:
+                    report.append(entry)
         if run.returncode == 0 and here:
             # ⚖️ Исход одной находки здесь не печатается: какая из них сверит час, решает чат
             # из --chat ниже, а первая по порядку вывода — случайность сортировки (находка PROTO Н3)
@@ -365,7 +400,8 @@ def verify_verbatim(text, said_at, finder):
         if run.returncode != 0:
             report.append(f'   🔴 ЭТА СТРОКА НЕ ПОДТВЕРЖДЕНА (код {run.returncode}): '
                           '0 — сказал владелец · 1 — не найдено · 2 — искать негде · '
-                          '3 — найдено, но происхождение машинное или неизвестное')
+                          '3 — найдено, но происхождение машинное или неизвестное · '
+                          '4 — искал не везде: часть записей не прочитана')
             return False, '\n'.join(report), marks, per_line
     return True, '\n'.join(report), marks, per_line
 
@@ -403,6 +439,14 @@ def unverified_reason(report, day):
     if code == 3:
         return ('текст найден, но происхождение машинное или неизвестное — искатель: код 3; '
                 'слово владельца с таким текстом не подтверждено')
+    if code == 4:
+        # ⚡ Карточка #797: чтение записи разговора не вернулось за предел (или читающий процесс
+        # упал), искатель её пропустил и честно сказал «искал не везде». Это не «текст не найден»:
+        # текст мог лежать ровно там. Причина называет файлы, чтобы повтор был осмысленным.
+        names = [os.path.basename(p) for p, _ in unread_in(report)]
+        return (f'запись разговора не прочитана: искатель за {day} не дочитал файлов {len(names)} '
+                f'({", ".join(names) or "имена не напечатаны"}) — текст мог лежать там; повтори позже, '
+                'зависание чтения перемежающееся (карточка #797) — искатель: код 4')
     return f'искатель кончился кодом {code} — исход не разобран'
 
 
@@ -430,7 +474,25 @@ def cmd_add(conn, a):
     print('🔎 СВЕРКА ДОСЛОВНОСТИ — ищу этот текст в записях разговоров:')
     ok, report, marks, per_line = verify_verbatim(text, a.said_at, a.finder)
     print(report)
+    # 📂 НЕПРОЧИТАННОЕ ИСКАТЕЛЕМ (карточка #797): файл НАЗВАННОГО чата не прочитан — слово могло лежать
+    # там, и любой иной исход был бы ложным: «не найдено» опровергло бы непроверенное, ожидание
+    # повисло бы вместе с чтением. Чужой файл не прочитан — на запись не влияет, но называется.
+    unread = unread_in(report)
+    mine_unread = of_chat(unread, prefixes)
+
+    def refuse_unread():
+        print()
+        print(f'⛔ ОТКАЗ: запись разговора не прочитана — искатель не дочитал файл чата {a.chat}, где')
+        print('   слово должно лежать (чтение не вернулось за предел или читающий процесс упал):')
+        for p in mine_unread:
+            print(f'      {p}')
+        print('   Слово НЕ записано: дословность не проверена, а не опровергнута. Повтори add позже —')
+        print('   зависание чтения перемежающееся (карточка #797).')
+        sys.exit(2)
+
     if not ok:
+        if mine_unread:
+            refuse_unread()
         print()
         print('⛔ ОТКАЗ: дословность НЕ подтверждена, слово НЕ записано.')
         print('   Хранилище о дословности, а не о смысле: пересказ здесь не хранится.')
@@ -484,6 +546,8 @@ def cmd_add(conn, a):
                     print(f'      {s} · чат {named(p)}')
 
         missing = [i + 1 for i, m in enumerate(mine) if not m]
+        if missing and mine_unread:
+            refuse_unread()
         if missing:
             print()
             print(f'⛔ ОТКАЗ: в чате {a.chat} этот текст НЕ найден (строк текста без находки в нём: '
@@ -532,6 +596,12 @@ def cmd_add(conn, a):
         outcome = ' | '.join(chosen)
         print(f'🧾 исход находки, с которой сверен час: {outcome}')
         src_file, src_line = settle_source(sources_of(per_line, prefixes, a.said_at), a)
+        if unread:
+            print(f'⚠️ искатель прочитал не всё: не прочитано файлов {len(unread)} — слово найдено и час сверен')
+            print(f'   в прочитанной записи чата {a.chat}, на запись это не влияет; непрочитанное:')
+            for p, why in unread:
+                print(f'      {p}' + ('   ⟨файл названного чата⟩' if p in mine_unread else '') + f' — {why}')
+            checked += f'; не прочитано искателем файлов {len(unread)}'
 
     try:
         cur = conn.execute(
@@ -677,10 +747,26 @@ def cmd_source(conn, a):
             continue
         ok, report, _, per_line = verify_verbatim(row['text_verbatim'], said_at, a.finder)
         if not ok:
+            if ('НЕ ПОДТВЕРЖДЕНА (код 4)' in report and unread_in(report)
+                    and not of_chat(unread_in(report), prefixes)):
+                # карточка #797: не дочитаны только ЧУЖИЕ файлы, а записи чата слова прочитаны целиком —
+                # тогда «не прочитана» была бы ложной причиной: текста в его чате нет
+                names = ', '.join(os.path.basename(p) for p, _ in unread_in(report))
+                left.append((n, f'текст не найден в прочитанных записях чата {row["chat"]} за '
+                                f'{said_at[:10]}; не дочитаны только файлы чужих чатов ({names}) — '
+                                'искатель: код 4'))
+                continue
             left.append((n, unverified_reason(report, said_at[:10])))
             continue
         found = sources_of(per_line, prefixes, said_at)
         if not found:
+            mine_unread = of_chat(unread_in(report), prefixes)
+            if mine_unread:
+                # карточка #797: файл чата слова не прочитан — «нет находки» было бы ложной причиной
+                left.append((n, f'запись разговора не прочитана: искатель не дочитал файл чата '
+                                f'{row["chat"]} ({", ".join(os.path.basename(p) for p in mine_unread)}) — '
+                                'адрес мог лежать там; повтори позже (карточка #797)'))
+                continue
             left.append((n, f'в чате {row["chat"]} нет находки с часом {said_at} и строкой «файл:»'))
             continue
         path, line = found[0]
