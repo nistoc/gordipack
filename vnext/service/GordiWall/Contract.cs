@@ -79,7 +79,23 @@ public sealed record ToolExec(
     IReadOnlyList<string> Pre,
     IReadOnlyList<string> Sub,
     IReadOnlyList<ArgMap> Args,
-    IReadOnlyList<string> MismatchWhen);
+    IReadOnlyList<string> MismatchWhen,
+    // Объявленная передача значения аргумента вызова в переменную среды тела: имя переменной → имя аргумента.
+    // Это единственный путь, которым значение попадает телу не командной строкой; прочие MEZO_* служба стирает.
+    IReadOnlyDictionary<string, string>? Env = null)
+{
+    public IReadOnlyDictionary<string, string> EnvMap => Env ?? new Dictionary<string, string>();
+
+    /// <summary>Имена аргументов вызова, которые это тело использует: командной строкой или переменной среды.</summary>
+    public IEnumerable<string> UsedArgs => Args.Select(a => a.Arg).Concat(EnvMap.Values);
+}
+
+/// <summary>Один вариант вызова: своё тело и свой перечень обязательных аргументов.</summary>
+public sealed record ToolVariant(
+    string Key,                         // значение аргумента выбора, которым вариант выбирается
+    string Title,
+    IReadOnlyList<string> Requires,     // аргументы, обязательные именно в этом варианте
+    ToolExec Exec);
 
 public sealed record ToolDef(
     string Name,
@@ -87,10 +103,24 @@ public sealed record ToolDef(
     string Title,
     string? Description,
     IReadOnlyList<ToolArg> Args,
-    ToolExec Exec,
+    ToolExec? Exec,         // null у вызова с вариантами: тело тогда у каждого варианта своё
     // Служебные таблицы, которые вызов вправе менять. null — поле в договоре не объявлено (у пишущих вызовов
     // так и бывает; у читающего это нарушение, его ловит приёмка); пустой список — читающий вызов не пишет ничего.
-    IReadOnlyList<string>? ServiceWrites = null);
+    IReadOnlyList<string>? ServiceWrites = null,
+    string? VariantBy = null,                       // имя аргумента выбора варианта (у него есть enum)
+    IReadOnlyList<ToolVariant>? Variants = null,    // по порядку договора
+    string? DefaultVariant = null)                  // только у читающего вызова
+{
+    public bool HasVariants => VariantBy is not null;
+
+    public IReadOnlyList<ToolVariant> VariantList => Variants ?? [];
+
+    public ToolVariant? FindVariant(string? key) =>
+        VariantList.FirstOrDefault(v => string.Equals(v.Key, key, StringComparison.Ordinal));
+
+    /// <summary>Имена аргументов, которые относятся к варианту: упомянуты в его exec.args или exec.env.</summary>
+    public HashSet<string> ArgsOf(ToolVariant v) => new(v.Exec.UsedArgs, StringComparer.Ordinal);
+}
 
 /// <summary>
 /// Договор, прочитанный из ОДНОГО файла. И служба, и однократный вызов мимо службы
@@ -166,14 +196,152 @@ public sealed class Contract
             foreach (var a in ja.EnumerateArray())
                 args.Add(ReadArg(a));
 
-        return new ToolDef(
-            Name: Str(t, "name") ?? throw new InvalidDataException("в договоре вызов без имени"),
+        var name = Str(t, "name") ?? throw new InvalidDataException("в договоре вызов без имени");
+        var hasExec = t.TryGetProperty("exec", out var jex);
+        var hasBy = t.TryGetProperty("variant_by", out _);
+        var hasVariants = t.TryGetProperty("variants", out var jvars);
+        if (hasExec == (hasBy || hasVariants))
+            throw new InvalidDataException(hasExec
+                ? $"у вызова «{name}» есть и exec, и variant_by/variants: тело либо одно, либо по вариантам, не оба"
+                : $"у вызова «{name}» нет ни exec, ни variant_by с variants: исполнять нечем");
+        if (hasBy != hasVariants)
+            throw new InvalidDataException($"у вызова «{name}» {(hasBy ? "есть variant_by, а variants нет" : "есть variants, а variant_by нет")}: "
+                                           + "вариантам нужны оба поля");
+
+        var variants = new List<ToolVariant>();
+        if (hasVariants)
+        {
+            if (jvars.ValueKind != JsonValueKind.Object)
+                throw new InvalidDataException($"у вызова «{name}» variants — не объект «значение → вариант»");
+            foreach (var kv in jvars.EnumerateObject())
+            {
+                if (!kv.Value.TryGetProperty("exec", out var vexec))
+                    throw new InvalidDataException($"у варианта «{kv.Name}» вызова «{name}» нет exec");
+                var requires = new List<string>();
+                if (kv.Value.TryGetProperty("requires", out var jrq) && jrq.ValueKind == JsonValueKind.Array)
+                    foreach (var r in jrq.EnumerateArray())
+                        if (r.GetString() is { } rs) requires.Add(rs);
+                variants.Add(new ToolVariant(kv.Name, Str(kv.Value, "title") ?? "", requires, ReadExec(vexec)));
+            }
+        }
+
+        var tool = new ToolDef(
+            Name: name,
             Mode: Str(t, "mode") ?? "read",
             Title: Str(t, "title") ?? "",
             Description: Str(t, "description"),
             Args: args,
-            Exec: ReadExec(t.GetProperty("exec")),
-            ServiceWrites: ReadServiceWrites(t));
+            Exec: hasExec ? ReadExec(jex) : null,
+            ServiceWrites: ReadServiceWrites(t),
+            VariantBy: Str(t, "variant_by"),
+            Variants: variants,
+            DefaultVariant: Str(t, "default_variant"));
+        Validate(tool);
+        return tool;
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex EnvName =
+        new(@"^[A-Z][A-Z0-9_]*$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// Разбор договора: правила о вариантах и передаче в среду. Нарушение — договор не загружается,
+    /// причина названа вызовом и аргументом. Проверяется здесь, а не при вызове: кривой договор не должен доживать до роли.
+    /// </summary>
+    private static void Validate(ToolDef tool)
+    {
+        var declared = tool.Args.Select(a => a.Name).ToHashSet(StringComparer.Ordinal);
+        var execs = new List<(string Where, ToolExec Exec, IReadOnlyList<string> Requires)>();
+        if (tool.HasVariants)
+            foreach (var v in tool.VariantList)
+                execs.Add(($"вариант «{v.Key}» вызова «{tool.Name}»", v.Exec, v.Requires));
+        else if (tool.Exec is { } single)
+            execs.Add(($"вызов «{tool.Name}»", single, new List<string>()));
+
+        // правила 4 и 7: всё названное в exec и requires — объявленные аргументы вызова; имя переменной среды — по образцу
+        foreach (var (where, exec, requires) in execs)
+        {
+            foreach (var m in exec.Args)
+                if (!declared.Contains(m.Arg))
+                    throw new InvalidDataException($"в {where} exec.args ссылается на аргумент «{m.Arg}», которого вызов не объявляет");
+            foreach (var r in requires)
+                if (!declared.Contains(r))
+                    throw new InvalidDataException($"в {where} requires называет аргумент «{r}», которого вызов не объявляет");
+            foreach (var (envName, argName) in exec.EnvMap)
+            {
+                if (!EnvName.IsMatch(envName))
+                    throw new InvalidDataException($"в {where} имя переменной среды «{envName}» не по образцу ^[A-Z][A-Z0-9_]*$");
+                if (!declared.Contains(argName))
+                    throw new InvalidDataException($"в {where} exec.env передаёт в «{envName}» аргумент «{argName}», которого вызов не объявляет");
+            }
+        }
+
+        if (!tool.HasVariants)
+        {
+            if (tool.DefaultVariant is not null)
+                throw new InvalidDataException($"у вызова «{tool.Name}» есть default_variant, а вариантов нет");
+            return;
+        }
+
+        // правило 2: аргумент выбора объявлен, у него есть enum, и перечень значений равен набору вариантов
+        var selector = tool.Args.FirstOrDefault(a => a.Name == tool.VariantBy)
+            ?? throw new InvalidDataException($"у вызова «{tool.Name}» variant_by называет «{tool.VariantBy}», а такого аргумента вызов не объявляет");
+        if (selector.Enum is not { Count: > 0 })
+            throw new InvalidDataException($"у вызова «{tool.Name}» аргумент выбора «{selector.Name}» без enum: нечем перечислить варианты");
+        var keys = tool.VariantList.Select(v => v.Key).ToHashSet(StringComparer.Ordinal);
+        if (!keys.SetEquals(selector.Enum))
+        {
+            var noVariant = selector.Enum.Where(e => !keys.Contains(e)).ToList();
+            var noValue = keys.Where(k => !selector.Enum.Contains(k)).ToList();
+            throw new InvalidDataException($"у вызова «{tool.Name}» перечень значений «{selector.Name}» расходится с вариантами: "
+                + (noVariant.Count > 0 ? $"у значений {string.Join(", ", noVariant)} нет варианта; " : "")
+                + (noValue.Count > 0 ? $"у вариантов {string.Join(", ", noValue)} нет значения в enum" : ""));
+        }
+
+        // правило 3: умолчание — из перечня, пишущему вызову его не положено; без умолчания выбор обязателен
+        if (tool.DefaultVariant is { } def)
+        {
+            if (!selector.Enum.Contains(def))
+                throw new InvalidDataException($"у вызова «{tool.Name}» default_variant «{def}» не входит в enum аргумента «{selector.Name}»");
+            if (!string.Equals(tool.Mode, "read", StringComparison.Ordinal))
+                throw new InvalidDataException($"у пишущего вызова «{tool.Name}» есть default_variant «{def}»: "
+                                               + "у записи умолчания быть не может, действие называется явно");
+        }
+        else if (!selector.Required)
+            throw new InvalidDataException($"у вызова «{tool.Name}» нет default_variant, а аргумент выбора «{selector.Name}» не обязателен: "
+                                           + "вариант выбирать нечем");
+
+        // правила 5 и 6: каждый аргумент, кроме выбора, относится хоть к одному варианту; required на вызове значит «в каждом»
+        foreach (var a in tool.Args.Where(a => a.Name != selector.Name))
+        {
+            var owners = tool.VariantList.Where(v => tool.ArgsOf(v).Contains(a.Name)).Select(v => v.Key).ToList();
+            if (owners.Count == 0)
+                throw new InvalidDataException($"у вызова «{tool.Name}» аргумент «{a.Name}» не относится ни к одному варианту: "
+                                               + "его не упоминает ни один exec.args и ни один exec.env");
+            if (a.Required && owners.Count != tool.VariantList.Count)
+                throw new InvalidDataException($"у вызова «{tool.Name}» аргумент «{a.Name}» обязателен (required=true значит «в каждом варианте»), "
+                                               + $"а относится только к вариантам: {string.Join(", ", owners)}");
+        }
+    }
+
+    /// <summary>
+    /// Строки вариантов вызова для справки и схемы MCP: «вариант X: обязательны …; можно …». Строятся из договора,
+    /// второго текста нет. Обязательны — требуемое на вызове и в варианте; можно — остальные аргументы варианта.
+    /// </summary>
+    public static IReadOnlyList<string> VariantLines(ToolDef tool)
+    {
+        var lines = new List<string>();
+        foreach (var v in tool.VariantList)
+        {
+            var own = tool.ArgsOf(v);
+            var required = tool.Args.Where(a => a.Name != tool.VariantBy && ((a.Required && own.Contains(a.Name)) || v.Requires.Contains(a.Name)))
+                                    .Select(a => a.Name).ToList();
+            var optional = tool.Args.Where(a => a.Name != tool.VariantBy && own.Contains(a.Name) && !required.Contains(a.Name))
+                                    .Select(a => a.Name).ToList();
+            var def = string.Equals(v.Key, tool.DefaultVariant, StringComparison.Ordinal) ? " (по умолчанию)" : "";
+            lines.Add($"вариант {tool.VariantBy}={v.Key}{def}: обязательны {(required.Count == 0 ? "—" : string.Join(", ", required))}; "
+                      + $"можно {(optional.Count == 0 ? "—" : string.Join(", ", optional))} · {v.Title}");
+        }
+        return lines;
     }
 
     private static List<string>? ReadServiceWrites(JsonElement t)
@@ -237,16 +405,30 @@ public sealed class Contract
             foreach (var w in jm.EnumerateArray())
                 if (w.GetString() is { } s) mismatch.Add(s);
 
-        return new ToolExec("python", null, Str(e, "dir"), Str(e, "script"), pre, sub, maps, mismatch);
+        var env = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (e.TryGetProperty("env", out var jenv))
+        {
+            if (jenv.ValueKind != JsonValueKind.Object)
+                throw new InvalidDataException("в договоре exec.env — не объект «имя переменной → имя аргумента»");
+            foreach (var kv in jenv.EnumerateObject())
+                env[kv.Name] = kv.Value.GetString()
+                               ?? throw new InvalidDataException($"в договоре exec.env: у переменной «{kv.Name}» значение не строка");
+        }
+
+        return new ToolExec("python", null, Str(e, "dir"), Str(e, "script"), pre, sub, maps, mismatch, env);
     }
 
     private static string? Str(JsonElement o, string name) =>
         o.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 
-    /// <summary>Отпечаток самого перечня вызовов — имена по порядку. Нужен приёмке: он меняется при добавлении вызова.</summary>
+    /// <summary>
+    /// Отпечаток самого перечня вызовов — имена и режимы по порядку, у вызовов с вариантами ещё аргумент выбора и ключи
+    /// вариантов. Нужен приёмке: он меняется при добавлении вызова и при снятии варианта (договор 2.0.0, карточка 781).
+    /// </summary>
     public string ToolsFingerprint()
     {
-        var joined = string.Join("\n", Tools.Select(t => t.Name + ":" + t.Mode));
+        var joined = string.Join("\n", Tools.Select(t => t.Name + ":" + t.Mode
+            + (t.HasVariants ? ":" + t.VariantBy + "=" + string.Join(",", t.VariantList.Select(v => v.Key)) : "")));
         return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(joined)))[..12];
     }
 }

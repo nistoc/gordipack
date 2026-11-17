@@ -1,10 +1,10 @@
 {
   "contract": {
     "name": "gordi",
-    "version": "1.3.0",
-    "stage": "E1",
-    "description": "Единый договор вызова тулинга контура. Из ЭТОГО файла служба MCP и CLI строят свои перечни вызовов, типы аргументов и текст справки. Второго источника нет намеренно: расходиться не с чем. Вызов с mode=read данных контура не меняет; служебные таблицы — только перечисленные в service_writes.",
-    "basis": "Слово владельца 2026-11-15 01:17 UTC (чат PROTO, выбор «Э1 — стена поверх кода»). Дизайн — atlas.archs/.mezosync/goal-gordipack-vnext/01-DESIGN.md. Критерий приёмки — карточка 779."
+    "version": "2.0.0",
+    "stage": "E2",
+    "description": "Единый договор вызова тулинга контура. Из ЭТОГО файла служба MCP и CLI строят свои перечни вызовов, типы аргументов и текст справки. Второго источника нет намеренно: расходиться не с чем. Вызов с mode=read данных контура не меняет; служебные таблицы — только перечисленные в service_writes. Один вызов может нести несколько тел: вариант выбирается значением типизированного аргумента (variant_by), у каждого варианта свои обязательные аргументы (requires). Значение аргумента вызова может быть передано телу переменной среды — объявленно, полем exec.env; иных переменных контура тело не получает.",
+    "basis": "Слово владельца 2026-11-15 01:17 UTC (чат PROTO, выбор «Э1 — стена поверх кода»). Дизайн — atlas.archs/.mezosync/goal-gordipack-vnext/01-DESIGN.md. Критерий приёмки — карточка 779. Версия 2.0.0, этап Э2: варианты вызова и exec.env — решение PROTO на карточке 781 (17.11.2026 01:55 UTC): вызовов остаётся двенадцать, умения входят вариантами."
   },
 
   "outcomes": {
@@ -15,7 +15,7 @@
       { "id": "not_started",    "title": "не запустилось",    "meaning": "тело инструмента не начало работу: не найден файл, отказ среды, отказ запуска процесса" },
       { "id": "cannot_verify",  "title": "не смог проверить", "meaning": "служба НЕ получила ответа тела по предмету: обрыв по времени, не удалось сохранить части длинного ответа, утерян итог частей. ⚖️ Это ЯВНОЕ незнание, а не «всё хорошо»" },
       { "id": "tool_failed",    "title": "тело отказало",     "meaning": "тело запустилось и завершилось ненулевым кодом: отказ по своим правилам (нет такой роли, неверный ключ подтверждения) или сбой внутри тела. Служба ответ тела ПОЛУЧИЛА и отдаёт его как есть: причина — в error, код тела — в child_exit" },
-      { "id": "refused",        "title": "отказ",             "meaning": "вызов отвергнут договором ДО исполнения: нет обязательного аргумента, неизвестный контур, запись в режиме только-чтение, неопознанная метка продолжения, аргумент, которого договор не объявляет" },
+      { "id": "refused",        "title": "отказ",             "meaning": "вызов отвергнут договором ДО исполнения: нет обязательного аргумента, неизвестный контур, запись в режиме только-чтение, неопознанная метка продолжения, аргумент, которого договор не объявляет, аргумент чужого варианта вызова, не передан обязательный аргумент выбранного варианта" },
       { "id": "partial",        "title": "частично",          "meaning": "тело отработало, но ответ отдан НЕ целиком: есть продолжение — вызвать то же самое с аргументом next_part. Так отвечают все части, кроме последней; последняя несёт настоящий исход тела, а в непоследних он назван полем final_outcome" }
     ]
   },
@@ -63,67 +63,129 @@
       "mode": "read",
       "service_writes": ["hint_seen"],
       "title": "Прочитать память роли",
-      "description": "Вид для пробуждения: разделы, отметки подтверждения, машинный слой. Номера версии здесь НЕТ — для правки берут memory_read_for_edit.",
+      "description": "Выбор вида — аргумент view. wake (по умолчанию): вид для пробуждения — разделы, отметки подтверждения, машинный слой; номера версии в нём НЕТ. edit: раздел ДЛЯ ПРАВКИ — тело и номер версии первой строкой; этот номер и подают в memory_write (action=save) как expect_version, а править тело надо ИЗ ЭТОГО ЖЕ вызова: тело из другого чтения уже могло разойтись.",
       "args": [
         { "name": "role",    "type": "string", "required": true,  "description": "Роль, чью память читаем (верхний регистр: COORD, PROTO, …)" },
-        { "name": "section", "type": "string", "required": false, "enum": ["identity", "rebirth", "sources", "state", "plan", "history", "launcher"], "description": "Раздел; без него печатается вся память" }
+        { "name": "view",    "type": "string", "required": false, "enum": ["wake", "edit"], "description": "Вид: wake — для пробуждения (без него берётся он); edit — раздел для правки с номером версии" },
+        { "name": "section", "type": "string", "required": false, "enum": ["identity", "rebirth", "sources", "state", "plan", "history", "launcher"], "description": "Раздел; у wake без него печатается вся память, у edit раздел обязателен" }
       ],
-      "exec": {
-        "dir": "runtime",
-        "script": "read-phoenix.py",
-        "pre": [["--db", "{db}"]],
-        "args": [
-          { "arg": "role",    "form": "flag", "flag": "--role" },
-          { "arg": "section", "form": "flag", "flag": "--section" }
-        ]
+      "variant_by": "view",
+      "default_variant": "wake",
+      "variants": {
+        "wake": {
+          "title": "вид для пробуждения",
+          "requires": [],
+          "exec": {
+            "dir": "runtime",
+            "script": "read-phoenix.py",
+            "pre": [["--db", "{db}"]],
+            "args": [
+              { "arg": "role",    "form": "flag", "flag": "--role" },
+              { "arg": "section", "form": "flag", "flag": "--section" }
+            ]
+          }
+        },
+        "edit": {
+          "title": "раздел для правки: тело и номер версии",
+          "requires": ["section"],
+          "exec": {
+            "dir": "runtime",
+            "script": "save-phoenix.py",
+            "pre": [["--db", "{db}"], ["--read"]],
+            "args": [
+              { "arg": "role",    "form": "flag", "flag": "--role" },
+              { "arg": "section", "form": "flag", "flag": "--section" }
+            ]
+          }
+        }
       }
     },
 
     {
-      "name": "memory_save",
-      "mode": "write",
-      "title": "Сохранить раздел памяти роли",
-      "description": "Записывает раздел. Номер прочитанной версии обязателен: если раздел с тех пор менялся, приходит исход mismatch и тело НЕ пишется.",
-      "args": [
-        { "name": "role",    "type": "string", "required": true },
-        { "name": "section", "type": "string", "required": true, "enum": ["identity", "rebirth", "sources", "state", "plan", "history", "launcher"] },
-        { "name": "body",    "type": "text",   "required": true, "description": "Полное тело раздела" },
-        { "name": "expect_version", "type": "int", "required": true, "description": "Номер версии, прочитанной перед правкой. Его отдаёт memory_read_for_edit ПЕРВОЙ строкой — не memory_read" },
-        { "name": "allow_shrink", "type": "bool", "required": false, "description": "Разрешить сокращение раздела. Без него сокращение ОТВЕРГАЕТСЯ: прежнее тело цело в истории, но молча терять его нельзя" }
-      ],
-      "exec": {
-        "dir": "runtime",
-        "script": "save-phoenix.py",
-        "pre": [["--db", "{db}"]],
-        "args": [
-          { "arg": "role",           "form": "flag", "flag": "--role" },
-          { "arg": "section",        "form": "flag", "flag": "--section" },
-          { "arg": "body",           "form": "tempfile", "flag": "--file" },
-          { "arg": "expect_version", "form": "flag", "flag": "--expect-version" },
-          { "arg": "allow_shrink",   "form": "switch", "flag": "--allow-shrink" }
-        ],
-        "mismatch_when": ["тело НЕ записано", "версии id=", "allow-shrink"]
-      }
-    },
-
-    {
-      "name": "memory_read_for_edit",
+      "name": "memory_find",
       "mode": "read",
-      "service_writes": [],
-      "title": "Прочитать раздел памяти ДЛЯ ПРАВКИ: тело и номер версии",
-      "description": "Первая строка ответа несёт номер версии — его и подают в memory_save как expect_version. Правится тело ИЗ ЭТОГО ЖЕ вызова: тело из другого чтения уже могло разойтись.",
+      "service_writes": ["hint_seen"],
+      "title": "Найти в памяти роли по словам, по всем трём слоям сразу",
+      "description": "Ищет по записям памяти роли (слои hot, warm, permanent), без чтения раздела целиком. Регистр букв не важен. Без аргумента layer отвечает записями всех трёх слоёв; с ним — одного слоя. Номер карточки ищется вместе со знаком «#», например #781.",
       "args": [
-        { "name": "role",    "type": "string", "required": true },
-        { "name": "section", "type": "string", "required": true, "enum": ["identity", "rebirth", "sources", "state", "plan", "history", "launcher"] }
+        { "name": "role",    "type": "string", "required": true,  "description": "Роль, чью память ищем" },
+        { "name": "query",   "type": "string", "required": true,  "description": "Слова запроса одной строкой, можно несколько слов" },
+        { "name": "section", "type": "string", "required": false, "enum": ["identity", "rebirth", "sources", "state", "plan", "history", "launcher"], "description": "Сузить поиск до одного раздела" },
+        { "name": "layer",   "type": "string", "required": false, "enum": ["hot", "warm", "permanent"], "description": "Сузить поиск до одного слоя памяти; без него — все три" },
+        { "name": "limit",   "type": "int",    "required": false, "description": "Сколько записей показать; без него 20" },
+        { "name": "phrase",  "type": "bool",   "required": false, "description": "Искать слова одной фразой подряд, а не по отдельности" },
+        { "name": "full_body", "type": "bool", "required": false, "description": "Печатать тело записи целиком, а не кусок вокруг слова" },
+        { "name": "revoked", "type": "bool",   "required": false, "description": "Искать только среди снятых записей" },
+        { "name": "actor",   "type": "string", "required": false, "description": "Кто читает (роль руки): ему засчитывается показ подсказки; без него — роли из role" }
       ],
       "exec": {
         "dir": "runtime",
-        "script": "save-phoenix.py",
-        "pre": [["--db", "{db}"], ["--read"]],
+        "script": "find-phoenix.py",
+        "pre": [["--db", "{db}"]],
         "args": [
-          { "arg": "role",    "form": "flag", "flag": "--role" },
-          { "arg": "section", "form": "flag", "flag": "--section" }
+          { "arg": "role",      "form": "flag",       "flag": "--role" },
+          { "arg": "section",   "form": "flag",       "flag": "--section" },
+          { "arg": "layer",     "form": "flag",       "flag": "--layer" },
+          { "arg": "limit",     "form": "flag",       "flag": "--limit" },
+          { "arg": "phrase",    "form": "switch",     "flag": "--phrase" },
+          { "arg": "full_body", "form": "switch",     "flag": "--full-body" },
+          { "arg": "revoked",   "form": "switch",     "flag": "--revoked" },
+          { "arg": "actor",     "form": "flag",       "flag": "--actor" },
+          { "arg": "query",     "form": "positional" }
         ]
+      }
+    },
+
+    {
+      "name": "memory_write",
+      "mode": "write",
+      "title": "Записать в память роли: сохранить раздел или сжать слой",
+      "description": "Действие называется явно (аргумент action), умолчания нет. save — записать раздел: номер прочитанной версии обязателен, и если раздел с тех пор менялся, приходит исход mismatch, а тело НЕ пишется. compact — унести из слоя hot в warm записи раздела, пока слой не уложится в порог; порога в аргументах нет, он читается из правил тела. Сжимать можно только СВОЮ память: actor должен быть равен role, иначе тело откажет.",
+      "args": [
+        { "name": "action",  "type": "string", "required": true,  "enum": ["save", "compact"], "description": "Действие: save — сохранить раздел, compact — сжать слой hot" },
+        { "name": "role",    "type": "string", "required": true,  "description": "Роль, чья память" },
+        { "name": "section", "type": "string", "required": false, "enum": ["identity", "rebirth", "sources", "state", "plan", "history", "launcher"], "description": "Раздел; у save обязателен, у compact без него сжимаются все разделы роли" },
+        { "name": "body",    "type": "text",   "required": false, "description": "Полное тело раздела (только save)" },
+        { "name": "expect_version", "type": "int", "required": false, "description": "Номер версии, прочитанной перед правкой (только save). Его отдаёт memory_read с view=edit ПЕРВОЙ строкой — не вид для пробуждения" },
+        { "name": "allow_shrink", "type": "bool", "required": false, "description": "Разрешить сокращение раздела (только save). Без него сокращение ОТВЕРГАЕТСЯ: прежнее тело цело в истории, но молча терять его нельзя" },
+        { "name": "actor",   "type": "string", "required": false, "description": "Роль руки. У compact обязателен и уходит телу как его «чья рука» (переменная среды MEZO_ROLE): роль сжимает СВОЮ память. У save необязателен — запись в историю разделов" },
+        { "name": "dry_run", "type": "bool",   "required": false, "description": "Холостой прогон (только compact): печатает перечень записей, которые унесёт настоящий вызов, и ничего не пишет" }
+      ],
+      "variant_by": "action",
+      "variants": {
+        "save": {
+          "title": "сохранить раздел памяти",
+          "requires": ["section", "body", "expect_version"],
+          "exec": {
+            "dir": "runtime",
+            "script": "save-phoenix.py",
+            "pre": [["--db", "{db}"]],
+            "args": [
+              { "arg": "role",           "form": "flag",     "flag": "--role" },
+              { "arg": "section",        "form": "flag",     "flag": "--section" },
+              { "arg": "body",           "form": "tempfile", "flag": "--file" },
+              { "arg": "expect_version", "form": "flag",     "flag": "--expect-version" },
+              { "arg": "allow_shrink",   "form": "switch",   "flag": "--allow-shrink" },
+              { "arg": "actor",          "form": "flag",     "flag": "--actor" }
+            ],
+            "mismatch_when": ["тело НЕ записано", "версии id=", "allow-shrink"]
+          }
+        },
+        "compact": {
+          "title": "сжать слой hot: унести записи в warm",
+          "requires": ["actor"],
+          "exec": {
+            "dir": "vnext",
+            "script": "memory-records.py",
+            "pre": [["--db", "{db}"], ["--compact"]],
+            "args": [
+              { "arg": "role",    "form": "flag",   "flag": "--role" },
+              { "arg": "section", "form": "flag",   "flag": "--section" },
+              { "arg": "dry_run", "form": "switch", "flag": "--dry-run" }
+            ],
+            "env": { "MEZO_ROLE": "actor" }
+          }
+        }
       }
     },
 
@@ -199,67 +261,108 @@
     },
 
     {
-      "name": "cards_list",
+      "name": "cards_read",
       "mode": "read",
       "service_writes": ["hint_seen"],
-      "title": "Перечень карточек роли",
+      "title": "Прочитать карточки: перечень роли или одну карточку целиком",
+      "description": "Выбор вида — аргумент view. list (по умолчанию): перечень карточек роли. card: одна карточка целиком по номеру.",
       "args": [
-        { "name": "role",   "type": "string", "required": true },
-        { "name": "status", "type": "string", "required": false, "description": "Отбор по состоянию; «all» — включая закрытые" },
-        { "name": "full",   "type": "bool",   "required": false, "description": "Полный вид вместо краткого" }
+        { "name": "view",   "type": "string", "required": false, "enum": ["list", "card"], "description": "Вид: list — перечень карточек роли (без него берётся он); card — одна карточка по номеру" },
+        { "name": "role",   "type": "string", "required": false, "description": "Роль, чьи карточки показать (только list, обязателен там)" },
+        { "name": "status", "type": "string", "required": false, "description": "Отбор по состоянию (только list); «all» — включая закрытые" },
+        { "name": "full",   "type": "bool",   "required": false, "description": "Полный вид вместо краткого (только list)" },
+        { "name": "card",   "type": "int",    "required": false, "description": "Номер карточки (только card, обязателен там)" }
       ],
-      "exec": {
-        "dir": "runtime",
-        "script": "backlog.py",
-        "pre": [["--db", "{db}"]],
-        "sub": ["list"],
-        "args": [
-          { "arg": "role",   "form": "flag",   "flag": "--role" },
-          { "arg": "status", "form": "flag",   "flag": "--status" },
-          { "arg": "full",   "form": "switch", "flag": "--full" }
-        ]
+      "variant_by": "view",
+      "default_variant": "list",
+      "variants": {
+        "list": {
+          "title": "перечень карточек роли",
+          "requires": ["role"],
+          "exec": {
+            "dir": "runtime",
+            "script": "backlog.py",
+            "pre": [["--db", "{db}"]],
+            "sub": ["list"],
+            "args": [
+              { "arg": "role",   "form": "flag",   "flag": "--role" },
+              { "arg": "status", "form": "flag",   "flag": "--status" },
+              { "arg": "full",   "form": "switch", "flag": "--full" }
+            ]
+          }
+        },
+        "card": {
+          "title": "одна карточка целиком",
+          "requires": ["card"],
+          "exec": {
+            "dir": "runtime",
+            "script": "backlog.py",
+            "pre": [["--db", "{db}"]],
+            "sub": ["show"],
+            "args": [
+              { "arg": "card", "form": "positional" }
+            ]
+          }
+        }
       }
     },
 
     {
-      "name": "cards_show",
-      "mode": "read",
-      "service_writes": [],
-      "title": "Одна карточка целиком",
-      "args": [
-        { "name": "card", "type": "int", "required": true, "description": "Номер карточки" }
-      ],
-      "exec": {
-        "dir": "runtime",
-        "script": "backlog.py",
-        "pre": [["--db", "{db}"]],
-        "sub": ["show"],
-        "args": [
-          { "arg": "card", "form": "positional" }
-        ]
-      }
-    },
-
-    {
-      "name": "cards_comment",
+      "name": "cards_write",
       "mode": "write",
-      "title": "Комментарий к карточке",
-      "description": "Комментарии только дописываются: прежние строки не правятся.",
+      "title": "Записать в карточки: комментарий или новая карточка",
+      "description": "Действие называется явно (аргумент action), умолчания нет. comment — комментарий к карточке; комментарии только дописываются, прежние строки не правятся. add — завести карточку: критерий приёмки (done_when) обязателен, без него карточка не заводится.",
       "args": [
-        { "name": "card",  "type": "int",    "required": true },
-        { "name": "actor", "type": "string", "required": true, "description": "Роль руки, оставляющей комментарий" },
-        { "name": "body",  "type": "text",   "required": true }
+        { "name": "action",  "type": "string", "required": true,  "enum": ["comment", "add"], "description": "Действие: comment — комментарий к карточке, add — завести новую" },
+        { "name": "card",    "type": "int",    "required": false, "description": "Номер карточки (только comment)" },
+        { "name": "actor",   "type": "string", "required": false, "description": "Роль руки: кто оставляет комментарий (comment) или кто заводит карточку (add)" },
+        { "name": "body",    "type": "text",   "required": false, "description": "Текст комментария (comment) или тело новой карточки (add)" },
+        { "name": "role",    "type": "string", "required": false, "description": "Роль-владелец новой карточки (только add)" },
+        { "name": "title",   "type": "string", "required": false, "description": "Заголовок новой карточки — его видно в списках (только add)" },
+        { "name": "done_when", "type": "text", "required": false, "description": "Критерий приёмки: чем докажешь, что сделано (только add)" },
+        { "name": "priority", "type": "string", "required": false, "enum": ["low", "normal", "high", "critical"], "description": "Срочность новой карточки; без него normal (только add)" },
+        { "name": "tags",    "type": "list<string>", "required": false, "description": "Метки новой карточки списком (только add)" },
+        { "name": "parent",  "type": "int",    "required": false, "description": "Номер родительской карточки (только add)" },
+        { "name": "track",   "type": "string", "required": false, "description": "Набор задач, к которому относится новая карточка (только add)" }
       ],
-      "exec": {
-        "dir": "runtime",
-        "script": "backlog.py",
-        "pre": [["--db", "{db}"]],
-        "sub": ["comment"],
-        "args": [
-          { "arg": "card",  "form": "positional" },
-          { "arg": "actor", "form": "flag",     "flag": "--actor" },
-          { "arg": "body",  "form": "tempfile", "flag": "--body-file" }
-        ]
+      "variant_by": "action",
+      "variants": {
+        "comment": {
+          "title": "комментарий к карточке",
+          "requires": ["card", "actor", "body"],
+          "exec": {
+            "dir": "runtime",
+            "script": "backlog.py",
+            "pre": [["--db", "{db}"]],
+            "sub": ["comment"],
+            "args": [
+              { "arg": "card",  "form": "positional" },
+              { "arg": "actor", "form": "flag",     "flag": "--actor" },
+              { "arg": "body",  "form": "tempfile", "flag": "--body-file" }
+            ]
+          }
+        },
+        "add": {
+          "title": "завести карточку",
+          "requires": ["role", "actor", "title", "body", "done_when"],
+          "exec": {
+            "dir": "runtime",
+            "script": "backlog.py",
+            "pre": [["--db", "{db}"]],
+            "sub": ["add"],
+            "args": [
+              { "arg": "role",      "form": "flag",     "flag": "--role" },
+              { "arg": "actor",     "form": "flag",     "flag": "--actor" },
+              { "arg": "title",     "form": "flag",     "flag": "--title" },
+              { "arg": "body",      "form": "tempfile", "flag": "--body-file" },
+              { "arg": "done_when", "form": "tempfile", "flag": "--done-when-file" },
+              { "arg": "priority",  "form": "flag",     "flag": "--priority" },
+              { "arg": "tags",      "form": "flag_csv", "flag": "--tags" },
+              { "arg": "parent",    "form": "flag",     "flag": "--parent" },
+              { "arg": "track",     "form": "flag",     "flag": "--track" }
+            ]
+          }
+        }
       }
     },
 
@@ -300,6 +403,33 @@
         "sub": ["find"],
         "args": [
           { "arg": "text", "form": "positional" }
+        ]
+      }
+    },
+
+    {
+      "name": "owner_words_add",
+      "mode": "write",
+      "title": "Записать слово владельца",
+      "description": "Тело само ищет дословный текст в записях разговоров и без находки слово НЕ записывает: пересказ не проходит. Поиск идёт по записям разговоров всей машины и может не уложиться в предел времени — тогда исход «не смог проверить», слово не записано. Час и чат должны совпасть с найденными, адрес источника (файл и строка) тело берёт из находки.",
+      "args": [
+        { "name": "said_at",  "type": "string", "required": true, "description": "Час слова: «ГГГГ-ММ-ДД ЧЧ:ММ:СС UTC»" },
+        { "name": "chat",     "type": "string", "required": true, "description": "Чат, где слово сказано: имя роли или префикс записи разговора (8 знаков)" },
+        { "name": "text",     "type": "text",   "required": true, "description": "ДОСЛОВНЫЙ текст слова владельца" },
+        { "name": "heard_by", "type": "string", "required": true, "description": "Роль, услышавшая слово" },
+        { "name": "note",     "type": "string", "required": false, "description": "Пояснение роли — не речь владельца" }
+      ],
+      "exec": {
+        "dir": "vnext",
+        "script": "owner-word.py",
+        "pre": [["--db", "{db}"]],
+        "sub": ["add"],
+        "args": [
+          { "arg": "said_at",  "form": "flag",     "flag": "--said-at" },
+          { "arg": "chat",     "form": "flag",     "flag": "--chat" },
+          { "arg": "text",     "form": "tempfile", "flag": "--text-file" },
+          { "arg": "heard_by", "form": "flag",     "flag": "--heard-by" },
+          { "arg": "note",     "form": "flag",     "flag": "--note" }
         ]
       }
     },
