@@ -71,7 +71,15 @@ r"""НАЙТИ СЛОВО ВЛАДЕЛЬЦА В ЗАПИСЯХ РАЗГОВОР�
       только явно названные; вызывающий получает вывод искателя, не дожидаясь брошенного;
     · ИСХОД: всё прочитано — вывод и коды прежние. Есть непрочитанные — у итога их число и полные
       пути строками «не прочитан: <путь> — <причина>»; «не найдено» и «только спорное» при них —
-      код 4 «искал не везде», а не 1 и не 3; найдено — код 0, непрочитанное названо рядом.
+      код 4 «искал не везде», а не 1 и не 3; найдено — код 0, непрочитанное названо рядом;
+    · СЛЕД БРОШЕННОГО: каталог хода find-owner-word-* во временном каталоге системы его прогон
+      убрать не может — повисший процесс держит свои файлы. Процесс потом исчезает, а каталог
+      оставался НАВСЕГДА (замер TAXO и COORD 17.11 13:46 UTC: 25 каталогов, живых процессов 0;
+      прежде здесь и в документе выпуска было неверно «остаётся, пока процесс жив»). Поэтому
+      каждый прогон при старте убирает свои каталоги, где ни в каталоге, ни в его файлах час нет
+      записи (sweep_stale); файлы, которые ещё держит живой процесс, пропускаются;
+    · предел --read-timeout — от 2 до 600 с: живой прогон пишет в свой каталог не реже раза
+      в предел, и уборка соседнего прогона не примет его за брошенный.
 
 ⛔ ЧЕГО ЭТОТ ИНСТРУМЕНТ НЕ ДОКАЗЫВАЕТ, СКАЗАНО ПРЯМО. Пустой ответ НЕ доказывает, что
 слова не было. Записи разговоров могут быть удалены, усечены при сжатии, лежать в другом
@@ -91,6 +99,7 @@ import argparse
 import datetime as dt
 import io
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -111,6 +120,14 @@ WORKER_FLAG = "--scan-worker"
 DEFAULT_READ_TIMEOUT = 30.0
 BEAT_SECONDS = 1.0     # как часто читающий процесс отмечает ход в своём файле
 POLL_SECONDS = 0.2     # как часто искатель смотрит на файл хода
+MAX_READ_TIMEOUT = 600.0   # верхняя граница --read-timeout: см. STALE_SECONDS
+# Каталоги хода: имя начинается так, лежат во временном каталоге системы.
+WORK_PREFIX = "find-owner-word-"
+# Каталог хода, где ни сам он, ни один его файл не менялись дольше этого, — след брошенного
+# прогона. ⚖️ Живой прогон пишет в свой каталог не реже раза в предел тишины (отметка хода или
+# новый файл задания после брошенного процесса), а предел не больше MAX_READ_TIMEOUT, —
+# поэтому часа тишины у живого не бывает.
+STALE_SECONDS = 3600.0
 
 # Каталог записей разговоров. ⚖️ Выводится от домашнего каталога, а не впечатан:
 # впечатанный путь сделал бы инструмент непереносимым на другую машину, а молчал бы
@@ -560,6 +577,44 @@ def read_records(path: pathlib.Path) -> list:
     return recs
 
 
+def sweep_stale(tmp_root: pathlib.Path, now: float) -> int:
+    """Убрать свои каталоги хода, брошенные прежними прогонами (карточка #797, заметка TAXO 3).
+
+    Прогон, бросивший повисший читающий процесс, свой каталог убрать не может: повисший процесс
+    держит свои файлы, и rmtree их пропускает. Процесс потом исчезает, а каталог остаётся навсегда.
+    Поэтому убирает каждый следующий прогон — свои каталоги (имя WORK_PREFIX), где ни в каталоге,
+    ни в одном его файле нет записи дольше STALE_SECONDS. Не удалось судить о свежести (нет прав,
+    файл исчез посреди обхода) — каталог не трогается. Файлы, которые ещё держит живой процесс,
+    rmtree пропускает: такой каталог останется до следующего раза. Чужие каталоги, ссылки и точки
+    соединения не трогаются. Возвращает число убранных каталогов."""
+    removed = 0
+    try:
+        entries = list(os.scandir(tmp_root))
+    except OSError:
+        return 0
+    for e in entries:
+        if not e.name.startswith(WORK_PREFIX):
+            continue
+        try:
+            if e.is_symlink() or not e.is_dir(follow_symlinks=False):
+                continue
+            if hasattr(os.path, "isjunction") and os.path.isjunction(e.path):
+                continue
+            # os.stat, а не кэш обхода: у файла, который держит открытым другой процесс, кэш
+            # каталога в Windows отстаёт от настоящего времени записи
+            newest = os.stat(e.path, follow_symlinks=False).st_mtime
+            for f in os.scandir(e.path):
+                newest = max(newest, os.stat(f.path, follow_symlinks=False).st_mtime)
+        except OSError:
+            continue
+        if now - newest <= STALE_SECONDS:
+            continue
+        shutil.rmtree(e.path, ignore_errors=True)
+        if not os.path.exists(e.path):
+            removed += 1
+    return removed
+
+
 def scan_files(files: list, date, needle: str, limit: float):
     """Прочитать файлы читающим процессом с пределом тишины (карточка #797).
 
@@ -573,7 +628,9 @@ def scan_files(files: list, date, needle: str, limit: float):
     scanned, unread = [], []
     if not files:
         return scanned, unread
-    work = pathlib.Path(tempfile.mkdtemp(prefix="find-owner-word-"))
+    # сперва убрать следы прежних брошенных прогонов, потом завести свой каталог
+    sweep_stale(pathlib.Path(tempfile.gettempdir()), time.time())
+    work = pathlib.Path(tempfile.mkdtemp(prefix=WORK_PREFIX))
     me = str(pathlib.Path(__file__).resolve())
     start, n = 0, 0
     try:
@@ -659,11 +716,18 @@ def main() -> int:
     ap.add_argument("--read-timeout", dest="read_timeout", type=float, default=DEFAULT_READ_TIMEOUT,
                     help="предел тишины чтения в секундах: файл, в котором за это время не прочитано "
                          f"ни одной новой строки, пропускается и называется у итога (по умолчанию "
-                         f"{DEFAULT_READ_TIMEOUT:g}; не меньше 2 — отметка хода ставится раз в секунду)")
+                         f"{DEFAULT_READ_TIMEOUT:g}; от 2 — отметка хода ставится раз в секунду — "
+                         f"до {MAX_READ_TIMEOUT:g}: дольше уборка соседнего прогона приняла бы живой "
+                         "каталог хода за брошенный)")
     a = ap.parse_args()
     if a.read_timeout < 2 * BEAT_SECONDS:
         print(f"⛔ ОТКАЗ МЕРИТЬ: предел --read-timeout {a.read_timeout:g} с меньше {2 * BEAT_SECONDS:g} с — "
               "читающий процесс отмечает ход раз в секунду, и живое чтение было бы названо повисшим.")
+        return 2
+    if a.read_timeout > MAX_READ_TIMEOUT:
+        print(f"⛔ ОТКАЗ МЕРИТЬ: предел --read-timeout {a.read_timeout:g} с больше {MAX_READ_TIMEOUT:g} с — "
+              "каталог хода такого прогона мог бы молчать час, и уборка соседнего прогона приняла бы его "
+              "за брошенный.")
         return 2
 
     root = pathlib.Path(a.root)

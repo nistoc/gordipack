@@ -33,8 +33,16 @@ r"""ПРИЁМКА: искатель слова владельца не виси
        ④в ВСТРЕЧНЫЙ: чат названного файла прочитан, текста в нём нет → обычный отказ, НЕ «не прочитана»
        ④г source: у слова, чей файл не прочитан, причина «запись разговора не прочитана»
        ④д контроль: всё прочитано → пишет, слова «не прочитано» в выводе нет
-    ⑤ НАРОЧНАЯ ПОЛОМКА «предел снят» → не проходит РОВНО семейство ①, остальные целы
+    У СЛЕД БРОШЕННОГО ПРОГОНА (заметка TAXO 3, 17.11): в своём TEMP стенда подсажены каталоги
+       Уа старый каталог хода (час без записи) убран прогоном искателя
+       Уб ВСТРЕЧНЫЙ: свежий каталог хода, старый каталог со свежим файлом и чужой старый каталог — целы
+       Ув предел --read-timeout 601 с — отказ, код 2; 600 с — обычный прогон, код 0
+    ⑤ НАРОЧНЫЕ ПОЛОМКИ — каждая роняет РОВНО своё семейство, остальные целы:
+       ⑤а «предел снят» ............ семейство ①; у ①а признак «процесс не вернулся»
+       ⑤б «каналы унаследованы» .... семейство ① (поломка БК TAXO); у ①а признак «вывод держит другой процесс»
+       ⑤в «уборка снята» ........... ровно Уа
 ⚡ Поломка сперва проходит разбор копии: упавшая копия «прошла» бы любой случай, ждущий провала.
+⚖️ Прогоны искателя на стенде идут с TEMP стенда: сама приёмка следов в системном Temp не оставляет.
 
 Зовут так:
     python <КОНТУР>/vnext-tools/bite-finder-hang.py
@@ -66,8 +74,22 @@ SHORT_LIMIT = "3"               # предел тишины для прямых 
 RUN_CAP = 20                    # сколько ждёт приёмка прямого прогона искателя, с
 OWNER_CAP = 75                  # сколько ждёт приёмка owner-word.py при пределе по умолчанию 30 с
 
+STALE_AGE = 7200                # «старый» каталог на стенде: два часа без записи (порог искателя — час)
+
 BREAK_LIMIT = ("                if code is not None or time.monotonic() - moved > limit:",
-               "                if code is not None:  # поломка ⑤: предел тишины снят")
+               "                if code is not None:  # поломка ⑤а: предел тишины снят")
+BREAK_CHANNELS = ("                                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,",
+                  "                                        stdin=subprocess.DEVNULL, stdout=None,  # поломка ⑤б")
+BREAK_SWEEP = ("    sweep_stale(pathlib.Path(tempfile.gettempdir()), time.time())",
+               "    pass  # поломка ⑤в: уборка снята")
+SIGN_ALIVE = "процесс не вернулся"
+SIGN_HELD = "вывод держит другой процесс"
+# (метка, имя, (образец, замена), семейство — начало имени случая, признак у ①а или None)
+BREAKS = [
+    ("⑤а", "предел тишины снят", BREAK_LIMIT, "①", SIGN_ALIVE),
+    ("⑤б", "каналы унаследованы", BREAK_CHANNELS, "①", SIGN_HELD),
+    ("⑤в", "уборка снята", BREAK_SWEEP, "Уа", None),
+]
 
 STUB = r'''
 # ПОДСТАВНОЕ ЧТЕНИЕ приёмки bite-finder-hang.py (карточка #797). Живёт только на стенде.
@@ -158,8 +180,14 @@ def run_bounded(cmd: list, env: dict, cap: float):
     try:
         out, _ = proc.communicate(timeout=cap)
     except subprocess.TimeoutExpired:
+        # признак механизма (заметка TAXO 2, 17.11): сам ли процесс не вернулся, или он кончился,
+        # а канал его вывода держит унаследовавший его процесс — снаружи то и другое «код None»
+        rc = proc.poll()
+        sign = (f"⏱ {SIGN_ALIVE} за {cap:g} с — снят приёмкой" if rc is None else
+                f"⏱ процесс кончился с кодом {rc}, но его {SIGN_HELD} (канал унаследован) — "
+                f"приёмка ждала {cap:g} с")
         proc.kill()
-        return None, "", time.monotonic() - t0
+        return None, sign, time.monotonic() - t0
     return proc.returncode, out.decode("utf-8", errors="replace"), time.monotonic() - t0
 
 
@@ -175,9 +203,13 @@ def run_cases(tool: pathlib.Path, bite: pathlib.Path, work: pathlib.Path, label:
     paths = make_stand(root)
     stub_dir = work / "stub"
     release = work / "release.flag"
+    # свой TEMP стенда: каталоги хода искателя (и брошенные повисшим чтением) остаются на стенде,
+    # а не в системном Temp — 17.11 приёмка оставила там 25 каталогов (заметка TAXO 3)
+    tmp = work / f"tmp-{label}"
+    tmp.mkdir()
     base = dict(os.environ, PYTHONIOENCODING="utf-8", USERPROFILE=str(home), HOME=str(home),
                 PYTHONPATH=str(stub_dir) + os.pathsep + os.environ.get("PYTHONPATH", ""),
-                FOW_STUB_RELEASE=str(release))
+                FOW_STUB_RELEASE=str(release), TEMP=str(tmp), TMP=str(tmp), TMPDIR=str(tmp))
     for k in ("FOW_STUB_HANG", "FOW_STUB_CRASH", "FOW_STUB_NOKILL"):
         base.pop(k, None)
     hang_env = dict(base, FOW_STUB_HANG=HANG_MARK, FOW_STUB_NOKILL="1")
@@ -280,6 +312,44 @@ def run_cases(tool: pathlib.Path, bite: pathlib.Path, work: pathlib.Path, label:
     case("④д контроль: всё прочитано → пишет, слов «не прочитано» в выводе и в verified_by нет",
          we == 0 and "не прочитано" not in oe and len(re_) == 1 and "не прочитано" not in re_[0][4],
          f"код {we}\n{oe}")
+
+    # ── У: след брошенного прогона — в отдельном TEMP, где нет каталогов от повисших прогонов ① ──
+    tmp_u = work / f"tmp-u-{label}"
+    tmp_u.mkdir()
+    old_t = time.time() - STALE_AGE
+
+    def plant(name: str, files: dict, dir_old: bool) -> pathlib.Path:
+        """Каталог с файлами {имя: старый ли}; время записи ставится руками."""
+        d = tmp_u / name
+        d.mkdir()
+        for fname, is_old in files.items():
+            f = d / fname
+            f.write_text("{}\n", encoding="utf-8")
+            if is_old:
+                os.utime(f, (old_t, old_t))
+        if dir_old:
+            os.utime(d, (old_t, old_t))
+        return d
+
+    stale = plant("find-owner-word-stale001", {"job-1.json": True, "out-1.jsonl": True}, True)
+    fresh = plant("find-owner-word-fresh001", {"out-1.jsonl": False}, False)
+    mixed = plant("find-owner-word-mixed001", {"job-1.json": True, "out-1.jsonl": False}, True)
+    alien = plant("other-tool-stale001", {"out-1.jsonl": True}, True)
+    env_u = dict(base, TEMP=str(tmp_u), TMP=str(tmp_u), TMPDIR=str(tmp_u))
+    u, ou, _ = find("охристый замок", env_u)
+    left = sorted(p.name for p in tmp_u.iterdir())
+    case("Уа старый каталог хода (два часа без записи) убран прогоном искателя",
+         u == 0 and not stale.exists(), f"код {u} · в TEMP стенда: {left}\n{ou}")
+    case("Уб ВСТРЕЧНЫЙ: свежий каталог хода, старый каталог со свежим файлом и чужой старый каталог — целы, "
+         "свой каталог прогона убран",
+         fresh.is_dir() and mixed.is_dir() and alien.is_dir()
+         and set(left) <= {stale.name, fresh.name, mixed.name, alien.name},
+         f"в TEMP стенда: {left}")
+    v1, ov1, _ = find("охристый замок", env_u, "--read-timeout", "601")
+    v2, ov2, _ = find("охристый замок", env_u, "--read-timeout", "600")
+    case("Ув предел --read-timeout 601 с — отказ «больше 600 с», код 2; 600 с — обычный прогон, код 0",
+         v1 == 2 and "ОТКАЗ МЕРИТЬ" in ov1 and "больше 600 с" in ov1 and v2 == 0,
+         f"601: код {v1}\n{ov1}\n600: код {v2}\n{ov2}")
     return res
 
 
@@ -313,42 +383,49 @@ def main() -> int:
             show(res)
             failed += [n for n, (ok, _) in res.items() if not ok]
 
-            print()
-            print("── ⑤ НАРОЧНАЯ ПОЛОМКА: предел тишины снят ──────────────────────────────────────────")
-            broken_dir = work / "broken"
-            broken_dir.mkdir()
             original = TOOL.read_text(encoding="utf-8")
-            patched = original.replace(*BREAK_LIMIT)
-            if patched == original:
-                print("  🔴 ⑤ образец поломки не найден — ОПЫТ НЕ ПОСТАВЛЕН")
-                failed.append("⑤ образец не найден")
-            else:
+            for i, (key, title, (pattern, repl), prefix, sign) in enumerate(BREAKS, 1):
+                print()
+                print(f"── {key} НАРОЧНАЯ ПОЛОМКА: {title} " + "─" * max(4, 70 - len(title)))
+                broken_dir = work / f"broken-{i}"
+                broken_dir.mkdir()
+                patched = original.replace(pattern, repl)
+                if patched == original or original.count(pattern) != 1:
+                    print(f"  🔴 {key} образец поломки не найден или не один — ОПЫТ НЕ ПОСТАВЛЕН")
+                    failed.append(f"{key} образец не найден")
+                    continue
                 try:
                     compile(patched, str(broken_dir / "find-owner-word.py"), "exec")
-                    ok_parse = True
                 except SyntaxError as e:
-                    print(f"  🔴 ⑤ поломка ломает разбор копии — ОПЫТ НЕ ПОСТАВЛЕН: {e.msg}, строка {e.lineno}")
-                    failed.append("⑤ разбор")
-                    ok_parse = False
-                if ok_parse:
-                    broken = broken_dir / "find-owner-word.py"
-                    broken.write_text(patched, encoding="utf-8")
-                    shutil.copy2(BITE_FIND, broken_dir / BITE_FIND.name)
-                    resb = run_cases(broken, broken_dir / BITE_FIND.name, work, "broken")
-                    fell = {n for n, (ok, _) in resb.items() if not ok}
-                    family = {n for n in resb if n.startswith("①")}
-                    for n in resb:
-                        mark = "пал" if n in fell else "цел"
-                        print(f"     {'⚡' if (n in fell) == (n in family) else '🔴'} {mark}: {n}")
-                    exact = fell == family
-                    print(f"  {'✅' if exact else '🔴'} ⑤ предел снят → не проходит РОВНО семейство ① "
-                          f"({len(family)} из {len(resb)}), остальные целы")
-                    if not exact:
-                        failed.append("⑤ поломка ломает не ровно ①")
-                        for n in sorted(fell ^ family):
-                            d = resb[n][1]
-                            print(f"       ⟂ {n}")
-                            for ln in d.strip().splitlines()[:8]:
+                    print(f"  🔴 {key} поломка ломает разбор копии — ОПЫТ НЕ ПОСТАВЛЕН: {e.msg}, строка {e.lineno}")
+                    failed.append(f"{key} разбор")
+                    continue
+                broken = broken_dir / "find-owner-word.py"
+                broken.write_text(patched, encoding="utf-8")
+                shutil.copy2(BITE_FIND, broken_dir / BITE_FIND.name)
+                resb = run_cases(broken, broken_dir / BITE_FIND.name, work, f"broken{i}")
+                fell = {n for n, (ok, _) in resb.items() if not ok}
+                family = {n for n in resb if n.startswith(prefix)}
+                for n in resb:
+                    mark = "пал" if n in fell else "цел"
+                    print(f"     {'⚡' if (n in fell) == (n in family) else '🔴'} {mark}: {n}")
+                exact = fell == family
+                print(f"  {'✅' if exact else '🔴'} {key} {title} → не проходит РОВНО «{prefix}» "
+                      f"({len(family)} из {len(resb)}), остальные целы")
+                if not exact:
+                    failed.append(f"{key} поломка ломает не ровно «{prefix}»")
+                    for n in sorted(fell ^ family):
+                        print(f"       ⟂ {n}")
+                        for ln in resb[n][1].strip().splitlines()[:8]:
+                            print(f"          {ln}")
+                if sign:
+                    first = next((n for n in resb if n.startswith("①а")), None)
+                    seen = first is not None and sign in resb[first][1]
+                    print(f"  {'✅' if seen else '🔴'} {key} признак у ①а: «{sign}»")
+                    if not seen:
+                        failed.append(f"{key} признака «{sign}» у ①а нет")
+                        if first is not None:
+                            for ln in resb[first][1].strip().splitlines()[:6]:
                                 print(f"          {ln}")
         finally:
             # отпустить подставные зависания, чтобы брошенные читающие процессы кончились сами
@@ -359,7 +436,7 @@ def main() -> int:
     print()
     print("=" * 96)
     print(f"ИТОГ: {'пало ' + str(len(failed)) if failed else 'все случаи сошлись'} · случаев на испытуемом "
-          f"{total} · нарочная поломка «предел снят» — 1")
+          f"{total} · нарочных поломок {len(BREAKS)}")
     for n in failed:
         print(f"   🔴 {n}")
     print("=" * 96)
@@ -367,9 +444,10 @@ def main() -> int:
     print("   · НАСТОЯЩЕГО зависания чтения: подставное ждёт в обычном сне и снимается; «kill не действует»")
     print("     изображено подменой kill у искателя, а не ядром. Почему живое чтение встаёт, не известно;")
     print("   · что 30 с хватает живому чтению на любом диске: предел выбран по замеру зависаний, а не скорости;")
-    print("   · следы брошенного процесса: его каталог find-owner-word-* во временном каталоге остаётся,")
-    print("     пока процесс жив, — на стенде его отпускает файл-отпуск, в жизни не отпускает никто;")
-    print("   · зависание ВНЕ чтения файла (обход каталогов, время правки): их делает сам искатель, без предела.")
+    print("   · уборку каталога, файлы которого ДЕРЖИТ живой повисший процесс: старый каталог на стенде подсажен")
+    print("     без процесса. Что уборка такие файлы пропустит, а не встанет на них, — не проверено;")
+    print("   · зависание ВНЕ чтения файла (обход каталогов, время правки, уборка): их делает сам искатель,")
+    print("     без предела.")
     return 1 if failed else 0
 
 
