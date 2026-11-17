@@ -86,9 +86,9 @@ BREAK_MA = [     # МА, в owner-word.py: адрес у первой наход
     ("            if p in prefixes and s == said_at:",
      "            if p in prefixes:  # поломка МА: адрес первой находки чата, час не смотрим")]
 BREAK_MD = [     # МД, в искателе: адрес по файлу и тексту, без часа
-    ('            addr.setdefault((ts, f.name, text), (f.resolve().as_posix(), where.get("line")))',
+    ('            addr.setdefault((ts, f.name, text), (full_path(root, root_real, f), where.get("line")))',
      '            addr.setdefault((ts, f.name, text), next((v for k, v in addr.items() if k[1:] == (f.name, text)),'
-     ' (f.resolve().as_posix(), where.get("line"))))  # поломка МД: адрес без часа')]
+     ' (full_path(root, root_real, f), where.get("line"))))  # поломка МД: адрес без часа')]
 BREAK_REASON = [  # П4, в owner-word.py: причина постоянным текстом, как до находки TAXO 2
     ("            left.append((n, unverified_reason(report, said_at[:10])))",
      "            left.append((n, f'текст не найден в записях разговоров за {said_at[:10]} '"
