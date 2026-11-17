@@ -109,13 +109,30 @@ def leads_to_this_machine(piece: str) -> bool:
 
 
 WATCHED_SUFFIXES = {".py", ".md", ".sql", ".json", ".ps1", ".sh", ".yml", ".yaml",
-           ".paths", ".txt", ".cfg", ".ini", ".toml"}
-SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv"}
+           ".paths", ".txt", ".cfg", ".ini", ".toml", ".cs", ".csproj"}
+# Файлы без расширения в имени (точка в начале — не расширение): в обходе диска их берём по имени.
+WATCHED_NAMES = {".gitattributes", ".gitignore"}
+# obj — каталог порождений сборки .NET (sourcelink, dgspec): их пишет компилятор, а не человек,
+# и пути машины в них есть всегда. Каталог bin не пропускаем: имя двусмысленное.
+SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv", "obj"}
 # В git-режиме белого списка нет — есть чёрный: бинарное не читаем, ОСТАЛЬНОЕ судим всё.
 BINARY_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".db", ".sqlite", ".pyc", ".exe",
             ".dll", ".zip", ".gz", ".7z", ".woff", ".woff2", ".ttf", ".pdf", ".bak"}
 # Файл-КОНФИГ: путь в нём не проза и не пример — его ИСПОЛНЯЕТ механизм. Любая находка красная.
-CONFIG_SUFFIXES = {".paths", ".cfg", ".ini", ".toml", ".json", ".yml", ".yaml"}
+# .csproj — тоже конфиг: путь в нём (HintPath и подобное) исполняет сборка.
+CONFIG_SUFFIXES = {".paths", ".cfg", ".ini", ".toml", ".json", ".yml", ".yaml", ".csproj"}
+
+
+def inside_git_tree(root: Path) -> bool:
+    """Лежит ли root в рабочем дереве git — в самом корне или глубже, в подкаталоге."""
+    if (root / ".git").exists():
+        return True
+    try:
+        r = subprocess.run(["git", "-C", str(root), "rev-parse", "--is-inside-work-tree"],
+                           capture_output=True, text=True, encoding="utf-8", timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return r.returncode == 0 and r.stdout.strip() == "true"
 
 
 def files_to_judge(root: Path):
@@ -126,21 +143,32 @@ def files_to_judge(root: Path):
     диску обвинял законный локальный файл. И наоборот: файл ЛЮБОГО расширения,
     попавший в git, судится — белый список расширений пропускал `.paths` молча,
     и попади он в git, никто бы не узнал.
-    Вне git (--root на живое дерево) — прежний обход по белому списку."""
-    if (root / ".git").exists():
+    Git-режим включается и когда --root — подкаталог дерева git (карточка по замеру двух
+    приёмщиков: на подкаталоге клона обход по белому списку видел 5 файлов из 14).
+    `git ls-files` из подкаталога отдаёт пути относительно него и только файлы под ним.
+    Вне git (--root на живое дерево или копию без git) — прежний обход по белому списку."""
+    note = "обход диска по белому списку расширений"
+    if inside_git_tree(root):
         try:
             out = subprocess.run(["git", "-C", str(root), "ls-files"],
                                  capture_output=True, text=True, encoding="utf-8",
                                  timeout=60, check=True).stdout
             files = [root / f for f in out.splitlines()
                      if (root / f).is_file() and (root / f).suffix.lower() not in BINARY_SUFFIXES]
-            return files, "публикуемое: git ls-files минус бинарные"
+            if out.strip():
+                return files, "публикуемое: git ls-files минус бинарные"
+            # Каталог в дереве git, но ни один файл под ним не отслеживается: пустой перечень
+            # прочитался бы как «чисто». Предупреждаем и судим обходом диска.
+            print("⚠️ под --root нет ни одного отслеживаемого файла — перехожу к обходу диска")
+            note = "обход диска по белому списку расширений: отслеживаемых файлов под --root нет"
         except (OSError, subprocess.SubprocessError) as e:
             print(f"⚠️ git ls-files не удался ({e}) — сужаюсь до обхода по расширениям")
+    # Части пути судим ОТНОСИТЕЛЬНО root: каталог с именем из SKIP_DIRS выше root
+    # (например, root сам лежит внутри obj или venv) читать не мешает.
     files = [p for p in sorted(root.rglob("*"))
-             if p.is_file() and p.suffix.lower() in WATCHED_SUFFIXES
-             and not any(part in SKIP_DIRS for part in p.parts)]
-    return files, "обход диска по белому списку расширений"
+             if p.is_file() and (p.suffix.lower() in WATCHED_SUFFIXES or p.name in WATCHED_NAMES)
+             and not any(part in SKIP_DIRS for part in p.relative_to(root).parts)]
+    return files, note
 
 
 def code_lines(src: str) -> tuple[set[int], set[int]]:
@@ -210,20 +238,95 @@ def example_lines(src: str) -> set[int]:
     return examples
 
 
+def cs_code_text(src: str) -> list[str]:
+    """Строки исходника C#, в которых КОММЕНТАРИИ заменены пробелами, остальное — как есть.
+
+    Число строк то же, что у src.splitlines(). Сканер по состояниям: код · `//` · `/* */` ·
+    обычная строка с экранированием · дословная `@"…"` с удвоенной кавычкой · сырая `\"\"\"…\"\"\"` ·
+    символ. Префиксы `$` и `@` — часть строки. `//` внутри строки комментария не начинает.
+    Если файл кончился внутри строки или блочного комментария — не падаем, а судим его
+    как код целиком: громче, а не тише."""
+    out: list[str] = []
+    i, n = 0, len(src)
+
+    def blank(text: str) -> str:
+        return "".join(c if c in "\r\n" else " " for c in text)
+
+    while i < n:
+        c = src[i]
+        if src.startswith("//", i):
+            j = src.find("\n", i)
+            j = n if j < 0 else j
+            out.append(blank(src[i:j]))
+            i = j
+        elif src.startswith("/*", i):
+            j = src.find("*/", i + 2)
+            if j < 0:
+                return src.splitlines()
+            out.append(blank(src[i:j + 2]))
+            i = j + 2
+        elif c == '"':
+            if src.startswith('"""', i):
+                q = len(src[i:]) - len(src[i:].lstrip('"'))
+                j = src.find('"' * q, i + q)
+                if j < 0:
+                    return src.splitlines()
+                end = j + q
+            else:
+                verbatim = i > 0 and "@" in src[max(0, i - 2):i] and src[i - 1] in "@$"
+                j = i + 1
+                while True:
+                    if j >= n or (not verbatim and src[j] == "\n"):
+                        return src.splitlines()
+                    if not verbatim and src[j] == "\\":
+                        j += 2
+                    elif verbatim and src.startswith('""', j):
+                        j += 2
+                    elif src[j] == '"':
+                        break
+                    else:
+                        j += 1
+                end = j + 1
+            out.append(src[i:end])
+            i = end
+        elif c == "'":
+            j = i + 1
+            if j < n and src[j] == "\\":
+                j += 2
+            else:
+                j += 1
+            while j < n and src[j] not in "'\n":
+                j += 1
+            end = j + 1 if j < n and src[j] == "'" else i + 1
+            out.append(src[i:end])
+            i = end
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out).splitlines()
+
+
 def judge_file(path: Path):
     """(красные, жёлтые) — списки (строка, номер, текст, почему)."""
     src = path.read_text(encoding="utf-8", errors="ignore")
+    cs_code = cs_code_text(src) if path.suffix.lower() == ".cs" else []
     code, docs = code_lines(src) if path.suffix == ".py" else (set(), set())
     examples = example_lines(src) if path.suffix == ".md" else set()
     reds, yellows = [], []
     for n, line in enumerate(src.splitlines(), 1):
         for m in MACHINE_PATH_RE.finditer(line):
-            piece = m.group(0)
+            # Закрывающий тег XML (`…x.dll</HintPath>`) прилипает к пути и читался заполнителем
+            # `<…>`: путь в .csproj молча считался обезличенным. Отрезаем всё с `</`.
+            piece = m.group(0).split("</", 1)[0]
             if PLACEHOLDER_RE.search(piece) or not leads_to_this_machine(piece):
                 continue
             if path.suffix.lower() in CONFIG_SUFFIXES:
                 reds.append((n, line.strip()[:120],
                                 "рабочий конфиг: путь исполняет механизм, не читатель"))
+            elif path.suffix.lower() == ".cs" and n <= len(cs_code) and any(
+                    not PLACEHOLDER_RE.search(q.group(0)) and leads_to_this_machine(q.group(0))
+                    for q in MACHINE_PATH_RE.finditer(cs_code[n - 1])):
+                reds.append((n, line.strip()[:120], "в коде C#: у чужого служба не заработает"))
             elif path.suffix == ".py" and n in code:
                 reds.append((n, line.strip()[:120], "в коде: у чужого механизм мёртв"))
             elif path.suffix == ".py" and n in docs and COMMAND_RE.match(line):

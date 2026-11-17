@@ -1,0 +1,105 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Служба-стена контура gordi. Внешних пакетов НЕТ намеренно:
+       восстановление пакетов с внутреннего источника уже дважды держало работу
+       (вопросы соседнего контура про nuget-feed), а стена обязана подниматься
+       на машине, где источник пакетов недоступен. Всё нужное есть в самой платформе. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>gordi-wall</AssemblyName>
+    <RootNamespace>GordiWall</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Предупреждения — ошибки: молчащее предупреждение в стене стоит дороже сборки -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <!-- Отметка сборки: из какого commit собрана стена. Вшивается атрибутами сборки, читает её contour_info.
+       Источники по порядку: git (commit, признак незакоммиченных правок, адрес origin) → файл ../build-stamp.txt,
+       в который git archive подставляет commit (export-subst, см. ../.gitattributes). Нет ни того ни другого —
+       commit остаётся пустым, и contour_info так и говорит: «НЕИЗВЕСТЕН — собрано не из git».
+       Сбой git сборку НЕ роняет: IgnoreExitCode и ContinueOnError, а годность значения проверяет разбор ниже. -->
+  <Target Name="GordiBuildStamp" BeforeTargets="CreateGeneratedAssemblyInfoInputsCacheFile">
+    <PropertyGroup>
+      <GordiServiceDir>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)/..'))</GordiServiceDir>
+      <GordiCommit></GordiCommit>
+      <GordiDirty>unknown</GordiDirty>
+      <GordiOrigin></GordiOrigin>
+      <GordiSourcePath>vnext/service/GordiWall</GordiSourcePath>
+    </PropertyGroup>
+
+    <Exec Command="git rev-parse HEAD" WorkingDirectory="$(GordiServiceDir)" ConsoleToMSBuild="true"
+          IgnoreExitCode="true" ContinueOnError="true" IgnoreStandardErrorWarningFormat="true"
+          StandardOutputImportance="low" StandardErrorImportance="low">
+      <Output TaskParameter="ConsoleOutput" ItemName="GordiGitHead" />
+    </Exec>
+    <PropertyGroup>
+      <GordiGitHeadText>@(GordiGitHead)</GordiGitHeadText>
+      <GordiCommit Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('$(GordiGitHeadText)', '^[0-9a-f]{40}$'))">$(GordiGitHeadText)</GordiCommit>
+    </PropertyGroup>
+
+    <!-- Сборка из выгрузки git archive: git рядом нет, commit подставлен в файл -->
+    <PropertyGroup Condition="'$(GordiCommit)' == '' And Exists('$(GordiServiceDir)/build-stamp.txt')">
+      <GordiStampText>$([System.IO.File]::ReadAllText('$(GordiServiceDir)/build-stamp.txt').Trim())</GordiStampText>
+      <GordiCommit Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('$(GordiStampText)', '^[0-9a-f]{40}$'))">$(GordiStampText)</GordiCommit>
+    </PropertyGroup>
+
+    <!-- Признак правок, адрес и путь — только когда commit взят из git -->
+    <Exec Condition="'$(GordiGitHeadText)' == '$(GordiCommit)' And '$(GordiCommit)' != ''"
+          Command="git status --porcelain -- ." WorkingDirectory="$(GordiServiceDir)" ConsoleToMSBuild="true"
+          IgnoreExitCode="true" ContinueOnError="true" IgnoreStandardErrorWarningFormat="true"
+          StandardOutputImportance="low" StandardErrorImportance="low">
+      <Output TaskParameter="ConsoleOutput" ItemName="GordiGitStatusLine" />
+      <Output TaskParameter="ExitCode" PropertyName="GordiStatusExit" />
+    </Exec>
+    <Exec Condition="'$(GordiGitHeadText)' == '$(GordiCommit)' And '$(GordiCommit)' != ''"
+          Command="git remote get-url origin" WorkingDirectory="$(GordiServiceDir)" ConsoleToMSBuild="true"
+          IgnoreExitCode="true" ContinueOnError="true" IgnoreStandardErrorWarningFormat="true"
+          StandardOutputImportance="low" StandardErrorImportance="low">
+      <Output TaskParameter="ConsoleOutput" ItemName="GordiGitOrigin" />
+      <Output TaskParameter="ExitCode" PropertyName="GordiOriginExit" />
+    </Exec>
+    <Exec Condition="'$(GordiGitHeadText)' == '$(GordiCommit)' And '$(GordiCommit)' != ''"
+          Command="git rev-parse --show-prefix" WorkingDirectory="$(MSBuildProjectDirectory)" ConsoleToMSBuild="true"
+          IgnoreExitCode="true" ContinueOnError="true" IgnoreStandardErrorWarningFormat="true"
+          StandardOutputImportance="low" StandardErrorImportance="low">
+      <Output TaskParameter="ConsoleOutput" ItemName="GordiGitPrefix" />
+      <Output TaskParameter="ExitCode" PropertyName="GordiPrefixExit" />
+    </Exec>
+    <PropertyGroup Condition="'$(GordiGitHeadText)' == '$(GordiCommit)' And '$(GordiCommit)' != ''">
+      <GordiDirty Condition="'$(GordiStatusExit)' == '0' And '@(GordiGitStatusLine)' == ''">no</GordiDirty>
+      <GordiDirty Condition="'$(GordiStatusExit)' == '0' And '@(GordiGitStatusLine)' != ''">yes</GordiDirty>
+      <!-- Учётные данные из адреса не уносим: оставляем схему и хозяина -->
+      <GordiOriginRaw>@(GordiGitOrigin)</GordiOriginRaw>
+      <GordiOrigin Condition="'$(GordiOriginExit)' == '0'">$([System.Text.RegularExpressions.Regex]::Replace('$(GordiOriginRaw)', '^([a-zA-Z+]+://)[^/@]+@', '$1'))</GordiOrigin>
+      <GordiPrefixText>@(GordiGitPrefix)</GordiPrefixText>
+      <GordiSourcePath Condition="'$(GordiPrefixExit)' == '0' And '$(GordiPrefixText)' != ''">$(GordiPrefixText.TrimEnd('/'))</GordiSourcePath>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+        <_Parameter1>GordiCommit</_Parameter1>
+        <_Parameter2>$(GordiCommit)</_Parameter2>
+      </AssemblyAttribute>
+      <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+        <_Parameter1>GordiDirty</_Parameter1>
+        <_Parameter2>$(GordiDirty)</_Parameter2>
+      </AssemblyAttribute>
+      <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+        <_Parameter1>GordiSourceUrl</_Parameter1>
+        <_Parameter2>$(GordiOrigin)</_Parameter2>
+      </AssemblyAttribute>
+      <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+        <_Parameter1>GordiSourcePath</_Parameter1>
+        <_Parameter2>$(GordiSourcePath)</_Parameter2>
+      </AssemblyAttribute>
+      <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+        <_Parameter1>GordiBuildDir</_Parameter1>
+        <_Parameter2>$(MSBuildProjectDirectory)</_Parameter2>
+      </AssemblyAttribute>
+    </ItemGroup>
+  </Target>
+
+</Project>
