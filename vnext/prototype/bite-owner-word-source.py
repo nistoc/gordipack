@@ -19,21 +19,40 @@ MEZO_SCRIPTS_ROOT (mezo_target.py).
 
 Случаи (различающий = обязан ответить ИНАЧЕ на поломанной копии):
   ① искатель печатает адрес, и адрес верен: под КАЖДОЙ строкой «чат:» стоит строка
-    «файл: <путь>:<N>», файл существует, это файл того чата, и строка N содержит текст.
-    Текст в двух чатах — два разных адреса                                         РАЗЛИЧАЮЩИЙ
+    «файл: <путь>:<N>», файл существует, это файл того чата, и N — номер строки ИМЕННО этой
+    реплики (строка содержит текст). Текст в двух чатах — два разных адреса; один текст ДВАЖДЫ
+    в одном чате с разными часами — тоже два разных адреса (находка TAXO 1)         РАЗЛИЧАЮЩИЙ
   ② add берёт адрес сам: (а) без ключей → код 0, записан адрес из находки искателя;
     (б) искатель без строки «файл:» → код 2, «нет адреса», строк не прибавилось;
     (в) --source-line, расходящийся с находкой → код 2, «РАСХОДИТСЯ», строк не прибавилось;
-    (г) ключи, совпадающие с находкой → код 0                                      РАЗЛИЧАЮЩИЙ
+    (г) ключи, совпадающие с находкой → код 0;
+    (д) час ВТОРОЙ реплики того же текста в том же чате → записан адрес второй реплики;
+    (е) искатель печатает исход без часа → код 2, «не распознан», строк не прибавилось
+        (замечание TAXO: прежде эта ветка писала слово без адреса с кодом 0)         РАЗЛИЧАЮЩИЙ
   ③ source дописывает адрес записанным словам: (а) холостой прогон — база не изменилась
     ни в одной строке, найденный адрес назван; (б) --apply — адрес записан у слова с находкой,
     слово без находки названо с причиной и не тронуто, слово с ДРУГИМ записанным файлом
     названо «РАСХОДИТСЯ» и не перезаписано, код 1 (часть слов без адреса);
-    (в) повторный вызов по номеру — «адрес уже есть», код 0                         РАЗЛИЧАЮЩИЙ
-  ④ ОБРАТНЫЙ ХОД — три поломки, каждая обязана провалить РОВНО свой случай:
+    (в) повторный вызов по номеру — «адрес уже есть», код 0;
+    (г) слово с часом второй реплики того же текста — записан адрес второй реплики;
+    (д) искателя нет по пути — причина «искатель не найден», а не «текст не найден»;
+    (е) каталога записей разговоров нет (искатель: код 2) — причина «искать негде»
+        (находка TAXO 2);
+    (ж) искатель упал с ошибкой Python — код 1 без строки исхода: причина «упал или снят»,
+        а не «текст не найден» (находка TAXO 3: так же кончается искатель, снятый taskkill /F
+        после зависания на чтении записи разговора, карточка #797)                РАЗЛИЧАЮЩИЙ
+  ④ ОБРАТНЫЙ ХОД — восемь поломок, каждая обязана провалить РОВНО свои случаи:
     П1 искатель считает строки со сдвигом на одну — ровно ①
     П2 add не берёт адрес из находки — ровно ②
     П3 холостой прогон source пишет в базу — ровно ③
+    МА адрес — у первой находки чата, час не смотрим (owner-word.py, sources_of) — ровно ② и ③:
+       функция общая у add и source
+    МД искатель ключует адрес без часа (find-owner-word.py) — ровно ①
+    П4 source называет причину постоянным текстом «текст не найден» — ровно ③
+    П5 ветка «час не распознан» пишет слово, как прежде — ровно ②
+    П6 код 1 без строки исхода называется «текст не найден», как прежде — ровно ③
+    МА и МД построены TAXO на её стенде (приёмка pull request 91, 17.11 00:25 UTC); МД здесь
+    одним якорем: адрес берётся у первой записи того же файла и текста, ключ прежний.
   У каждой поломки якорь ищется точной строкой и встречается РОВНО ОДИН раз; каждая копия
   обязана запуститься (искатель находит текст, owner-word.py list отвечает кодом 0).
 
@@ -63,6 +82,23 @@ BREAK_ADD = [    # П2, в owner-word.py
 BREAK_DRY = [    # П3, в owner-word.py
     ("    if a.apply and planned:",
      "    if planned:  # поломка: холостой прогон пишет")]
+BREAK_MA = [     # МА, в owner-word.py: адрес у первой находки чата, час не смотрим
+    ("            if p in prefixes and s == said_at:",
+     "            if p in prefixes:  # поломка МА: адрес первой находки чата, час не смотрим")]
+BREAK_MD = [     # МД, в искателе: адрес по файлу и тексту, без часа
+    ('            addr.setdefault((ts, f.name, text), (f.resolve().as_posix(), where.get("line")))',
+     '            addr.setdefault((ts, f.name, text), next((v for k, v in addr.items() if k[1:] == (f.name, text)),'
+     ' (f.resolve().as_posix(), where.get("line"))))  # поломка МД: адрес без часа')]
+BREAK_REASON = [  # П4, в owner-word.py: причина постоянным текстом, как до находки TAXO 2
+    ("            left.append((n, unverified_reason(report, said_at[:10])))",
+     "            left.append((n, f'текст не найден в записях разговоров за {said_at[:10]} '"
+     "'(запись могла быть сжата или удалена)'))  # поломка П4")]
+BREAK_NOHOUR = [  # П5, в owner-word.py: ветка «час не распознан» пишет слово, как до замечания TAXO
+    ("        print(f'   инструментов, а не нехватка данных. Искатель: {a.finder}')\n        sys.exit(2)",
+     "        checked, outcome = 'час и чат НЕ сверены: час не распознан', ' | '.join(marks)  # поломка П5")]
+BREAK_CRASH = [  # П6, в owner-word.py: код 1 без строки исхода — «текст не найден», как до находки TAXO 3
+    ("        if 'исход в выводе искателя не распознан, код 1)' in report:",
+     "        if False:  # поломка П6: падение искателя не отличаем от «не найдено»")]
 OLD_FINDER = [   # искатель, каким он был до карточки #795: строки «файл:» нет
     ('            print(f"   файл: {src[0]}:{src[1]}")',
      '            pass  # старый искатель: строки «файл:» нет')]
@@ -82,9 +118,17 @@ FAR_FILE = "C:/нет-такого/другой-файл.jsonl"
 # (час, текст) реплик владельца; None — строка ответа, только чтобы сдвинуть номера строк
 RECORDS = {
     STUD_T: [None, None, ("12:10:00", T_A), ("12:15:00", T_B), None, ("12:20:00", T_C),
-             ("12:25:00", T_D)],
+             ("12:25:00", T_D), None, ("12:30:00", T_A)],   # T_A дважды в одном чате (находка TAXO 1)
     CORE_T: [None, ("12:15:30", T_B)],
 }
+# Искатель чужой формы: исход без часа (для случая ②(е)). Строки «чат:» и «файл:» на месте —
+# чтобы отказ шёл именно от часа, а не от пропажи чата или адреса.
+STUB_NOHOUR = ('print("📝 НАБРАНО ЧЕЛОВЕКОМ · час не указан")\n'
+               'print("   чат: C--guts--atlas / 5a5a5a5a…")\n'
+               'print("   файл: C:/нет-такого/запись.jsonl:3")\n')
+# Искатель, упавший посреди чтения (для случая ③(ж)): ошибка Python — код 1, строки исхода нет.
+# Так же кончается искатель, снятый taskkill /F (замер TAXO 17.11 01:53 UTC).
+STUB_CRASH = 'raise RuntimeError("подставное падение искателя посреди чтения записей")\n'
 
 print(f"⚖️ испытуется: {mezo_target.label()}")
 tool = mezo_target.script("owner-word.py")
@@ -149,13 +193,19 @@ try:
     home = stand / "home"
     chats = home / ".claude" / "projects" / PROJECT
     chats.mkdir(parents=True)
-    truth = {}   # (текст, префикс чата) → (файл, номер строки) — где реплика лежит НА САМОМ ДЕЛЕ
+    truth = {}   # (текст, префикс чата, час) → (файл, номер строки) — где реплика лежит НА САМОМ ДЕЛЕ
     for tid, recs in RECORDS.items():
         path = chats / f"{tid}.jsonl"
         path.write_text("\n".join(record(r, i) for i, r in enumerate(recs)) + "\n", encoding="utf-8")
         for i, r in enumerate(recs, 1):
             if r is not None:
-                truth[(r[1], tid[:8])] = (path, i)
+                truth[(r[1], tid[:8], r[0])] = (path, i)
+    stub_nohour = stand / "stub-finder-nohour.py"
+    stub_nohour.write_text(STUB_NOHOUR, encoding="utf-8")
+    stub_crash = stand / "stub-finder-crash.py"
+    stub_crash.write_text(STUB_CRASH, encoding="utf-8")
+    bare_home = stand / "home-without-records"   # для ③(е): каталога записей разговоров нет
+    bare_home.mkdir()
 
     seq = [0]
 
@@ -189,37 +239,43 @@ try:
                 target.write_text(text, encoding="utf-8")
         return copy, fcopy
 
-    def env():
+    def env(home_dir=None):
         e = mezo_stand.stand_env(stand, PYTHONIOENCODING="utf-8")
-        e["USERPROFILE"] = str(home)
-        e["HOME"] = str(home)
+        e["USERPROFILE"] = str(home_dir or home)
+        e["HOME"] = str(home_dir or home)
         return e
 
-    def run(args):
+    def run(args, home_dir=None):
         r = subprocess.run([sys.executable, "-X", "utf8"] + [str(x) for x in args],
-                           capture_output=True, text=True, encoding="utf-8", cwd=str(stand), env=env())
+                           capture_output=True, text=True, encoding="utf-8", cwd=str(stand),
+                           env=env(home_dir))
         return r.returncode, (r.stdout or "") + (r.stderr or "")
 
     def find(fcopy, text):
         return run([fcopy, "--слово", text, "--за", DAY])
 
     def addresses(out):
-        """[(префикс чата, строка «файл:» под ним или None)] — по каждой строке «чат:» вывода."""
-        lines, got = out.splitlines(), []
+        """[(префикс чата, час находки, строка «файл:» под «чат:» или None)] — по каждой строке
+        «чат:» вывода. Час — из ближайшей строки выше с ISO-часом (строка исхода находки)."""
+        lines, got, hm = out.splitlines(), [], None
         for i, line in enumerate(lines):
+            t = re.search(r"T(\d{2}:\d{2}:\d{2})(?:\.\d+)?Z", line)
+            if t:
+                hm = t.group(1)
             m = re.match(r"^\s*чат: .+? / ([0-9A-Za-z-]{8})…\s*$", line)
             if not m:
                 continue
             nxt = lines[i + 1] if i + 1 < len(lines) else ""
             f = re.match(r"^\s*файл: (?P<path>.+):(?P<line>\d+)\s*$", nxt)
-            got.append((m.group(1).lower(), (f.group("path"), int(f.group("line"))) if f else None))
+            got.append((m.group(1).lower(), hm,
+                        (f.group("path"), int(f.group("line"))) if f else None))
         return got
 
-    def printed(fcopy, text, prefix):
-        """Адрес, который искатель печатает для находки текста в чате prefix."""
+    def printed(fcopy, text, prefix, hm):
+        """Адрес, который искатель печатает для находки текста в чате prefix с часом hm."""
         _, out = find(fcopy, text)
-        for p, addr in addresses(out):
-            if p == prefix and addr:
+        for p, h, addr in addresses(out):
+            if p == prefix and h == hm and addr:
                 return addr
         return None
 
@@ -235,22 +291,25 @@ try:
 
     def case_finder(copy, fcopy):
         parts, ok = [], True
-        for text, want in ((T_A, {STUD_T[:8]}), (T_B, {STUD_T[:8], CORE_T[:8]})):
+        expected = ((T_A, {(STUD_T[:8], "12:10:00"), (STUD_T[:8], "12:30:00")}),   # дважды в одном чате
+                    (T_B, {(STUD_T[:8], "12:15:00"), (CORE_T[:8], "12:15:30")}))   # в двух чатах
+        for text, want in expected:
             code, out = find(fcopy, text)
             got = addresses(out)
-            seen = {p for p, _ in got}
+            seen = {(p, h) for p, h, _ in got}
             good = code == 0 and seen == want and len(got) == len(want)
-            for p, addr in got:
-                real = truth.get((text, p))
+            for p, h, addr in got:
+                real = truth.get((text, p, h))
                 if not addr or not real:
                     good = False
-                    parts.append(f"{p}: строки «файл:» под «чат:» НЕТ")
+                    parts.append(f"{p} {h}: строки «файл:» под «чат:» НЕТ" if not addr
+                                 else f"{p} {h}: такой реплики в стенде нет")
                     continue
                 path, n = addr
                 content = Path(path).read_text(encoding="utf-8").splitlines() if Path(path).is_file() else []
                 holds = 0 < n <= len(content) and text in content[n - 1]
-                good = good and same_file(path, real[0]) and holds
-                parts.append(f"{p}: строка {n} (на самом деле {real[1]}), текст в ней: "
+                good = good and same_file(path, real[0]) and holds and n == real[1]
+                parts.append(f"{p} {h}: строка {n} (на самом деле {real[1]}), текст в ней: "
                              f"{'да' if holds else 'НЕТ'}")
             if not got:
                 parts.append(f"«{text[:24]}…»: строк «чат:» нет, код {code}")
@@ -258,7 +317,7 @@ try:
         return ok, "искатель печатает адрес под каждой строкой «чат:»: " + " · ".join(parts)
 
     def case_add(copy, fcopy):
-        want = printed(fcopy, T_A, STUD_T[:8])
+        want = printed(fcopy, T_A, STUD_T[:8], "12:10:00")
         db = fresh_db()
         c1, out1, b1, a1 = add(copy, db, T_A, "12:10:00")
         got = rows(db)
@@ -275,18 +334,32 @@ try:
         keys = ("--source-file", want[0], "--source-line", str(want[1])) if want else ()
         c4, out4, b4, a4 = add(copy, db4, T_A, "12:10:00", keys=keys)
         g_d = bool(want) and c4 == 0 and a4 == b4 + 1
-        ok = g_a and g_b and g_c and g_d
+        # (д) один текст дважды в одном чате: час второй реплики — её адрес (находка TAXO 1)
+        want2 = printed(fcopy, T_A, STUD_T[:8], "12:30:00")
+        db5 = fresh_db()
+        c5, out5, b5, a5 = add(copy, db5, T_A, "12:30:00")
+        got5 = rows(db5)
+        rec5 = got5[-1] if got5 and a5 == b5 + 1 else None
+        g_e = bool(c5 == 0 and rec5 and want2 and same_file(rec5[4], want2[0]) and rec5[5] == want2[1])
+        # (е) искатель чужой формы — исход без часа: отказ, слово не пишется (замечание TAXO)
+        db6 = fresh_db()
+        c6, out6, b6, a6 = add(copy, db6, T_A, "12:10:00", finder_path=stub_nohour)
+        g_f = c6 == 2 and a6 == b6 and "не распознан" in out6
+        ok = g_a and g_b and g_c and g_d and g_e and g_f
         return ok, (f"add берёт адрес сам: (а) без ключей код {c1} (ждали 0), записан "
                     f"{(rec[4], rec[5]) if rec else '—'}, искатель печатает {want} — "
                     f"{'совпало' if g_a else 'НЕ совпало'} · (б) искатель без «файл:» код {c2} (ждали 2), "
                     f"строк {b2}→{a2} · (в) --source-line 999 код {c3} (ждали 2), строк {b3}→{a3} · "
-                    f"(г) ключи по находке код {c4} (ждали 0)")
+                    f"(г) ключи по находке код {c4} (ждали 0) · (д) час второй реплики того же текста: "
+                    f"код {c5}, записан {rec5[5] if rec5 else '—'}, искатель печатает для неё "
+                    f"{want2[1] if want2 else '—'} — {'совпало' if g_e else 'НЕ совпало'} · "
+                    f"(е) исход без часа: код {c6} (ждали 2), строк {b6}→{a6}")
 
     def case_source(copy, fcopy):
         words = [(f"{DAY} 12:20:00 UTC", "STUD", T_C, None, None),
                  (f"{DAY} 12:00:00 UTC", "STUD", T_NONE, None, None),
                  (f"{DAY} 12:25:00 UTC", "STUD", T_D, FAR_FILE, None)]
-        want = printed(fcopy, T_C, STUD_T[:8])
+        want = printed(fcopy, T_C, STUD_T[:8], "12:20:00")
         db = fresh_db(words)
         before = rows(db)
         c1, out1 = run([copy, "--db", db, "source"])
@@ -304,13 +377,35 @@ try:
                    and "записано адресов 1 из 1" in out2)
         c3, out3 = run([copy, "--db", db, "source", str(before[0][0])])
         g_c = c3 == 0 and "адрес уже есть" in out3
-        ok = g_a and g_b and g_c
+        # (г) слово с часом второй реплики того же текста в том же чате (находка TAXO 1)
+        want2 = printed(fcopy, T_A, STUD_T[:8], "12:30:00")
+        dbg = fresh_db([(f"{DAY} 12:30:00 UTC", "STUD", T_A, None, None)])
+        c4, _ = run([copy, "--db", dbg, "source", "--apply"])
+        wg = rows(dbg)[0]
+        g_d = bool(c4 == 0 and want2 and same_file(wg[4], want2[0]) and wg[5] == want2[1])
+        # (д)(е) причина — от отчёта сверки, а не постоянным текстом (находка TAXO 2)
+        dbr = fresh_db([(f"{DAY} 12:20:00 UTC", "STUD", T_C, None, None)])
+        c5, out5 = run([copy, "--db", dbr, "--finder", stand / "нет-искателя.py", "source"])
+        g_e = c5 == 1 and "искатель не найден" in out5 and "текст не найден" not in out5
+        c6, out6 = run([copy, "--db", dbr, "source"], home_dir=bare_home)
+        g_f = c6 == 1 and "искать негде" in out6 and "текст не найден" not in out6
+        # (ж) искатель упал — код 1 без строки исхода (находка TAXO 3)
+        c7, out7 = run([copy, "--db", dbr, "--finder", stub_crash, "source"])
+        g_g = c7 == 1 and "упал или снят" in out7 and "текст не найден" not in out7
+        ok = g_a and g_b and g_c and g_d and g_e and g_f and g_g
+
+        def reason(out):
+            return next((ln.strip()[:110] for ln in out.splitlines() if "🔴 слово #" in ln), "—")
         return ok, (f"source: (а) холостой код {c1} (ждали 1), строки базы не изменились: "
                     f"{'да' if same else 'НЕТ'}, адрес назван: {'да' if g_a else 'НЕТ'} · (б) --apply код {c2} (ждали 1), слово с находкой "
                     f"{(w1[4], w1[5]) if w1 else '—'} против {want}, без находки "
                     f"{'не тронуто' if w2 and w2[4] is None else 'ТРОНУТО'}, с другим файлом "
                     f"{'не перезаписано' if w3 and w3[4] == FAR_FILE else 'ПЕРЕЗАПИСАНО'} — "
-                    f"{'да' if g_b else 'НЕТ'} · (в) по номеру код {c3} (ждали 0)")
+                    f"{'да' if g_b else 'НЕТ'} · (в) по номеру код {c3} (ждали 0) · (г) час второй реплики: "
+                    f"код {c4}, записана строка {wg[5]}, искатель печатает {want2[1] if want2 else '—'} — "
+                    f"{'совпало' if g_d else 'НЕ совпало'} · (д) искателя нет: код {c5}, «{reason(out5)}» · "
+                    f"(е) записей нет: код {c6}, «{reason(out6)}» · "
+                    f"(ж) искатель упал: код {c7}, «{reason(out7)}»")
 
     CASES = [("①", case_finder), ("②", case_add), ("③", case_source)]
 
@@ -359,27 +454,38 @@ try:
               f"ОБРАТНЫЙ ХОД ({label}): провалились {', '.join(red) or 'никто'} "
               f"(ждали ровно {', '.join(want)}) · копия запустилась: {'да' if up else 'НЕТ'} ({up_said})")
 
-    reverse("④П1", "line", "искатель считает строки со сдвигом", (), BREAK_LINE, ["①"])
-    reverse("④П2", "add", "add не берёт адрес из находки", BREAK_ADD, (), ["②"])
-    reverse("④П3", "dry", "холостой прогон source пишет", BREAK_DRY, (), ["③"])
+    REVERSES = [
+        ("④П1", "line", "искатель считает строки со сдвигом", (), BREAK_LINE, ["①"]),
+        ("④П2", "add", "add не берёт адрес из находки", BREAK_ADD, (), ["②"]),
+        ("④П3", "dry", "холостой прогон source пишет", BREAK_DRY, (), ["③"]),
+        ("④МА", "ma", "адрес у первой находки чата, час не смотрим", BREAK_MA, (), ["②", "③"]),
+        ("④МД", "md", "искатель ключует адрес без часа", (), BREAK_MD, ["①"]),
+        ("④П4", "reason", "source называет причину постоянным текстом", BREAK_REASON, (), ["③"]),
+        ("④П5", "nohour", "ветка «час не распознан» пишет слово", BREAK_NOHOUR, (), ["②"]),
+        ("④П6", "crash", "падение искателя названо «текст не найден»", BREAK_CRASH, (), ["③"]),
+    ]
+    for rev in REVERSES:
+        reverse(*rev)
 
     print()
-    total = len(CASES) + 3
+    total = len(CASES) + len(REVERSES)
     print(f"ИТОГ: {max(total - len(failures), 0)} из {total}")
     if failures:
         print(f"🔴 ПРОВАЛИЛОСЬ случаев: {len(failures)}")
         for f in failures:
             print(f"   · {f}")
         sys.exit(mezo_stand.finish(1))
-    print("✅ ВСЕ СЛУЧАИ ПРОШЛИ — искатель печатает под каждой строкой «чат:» адрес, и строка по этому "
-          "адресу содержит текст; add берёт адрес из той же находки, что и час, без адреса и при "
-          "расхождении с ключами отказывает; source в холостом прогоне базу не меняет, с --apply "
-          "дописывает адрес, не трогая слов без находки и не перезаписывая другой записанный файл; "
-          "каждая из трёх поломок валит ровно свой случай.")
+    print("✅ ВСЕ СЛУЧАИ ПРОШЛИ — искатель печатает под каждой строкой «чат:» адрес именно этой реплики, "
+          "и у одного текста дважды в одном чате адреса разные; add берёт адрес из той же находки, что и час, "
+          "без адреса, при расхождении с ключами и при исходе без часа отказывает; source в холостом прогоне "
+          "базу не меняет, с --apply дописывает адрес, не трогая слов без находки и не перезаписывая другой "
+          "записанный файл, а причину называет по отчёту сверки — и падение искателя не выдаёт за «текст не найден»; "
+          "каждая из восьми поломок валит ровно свои случаи.")
     print("⛔ Чего приёмка НЕ доказывает: многострочный текст (адрес — строка записи, где лежит "
           "ПЕРВАЯ строка текста; разнесённость по записям только печатается); записи, сжатые или "
           "удалённые после того, как слово записано (source назовёт их, но адреса не восстановит); "
-          "что адрес верен у 20 слов живой базы — это покажет только прогон source на ней; "
+          "что адрес верен у слов живой базы — это покажет только прогон source на ней; "
+          "причину при коде 3 искателя (происхождение машинное) — стенд такой реплики не строит; "
           "вид исхода находки (карточка #778).")
     sys.exit(mezo_stand.finish(0))
 finally:
