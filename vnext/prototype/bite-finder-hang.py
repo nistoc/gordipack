@@ -33,16 +33,31 @@ r"""ПРИЁМКА: искатель слова владельца не виси
        ④в ВСТРЕЧНЫЙ: чат названного файла прочитан, текста в нём нет → обычный отказ, НЕ «не прочитана»
        ④г source: у слова, чей файл не прочитан, причина «запись разговора не прочитана»
        ④д контроль: всё прочитано → пишет, слова «не прочитано» в выводе нет
-    У СЛЕД БРОШЕННОГО ПРОГОНА (заметка TAXO 3, 17.11): в своём TEMP стенда подсажены каталоги
-       Уа старый каталог хода (час без записи) убран прогоном искателя
-       Уб ВСТРЕЧНЫЙ: свежий каталог хода, старый каталог со свежим файлом и чужой старый каталог — целы
+    П ПЕСОЧНИЦА: дочерний процесс со средой dict(os.environ) видит Temp и домашний каталог стенда
+    У СЛЕД БРОШЕННОГО ПРОГОНА (заметка TAXO 3, 17.11): в своём TEMP стенда подсажены каталоги —
+       в контейнере find-owner-word/ и рядом с ним, верхним уровнем
+       Уа старый каталог хода в контейнере (час без записи) убран прогоном искателя
+       Уб ВСТРЕЧНЫЙ: в контейнере свежий каталог хода, старый со свежим файлом и чужой старый — целы
+       Уг ВСТРЕЧНЫЙ: вне контейнера уборка не трогает ничего — ни старый find-owner-word-* верхним
+          уровнем Temp, ни чужой старый каталог
        Ув предел --read-timeout 601 с — отказ, код 2; 600 с — обычный прогон, код 0
     ⑤ НАРОЧНЫЕ ПОЛОМКИ — каждая роняет РОВНО своё семейство, остальные целы:
        ⑤а «предел снят» ............ семейство ①; у ①а признак «процесс не вернулся»
        ⑤б «каналы унаследованы» .... семейство ① (поломка БК TAXO); у ①а признак «вывод держит другой процесс»
        ⑤в «уборка снята» ........... ровно Уа
+       ⑤г «имя не проверяется» ..... ровно Уб (поломка Т2 TAXO): без проверки имени удаление не выходит
+                                     за контейнер — Уг цел
+       ⑤д «контейнер снят» ......... ровно Уа и Уг: уборка снова идёт по всему Temp, как в 18f9aef
 ⚡ Поломка сперва проходит разбор копии: упавшая копия «прошла» бы любой случай, ждущий провала.
-⚖️ Прогоны искателя на стенде идут с TEMP стенда: сама приёмка следов в системном Temp не оставляет.
+⛔ ПЕСОЧНИЦА ВСЕГО ДЕРЕВА ПРОЦЕССОВ (правило deliberate-break-sandbox-env). Поломки ⑤г и ⑤д РАСШИРЯЮТ
+удаление и исполняют его по-настоящему. Поэтому main() до первого прогона ставит в os.environ TEMP, TMP,
+TMPDIR, HOME и USERPROFILE стенда — их наследует КАЖДЫЙ дочерний процесс, даже позванный со средой
+dict(os.environ); случай П это проверяет, а ③ сверх того получает TEMP стенда явно.
+🩸 17.11 14:56–15:02 UTC в редакции 18f9aef здесь стояло «прогоны искателя на стенде идут с TEMP
+стенда», а ③ шёл со средой системы: нарочная поломка Т2 TAXO удалила через него ≈58 тыс. каталогов
+системного Temp (записка #6608). Утверждение об изоляции было проверено на случаях, которые правились,
+а не на КАЖДОМ вызове процесса. Вызовы процессов в этом файле: run_bounded в find, owner, ③ и П —
+все со средой стенда.
 
 Зовут так:
     python <КОНТУР>/vnext-tools/bite-finder-hang.py
@@ -80,15 +95,22 @@ BREAK_LIMIT = ("                if code is not None or time.monotonic() - moved 
                "                if code is not None:  # поломка ⑤а: предел тишины снят")
 BREAK_CHANNELS = ("                                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,",
                   "                                        stdin=subprocess.DEVNULL, stdout=None,  # поломка ⑤б")
-BREAK_SWEEP = ("    sweep_stale(pathlib.Path(tempfile.gettempdir()), time.time())",
+BREAK_SWEEP = ("    sweep_stale(home, time.time())",
                "    pass  # поломка ⑤в: уборка снята")
+# ⛔ ⑤г и ⑤д РАСШИРЯЮТ удаление — только в песочнице всего дерева процессов (main)
+BREAK_NAME = ("        if not e.name.startswith(WORK_PREFIX):",
+              "        if False:  # поломка ⑤г: имя не проверяется")
+BREAK_HOME = ("    home = pathlib.Path(tempfile.gettempdir()) / WORK_HOME",
+              "    home = pathlib.Path(tempfile.gettempdir())  # поломка ⑤д: контейнер снят")
 SIGN_ALIVE = "процесс не вернулся"
 SIGN_HELD = "вывод держит другой процесс"
-# (метка, имя, (образец, замена), семейство — начало имени случая, признак у ①а или None)
+# (метка, имя, (образец, замена), семейство — начала имён случаев, признак у ①а или None)
 BREAKS = [
-    ("⑤а", "предел тишины снят", BREAK_LIMIT, "①", SIGN_ALIVE),
-    ("⑤б", "каналы унаследованы", BREAK_CHANNELS, "①", SIGN_HELD),
-    ("⑤в", "уборка снята", BREAK_SWEEP, "Уа", None),
+    ("⑤а", "предел тишины снят", BREAK_LIMIT, ("①",), SIGN_ALIVE),
+    ("⑤б", "каналы унаследованы", BREAK_CHANNELS, ("①",), SIGN_HELD),
+    ("⑤в", "уборка снята", BREAK_SWEEP, ("Уа",), None),
+    ("⑤г", "имя не проверяется", BREAK_NAME, ("Уб",), None),
+    ("⑤д", "контейнер снят", BREAK_HOME, ("Уа", "Уг"), None),
 ]
 
 STUB = r'''
@@ -269,8 +291,20 @@ def run_cases(tool: pathlib.Path, bite: pathlib.Path, work: pathlib.Path, label:
     case("②в файл после упавшего прочитан: найдено, код 0", k3 == 0 and "2026-03-04T12:00:00.000Z" in ok3,
          f"код {k3}\n{ok3}")
 
-    # ── ③: встречный ──
-    b, ob, tb = run_bounded([sys.executable, str(bite)], dict(os.environ, PYTHONIOENCODING="utf-8"), 300)
+    # ── П: песочница всего дерева процессов — дочерний процесс со средой системы видит стенд ──
+    probe = "import pathlib, tempfile; print(tempfile.gettempdir()); print(pathlib.Path.home())"
+    p, op, _ = run_bounded([sys.executable, "-c", probe], dict(os.environ, PYTHONIOENCODING="utf-8"), 30)
+    seen = [ln.strip() for ln in op.splitlines() if ln.strip()]
+    inside = len(seen) == 2 and all(
+        os.path.normcase(str(pathlib.Path(s).resolve())).startswith(os.path.normcase(str(work.resolve())))
+        for s in seen)
+    case("П песочница: дочерний процесс со средой dict(os.environ) видит Temp и домашний каталог стенда",
+         p == 0 and inside, f"код {p} · стенд {work.resolve()}\n{op}")
+
+    # ── ③: встречный — TEMP стенда явно, поверх песочницы ──
+    b, ob, tb = run_bounded([sys.executable, str(bite)],
+                            dict(os.environ, PYTHONIOENCODING="utf-8", TEMP=str(tmp), TMP=str(tmp),
+                                 TMPDIR=str(tmp)), 300)
     case("③ ВСТРЕЧНЫЙ: всё читается — bite-find-owner-word.py проходит без правки ожиданий",
          b == 0 and "пало 0" in ob, f"код {b}, {tb:.0f} с\n" + "\n".join(ob.splitlines()[-12:]))
 
@@ -318,9 +352,12 @@ def run_cases(tool: pathlib.Path, bite: pathlib.Path, work: pathlib.Path, label:
     tmp_u.mkdir()
     old_t = time.time() - STALE_AGE
 
-    def plant(name: str, files: dict, dir_old: bool) -> pathlib.Path:
+    box = tmp_u / "find-owner-word"     # контейнер каталогов хода искателя (WORK_HOME)
+    box.mkdir()
+
+    def plant(name: str, files: dict, dir_old: bool, where: pathlib.Path = box) -> pathlib.Path:
         """Каталог с файлами {имя: старый ли}; время записи ставится руками."""
-        d = tmp_u / name
+        d = where / name
         d.mkdir()
         for fname, is_old in files.items():
             f = d / fname
@@ -335,16 +372,22 @@ def run_cases(tool: pathlib.Path, bite: pathlib.Path, work: pathlib.Path, label:
     fresh = plant("find-owner-word-fresh001", {"out-1.jsonl": False}, False)
     mixed = plant("find-owner-word-mixed001", {"job-1.json": True, "out-1.jsonl": False}, True)
     alien = plant("other-tool-stale001", {"out-1.jsonl": True}, True)
+    top_own = plant("find-owner-word-stale-top", {"job-1.json": True}, True, tmp_u)
+    top_alien = plant("other-tool-stale-top", {"out-1.jsonl": True}, True, tmp_u)
     env_u = dict(base, TEMP=str(tmp_u), TMP=str(tmp_u), TMPDIR=str(tmp_u))
     u, ou, _ = find("охристый замок", env_u)
-    left = sorted(p.name for p in tmp_u.iterdir())
-    case("Уа старый каталог хода (два часа без записи) убран прогоном искателя",
-         u == 0 and not stale.exists(), f"код {u} · в TEMP стенда: {left}\n{ou}")
-    case("Уб ВСТРЕЧНЫЙ: свежий каталог хода, старый каталог со свежим файлом и чужой старый каталог — целы, "
+    left = sorted(p.name for p in box.iterdir())
+    top = sorted(p.name for p in tmp_u.iterdir())
+    case("Уа старый каталог хода в контейнере (два часа без записи) убран прогоном искателя",
+         u == 0 and not stale.exists(), f"код {u} · в контейнере: {left}\n{ou}")
+    case("Уб ВСТРЕЧНЫЙ: в контейнере свежий каталог хода, старый со свежим файлом и чужой старый — целы, "
          "свой каталог прогона убран",
          fresh.is_dir() and mixed.is_dir() and alien.is_dir()
          and set(left) <= {stale.name, fresh.name, mixed.name, alien.name},
-         f"в TEMP стенда: {left}")
+         f"в контейнере: {left}")
+    case("Уг ВСТРЕЧНЫЙ: вне контейнера уборка не трогает ничего — старый find-owner-word-* верхним уровнем "
+         "Temp и чужой старый каталог целы",
+         top_own.is_dir() and top_alien.is_dir(), f"в TEMP стенда верхним уровнем: {top}")
     v1, ov1, _ = find("охристый замок", env_u, "--read-timeout", "601")
     v2, ov2, _ = find("охристый замок", env_u, "--read-timeout", "600")
     case("Ув предел --read-timeout 601 с — отказ «больше 600 с», код 2; 600 с — обычный прогон, код 0",
@@ -373,6 +416,16 @@ def main() -> int:
     failed: list = []
     with tempfile.TemporaryDirectory(prefix="bite-finder-hang-", ignore_cleanup_errors=True) as tmp:
         work = pathlib.Path(tmp)
+        # ⛔ ПЕСОЧНИЦА ВСЕГО ДЕРЕВА ПРОЦЕССОВ — до первого дочернего процесса: поломки ⑤г и ⑤д
+        # расширяют удаление, и любой вызов, ушедший со средой системы, исполнил бы его в
+        # настоящем Temp (17.11, записка #6608). Наследуют все — и позванные с dict(os.environ)
+        sand_tmp, sand_home = work / "sandbox-tmp", work / "sandbox-home"
+        sand_tmp.mkdir()
+        sand_home.mkdir()
+        os.environ.update(TEMP=str(sand_tmp), TMP=str(sand_tmp), TMPDIR=str(sand_tmp),
+                          HOME=str(sand_home), USERPROFILE=str(sand_home))
+        tempfile.tempdir = str(sand_tmp)
+        print(f"песочница: TEMP и HOME всего дерева процессов — внутри {work}")
         (work / "stub").mkdir()
         (work / "stub" / "sitecustomize.py").write_text(STUB, encoding="utf-8")
         release = work / "release.flag"
@@ -406,14 +459,15 @@ def main() -> int:
                 resb = run_cases(broken, broken_dir / BITE_FIND.name, work, f"broken{i}")
                 fell = {n for n, (ok, _) in resb.items() if not ok}
                 family = {n for n in resb if n.startswith(prefix)}
+                fam = " и ".join(prefix)
                 for n in resb:
                     mark = "пал" if n in fell else "цел"
                     print(f"     {'⚡' if (n in fell) == (n in family) else '🔴'} {mark}: {n}")
                 exact = fell == family
-                print(f"  {'✅' if exact else '🔴'} {key} {title} → не проходит РОВНО «{prefix}» "
+                print(f"  {'✅' if exact else '🔴'} {key} {title} → не проходит РОВНО «{fam}» "
                       f"({len(family)} из {len(resb)}), остальные целы")
                 if not exact:
-                    failed.append(f"{key} поломка ломает не ровно «{prefix}»")
+                    failed.append(f"{key} поломка ломает не ровно «{fam}»")
                     for n in sorted(fell ^ family):
                         print(f"       ⟂ {n}")
                         for ln in resb[n][1].strip().splitlines()[:8]:
@@ -445,7 +499,10 @@ def main() -> int:
     print("     изображено подменой kill у искателя, а не ядром. Почему живое чтение встаёт, не известно;")
     print("   · что 30 с хватает живому чтению на любом диске: предел выбран по замеру зависаний, а не скорости;")
     print("   · уборку каталога, файлы которого ДЕРЖИТ живой повисший процесс: старый каталог на стенде подсажен")
-    print("     без процесса. Что уборка такие файлы пропустит, а не встанет на них, — не проверено;")
+    print("     без процесса. Это проверила TAXO прямым вызовом sweep_stale 17.11 (держимое цело, уборка")
+    print("     на нём не встаёт) — не эта приёмка;")
+    print("   · песочница держит только то, что идёт через среду: путь, впечатанный в код испытуемого,")
+    print("     она не перенаправит. В find-owner-word.py путь Temp берётся только из tempfile;")
     print("   · зависание ВНЕ чтения файла (обход каталогов, время правки, уборка): их делает сам искатель,")
     print("     без предела.")
     return 1 if failed else 0
