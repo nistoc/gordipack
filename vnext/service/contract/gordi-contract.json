@@ -1,0 +1,317 @@
+{
+  "contract": {
+    "name": "gordi",
+    "version": "1.3.0",
+    "stage": "E1",
+    "description": "Единый договор вызова тулинга контура. Из ЭТОГО файла служба MCP и CLI строят свои перечни вызовов, типы аргументов и текст справки. Второго источника нет намеренно: расходиться не с чем. Вызов с mode=read данных контура не меняет; служебные таблицы — только перечисленные в service_writes.",
+    "basis": "Слово владельца 2026-11-15 01:17 UTC (чат PROTO, выбор «Э1 — стена поверх кода»). Дизайн — atlas.archs/.mezosync/goal-gordipack-vnext/01-DESIGN.md. Критерий приёмки — карточка 779."
+  },
+
+  "outcomes": {
+    "description": "Закрытый перечень исходов. Код выхода дочернего процесса договором НЕ является: он лишь один из признаков, по которым служба выбирает исход.",
+    "values": [
+      { "id": "passed",         "title": "прошло",            "meaning": "вызов исполнен, ответ полон" },
+      { "id": "mismatch",       "title": "расхождение",       "meaning": "вызов исполнен, но результат не совпал с ожидаемым состоянием (например, устаревшая версия раздела памяти)" },
+      { "id": "not_started",    "title": "не запустилось",    "meaning": "тело инструмента не начало работу: не найден файл, отказ среды, отказ запуска процесса" },
+      { "id": "cannot_verify",  "title": "не смог проверить", "meaning": "служба НЕ получила ответа тела по предмету: обрыв по времени, не удалось сохранить части длинного ответа, утерян итог частей. ⚖️ Это ЯВНОЕ незнание, а не «всё хорошо»" },
+      { "id": "tool_failed",    "title": "тело отказало",     "meaning": "тело запустилось и завершилось ненулевым кодом: отказ по своим правилам (нет такой роли, неверный ключ подтверждения) или сбой внутри тела. Служба ответ тела ПОЛУЧИЛА и отдаёт его как есть: причина — в error, код тела — в child_exit" },
+      { "id": "refused",        "title": "отказ",             "meaning": "вызов отвергнут договором ДО исполнения: нет обязательного аргумента, неизвестный контур, запись в режиме только-чтение, неопознанная метка продолжения, аргумент, которого договор не объявляет" },
+      { "id": "partial",        "title": "частично",          "meaning": "тело отработало, но ответ отдан НЕ целиком: есть продолжение — вызвать то же самое с аргументом next_part. Так отвечают все части, кроме последней; последняя несёт настоящий исход тела, а в непоследних он назван полем final_outcome" }
+    ]
+  },
+
+  "answer_shape": {
+    "description": "Форма ответа ЛЮБОГО вызова. Поля обязательны все, кроме error. Вывод тела длиннее предела знаков не режется, а выдаётся ЧАСТЯМИ (part / parts / next_part): ответ целиком лежит у стены на диске 2 часа.",
+    "fields": [
+      { "name": "outcome",    "type": "enum:outcomes", "required": true,  "note": "исход из закрытого перечня" },
+      { "name": "truncated",  "type": "bool",          "required": true,  "note": "признак НАСТОЯЩЕГО отсечения: что-то отрезано и потеряно (предел времени; слишком длинные предупреждения тела). Выдача частями — не отсечение: при ней truncated=false" },
+      { "name": "truncate_reason", "type": "string",   "required": false, "note": "почему отсечено — предел времени, предел знаков у предупреждений" },
+      { "name": "text",       "type": "string",        "required": true,  "note": "вывод тела (только stdout) — эта часть ответа; у ответа не по частям — весь вывод" },
+      { "name": "warnings",   "type": "string",        "required": true,  "note": "поток ошибок тела (stderr) ОТДЕЛЬНО от text; пусто, если предупреждений нет. При выдаче частями — целиком в первой части и повторён в последней. Если сами предупреждения длиннее предела — начало и конец со строкой «вырезано N знаков» (и truncated=true)" },
+      { "name": "part",       "type": "int",           "required": true,  "note": "номер этой части, с 1; у ответа не по частям — 1" },
+      { "name": "parts",      "type": "int",           "required": true,  "note": "всего частей; у ответа не по частям — 1" },
+      { "name": "next_part",  "type": "string",        "required": false, "note": "метка продолжения — её передают в аргументе next_part; null у последней части и у ответа не по частям" },
+      { "name": "final_outcome", "type": "enum:outcomes", "required": false, "note": "в непоследних частях — исход, которым кончилось тело (чтобы не ждать конца, узнавая об отказе); в остальных null" },
+      { "name": "contour",    "type": "string",        "required": true,  "note": "контур, на котором вызов исполнен — ТОТ, что передан в вызове" },
+      { "name": "tooling_version", "type": "string",   "required": true,  "note": "версия тулинга, ответившего на вызов: роль не обязана помнить, кто её судит" },
+      { "name": "child_exit", "type": "int",           "required": false, "note": "код выхода тела — СПРАВОЧНО, не договор" },
+      { "name": "error",      "type": "string",        "required": false, "note": "причина отказа или незапуска, словами" }
+    ]
+  },
+
+  "common_args": [
+    {
+      "name": "contour",
+      "type": "string",
+      "required": true,
+      "selects": "contour",
+      "description": "Имя контура, НА КОТОРОМ исполнять вызов. Обязателен у каждого вызова: служба НЕ вычисляет контур от своего расположения и НЕ читает его из переменных среды. Неизвестное имя — исход refused.",
+      "why": "Класс T7 разбора: 10 карточек, где инструмент считал путь сам (карточки 613, 668, 761, 772, 773)."
+    },
+    {
+      "name": "next_part",
+      "type": "string",
+      "required": false,
+      "description": "Метка продолжения из ответа «частично» (поле next_part; в шапке ответа напечатана точная форма следующего вызова). С ней тело НЕ запускается: отдаётся следующая часть уже сохранённого ответа. Метка привязана к вызову и контуру: чужая, неизвестная или просроченная (хранится 2 часа) — исход refused. Остальные аргументы вызова при этом не нужны.",
+      "why": "Находки С1 и С7 карточки 791: обрезка хвоста теряла вторую половину ключа подтверждения ленты."
+    }
+  ],
+
+  "tools": [
+    {
+      "name": "memory_read",
+      "mode": "read",
+      "service_writes": ["hint_seen"],
+      "title": "Прочитать память роли",
+      "description": "Вид для пробуждения: разделы, отметки подтверждения, машинный слой. Номера версии здесь НЕТ — для правки берут memory_read_for_edit.",
+      "args": [
+        { "name": "role",    "type": "string", "required": true,  "description": "Роль, чью память читаем (верхний регистр: COORD, PROTO, …)" },
+        { "name": "section", "type": "string", "required": false, "enum": ["identity", "rebirth", "sources", "state", "plan", "history", "launcher"], "description": "Раздел; без него печатается вся память" }
+      ],
+      "exec": {
+        "dir": "runtime",
+        "script": "read-phoenix.py",
+        "pre": [["--db", "{db}"]],
+        "args": [
+          { "arg": "role",    "form": "flag", "flag": "--role" },
+          { "arg": "section", "form": "flag", "flag": "--section" }
+        ]
+      }
+    },
+
+    {
+      "name": "memory_save",
+      "mode": "write",
+      "title": "Сохранить раздел памяти роли",
+      "description": "Записывает раздел. Номер прочитанной версии обязателен: если раздел с тех пор менялся, приходит исход mismatch и тело НЕ пишется.",
+      "args": [
+        { "name": "role",    "type": "string", "required": true },
+        { "name": "section", "type": "string", "required": true, "enum": ["identity", "rebirth", "sources", "state", "plan", "history", "launcher"] },
+        { "name": "body",    "type": "text",   "required": true, "description": "Полное тело раздела" },
+        { "name": "expect_version", "type": "int", "required": true, "description": "Номер версии, прочитанной перед правкой. Его отдаёт memory_read_for_edit ПЕРВОЙ строкой — не memory_read" },
+        { "name": "allow_shrink", "type": "bool", "required": false, "description": "Разрешить сокращение раздела. Без него сокращение ОТВЕРГАЕТСЯ: прежнее тело цело в истории, но молча терять его нельзя" }
+      ],
+      "exec": {
+        "dir": "runtime",
+        "script": "save-phoenix.py",
+        "pre": [["--db", "{db}"]],
+        "args": [
+          { "arg": "role",           "form": "flag", "flag": "--role" },
+          { "arg": "section",        "form": "flag", "flag": "--section" },
+          { "arg": "body",           "form": "tempfile", "flag": "--file" },
+          { "arg": "expect_version", "form": "flag", "flag": "--expect-version" },
+          { "arg": "allow_shrink",   "form": "switch", "flag": "--allow-shrink" }
+        ],
+        "mismatch_when": ["тело НЕ записано", "версии id=", "allow-shrink"]
+      }
+    },
+
+    {
+      "name": "memory_read_for_edit",
+      "mode": "read",
+      "service_writes": [],
+      "title": "Прочитать раздел памяти ДЛЯ ПРАВКИ: тело и номер версии",
+      "description": "Первая строка ответа несёт номер версии — его и подают в memory_save как expect_version. Правится тело ИЗ ЭТОГО ЖЕ вызова: тело из другого чтения уже могло разойтись.",
+      "args": [
+        { "name": "role",    "type": "string", "required": true },
+        { "name": "section", "type": "string", "required": true, "enum": ["identity", "rebirth", "sources", "state", "plan", "history", "launcher"] }
+      ],
+      "exec": {
+        "dir": "runtime",
+        "script": "save-phoenix.py",
+        "pre": [["--db", "{db}"], ["--read"]],
+        "args": [
+          { "arg": "role",    "form": "flag", "flag": "--role" },
+          { "arg": "section", "form": "flag", "flag": "--section" }
+        ]
+      }
+    },
+
+    {
+      "name": "feed_read",
+      "mode": "read",
+      "service_writes": ["cursor_segments", "read_batches", "sync_backoff"],
+      "title": "Прочитать ленту координации",
+      "description": "Печатает непрочитанные записки роли целиком. Чтение НЕ двигает отметку прочитанного — её двигает feed_ack. Длинный вывод выдаётся ЧАСТЯМИ: ключ подтверждения разрезан на половины, и вторая лежит в ПОСЛЕДНЕЙ части — дочитай до части без next_part, не обрезая.",
+      "args": [
+        { "name": "role",  "type": "string", "required": true },
+        { "name": "limit", "type": "int",    "required": false, "description": "Сколько записок взять; без него — все непрочитанные" },
+        { "name": "to_me", "type": "bool",   "required": false, "description": "Только обращённое лично. ⚠️ Отбор НЕ гасит долг чтения и ключа подтверждения не даёт. Он записывает в cursor_segments, что тела этих записок показаны (отметку прочитанного это не двигает): без записи следующий проход объявил бы их непрочитанными" }
+      ],
+      "exec": {
+        "dir": "runtime",
+        "script": "read-messages.py",
+        "pre": [["--db", "{db}"]],
+        "args": [
+          { "arg": "role",  "form": "flag",   "flag": "--role" },
+          { "arg": "limit", "form": "flag",   "flag": "--limit" },
+          { "arg": "to_me", "form": "switch", "flag": "--to-me" }
+        ]
+      }
+    },
+
+    {
+      "name": "feed_ack",
+      "mode": "write",
+      "title": "Подтвердить прочтение ленты",
+      "description": "Двигает отметку прочитанного по ключу, выданному чтением. Ключ одноразовый и разрезан на две половины — склейка подаётся целиком.",
+      "args": [
+        { "name": "role", "type": "string", "required": true },
+        { "name": "key",  "type": "string", "required": true, "description": "Склейка обеих половин ключа из вывода чтения: <первая>-<вторая>" }
+      ],
+      "exec": {
+        "dir": "runtime",
+        "script": "read-messages.py",
+        "pre": [["--db", "{db}"]],
+        "args": [
+          { "arg": "role", "form": "flag", "flag": "--role" },
+          { "arg": "key",  "form": "flag", "flag": "--ack" }
+        ]
+      }
+    },
+
+    {
+      "name": "feed_write",
+      "mode": "write",
+      "title": "Написать записку в ленту",
+      "description": "Адресаты — списком в схеме вызова, а не повтором флага: повтор молча брал последнее имя (карточка 596).",
+      "args": [
+        { "name": "role", "type": "string",        "required": true,  "description": "Роль-писатель" },
+        { "name": "to",   "type": "list<string>",  "required": true,  "description": "Кому ОБРАЩЕНА записка" },
+        { "name": "cc",   "type": "list<string>",  "required": false, "description": "Кто в копии" },
+        { "name": "body", "type": "text",          "required": true },
+        { "name": "card", "type": "int",           "required": false, "description": "Номер карточки, которой касается записка" },
+        { "name": "priority", "type": "string",    "required": false, "enum": ["normal", "high", "critical"], "description": "Срочность для читателя; без него normal" }
+      ],
+      "exec": {
+        "dir": "runtime",
+        "script": "write-message.py",
+        "pre": [["--db", "{db}"]],
+        "args": [
+          { "arg": "role", "form": "flag",     "flag": "--role" },
+          { "arg": "to",   "form": "flag_csv", "flag": "--to" },
+          { "arg": "cc",   "form": "flag_csv", "flag": "--cc" },
+          { "arg": "body", "form": "tempfile", "flag": "--file" },
+          { "arg": "card", "form": "flag",     "flag": "--task" },
+          { "arg": "priority", "form": "flag", "flag": "--priority" }
+        ]
+      }
+    },
+
+    {
+      "name": "cards_list",
+      "mode": "read",
+      "service_writes": ["hint_seen"],
+      "title": "Перечень карточек роли",
+      "args": [
+        { "name": "role",   "type": "string", "required": true },
+        { "name": "status", "type": "string", "required": false, "description": "Отбор по состоянию; «all» — включая закрытые" },
+        { "name": "full",   "type": "bool",   "required": false, "description": "Полный вид вместо краткого" }
+      ],
+      "exec": {
+        "dir": "runtime",
+        "script": "backlog.py",
+        "pre": [["--db", "{db}"]],
+        "sub": ["list"],
+        "args": [
+          { "arg": "role",   "form": "flag",   "flag": "--role" },
+          { "arg": "status", "form": "flag",   "flag": "--status" },
+          { "arg": "full",   "form": "switch", "flag": "--full" }
+        ]
+      }
+    },
+
+    {
+      "name": "cards_show",
+      "mode": "read",
+      "service_writes": [],
+      "title": "Одна карточка целиком",
+      "args": [
+        { "name": "card", "type": "int", "required": true, "description": "Номер карточки" }
+      ],
+      "exec": {
+        "dir": "runtime",
+        "script": "backlog.py",
+        "pre": [["--db", "{db}"]],
+        "sub": ["show"],
+        "args": [
+          { "arg": "card", "form": "positional" }
+        ]
+      }
+    },
+
+    {
+      "name": "cards_comment",
+      "mode": "write",
+      "title": "Комментарий к карточке",
+      "description": "Комментарии только дописываются: прежние строки не правятся.",
+      "args": [
+        { "name": "card",  "type": "int",    "required": true },
+        { "name": "actor", "type": "string", "required": true, "description": "Роль руки, оставляющей комментарий" },
+        { "name": "body",  "type": "text",   "required": true }
+      ],
+      "exec": {
+        "dir": "runtime",
+        "script": "backlog.py",
+        "pre": [["--db", "{db}"]],
+        "sub": ["comment"],
+        "args": [
+          { "arg": "card",  "form": "positional" },
+          { "arg": "actor", "form": "flag",     "flag": "--actor" },
+          { "arg": "body",  "form": "tempfile", "flag": "--body-file" }
+        ]
+      }
+    },
+
+    {
+      "name": "rules_get",
+      "mode": "read",
+      "service_writes": [],
+      "title": "Правило свода по ключу или перечень ключей",
+      "description": "Источник правил — хранилище контура, не файл навыка: у файла копия, у хранилища тело.",
+      "args": [
+        { "name": "key",  "type": "string", "required": false, "description": "Ключ правила; без него печатается перечень" },
+        { "name": "list", "type": "bool",   "required": false, "description": "Перечень ключей" }
+      ],
+      "exec": {
+        "dir": "runtime",
+        "script": "set-rule.py",
+        "pre": [["--db", "{db}"]],
+        "args": [
+          { "arg": "key",  "form": "flag_with_const", "flag": "--key", "const_after": "--show" },
+          { "arg": "list", "form": "switch",          "flag": "--list" }
+        ]
+      }
+    },
+
+    {
+      "name": "owner_words_find",
+      "mode": "read",
+      "service_writes": [],
+      "title": "Найти слово владельца по куску текста",
+      "description": "Постоянный слой: слово владельца живёт с адресом (номер, час, чат) и сверяется по записи разговора.",
+      "args": [
+        { "name": "text", "type": "string", "required": true, "description": "Кусок текста для поиска" }
+      ],
+      "exec": {
+        "dir": "vnext",
+        "script": "owner-word.py",
+        "pre": [["--db", "{db}"]],
+        "sub": ["find"],
+        "args": [
+          { "arg": "text", "form": "positional" }
+        ]
+      }
+    },
+
+    {
+      "name": "contour_info",
+      "mode": "read",
+      "service_writes": [],
+      "title": "Кто меня судит: контур, версия тулинга, отпечаток установки",
+      "description": "Отвечает БЕЗ отказа: роль узнаёт версию тулинга и правил, не вызывая провал (карточка 755). Отпечаток считается по СОДЕРЖИМОМУ установленных файлов, не по именам (карточка 771).",
+      "args": [],
+      "exec": { "kind": "builtin", "builtin": "contour_info" }
+    }
+  ]
+}

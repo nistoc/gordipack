@@ -1,0 +1,2 @@
+# Файл, в который git archive подставляет commit выгрузки (читает сборка, если git рядом нет).
+build-stamp.txt export-subst
