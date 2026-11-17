@@ -310,6 +310,16 @@ def compact(conn, role, section, actor, dry_run):
         plan += [(sect, rec) for rec, _w in taken]
         moved_total += [rec for rec, _w in taken]
         chars_total += sum(rec[2] for rec, _w in taken)
+    if not section:
+        # разделы с текстом, но без записей сжатие не видит: не молчим, а называем их и даём команду разбора
+        bare = conn.execute(
+            "SELECT section, length(body) FROM phoenix WHERE role=? AND TRIM(body) <> '' "
+            "AND section NOT IN (SELECT DISTINCT section FROM phoenix_records WHERE role=?) "
+            "ORDER BY section", (role, role)).fetchall()
+        if bare:
+            names = ", ".join(f"{s} ({n} знаков)" for s, n in bare)
+            print(f"⚪ разделы без записей — сжатие их не видит: {names} · "
+                  "разобрать: --section <раздел> --разобрать")
     print("-" * 96)
     print(f"ИТОГ ВЫЗОВА: унесено {len(moved_total)} записей, {chars_total} знаков (hot → warm)" +
           (" · порог достигнут не везде" if short else ""))

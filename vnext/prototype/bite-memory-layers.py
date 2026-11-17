@@ -24,8 +24,10 @@ vnext/prototype того же дерева) — остальные катало�
 
 Случаи (РАЗЛИЧАЮЩИЙ — обязан ответить ИНАЧЕ на поломанном инструменте; КОНТРОЛЬ — не даёт
 ложной тревоги и не прячет поломку):
-  ④-1 … ④-11  сжатие слоя hot (память записей роли)
-  ⑥-1 … ⑥-5    поиск по трём слоям одним вызовом
+  ④-1 … ④-12  сжатие слоя hot (память записей роли); ④-12 — без --section называет разделы
+               с текстом и без записей
+  ⑥-1 … ⑥-6    поиск по трём слоям одним вызовом; ⑥-6 — запрос из трёх слов, которые вместе
+               не встречаются (ступень частичного совпадения), с --layer warm
   ②-1, ②-2     запись раздела с устаревшей и со свежей ожидаемой версией
   ③-1, ③-2     файл старше последней записи раздела и свежий файл
 Поломки строит сама приёмка заменой текста в КОПИИ инструмента; якорь обязан найтись РОВНО
@@ -34,10 +36,15 @@ vnext/prototype того же дерева) — остальные катало�
   П2 не сверяется час файла .......... не проходит ③-1; проходит ②-1
   П3 у поиска отнят один слой ........ не проходит ⑥-1; проходит ②-1
   П4 сжатие печатает, но не пишет .... не проходит ④-1; проходит ⑥-1
+  П5 у ступени частичного совпадения
+     снят отбор по слою .............. не проходит ⑥-6; проходят ⑥-1, ②-1
 
 Зовут так:
     MEZO_SCRIPTS_ROOT=<дерево>/scripts MEZO_LIVE_DB=<живая база, схема> \
+        MEZO_CONTAINER=<каталог контура> \
         python -u -X utf8 <дерево>/vnext/prototype/bite-memory-layers.py
+MEZO_CONTAINER нужна, когда дерево лежит вне контура (клон): без неё инструменты отвечают
+«контейнер группы НЕ НАЙДЕН», и приёмка честно кончается кодом 2.
 """
 import contextlib
 import hashlib
@@ -74,6 +81,11 @@ BREAKS = {
     "П4": ("memory-records.py",
            "    elif plan:\n",
            "    elif False:\n"),
+    # у ступени частичного совпадения (_fetch_records_or) снят отбор по слою; якорь уникален за счёт cap
+    "П5": ("find-phoenix.py",
+           "    if layer:\n        where_clauses.append(\"pr.layer = ?\")\n        params.append(layer)\n"
+           "    params.append(cap)",
+           "    params.append(cap)"),
 }
 
 print(f"⚖️ испытуется: {mezo_target.label()}")
@@ -557,6 +569,52 @@ def case_6_5(T):
                 f"--layer: код {code2} (ждали 1), причина названа: {'да' if 'нет поля слоя' in out2 else 'НЕТ'}")
 
 
+def case_6_6(T):
+    """Три слова, которые ВМЕСТЕ не встречаются ни в одной записи: поиск доходит до ступени
+    частичного совпадения. Каждая запись несёт по два слова из трёх, слои у них разные."""
+    db = new_db("layered")
+    pairs = {"hot": ("хризолит", "гранат"), "warm": ("гранат", "аметист"),
+             "permanent": ("хризолит", "аметист")}
+    recs = [rec(300, f"## Пара {layer}", layer=layer,
+                body=f"## Пара {layer}\nздесь сказано про {a} и про {b}\n")
+            for layer, (a, b) in pairs.items()]
+    recs.append(rec(300, "## Посторонняя"))
+    ids = plant(db, "state", recs)
+    warm_id = ids[1]
+    code, out = call(T.t["find"], db, "хризолит гранат аметист", "--layer", "warm")
+    got = headers(out)
+    partial = "все слова вместе не встречаются" in out
+    ok = (code == 0 and bool(got) and set(got.values()) == {"warm"} and warm_id in got
+          and not (set(got) & {ids[0], ids[2]}) and partial)
+    return ok, (f"три слова врозь, --layer warm: код {code} (ждали 0) · найдено слоёв "
+                f"{sorted(got.values())} (ждали только warm, хотя бы одну запись) · записей hot в ответе: "
+                f"{'НЕТ' if ids[0] not in got else 'ЕСТЬ'} · дошло до частичного совпадения: "
+                f"{'да' if partial else 'НЕТ'}")
+
+
+def case_4_12(T):
+    db = new_db("layered")
+    plant(db, "state", [rec(1500, f"## Малая {n}") for n in range(1, 4)])
+    bare_text = save_body(500, "без записей")
+    with contextlib.closing(sqlite3.connect(str(db))) as c:
+        c.execute("INSERT INTO phoenix (role, section, body) VALUES (?,?,?)", (ROLE, "plan", bare_text))
+        c.commit()
+    fp0 = file_fp(db)
+    code, out = call(T.t["records"], db, "--сжать", "--dry-run")
+    named = "разделы без записей" in out and f"plan ({len(bare_text)} знаков)" in out
+    # встречная половина: записи есть у всех разделов роли — строки нет
+    db2 = new_db("layered")
+    plant(db2, "state", [rec(1500, f"## Малая {n}") for n in range(1, 4)])
+    plant(db2, "plan", [rec(500, "## Плановая")])
+    code2, out2 = call(T.t["records"], db2, "--сжать", "--dry-run")
+    absent = "разделы без записей" not in out2
+    ok = code == 0 and code2 == 0 and named and absent and file_fp(db) == fp0
+    return ok, (f"раздел с текстом и без записей: код {code} (ждали 0) · назван вместе с числом знаков "
+                f"({len(bare_text)}): {'да' if named else 'НЕТ'} · база не тронута: "
+                f"{'да' if file_fp(db) == fp0 else 'НЕТ'} · встречная половина (записи у всех "
+                f"разделов): код {code2} (ждали 0), строки нет: {'да' if absent else 'НЕТ'}")
+
+
 def save_body(size, mark):
     head = f"# раздел опыта {mark}\n"
     return head + ("строка опыта\n" * max(1, (size - len(head)) // 13))
@@ -663,11 +721,13 @@ CASES = [
     ("④-9", "РАЗЛ.", case_4_9, "одна запись больше порога"),
     ("④-10", "РАЗЛ.", case_4_10, "порядок ухода"),
     ("④-11", "КОНТР.", case_4_11, "пересборка без правки текста"),
+    ("④-12", "РАЗЛ.", case_4_12, "разделы без записей названы"),
     ("⑥-1", "РАЗЛ.", case_6_1, "три слоя одним вызовом"),
     ("⑥-2", "РАЗЛ.", case_6_2, "ПРАВО и право"),
     ("⑥-3", "РАЗЛ.", case_6_3, "карточка #462"),
     ("⑥-4", "КОНТР.", case_6_4, "--layer warm"),
     ("⑥-5", "КОНТР.", case_6_5, "база без поля слоя: поиск"),
+    ("⑥-6", "РАЗЛ.", case_6_6, "три слова врозь + --layer warm (частичное совпадение)"),
     ("②-1", "РАЗЛ.", case_2_1, "устаревшая ожидаемая версия"),
     ("②-2", "РАЗЛ.", case_2_2, "свежая ожидаемая версия"),
     ("③-1", "РАЗЛ.", case_3_1, "файл старше записи раздела"),
@@ -715,13 +775,14 @@ try:
         results[num] = ok
         check(num, ok, said, kind)
 
-    # ══ ОБРАТНЫЙ ХОД: четыре нарочные поломки в КОПИЯХ инструментов ═════════════════════════
+    # ══ ОБРАТНЫЙ ХОД: пять нарочных поломок в КОПИЯХ инструментов ═════════════════════════
     print()
     print("── нарочные поломки: приёмка сама правит КОПИЮ инструмента на стенде ──")
     breaks_ok = 0
     # (поломка → какой инструмент подменён; случай, который обязан не пройти; те, что обязаны пройти)
     PLAN = {"П1": ("②-1", ["③-1", "④-1", "⑥-1"]), "П2": ("③-1", ["②-1"]),
-            "П3": ("⑥-1", ["②-1"]), "П4": ("④-1", ["⑥-1"])}
+            "П3": ("⑥-1", ["②-1"]), "П4": ("④-1", ["⑥-1"]),
+            "П5": ("⑥-6", ["⑥-1", "②-1"])}
     for label, (tool_name, anchor, replacement) in BREAKS.items():
         src = next(p for p in TOOLS.values() if p.name == tool_name)
         bdir = STAND / f"broken-{label}"
@@ -753,10 +814,14 @@ try:
             started = code == 0 and "OK phoenix/" in out
             said = f"поломанная копия запустилась: код {code} (ждали 0) · строка записи есть: " \
                    f"{'да' if 'OK phoenix/' in out else 'НЕТ'}"
-        elif label == "П3":
+        elif label in ("П3", "П5"):
             db = new_db("layered")
-            plant_three(db, "хризолит")
-            code, out = call(broken.t["find"], db, "хризолит")
+            if label == "П3":
+                plant_three(db, "хризолит")
+                code, out = call(broken.t["find"], db, "хризолит")
+            else:
+                plant(db, "state", [rec(300, "## Пара", body="## Пара\nздесь про хризолит и про гранат\n")])
+                code, out = call(broken.t["find"], db, "хризолит гранат аметист", "--layer", "warm")
             m = re.search(r"ОТВЕТ: (\d+) записей", out)
             started = code == 0 and m is not None and int(m.group(1)) >= 1
             said = f"поломанная копия запустилась: код {code} (ждали 0) · записей в ответе " \
@@ -794,7 +859,7 @@ try:
     k_nums = [c[0] for c in CASES if c[0][0] in "②③"]
     k = sum(1 for n in k_nums if results.get(n))
     print()
-    print(f"ИТОГ: ④ {a} из {an} · ⑥ {b} из {bn} · ② ③ {k} из {len(k_nums)} · поломки {breaks_ok} из 4")
+    print(f"ИТОГ: ④ {a} из {an} · ⑥ {b} из {bn} · ② ③ {k} из {len(k_nums)} · поломки {breaks_ok} из {len(BREAKS)}")
     if failures:
         print(f"🔴 ПРОВАЛИЛОСЬ случаев: {len(failures)}")
         for f in failures:
