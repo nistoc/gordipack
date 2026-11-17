@@ -1262,6 +1262,22 @@ def case_B1(ctx, contract_path):
                ("\nПРОБЛЕМЫ:\n" + "\n".join(problems)) if problems else ""))
 
 
+def one_line(x):
+    """Значение в одну строку: перевод строки внутри значения сбил бы разметку строк подробностей."""
+    return " ".join(str(x or "").split())
+
+
+def marked(detail, flags):
+    """Строки подробностей: у каждой с флагом — «ок» или «НЕ ТАК» перед текстом. flags[i] None — строка без суждения.
+    Число строк обязано сойтись с числом флагов: иначе пометка встала бы не на ту строку."""
+    lines = detail.split("\n")
+    assert len(lines) == len(flags), (len(lines), len(flags), detail[:200])
+    out = []
+    for line, f in zip(lines, flags):
+        out.append(line if f is None else ("ок " if f else "НЕ ТАК ") + line)
+    return "\n".join(out)
+
+
 # ───────────── В2 разбор договора
 
 def case_B2(ctx):
@@ -1310,14 +1326,33 @@ def case_B2(ctx):
          ["cards_read", "card", "required=true"]),
         ("правило 7: имя переменной среды по образцу не проходит", edit(lambda d: tool_doc(d, "memory_write")["variants"]["compact"]["exec"].__setitem__("env", {"mezo_role": "actor"})),
          ["memory_write", "mezo_role", "не по образцу"]),
+        # возврат 1: requires — только аргументы СВОЕГО варианта; вид полей; имя переменной среды только из MEZO_*
+        ("возврат 1 а: requires называет аргумент, который использует только ДРУГОЙ вариант", edit(lambda d: tool_doc(d, "cards_read")["variants"]["list"]["requires"].append("card")),
+         ["cards_read", "list", "card", "не использует"]),
+        ("возврат 1 б: requires — строка, не массив", edit(lambda d: tool_doc(d, "memory_read")["variants"]["edit"].__setitem__("requires", "section")),
+         ["memory_read", "edit", "requires", "не массив"]),
+        ("возврат 1 б: requires — объект, не массив", edit(lambda d: tool_doc(d, "memory_read")["variants"]["edit"].__setitem__("requires", {"section": True})),
+         ["memory_read", "edit", "requires", "не массив"]),
+        ("возврат 1 в: в requires стоит число", edit(lambda d: tool_doc(d, "memory_read")["variants"]["edit"].__setitem__("requires", [5])),
+         ["memory_read", "edit", "requires", "Number"]),
+        ("возврат 1 г: значение в exec.env — число", edit(lambda d: tool_doc(d, "memory_write")["variants"]["compact"]["exec"].__setitem__("env", {"MEZO_ROLE": 5})),
+         ["exec.env", "MEZO_ROLE", "Number"]),
+        ("возврат 1 д: имя переменной среды PATH", edit(lambda d: tool_doc(d, "memory_write")["variants"]["compact"]["exec"].__setitem__("env", {"PATH": "actor"})),
+         ["memory_write", "PATH", "не по образцу"]),
+        ("возврат 1 е: имя переменной среды GORDI_ROLE", edit(lambda d: tool_doc(d, "memory_write")["variants"]["compact"]["exec"].__setitem__("env", {"GORDI_ROLE": "actor"})),
+         ["memory_write", "GORDI_ROLE", "не по образцу"]),
+        ("возврат 1 ж: в enum аргумента стоит число", edit(lambda d: [a["enum"].append(5) for a in tool_doc(d, "memory_read")["args"] if a["name"] == "view"]),
+         ["enum аргумента", "Number"]),
     ]
     rows, bad = [], []
     for i, (label, doc, must) in enumerate(copies):
         p = os.path.join(ctx["work"], "contract-781-b2-%02d.json" % i)
         write_json(p, doc)
         code, err = load_refusal(ctx["exe"], p, ctx["contours"])
-        ok = code == 4 and "договор не читается" in err and all(m in err for m in must)
-        rows.append("%s %s: код %s — %s" % ("ок" if ok else "НЕ ТАК", label, code, err.strip()[:170]))
+        # в потоке ошибок не должно быть трассировки необработанного исключения: кривой договор — отказ с причиной, не падение
+        trace = ("Unhandled exception" in err) or ("   at " in err) or ("InvalidOperationException" in err)
+        ok = code == 4 and "договор не читается" in err and all(m in err for m in must) and not trace
+        rows.append("%s %s: код %s — %s%s" % ("ок" if ok else "НЕ ТАК", label, code, one_line(err)[:170], " · ТРАССИРОВКА В STDERR" if trace else ""))
         if not ok:
             bad.append(label)
     code_ok, _ = load_refusal(ctx["exe"], ctx["contract"], ctx["contours"])
@@ -1413,13 +1448,14 @@ def case_B4(ctx, contract_path):
     ok_b = seen(t_b) == ("-", "-") and s_b.get("outcome") == "passed"
     ok_c = seen(t_c) == ("PROTO", "-") and s_c.get("outcome") == "passed"
     ok_d = s_d.get("outcome") == "refused" and "actor" in (s_d.get("error") or "") and not ran_d
-    return (ok_a and ok_a_run and ok_b and ok_c and ok_d,
+    return (ok_a and ok_a_run and ok_b and ok_c and ok_d, marked(
             "служба поднята с MEZO_ROLE=EVIL и MEZO_CONTAINER=X в СВОЕЙ среде\n"
             "вызов без env в договоре (rules_get): тело видит (MEZO_ROLE, MEZO_CONTAINER) = %s · режим run: %s (ждали обе «-»)\n"
             "вариант save без env (memory_write): тело видит %s (ждали обе «-»)\n"
             "вариант compact с actor=PROTO: тело видит %s (ждали PROTO и «-»)\n"
             "compact без actor: исход %s, причина «%s», тело запускалось: %s (ждали отказ до тела)"
-            % (seen(t_a), seen(out_a), seen(t_b), seen(t_c), s_d.get("outcome"), (s_d.get("error") or "")[:110], ran_d))
+            % (seen(t_a), seen(out_a), seen(t_b), seen(t_c), s_d.get("outcome"), one_line(s_d.get("error"))[:110], ran_d),
+            [None, ok_a and ok_a_run, ok_b, ok_c, ok_d]))
 
 
 # ───────────── В5 поиск по трём слоям, критерий ⑥
@@ -1492,7 +1528,7 @@ def case_B5(ctx, contract_path):
               and r2[0] == "passed" and set(rh2) == {warm_id}
               and r3[0] == "passed" and r4[0] == "passed" and set(rh3) == set(rh4) == set(hits))
     ok_num = bool(num_pick) and sn is not None and sn.get("outcome") == "passed" and set(parse_hits(tn)) == set(num_pick[2]) and bool(parse_hits(tn))
-    return (ok_layers and ok_warm and ok_case and ok_run and ok_num,
+    return (ok_layers and ok_warm and ok_case and ok_run and ok_num, marked(
             "роль %s, слово «%s»; записи до переноса %s; перенесены: #%d → warm, #%d → permanent (%s)\n"
             "служба, без layer: исход %s · записи %s · слои %s\n"
             "служба, layer=warm: исход %s · записи %s (ждали только #%d)\n"
@@ -1505,7 +1541,8 @@ def case_B5(ctx, contract_path):
                sorted(h3), sorted(h4), set(h3) == set(h4) == set(hits),
                r1[0], sorted(rh1), r2[0], sorted(rh2), set(rh3) == set(rh4) == set(hits),
                ("%s у роли %s" % (num_pick[1], num_pick[0])) if num_pick else "ПРОВЕРЯТЬ НЕЧЕМ: номера карточки в записях копии нет",
-               sn.get("outcome") if sn else None, sorted(parse_hits(tn)) if tn else None, sorted(num_pick[2]) if num_pick else None))
+               sn.get("outcome") if sn else None, sorted(parse_hits(tn)) if tn else None, sorted(num_pick[2]) if num_pick else None),
+            [None, ok_layers, ok_warm, ok_case, ok_run, ok_num]))
 
 
 # ───────────── В6 сжатие, критерий ④
@@ -1560,7 +1597,7 @@ def case_B6(ctx, contract_path):
     ok_real = (s_real.get("outcome") == "passed" and ids_real == ids_dry and bool(ids_real) and m_chars is not None
                and int(m_chars.group(3)) < int(m_chars.group(1)) and int(m_chars.group(3)) == int(hot_after)
                and all(layers.get(i) == "warm" for i in ids_real) and d4 != d3)
-    return (ok_dry and ok_bad and ok_th and ok_real,
+    return (ok_dry and ok_bad and ok_th and ok_real, marked(
             "роль %s, раздел %s: слой hot %d знаков (порог читает тело, в вызове его нет)\n"
             "холостой прогон: исход %s · записи %s · «hot → warm» в тексте: %s · таблица записей не изменилась: %s\n"
             "actor=%s при role=%s: исход %s, причина «%s» · таблица не изменилась: %s\n"
@@ -1569,11 +1606,12 @@ def case_B6(ctx, contract_path):
             "в копии все они в слое warm: %s · таблица изменилась: %s"
             % (role, section, chars,
                s_dry.get("outcome"), ids_dry, "hot → warm" in t_dry, d1 == d0,
-               other, role, s_bad.get("outcome"), (s_bad.get("error") or "")[:100], d2 == d1,
-               s_th.get("outcome"), (s_th.get("error") or "")[:80], s_li.get("outcome"), (s_li.get("error") or "")[:80], d3 == d2,
+               other, role, s_bad.get("outcome"), one_line(s_bad.get("error"))[:100], d2 == d1,
+               s_th.get("outcome"), one_line(s_th.get("error"))[:80], s_li.get("outcome"), one_line(s_li.get("error"))[:80], d3 == d2,
                s_real.get("outcome"), ids_real, ids_real == ids_dry,
                m_chars.group(1) if m_chars else None, m_chars.group(3) if m_chars else None, hot_after,
-               all(layers.get(i) == "warm" for i in ids_real), d4 != d3))
+               all(layers.get(i) == "warm" for i in ids_real), d4 != d3),
+            [None, ok_dry, ok_bad, ok_th, ok_real]))
 
 
 # ───────────── В7 завести карточку
@@ -1611,15 +1649,16 @@ def case_B7(ctx, contract_path):
     ok_cm = s_cm.get("outcome") == "passed" and len(ev) == 1 and ev[0][1].strip() == comment
     ok_read = (s_show.get("outcome") == "passed" and title in t_show
                and s_list.get("outcome") in ("passed", "partial") and ("#%s " % new_id) in t_list and title[:18] in t_list)
-    return (ok_add and ok_no and ok_cm and ok_read,
-            "заведена карточка #%s: исход %s · строк backlog было %s стало %s · заголовок, тело, критерий, метки %s, срочность %s совпали: %s\n"
+    return (ok_add and ok_no and ok_cm and ok_read, marked(
+            "заведена карточка #%s: исход %s · строк backlog было %s стало %s · заголовок, тело, критерий, метки %s, срочность %s совпали: %s (ждали passed, +1 строка, поля совпали)\n"
             "без done_when: исход %s «%s» (ждали отказ договора, не «тело отказало») · строк backlog %s (было %s)\n"
-            "комментарий: исход %s · событий comment у карточки %d, текст совпал: %s\n"
-            "cards_read view=card: исход %s · заголовок в ответе: %s · view=list role=PROTO: исход %s · карточка перечислена: %s"
+            "комментарий: исход %s · событий comment у карточки %d, текст совпал: %s (ждали passed, одно событие, текст совпал)\n"
+            "cards_read view=card: исход %s · заголовок в ответе: %s · view=list role=PROTO: исход %s · карточка перечислена: %s (ждали passed, True, passed, True)"
             % (new_id, s_add.get("outcome"), n0, n1, saved_tags, row[0][5] if row else None, ok_add,
-               s_no.get("outcome"), (s_no.get("error") or "")[:120], n2, n1,
+               s_no.get("outcome"), one_line(s_no.get("error"))[:120], n2, n1,
                s_cm.get("outcome"), len(ev), bool(ev) and ev[0][1].strip() == comment,
-               s_show.get("outcome"), title in t_show, s_list.get("outcome"), ("#%s " % new_id) in t_list))
+               s_show.get("outcome"), title in t_show, s_list.get("outcome"), ("#%s " % new_id) in t_list),
+            [ok_add, ok_no, ok_cm, ok_read]))
 
 
 # ───────────── В8 записать слово владельца: настоящий искатель, подставной домашний каталог
@@ -1667,13 +1706,14 @@ def case_B8(ctx, contract_path):
               and row[0][4] == real_line and norm(row[0][3]) == norm(chat_file) and DAY_781 in (row[0][0] or "") and "12:10:00" in (row[0][0] or ""))
     ok_no = s_no.get("outcome") == "tool_failed" and n2 == n1 and "ОТКАЗ" in (s_no.get("error") or "")
     ok_fd = s_fd.get("outcome") == "passed" and text_yes in t_fd
-    return (ok_add and ok_no and ok_fd,
+    return (ok_add and ok_no and ok_fd, marked(
             "служба поднята с USERPROFILE и HOME на подставной каталог %s (настоящий искатель из малой копии)\n"
-            "запись: исход %s · строк owner_words было %s стало %s · в строке файл %s внутри подставного каталога: %s, номер строки %s (на самом деле %d), час %s\n"
-            "текст, которого в записях нет: исход %s «%s» · строк %s (было %s)\n"
-            "owner_words_find: исход %s · найденное слово в ответе: %s"
+            "запись: исход %s · строк owner_words было %s стало %s · в строке файл %s внутри подставного каталога: %s, номер строки %s (на самом деле %d), час %s (ждали passed, +1 строка, файл внутри подставного каталога)\n"
+            "текст, которого в записях нет: исход %s «%s» · строк %s (было %s) (ждали tool_failed с ОТКАЗ, строк не прибавилось)\n"
+            "owner_words_find: исход %s · найденное слово в ответе: %s (ждали passed, True)"
             % (home, s_ok.get("outcome"), n0, n1, row[0][3] if row else None, inside, row[0][4] if row else None, real_line,
-               row[0][0] if row else None, s_no.get("outcome"), (s_no.get("error") or "")[:110], n2, n1, s_fd.get("outcome"), text_yes in t_fd))
+               row[0][0] if row else None, s_no.get("outcome"), one_line(s_no.get("error"))[:110], n2, n1, s_fd.get("outcome"), text_yes in t_fd),
+            [None, ok_add, ok_no, ok_fd]))
 
 
 # ───────────── В9 читающие вызовы пишут только объявленное
@@ -1729,10 +1769,15 @@ def apply_break(doc, key):
     import copy
     d = copy.deepcopy(doc)
     if key == "П1":
-        tool_doc(d, "memory_write")["variants"]["compact"]["exec"].pop("env", None)
+        v = tool_doc(d, "memory_write")["variants"]["compact"]
+        v["exec"].pop("env", None)
+        # без env аргумент actor вариантом не используется: убираем его и из requires, чтобы копия загрузилась (иначе её отвергнет разбор)
+        v["requires"] = [r for r in v["requires"] if r != "actor"]
     elif key == "П2":
         v = tool_doc(d, "cards_read")["variants"]
-        v["list"]["exec"], v["card"]["exec"] = v["card"]["exec"], v["list"]["exec"]
+        # переставляем тело вместе с requires: иначе копию отвергнет разбор (requires называл бы чужой аргумент)
+        for k in ("exec", "requires"):
+            v["list"][k], v["card"][k] = v["card"][k], v["list"][k]
     elif key == "П3":
         tool_doc(d, "cards_write")["variants"]["add"].pop("requires", None)
     return d

@@ -218,9 +218,13 @@ public sealed class Contract
                 if (!kv.Value.TryGetProperty("exec", out var vexec))
                     throw new InvalidDataException($"у варианта «{kv.Name}» вызова «{name}» нет exec");
                 var requires = new List<string>();
-                if (kv.Value.TryGetProperty("requires", out var jrq) && jrq.ValueKind == JsonValueKind.Array)
+                if (kv.Value.TryGetProperty("requires", out var jrq))
+                {
+                    if (jrq.ValueKind != JsonValueKind.Array)
+                        throw new InvalidDataException($"у варианта «{kv.Name}» вызова «{name}» requires — не массив имён аргументов");
                     foreach (var r in jrq.EnumerateArray())
-                        if (r.GetString() is { } rs) requires.Add(rs);
+                        requires.Add(StrOnly(r, $"requires варианта «{kv.Name}» вызова «{name}»"));
+                }
                 variants.Add(new ToolVariant(kv.Name, Str(kv.Value, "title") ?? "", requires, ReadExec(vexec)));
             }
         }
@@ -241,7 +245,7 @@ public sealed class Contract
     }
 
     private static readonly System.Text.RegularExpressions.Regex EnvName =
-        new(@"^[A-Z][A-Z0-9_]*$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        new(@"^MEZO_[A-Z0-9_]+$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     /// <summary>
     /// Разбор договора: правила о вариантах и передаче в среду. Нарушение — договор не загружается,
@@ -263,15 +267,22 @@ public sealed class Contract
             foreach (var m in exec.Args)
                 if (!declared.Contains(m.Arg))
                     throw new InvalidDataException($"в {where} exec.args ссылается на аргумент «{m.Arg}», которого вызов не объявляет");
-            foreach (var r in requires)
-                if (!declared.Contains(r))
-                    throw new InvalidDataException($"в {where} requires называет аргумент «{r}», которого вызов не объявляет");
+            // сначала env (имя переменной и объявленность аргумента), потом requires: у него причина «не использует» зависит от env
             foreach (var (envName, argName) in exec.EnvMap)
             {
                 if (!EnvName.IsMatch(envName))
-                    throw new InvalidDataException($"в {where} имя переменной среды «{envName}» не по образцу ^[A-Z][A-Z0-9_]*$");
+                    throw new InvalidDataException($"в {where} имя переменной среды «{envName}» не по образцу ^MEZO_[A-Z0-9_]+$: договор не вправе подменять телу чужие переменные среды");
                 if (!declared.Contains(argName))
                     throw new InvalidDataException($"в {where} exec.env передаёт в «{envName}» аргумент «{argName}», которого вызов не объявляет");
+            }
+            foreach (var r in requires)
+            {
+                if (!declared.Contains(r))
+                    throw new InvalidDataException($"в {where} requires называет аргумент «{r}», которого вызов не объявляет");
+                // свой аргумент варианта — тот, что назван в его exec.args или exec.env; иначе вариант невызываем
+                if (!exec.UsedArgs.Contains(r))
+                    throw new InvalidDataException($"в {where} requires называет аргумент «{r}», которого тело этого варианта не использует "
+                                                   + "(нет ни в exec.args, ни в exec.env): вариант стал бы невызываемым");
             }
         }
 
@@ -349,7 +360,7 @@ public sealed class Contract
         if (!t.TryGetProperty("service_writes", out var jw) || jw.ValueKind != JsonValueKind.Array) return null;
         var list = new List<string>();
         foreach (var w in jw.EnumerateArray())
-            if (w.GetString() is { } s) list.Add(s);
+            list.Add(StrOnly(w, "service_writes"));
         return list;
     }
 
@@ -360,7 +371,7 @@ public sealed class Contract
         {
             values = new List<string>();
             foreach (var v in je.EnumerateArray())
-                if (v.GetString() is { } s) values.Add(s);
+                values.Add(StrOnly(v, "enum аргумента"));
         }
 
         return new ToolArg(
@@ -383,13 +394,13 @@ public sealed class Contract
                 // «pre» — список групп: группа может быть парой («--db», «{db}») или одиночным словом
                 if (group.ValueKind == JsonValueKind.Array)
                     foreach (var w in group.EnumerateArray())
-                    { if (w.GetString() is { } s) pre.Add(s); }
-                else if (group.GetString() is { } single) pre.Add(single);
+                        pre.Add(StrOnly(w, "exec.pre"));
+                else pre.Add(StrOnly(group, "exec.pre"));
 
         var sub = new List<string>();
         if (e.TryGetProperty("sub", out var js) && js.ValueKind == JsonValueKind.Array)
             foreach (var w in js.EnumerateArray())
-                if (w.GetString() is { } s) sub.Add(s);
+                sub.Add(StrOnly(w, "exec.sub"));
 
         var maps = new List<ArgMap>();
         if (e.TryGetProperty("args", out var ja) && ja.ValueKind == JsonValueKind.Array)
@@ -403,7 +414,7 @@ public sealed class Contract
         var mismatch = new List<string>();
         if (e.TryGetProperty("mismatch_when", out var jm) && jm.ValueKind == JsonValueKind.Array)
             foreach (var w in jm.EnumerateArray())
-                if (w.GetString() is { } s) mismatch.Add(s);
+                mismatch.Add(StrOnly(w, "exec.mismatch_when"));
 
         var env = new Dictionary<string, string>(StringComparer.Ordinal);
         if (e.TryGetProperty("env", out var jenv))
@@ -411,12 +422,20 @@ public sealed class Contract
             if (jenv.ValueKind != JsonValueKind.Object)
                 throw new InvalidDataException("в договоре exec.env — не объект «имя переменной → имя аргумента»");
             foreach (var kv in jenv.EnumerateObject())
-                env[kv.Name] = kv.Value.GetString()
-                               ?? throw new InvalidDataException($"в договоре exec.env: у переменной «{kv.Name}» значение не строка");
+                env[kv.Name] = StrOnly(kv.Value, $"exec.env, переменная «{kv.Name}»");
         }
 
         return new ToolExec("python", null, Str(e, "dir"), Str(e, "script"), pre, sub, maps, mismatch, env);
     }
+
+    /// <summary>
+    /// Строгое чтение строки из перечня: значение не строки (число, null, объект) — договор не загружается,
+    /// причина называет место. Прямой GetString() бросил бы InvalidOperationException и уронил службу трассировкой.
+    /// </summary>
+    private static string StrOnly(JsonElement v, string where) =>
+        v.ValueKind == JsonValueKind.String
+            ? v.GetString()!
+            : throw new InvalidDataException($"в договоре в {where} значение вида {v.ValueKind}, а нужна строка");
 
     private static string? Str(JsonElement o, string name) =>
         o.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
