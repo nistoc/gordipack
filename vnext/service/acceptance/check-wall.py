@@ -1022,15 +1022,18 @@ DAY_781 = "2026-11-13"
 #       ⚠️ ИСТОРИЯ: до 2026-11-17 переставлялся exec целиком вместе с requires — и случаи падали отказом «аргумент не относится
 #       к варианту», а не вызовом чужого тела (та же находка TAXO).
 #   П3  у варианта add снят requires             → без критерия отказ даёт тело, а не договор: ломает В7
+#       ⚠️ ИСТОРИЯ: до возврата 3 (2026-11-17) признак П3 называл строку без исхода — и засчитывал поломку, где отказал
+#       ДОГОВОР, только по чужому аргументу (requires done_when → tags; контроль TAXO, её разбор 17.11 12:56 UTC).
+#       Теперь признак несёт исход «tool_failed «тело отказало»: названный механизм — отказ ТЕЛА.
 # Четвёртое поле — ПРЯМОЙ ПРИЗНАК: случай и кусок строки, которой этот случай обязан объяснить провал. Он держит МЕХАНИЗМ:
 # «упали ровно свои» мало, если они упали соседним отказом. Признаки тоже названы до прогона.
 BREAKS_781 = [
     ("П1", "у варианта compact переменная среды названа не тем именем", {"В4", "В6"},
-     ("В4", "вариант compact с actor=PROTO: тело видит ('-', '-')")),
+     ("В4", "вариант compact с actor=PROTO при role=COORD: тело видит ('-', '-')")),
     ("П2", "у вариантов cards_read переставлены только подкоманды", {"В3", "В7", "В9"},
      ("В3", "вариант list [serve]: исход passed · тело запускалось: True")),
     ("П3", "у варианта add снят requires", {"В7"},
-     ("В7", "НЕ ТАК без done_when: исход")),
+     ("В7", "НЕ ТАК без done_when: исход tool_failed «тело отказало")),
 ]
 
 
@@ -1447,7 +1450,9 @@ def case_B4(ctx, contract_path):
 
     s_a, t_a = call_serve(w, "rules_get", carg, {"list": True})
     s_b, t_b = call_serve(w, "memory_write", carg, {"action": "save", "role": "PROTO", "section": "state", "body": "x", "expect_version": 1})
-    s_c, t_c = call_serve(w, "memory_write", carg, {"action": "compact", "role": "PROTO", "actor": "PROTO"})
+    # role и actor НАМЕРЕННО разные: при равных подмена «в MEZO_ROLE уходит role, а не actor» прошла бы молча
+    # (заметка TAXO, её разбор 17.11 12:56 UTC). Тело здесь — заглушка, чужую память она не трогает.
+    s_c, t_c = call_serve(w, "memory_write", carg, {"action": "compact", "role": "COORD", "actor": "PROTO"})
     before = len(log_lines(log))
     s_d, t_d = call_serve(w, "memory_write", carg, {"action": "compact", "role": "PROTO"})
     ran_d = len(log_lines(log)) > before
@@ -1462,7 +1467,7 @@ def case_B4(ctx, contract_path):
             "служба поднята с MEZO_ROLE=EVIL и MEZO_CONTAINER=X в СВОЕЙ среде\n"
             "вызов без env в договоре (rules_get): тело видит (MEZO_ROLE, MEZO_CONTAINER) = %s · режим run: %s (ждали обе «-»)\n"
             "вариант save без env (memory_write): тело видит %s (ждали обе «-»)\n"
-            "вариант compact с actor=PROTO: тело видит %s (ждали PROTO и «-»)\n"
+            "вариант compact с actor=PROTO при role=COORD: тело видит %s (ждали PROTO и «-»)\n"
             "compact без actor: исход %s, причина «%s», тело запускалось: %s (ждали отказ до тела)"
             % (seen(t_a), seen(out_a), seen(t_b), seen(t_c), s_d.get("outcome"), one_line(s_d.get("error"))[:110], ran_d),
             [None, ok_a and ok_a_run, ok_b, ok_c, ok_d]))
