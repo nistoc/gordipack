@@ -34,6 +34,7 @@ r"""НАЙТИ СЛОВО ВЛАДЕЛЬЦА В ЗАПИСЯХ РАЗГОВОР�
     0 — нашли с происхождением «человек» или выбором · 1 — не нашли ничего
     2 — ОТКАЗ МЕРИТЬ (искать было негде)
     3 — совпадения есть, но у всех происхождение не записано или машинное
+    4 — ИСКАЛ НЕ ВЕЗДЕ: в прочитанном не нашли (или только спорное), а часть файлов не прочитана
 
 ✍ ПРОИСХОЖДЕНИЕ СУДИТСЯ ПО ПОЛЮ ЗАПИСИ, А НЕ ПО ВИДУ ТЕКСТА (с 2026-09-04 20:15 UTC,
   признак нашёл @CHROME, исключение и встречный случай — перемер PROTO; подробно в
@@ -56,6 +57,33 @@ r"""НАЙТИ СЛОВО ВЛАДЕЛЬЦА В ЗАПИСЯХ РАЗГОВОР�
       RCC 11.10): сведённые в один ноль, они прятали бы, что окна инструмент не читал.
 Имена в коде — по-английски (слово владельца 07.09); прежние русские флаги приняты синонимами.
 
+═══ КАРТОЧКА #797 (2026-11-17): ЧТЕНИЕ, КОТОРОЕ НЕ ВОЗВРАЩАЕТСЯ ═══
+16–17.11 искатель трижды за сутки повис молча на чтении записи разговора, которую в это время
+дописывала среда: ни байта за минуты, процессор стоит, поток один — и процесс не снимался даже
+принудительно (запись о нём оставалась в списке процессов). Вызывающий owner-word.py ждал без
+предела; запись адресов словам владельца (карточка #795) встала на 50 минут без единой строки.
+    · зависший поток снять нельзя ⇒ записи читает ОТДЕЛЬНЫЙ читающий процесс (scan_worker), один
+      на прогон, а не на файл (цена запуска); искатель ждёт его, глядя на его файл хода;
+    · файл хода растёт раз в секунду, пока номер строки меняется. Тишина дольше предела
+      (--read-timeout, 30 с) — чтение не вернулось: файл в «не прочитан», процессу kill без
+      ожидания, остальные файлы — новому читающему процессу. Упал читающий процесс — так же;
+    · к брошенному процессу у искателя нет каналов: его вывод — в файлы, описатели наследуются
+      только явно названные; вызывающий получает вывод искателя, не дожидаясь брошенного;
+    · ИСХОД: всё прочитано — вывод и коды прежние. Есть непрочитанные — у итога их число и полные
+      пути строками «не прочитан: <путь> — <причина>»; «не найдено» и «только спорное» при них —
+      код 4 «искал не везде», а не 1 и не 3; найдено — код 0, непрочитанное названо рядом;
+    · СЛЕД БРОШЕННОГО: каталог хода find-owner-word-* его прогон убрать не может — повисший
+      процесс держит свои файлы. Процесс потом исчезает, а каталог оставался НАВСЕГДА (замер TAXO
+      и COORD 17.11 13:46 UTC: 25 каталогов, живых процессов 0; прежде здесь и в документе выпуска
+      было неверно «остаётся, пока процесс жив»). Поэтому каждый прогон при старте убирает
+      каталоги хода, где ни в каталоге, ни в его файлах час нет записи (sweep_stale); файлы,
+      которые ещё держит живой процесс, пропускаются;
+    · КОНТЕЙНЕР: каталоги хода лежат в <Temp>/find-owner-word/, и уборка обходит ТОЛЬКО его.
+      17.11 в редакции без контейнера нарочная поломка проверки имени удалила ≈58 тыс. чужих
+      каталогов системного Temp (записка #6608) — удаление ограничено местом, а не строкой;
+    · предел --read-timeout — от 2 до 600 с: живой прогон пишет в свой каталог не реже раза
+      в предел, и уборка соседнего прогона не примет его за брошенный.
+
 ⛔ ЧЕГО ЭТОТ ИНСТРУМЕНТ НЕ ДОКАЗЫВАЕТ, СКАЗАНО ПРЯМО. Пустой ответ НЕ доказывает, что
 слова не было. Записи разговоров могут быть удалены, усечены при сжатии, лежать в другом
 каталоге проектов или относиться к сеансу, чей файл не сохранён. ⇒ «не найдено» означает
@@ -74,11 +102,41 @@ import argparse
 import datetime as dt
 import io
 import json
+import os
 import pathlib
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
+import threading
+import time
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+
+# ── ЧТЕНИЕ В ОТДЕЛЬНОМ ПРОЦЕССЕ (карточка #797) ──────────────────────────────────────────
+# Ключ, которым искатель зовёт сам себя читающим процессом. Человеку он не нужен.
+WORKER_FLAG = "--scan-worker"
+# Предел тишины: столько секунд без единой новой строки — чтение считается не вернувшимся.
+# ⚖️ Число не из замера скорости, а из замера зависания: живое чтение двигает номер строки
+# много раз в секунду, а повисшее 16–17.11 стояло минутами. 30 с — с запасом в обе стороны.
+DEFAULT_READ_TIMEOUT = 30.0
+BEAT_SECONDS = 1.0     # как часто читающий процесс отмечает ход в своём файле
+POLL_SECONDS = 0.2     # как часто искатель смотрит на файл хода
+MAX_READ_TIMEOUT = 600.0   # верхняя граница --read-timeout: см. STALE_SECONDS
+# Каталоги хода лежат в СВОЁМ каталоге-контейнере внутри временного каталога системы, а не
+# прямо в нём; имя каждого начинается с WORK_PREFIX.
+# 🩸 17.11 14:56–15:02 UTC: в редакции, где каталоги хода лежали прямо в Temp, а уборку держала
+# одна проверка имени, нарочная поломка этой проверки удалила в системном Temp ≈58 тыс. чужих
+# каталогов (записка #6608, карточка #797). Контейнер ограничивает удаление местом, а не строкой:
+# без проверки имени уборка всё равно не выходит за свой каталог.
+WORK_HOME = "find-owner-word"
+WORK_PREFIX = "find-owner-word-"
+# Каталог хода, где ни сам он, ни один его файл не менялись дольше этого, — след брошенного
+# прогона. ⚖️ Живой прогон пишет в свой каталог не реже раза в предел тишины (отметка хода или
+# новый файл задания после брошенного процесса), а предел не больше MAX_READ_TIMEOUT, —
+# поэтому часа тишины у живого не бывает.
+STALE_SECONDS = 3600.0
 
 # Каталог записей разговоров. ⚖️ Выводится от домашнего каталога, а не впечатан:
 # впечатанный путь сделал бы инструмент непереносимым на другую машину, а молчал бы
@@ -456,7 +514,218 @@ def parse_choice_text(s: str) -> list:
     return result
 
 
+def scan_worker(job_path: str, out_path: str) -> int:
+    """ЧИТАЮЩИЙ ПРОЦЕСС (карточка #797): читает файлы задания по порядку и пишет в свой файл хода
+    строки JSON — {"start": i} перед файлом, {"tick": i, "line": n} раз в секунду, пока номер
+    строки меняется, {"done": i, "seen": …, "hits": […]} по концу файла, {"end": true} в конце.
+
+    hits — то, что прежде отбиралось прямо в цикле main(): записи искомой даты с искомым куском,
+    вместе с номером строки (адрес источника, карточка #795). seen — счёт охвата файла.
+    ⚖️ Отметку хода ставит ОТДЕЛЬНЫЙ поток по номеру строки, а не сам цикл чтения: повисшее чтение
+    отпускает остальные потоки, и тишина в файле хода значит «номер строки не двигался»."""
+    job = json.loads(pathlib.Path(job_path).read_text(encoding="utf-8"))
+    date, needle = job.get("date"), job["needle"]
+    lock = threading.Lock()
+    out = open(out_path, "a", encoding="utf-8")
+    state = {"i": None, "where": None, "mark": None, "stop": False}
+
+    def emit(rec: dict) -> None:
+        with lock:
+            if not out.closed:
+                out.write(json.dumps(rec, ensure_ascii=True) + "\n")
+                out.flush()
+
+    def beat() -> None:
+        while not state["stop"]:
+            time.sleep(BEAT_SECONDS)
+            cur = state["where"]
+            mark = (state["i"], cur.get("line") if cur is not None else None)
+            if mark != state["mark"]:
+                state["mark"] = mark
+                emit({"tick": mark[0], "line": mark[1]})
+
+    threading.Thread(target=beat, daemon=True).start()
+    for i, name in enumerate(job["files"]):
+        where: dict = {}
+        state["i"], state["where"] = i, where
+        emit({"start": i})
+        seen = {"текст": 0, "выбор": 0, "посреди-хода": 0}
+        hits = []
+        for ts, kind, text, origin, marks, window in user_turns(pathlib.Path(name), where):
+            if date and not ts.startswith(date):
+                continue
+            if kind in ("выбор", "посреди-хода"):
+                seen[kind] += 1
+            elif kind == "текст" and origin == "человек":
+                seen["текст"] += 1
+            if needle not in text.lower():
+                continue
+            hits.append([ts, kind, text, origin, marks, window, where.get("line")])
+        emit({"done": i, "seen": seen, "hits": hits})
+    emit({"end": True})
+    state["stop"] = True
+    with lock:
+        out.close()
+    return 0
+
+
+def read_records(path: pathlib.Path) -> list:
+    """Строки файла хода читающего процесса. Недописанная последняя строка не берётся."""
+    try:
+        raw = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    recs = []
+    for ln in raw.splitlines(keepends=True):
+        if not ln.endswith("\n"):
+            break
+        try:
+            recs.append(json.loads(ln))
+        except ValueError:
+            continue
+    return recs
+
+
+def is_link(path: str) -> bool:
+    """Ссылка или точка соединения: обходить и удалять сквозь неё нельзя — за ней чужое место."""
+    if os.path.islink(path):
+        return True
+    return hasattr(os.path, "isjunction") and os.path.isjunction(path)
+
+
+def work_home() -> pathlib.Path:
+    """Свой каталог-контейнер для каталогов хода: <Temp>/find-owner-word (создаётся при нужде)."""
+    home = pathlib.Path(tempfile.gettempdir()) / WORK_HOME
+    home.mkdir(exist_ok=True)
+    return home
+
+
+def sweep_stale(home: pathlib.Path, now: float) -> int:
+    """Убрать свои каталоги хода, брошенные прежними прогонами (карточка #797, заметка TAXO 3).
+
+    Прогон, бросивший повисший читающий процесс, свой каталог убрать не может: повисший процесс
+    держит свои файлы, и rmtree их пропускает. Процесс потом исчезает, а каталог остаётся навсегда.
+    Поэтому убирает каждый следующий прогон — каталоги хода, где ни в каталоге, ни в одном его
+    файле нет записи дольше STALE_SECONDS. Не удалось судить о свежести (нет прав, файл исчез
+    посреди обхода) — каталог не трогается. Файлы, которые ещё держит живой процесс, rmtree
+    пропускает: такой каталог останется до следующего раза.
+    ⛔ Обходит ТОЛЬКО свой контейнер home (work_home), а не весь Temp: удаление ограничено местом.
+    Проверка имени WORK_PREFIX — вторая защита внутри контейнера, а не единственная. Контейнер —
+    ссылка или точка соединения — уборки нет вовсе. Ссылки и точки соединения внутри не трогаются.
+    Возвращает число убранных каталогов."""
+    removed = 0
+    if is_link(str(home)):
+        return 0
+    try:
+        entries = list(os.scandir(home))
+    except OSError:
+        return 0
+    for e in entries:
+        if not e.name.startswith(WORK_PREFIX):
+            continue
+        try:
+            # ⚠️ у точки соединения is_dir(follow_symlinks=False) — True (замер TAXO 17.11):
+            # держит только is_link
+            if e.is_symlink() or not e.is_dir(follow_symlinks=False) or is_link(e.path):
+                continue
+            # os.stat, а не кэш обхода: у файла, который держит открытым другой процесс, кэш
+            # каталога в Windows отстаёт от настоящего времени записи
+            newest = os.stat(e.path, follow_symlinks=False).st_mtime
+            for f in os.scandir(e.path):
+                newest = max(newest, os.stat(f.path, follow_symlinks=False).st_mtime)
+        except OSError:
+            continue
+        if now - newest <= STALE_SECONDS:
+            continue
+        shutil.rmtree(e.path, ignore_errors=True)
+        if not os.path.exists(e.path):
+            removed += 1
+    return removed
+
+
+def scan_files(files: list, date, needle: str, limit: float):
+    """Прочитать файлы читающим процессом с пределом тишины (карточка #797).
+
+    Возвращает (прочитанные, непрочитанные): [(файл, seen, hits)] в порядке файлов и
+    [(файл, причина)]. Файл, на котором читающий процесс замолчал дольше предела или упал,
+    пропускается; остальные читает новый читающий процесс.
+    ⛔ Брошенный процесс НЕ ждём ни wait, ни чтением его вывода: процесс, повисший в чтении,
+    не снимается и принудительно (16–17.11, три случая), и любое ожидание повисло бы вместе с ним.
+    Его вывод идёт в файлы, а не в каналы искателя, и наследует он только три названных
+    описателя — поэтому и вызывающий искатель (owner-word.py) своего вывода дождётся."""
+    scanned, unread = [], []
+    if not files:
+        return scanned, unread
+    # сперва убрать следы прежних брошенных прогонов, потом завести свой каталог — оба в контейнере
+    home = work_home()
+    sweep_stale(home, time.time())
+    work = pathlib.Path(tempfile.mkdtemp(prefix=WORK_PREFIX, dir=home))
+    me = str(pathlib.Path(__file__).resolve())
+    start, n = 0, 0
+    try:
+        while start < len(files):
+            n += 1
+            batch = files[start:]
+            job, out, err = work / f"job-{n}.json", work / f"out-{n}.jsonl", work / f"err-{n}.txt"
+            job.write_text(json.dumps({"files": [str(p) for p in batch], "date": date,
+                                       "needle": needle}, ensure_ascii=True), encoding="utf-8")
+            out.write_bytes(b"")
+            with open(err, "wb") as err_fh:
+                proc = subprocess.Popen([sys.executable, me, WORKER_FLAG, str(job), str(out)],
+                                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                        stderr=err_fh)
+            size, moved, code = -1, time.monotonic(), None
+            while True:
+                try:
+                    code = proc.wait(timeout=POLL_SECONDS)
+                except subprocess.TimeoutExpired:
+                    code = None
+                try:
+                    now_size = out.stat().st_size
+                except OSError:
+                    now_size = size
+                if now_size != size:
+                    size, moved = now_size, time.monotonic()
+                if code is not None or time.monotonic() - moved > limit:
+                    break
+            recs = read_records(out)
+            done = [r for r in recs if "done" in r]
+            for r in done:
+                scanned.append((batch[r["done"]], r["seen"], r["hits"]))
+            if any("end" in r for r in recs) or len(done) >= len(batch):
+                if code is None:
+                    try:
+                        proc.kill()
+                    except OSError:
+                        pass
+                break
+            cur = len(done)
+            if code is None:
+                try:
+                    proc.kill()     # не ждём: снимется ли он, искателю неважно
+                except OSError:
+                    pass
+                started = any(r.get("start") == cur for r in recs)
+                why = (f"чтение не вернулось за {limit:g} с (ни одной новой строки) — файл пропущен, "
+                       f"читающий процесс {proc.pid} брошен без ожидания" if started else
+                       f"читающий процесс {proc.pid} не начал этот файл за {limit:g} с — брошен без ожидания")
+            else:
+                try:
+                    tail = err.read_text(encoding="utf-8", errors="replace").strip().splitlines()
+                except OSError:
+                    tail = []
+                why = (f"читающий процесс упал на этом файле, код {code}"
+                       + (f": {tail[-1][:240]}" if tail else ""))
+            unread.append((batch[cur], why))
+            start += cur + 1
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    return scanned, unread
+
+
 def main() -> int:
+    if len(sys.argv) == 4 and sys.argv[1] == WORKER_FLAG:
+        return scan_worker(sys.argv[2], sys.argv[3])
     ap = argparse.ArgumentParser()
     # Флаги по-английски (слово владельца 07.09 о коде); прежние русские имена — синонимы:
     # ими инструмент зовут свод правил, карточки и память ролей.
@@ -473,7 +742,22 @@ def main() -> int:
                     help="читать ВСЕ записи, даже правленные до искомой даты "
                          "(отключает отбор по времени правки — см. разбор ниже); "
                          "прежнее имя --все-файлы")
+    ap.add_argument("--read-timeout", dest="read_timeout", type=float, default=DEFAULT_READ_TIMEOUT,
+                    help="предел тишины чтения в секундах: файл, в котором за это время не прочитано "
+                         f"ни одной новой строки, пропускается и называется у итога (по умолчанию "
+                         f"{DEFAULT_READ_TIMEOUT:g}; от 2 — отметка хода ставится раз в секунду — "
+                         f"до {MAX_READ_TIMEOUT:g}: дольше уборка соседнего прогона приняла бы живой "
+                         "каталог хода за брошенный)")
     a = ap.parse_args()
+    if a.read_timeout < 2 * BEAT_SECONDS:
+        print(f"⛔ ОТКАЗ МЕРИТЬ: предел --read-timeout {a.read_timeout:g} с меньше {2 * BEAT_SECONDS:g} с — "
+              "читающий процесс отмечает ход раз в секунду, и живое чтение было бы названо повисшим.")
+        return 2
+    if a.read_timeout > MAX_READ_TIMEOUT:
+        print(f"⛔ ОТКАЗ МЕРИТЬ: предел --read-timeout {a.read_timeout:g} с больше {MAX_READ_TIMEOUT:g} с — "
+              "каталог хода такого прогона мог бы молчать час, и уборка соседнего прогона приняла бы его "
+              "за брошенный.")
+        return 2
 
     root = pathlib.Path(a.root)
     if not root.is_dir():
@@ -535,6 +819,7 @@ def main() -> int:
             print(f"⛔ ОТКАЗ МЕРИТЬ: дату «{a.date}» не разобрать, нужна форма ГГГГ-ММ-ДД.")
             return 2
 
+    to_read = []
     for f in root.rglob("*.jsonl"):
         if threshold is not None:
             try:
@@ -543,17 +828,18 @@ def main() -> int:
                     continue
             except OSError:
                 pass          # не смогли узнать время правки — читаем, а не пропускаем
-        files_read += 1
-        where: dict = {}
-        for ts, kind, text, origin, marks, window in user_turns(f, where):
-            if a.date and not ts.startswith(a.date):
-                continue
-            if kind in ("выбор", "посреди-хода"):
-                seen[kind] += 1
-            elif kind == "текст" and origin == "человек":
-                seen["текст"] += 1
-            if needle not in text.lower():
-                continue
+        to_read.append(f)
+    # ⏱ ЧИТАЕТ ОТДЕЛЬНЫЙ ПРОЦЕСС С ПРЕДЕЛОМ (карточка #797): отбор по дате и по искомому куску —
+    # там же, где прежде, только в читающем процессе (scan_worker); суждение о находках — здесь.
+    scanned, unread = scan_files(to_read, a.date, needle, a.read_timeout)
+    files_read = len(scanned)
+    for f, seen_f, hits in scanned:
+        for k in seen:
+            seen[k] += seen_f.get(k, 0)
+        for ts, kind, text, origin, marks, window, line in hits:
+            # номер строки — тем же словарём, что до карточки #797: строка addr.setdefault ниже —
+            # образец нарочной поломки МД приёмки bite-owner-word-source.py
+            where = {"line": line}
             if kind == "сводка":
                 summaries += 1
                 continue
@@ -616,7 +902,18 @@ def main() -> int:
         print(f"       ⚠️ ПРОПУЩЕНО {skipped} файлов: время их правки старше {a.date}, "
               f"записи этой даты в них взяться неоткуда.")
         print(f"       Читать всё равно ВСЕ: добавь --all-files")
+    if unread:
+        print(f"       ⛔ НЕ ПРОЧИТАНО {len(unread)} файлов: чтение не вернулось за {a.read_timeout:g} с "
+              "или читающий процесс упал — пути у итога")
     print("=" * 92)
+
+    def print_unread() -> None:
+        """Непрочитанные файлы — у итога, полными путями (owner-word.py берёт их отсюда)."""
+        print(f"⛔ ИСКАЛ НЕ ВЕЗДЕ: не прочитано файлов {len(unread)} из {len(unread) + files_read} "
+              f"(предел тишины чтения {a.read_timeout:g} с):")
+        for uf, why in unread:
+            print(f"   не прочитан: {uf.resolve().as_posix()} — {why}")
+        print("   счёт и вывод выше — только по прочитанным файлам; непрочитанное могло нести то же слово")
 
     def print_source(src) -> None:
         """Строка «файл:» — СРАЗУ под строкой «чат:»: owner-word.py берёт из неё адрес слова.
@@ -741,7 +1038,26 @@ def main() -> int:
             print("⚡ ВАЖНО: слово найдено ТОЛЬКО в окне вопросов (выбором или своим текстом). Поиск")
             print("   по тексту реплик его НЕ находит — и роль, ищущая текстом, решила бы, что цитата")
             print("   выдумана. Ровно этот случай и завёл карточку #521.")
+        if unread:
+            # найдено — код 0, как прежде: находка в прочитанном файле настоящая. Непрочитанное
+            # названо рядом, чтобы счёт «разных ответов» не читался полным (карточка #797)
+            print_unread()
         return 0
+    if unread:
+        # ⛔ «НЕ НАЙДЕНО» ПРИ НЕПРОЧИТАННЫХ ФАЙЛАХ — НЕ ЧЕСТНОЕ (карточка #797, критерий ②): слово
+        # могло лежать ровно в том файле, чтение которого не вернулось. Отдельный код, чтобы это
+        # видел и вызывающий, а не только читатель: 1 и 3 здесь были бы ложью о полноте.
+        print(f"⛔ ИСКАЛ НЕ ВЕЗДЕ — в прочитанных файлах ({files_read}) слова с происхождением «человек» "
+              "и среди выборов нет,")
+        print("   но часть файлов не прочитана: «не найдено» здесь НЕ ЧЕСТНОЕ, вывода о слове не делай.")
+        if no_origin or machine:
+            print(f"   совпадения в прочитанном: без признака {len(no_origin)} · машинных {len(machine)}"
+                  " (напечатаны выше)")
+        print(f"   прочитано РАЗДЕЛЬНО: реплик текстом {seen['текст']} · ответов в окне вопросов "
+              f"{seen['выбор']} · пришедших посреди хода {seen['посреди-хода']}")
+        print_unread()
+        print("   👉 повтори поиск: зависание чтения перемежающееся (карточка #797)")
+        return 4
     # ⛔ САМОЕ ВАЖНОЕ МЕСТО ЭТОГО ИНСТРУМЕНТА: чего пустой ответ НЕ значит.
     print("⚪ НЕ НАЙДЕНО среди реплик с записанным происхождением «человек» и среди выборов.")
     if no_origin:
