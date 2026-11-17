@@ -43,6 +43,9 @@
 Находка COORD Н2: причина отказа (поле error) — строка тела с признаком ошибки в начале, а не последняя строка вывода.
 Случай К11 судит это на трёх заглушках: признак первой строкой stdout перед подсказкой; признак во второй строке потока
 ошибок; признака нет — берётся последняя непустая строка (так кончается необработанное исключение).
+Два замечания COORD к случаю К11 судит случай К12: причиной становится ПОСЛЕДНЯЯ строка с признаком (предупреждение
+с признаком, напечатанное раньше причины, её не подменяет), а признак-слово считается только целым словом
+(«ERRORS: 0» — не признак).
 
 Исход: 0 — все машинные критерии прошли; 1 — хоть один провалился; 2 — проверять было нечем;
 3 — сборка старше исходников, судить её нельзя (пересобрать и запустить снова).
@@ -871,6 +874,48 @@ def cases_791(args, work, manifest, contract_doc, carg, v3, s2c):
            % (k11a.get("outcome"), k11a.get("child_exit"), e11a[:120], k11_code, "совпадений нет" in k11_run,
               k11b.get("outcome"), k11b.get("child_exit"), e11b[:120],
               k11c.get("outcome"), k11c.get("child_exit"), e11c[:120]))
+
+    # ───────────── К12: КАКАЯ строка с признаком — причина (два замечания COORD к случаю К11, карточка 791)
+    # (а)(б) предупреждение с признаком напечатано РАНЬШЕ причины: причиной обязана стать причина;
+    # (в) сводка «ERRORS: 0» и строка «ОТКАЗЫ: 0» признаком не считаются — признак-слово только целым словом;
+    # (г) контроль: признак-слово с двоеточием остаётся признаком.
+    k12_warn_out = ("🔴 предупреждение: память роли велика\n⛔ нет такой роли: ZZZ\n"
+                    "подсказка: перечень ролей — правило role-roster-and-zones\n")
+    k12_warn_err = "⛔ предупреждение: стенд старше срока\nERR: неверный ключ подтверждения\n"
+    k12_summary = "ERRORS: 0\nОТКАЗЫ: 0\nитог: проверка не прошла, смотри строки выше\n"
+    k12_word = "ОТКАЗ: нет прав на запись\nподсказка: спроси владельца\n"
+    put_stub("stub-k12-warn-stdout.py", "import sys\nsys.stdout.buffer.write(%r)\nsys.exit(1)\n" % k12_warn_out.encode("utf-8"))
+    put_stub("stub-k12-warn-stderr.py", "import sys\nsys.stdout.buffer.write(b'some output\\n')\nsys.stderr.buffer.write(%r)\nsys.exit(1)\n"
+             % k12_warn_err.encode("utf-8"))
+    put_stub("stub-k12-summary.py", "import sys\nsys.stdout.buffer.write(%r)\nsys.exit(1)\n" % k12_summary.encode("utf-8"))
+    put_stub("stub-k12-word.py", "import sys\nsys.stdout.buffer.write(%r)\nsys.exit(1)\n" % k12_word.encode("utf-8"))
+    k12_contract = stub_contract("k12", {"owner_words_find": "stub-k12-warn-stdout.py", "rules_get": "stub-k12-warn-stderr.py",
+                                          "cards_list": "stub-k12-summary.py"})
+    k12w_contract = stub_contract("k12w", {"owner_words_find": "stub-k12-word.py"})
+    w12 = Wall(args.exe, k12_contract, m_stub_path)
+    k12a, _ = w12.call("owner_words_find", {carg: CONTOUR_STAND, "text": "X"})
+    k12b, _ = w12.call("rules_get", {carg: CONTOUR_STAND, "list": True})
+    k12c, _ = w12.call("cards_list", {carg: CONTOUR_STAND, "role": "PROTO"})
+    w12.close()
+    w12w = Wall(args.exe, k12w_contract, m_stub_path)
+    k12d, _ = w12w.call("owner_words_find", {carg: CONTOUR_STAND, "text": "X"})
+    w12w.close()
+    e12a, e12b, e12c, e12d = [(x.get("error") or "") for x in (k12a, k12b, k12c, k12d)]
+    ok_k12a = (k12a.get("outcome") == "tool_failed" and "нет такой роли" in e12a
+               and "память роли велика" not in e12a and "подсказка" not in e12a)
+    ok_k12b = (k12b.get("outcome") == "tool_failed" and "неверный ключ подтверждения" in e12b
+               and "стенд старше срока" not in e12b)
+    ok_k12c = (k12c.get("outcome") == "tool_failed" and "проверка не прошла" in e12c
+               and "ERRORS" not in e12c and "ОТКАЗЫ" not in e12c)
+    ok_k12d = (k12d.get("outcome") == "tool_failed" and "нет прав на запись" in e12d and "подсказка" not in e12d)
+    v3.add("791-К12", ok_k12a and ok_k12b and ok_k12c and ok_k12d,
+           "причина отказа — ПОСЛЕДНЯЯ строка с признаком ошибки; признак-слово считается только целым словом",
+           "(а) stdout: предупреждение с признаком, за ним причина с признаком и подсказка: исход %s · error «%s» (ждали «нет такой роли»)\n"
+           "(б) поток ошибок: предупреждение с признаком, за ним причина: исход %s · error «%s» (ждали «неверный ключ подтверждения»)\n"
+           "(в) строки «ERRORS: 0» и «ОТКАЗЫ: 0», признака нет: исход %s · error «%s» (ждали последнюю строку — «проверка не прошла»)\n"
+           "(г) контроль, признак-слово с двоеточием: исход %s · error «%s» (ждали «нет прав на запись» без подсказки)"
+           % (k12a.get("outcome"), e12a[:120], k12b.get("outcome"), e12b[:120],
+              k12c.get("outcome"), e12c[:120], k12d.get("outcome"), e12d[:120]))
 
     # ───────────── К10: защита живого контура — чистая проверка функции, процессы не запускаются
     def refused_live(tool, a):

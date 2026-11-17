@@ -445,16 +445,36 @@ public sealed class ToolRunner(Contract contract, Manifest manifest, bool readOn
     // Признаки ошибки, которыми инструменты контура начинают строку с причиной отказа.
     private static readonly string[] ReasonMarks = { "ERR", "🔴", "⛔", "❌", "ОТКАЗ" };
 
-    /// <summary>Первая строка текста, начинающаяся с признака ошибки; нет такой — null.</summary>
+    /// <summary>
+    /// Строка начинается с признака ошибки. Признак-слово («ERR», «ОТКАЗ») считается только ЦЕЛЫМ словом: за ним
+    /// не буква и не цифра. Иначе сводка «ERRORS: 0» сошла бы за причину отказа (замечание COORD 2, карточка 791).
+    /// </summary>
+    private static bool StartsWithMark(string line)
+    {
+        foreach (var mark in ReasonMarks)
+        {
+            if (!line.StartsWith(mark, StringComparison.Ordinal)) continue;
+            // у значка границы слова нет: он признак сам по себе
+            if (!char.IsLetter(mark[0])) return true;
+            if (line.Length == mark.Length || !char.IsLetterOrDigit(line[mark.Length])) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// ПОСЛЕДНЯЯ строка текста, начинающаяся с признака ошибки; нет такой — null. Последняя, а не первая: причину
+    /// выхода тело говорит последней (сообщение выхода уходит в поток последним), а предупреждения с тем же
+    /// признаком печатает раньше (замечание COORD 1, карточка 791).
+    /// </summary>
     private static string? MarkedLine(string text) =>
-        text.Split('\n').Select(l => l.Trim())
-            .FirstOrDefault(l => l.Length > 0 && ReasonMarks.Any(m => l.StartsWith(m, StringComparison.Ordinal)));
+        text.Split('\n').Select(l => l.Trim()).LastOrDefault(l => l.Length > 0 && StartsWithMark(l));
 
     /// <summary>
     /// Короткая причина отказа — ОДНА строка тела. Сперва ищется строка с признаком ошибки: в потоке ошибок,
-    /// затем в stdout; берётся ПЕРВАЯ такая. Признака нет ни в одном потоке — последняя непустая строка потока ошибок,
+    /// затем в stdout; берётся ПОСЛЕДНЯЯ такая. Признака нет ни в одном потоке — последняя непустая строка потока ошибок,
     /// а при пустом потоке ошибок — stdout: так кончаются разбор аргументов и необработанное исключение Python.
     /// Прежде бралась только последняя строка, и причиной становился хвост подсказки (находка COORD Н2, карточка 791).
+    /// ⚠️ Граница: если тело ПОСЛЕ причины печатает ещё одну строку с признаком, причиной станет она.
     /// </summary>
     private static string ShortReason(Outcome outcome, string stderr, string stdout)
     {
