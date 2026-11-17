@@ -18,6 +18,17 @@ bite-stand-cleanup.py — приёмка помощника mezo_stand.py и у�
 Поэтому нарочная поломка ищет своё место в ОБОИХ файлах (ровно одно на двоих), копия утилиты
 едет в свой каталог вместе с mezo_stand.py, и утилита грузится вместе со своим соседом.
 (21)–(23) — правка С2: возраст не ниже нуля, показ называет срок автоуборки, размер — os.lstat.
+
+Карточка #800 (17.11.2026): вся приёмка живёт в СВОЁМ временном каталоге. До правки подставные
+проверки и утилита уборки получали среду вызывающего: стенды заводились во временной папке
+машины, а удаление сломанных копий утилиты (случаи (15) и (16) снимают проверку имени) держал
+в каталоге приёмки один аргумент --temp-dir. Теперь main() заводит один каталог, переносит в него
+TMPDIR/TEMP/TMP самой приёмки, и каждый дочерний процесс получает временный каталог ВНУТРИ него
+(child_env отказывает, если каталог снаружи). (27)–(29) — случаи этой правки.
+
+Правило deliberate-break-sandbox-env (17.11.2026): вместе с временным каталогом main() переносит в свой
+каталог и домашний (HOME, USERPROFILE) — до первого дочернего процесса, поэтому его наследует и запуск,
+который идёт мимо child_env. (30) — случай этой правки. Свой каталог, не убранный в конце, — провал.
 """
 import os
 import re
@@ -41,6 +52,10 @@ JANITOR = HERE / "janitor-stands.py"
 CASES = 0
 OK = True
 LONG_AGO = 72 * 3600
+ROOT = None                              # свой временный каталог приёмки; заводит enter_own_temp()
+TEMP_VARS = ("TMPDIR", "TEMP", "TMP")    # в этом порядке их читает tempfile.gettempdir()
+HOME_VARS = ("MEZO_STAND_HOME", "MEZO_STAND_HOME_TEMP")   # дом стендов вызывающего
+USER_HOME_VARS = ("HOME", "USERPROFILE")                  # домашний каталог: POSIX читает HOME, Windows — USERPROFILE
 
 
 def case(title, ok, detail):
@@ -65,11 +80,13 @@ def run_probe(body, env_extra=None, helper=None):
         "print('STAND=' + str(root))\n"
     )
     (d / "probe.py").write_text(head + body, encoding="utf-8")
-    env = dict(os.environ, PYTHONIOENCODING="utf-8")
-    env.pop("MEZO_KEEP_STANDS", None)
-    env.update(env_extra or {})
+    base = dict(os.environ)
+    base.pop("MEZO_KEEP_STANDS", None)
+    for name in HOME_VARS:       # стенд подставной проверки — в каталоге приёмки, а не в доме вызывающего
+        base.pop(name, None)
+    base.update(env_extra or {})
     p = subprocess.run([sys.executable, "probe.py"], cwd=d, capture_output=True,
-                       text=True, encoding="utf-8", errors="replace", env=env)
+                       text=True, encoding="utf-8", errors="replace", env=child_env(ROOT, base))
     out = (p.stdout or "") + (p.stderr or "")
     m = re.search(r"STAND=(.+)", out)
     stand = Path(m.group(1).strip()) if m else None
@@ -77,12 +94,55 @@ def run_probe(body, env_extra=None, helper=None):
     return stand, out, p.returncode
 
 
-def janitor(sandbox, tools, *extra, script=None, env=None):
-    p = subprocess.run([sys.executable, str(script or JANITOR),
-                        "--temp-dir", str(sandbox), "--tools-dir", str(tools), *extra],
+def inside_root(path) -> bool:
+    """Лежит ли path внутри временного каталога приёмки (сам каталог — тоже «внутри»)."""
+    if ROOT is None or not str(path):
+        return False
+    root = os.path.normcase(os.path.realpath(ROOT))
+    try:
+        return os.path.commonpath([os.path.normcase(os.path.realpath(path)), root]) == root
+    except ValueError:               # разные диски
+        return False
+
+
+def own_home():
+    """Домашний каталог приёмки — внутри её временного каталога (заводит enter_own_temp)."""
+    return ROOT / "own-home"
+
+
+def child_env(temp, base=None):
+    """Среда дочернего процесса: его временный каталог — temp, и temp обязан лежать в каталоге приёмки.
+
+    Карточка #800. Утилита уборки без --temp-dir идёт по tempfile.gettempdir(), помощник заводит стенды
+    там же. Пока дочерний процесс получал среду вызывающего, уборку в каталоге приёмки держал один
+    аргумент; сломанная копия со снятой проверкой имени, потеряв его, удаляла бы во временной папке
+    машины — навсегда, мимо Корзины. Каталог снаружи — отказ ДО запуска, а не запуск наудачу.
+    Домашний каталог дочернего процесса (HOME, USERPROFILE) — всегда дом приёмки внутри того же каталога.
+    """
+    if not inside_root(temp):
+        sys.exit(f"НЕ ЗАПУСТИЛАСЬ: дочерний процесс получил бы временный каталог ВНЕ каталога приёмки — "
+                 f"{temp} (каталог приёмки: {ROOT})")
+    env = dict(os.environ if base is None else base, PYTHONIOENCODING="utf-8")
+    for name in TEMP_VARS:
+        env[name] = str(temp)
+    for name in USER_HOME_VARS:      # дом дочернего процесса — дом приёмки, что бы ни лежало в base
+        env[name] = str(own_home())
+    return env
+
+
+def launch_janitor(temp, *args, script=None, env=None):
+    """Запустить утилиту уборки; temp — временный каталог её процесса (туда она идёт без --temp-dir)."""
+    p = subprocess.run([sys.executable, str(script or JANITOR), *args],
                        capture_output=True, text=True, encoding="utf-8", errors="replace",
-                       env=dict(env if env is not None else os.environ, PYTHONIOENCODING="utf-8"))
+                       env=child_env(temp, env))
     return (p.stdout or "") + (p.stderr or ""), p.returncode
+
+
+def janitor(sandbox, tools, *extra, script=None, env=None):
+    """Обычный запуск: искать в sandbox. Каталог назван дважды — аргументом и средой: потеря одного
+    из двух не выводит уборку из каталога приёмки."""
+    return launch_janitor(sandbox, "--temp-dir", str(sandbox), "--tools-dir", str(tools), *extra,
+                          script=script, env=env)
 
 
 def load(path, name):
@@ -142,7 +202,65 @@ def link_dir(target, link):
         os.symlink(target, link, target_is_directory=True)
 
 
+def enter_own_temp():
+    """Перенести приёмку в свой временный каталог: её собственные mkdtemp и среду дочерних процессов."""
+    global ROOT
+    saved = {name: os.environ.get(name) for name in TEMP_VARS + USER_HOME_VARS}
+    ROOT = Path(os.path.realpath(tempfile.mkdtemp(prefix="bite-stand-cleanup-")))
+    own_home().mkdir()
+    for name in TEMP_VARS:
+        os.environ[name] = str(ROOT)
+    for name in USER_HOME_VARS:      # правило deliberate-break-sandbox-env ②: дом — тоже свой, до первого запуска
+        os.environ[name] = str(own_home())
+    tempfile.tempdir = None          # tempfile запомнил прежнюю папку при первом вызове — пусть прочтёт новую
+    if not inside_root(tempfile.gettempdir()):
+        got, root = tempfile.gettempdir(), ROOT
+        leave_own_temp(saved)        # заведённый каталог у вызывающего не оставляем
+        sys.exit(f"НЕ ЗАПУСТИЛАСЬ: приёмка не перешла в свой временный каталог — tempfile отдаёт "
+                 f"{got}, а не {root}")
+    if not inside_root(os.path.expanduser("~")):
+        got, root = os.path.expanduser("~"), ROOT
+        leave_own_temp(saved)
+        sys.exit(f"НЕ ЗАПУСТИЛАСЬ: приёмка не перешла в свой домашний каталог — он читается как "
+                 f"{got}, а не внутри {root}")
+    return saved
+
+
+def leave_own_temp(saved):
+    """Вернуть среду и убрать свой каталог — по точному пути, без обхода соседей.
+    Вернёт False, если каталог остался на диске."""
+    global ROOT
+    for name, value in saved.items():
+        if value is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = value
+    tempfile.tempdir = None
+    root, ROOT = ROOT, None
+    if root is None:
+        return True
+    shutil.rmtree(root, ignore_errors=True)
+    if Path(root).exists():          # ignore_errors молчит о занятом файле — остаток называем вслух
+        print(f"RED свой временный каталог приёмки НЕ УБРАН: {root}\n"
+              f"    он остался у вызывающего: найди, что его держит (открытый файл, живой процесс), "
+              f"и убери сам")
+        return False
+    return True
+
+
 def main():
+    saved = enter_own_temp()
+    try:
+        code = run_cases()
+    finally:
+        cleaned = leave_own_temp(saved)
+    if not cleaned:
+        print("ПРИЁМКА ПРОВАЛЕНА — свой временный каталог не убран (строка выше)")
+        return 1
+    return code
+
+
+def run_cases():
     print("=" * 78)
     print("ПРИЁМКА: уборка временных каталогов проверок")
     print("=" * 78)
@@ -590,6 +708,92 @@ def new_cases():
                  ok and not bad,
                  f"на целой: {line} · на поломке "
                  f"{'провалился, как должен' if not bad else 'ПРОШЁЛ — приёмка слепа'}")
+
+        # (27) карточка #800: сломанная копия утилиты БЕЗ --temp-dir убирает там, где приёмка дала ей
+        #      временный каталог, — и нигде больше. «Каталог вызывающего» здесь подставной (outer):
+        #      оба запуска идут внутри каталога приёмки, во временную папку машины не выходит ни один.
+        #      Встречный запуск отдаёт дочернему процессу каталог вызывающего как есть — так было
+        #      до правки, — и на нём чужой каталог обязан пропасть: иначе случай не видел бы разницы.
+        def c27(own_temp):
+            tag = "own" if own_temp else "callers"
+            outer = old_dirs(work / f"outer27-{tag}", "abc-foreign-outer")
+            inner = old_dirs(work / f"inner27-{tag}", "abc-own")
+            script = broken_copy(work, "MIN_PREFIX_LEN = 4\n", "MIN_PREFIX_LEN = 0\n")
+            launch_janitor(inner if own_temp else outer,
+                           "--tools-dir", str(tools), "--prefix", "ab", "--apply", script=script)
+            return (outer / "abc-foreign-outer").exists(), (inner / "abc-own").exists()
+        foreign_kept, own_left = c27(True)
+        foreign_kept_bare, _ = c27(False)
+        case("(27) сломанная копия утилиты (порога длины нет) БЕЗ --temp-dir удаляет только во временном "
+             "каталоге, выданном приёмкой; встречный запуск с каталогом вызывающего удаляет чужой каталог",
+             foreign_kept and not own_left and not foreign_kept_bare,
+             f"со своим каталогом: чужой каталог снаружи цел: {foreign_kept} · каталог в своём убран: "
+             f"{not own_left} · с каталогом вызывающего чужой каталог "
+             f"{'удалён, как должен' if not foreign_kept_bare else 'ЦЕЛ — случай слеп'}")
+
+        # (28) временный каталог ВНЕ каталога приёмки дочернему процессу не выдаётся: отказ до запуска.
+        #      И сама приёмка живёт внутри: её mkdtemp и среда, которую наследуют дочерние процессы.
+        #      Домашний каталог — тоже: и в среде приёмки, и в том, что child_env кладёт сам
+        #      (основа пустая — наследованием его не получить).
+        try:
+            child_env(ROOT.parent)
+            refused = False
+        except SystemExit as e:
+            refused = "ВНЕ каталога приёмки" in str(e)
+        own = (inside_root(tempfile.gettempdir())
+               and all(inside_root(os.environ.get(name, "")) for name in TEMP_VARS))
+        home_own = (inside_root(os.path.expanduser("~"))
+                    and all(inside_root(os.environ.get(name, "")) for name in USER_HOME_VARS))
+        given = child_env(ROOT, {})
+        home_given = all(inside_root(given.get(name, "")) for name in USER_HOME_VARS)
+        case("(28) временный каталог вне каталога приёмки дочернему процессу не выдаётся (отказ до запуска); "
+             "сама приёмка и её среда — внутри своего каталога, домашний каталог тоже",
+             refused and own and home_own and home_given,
+             f"отказ на каталоге снаружи: {refused} · tempfile и TMPDIR/TEMP/TMP приёмки внутри: {own} · "
+             f"домашний каталог приёмки (HOME, USERPROFILE) внутри: {home_own} · child_env кладёт его "
+             f"дочернему процессу сам: {home_given}")
+
+        # (29) каждый запуск дочернего процесса в этом файле получает среду от child_env. Новый запуск
+        #      со средой вызывающего — тот самый путь, которым удаление выходит из каталога приёмки.
+        def call_text(src, at):
+            depth = 0
+            for i in range(src.index("(", at), len(src)):
+                depth += (src[i] == "(") - (src[i] == ")")
+                if depth == 0:
+                    return src[at:i + 1]
+            return src[at:]
+        own_source = Path(__file__).read_text(encoding="utf-8")
+        calls = [m.start() for m in re.finditer(
+            r"subprocess\.(?:run|Popen|call|check_call|check_output)\(", own_source)]
+        bare = [own_source.count("\n", 0, at) + 1 for at in calls
+                if "env=child_env(" not in call_text(own_source, at)]
+        case("(29) каждый запуск дочернего процесса в приёмке получает среду от child_env",
+             len(calls) >= 2 and not bare,
+             f"запусков в файле: {len(calls)} · без child_env — "
+             + (", ".join(f"строка {n}" for n in bare) if bare else "нет"))
+
+        # (30) правило deliberate-break-sandbox-env ⑤: дочерний процесс, запущенный МИМО child_env —
+        #      со средой самой приёмки, как пошёл бы запуск через os.system или чужой помощник,
+        #      которого (29) не видит, — получает временный и домашний каталог внутри каталога приёмки.
+        #      Запуск здесь нарочно идёт через os.popen: среду он не передаёт, а наследует.
+        script30, seen30 = work / "see30.py", work / "seen30.txt"
+        script30.write_text(
+            "# -*- coding: utf-8 -*-\n"
+            "import os, sys, tempfile\n"
+            "rows = [tempfile.gettempdir(), os.path.expanduser('~'),\n"
+            "        os.environ.get('HOME', ''), os.environ.get('USERPROFILE', '')]\n"
+            "with open(sys.argv[1], 'w', encoding='utf-8') as f:\n"
+            "    f.write('\\n'.join(rows))\n", encoding="utf-8")
+        os.popen(f'"{sys.executable}" "{script30}" "{seen30}"').close()
+        seen = seen30.read_text(encoding="utf-8").split("\n") if seen30.exists() else []
+        outside = [f"{label} = {value or 'пусто'}"
+                   for label, value in zip(("tempfile", "дом", "HOME", "USERPROFILE"), seen)
+                   if not inside_root(value)]
+        case("(30) дочерний процесс, запущенный мимо child_env (среду наследует от приёмки), видит временный "
+             "и домашний каталог внутри каталога приёмки",
+             len(seen) == 4 and not outside,
+             f"ответил дочерний процесс: {'да' if len(seen) == 4 else 'НЕТ'} · снаружи — "
+             + ("; ".join(outside) if outside else "ничего"))
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
