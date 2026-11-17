@@ -18,6 +18,16 @@ r"""ПАМЯТЬ ЗАПИСЯМИ С ПОЛЯМИ: завести · отобр�
     --собрать     сложить записи обратно в сплошное тело и СВЕРИТЬ с живым
     --снять       пометить запись снятой: чем и когда (живость не удаляется)
     --поля        дописать полям запись: источник · условие снятия · предмет
+    --сжать       унести из слоя hot в слой warm столько записей, чтобы слой уложился
+                  в порог раздела (карточка #781, этап Э2); --dry-run — только показать
+    --перенести   перенести ОДНУ запись в другой слой рукой: --перенести ID --слой X
+    --слой        отбор для --показать и --отобрать (hot · warm · permanent)
+
+🔑 ПОРОГ СЖАТИЯ НЕ ПЕРЕДАЁТСЯ ПРИЗНАКОМ ВОВСЕ. Он читается из соседнего
+guard-phoenix-volume.py (то же число, что судит объём раздела при сохранении памяти):
+роль, которой порог можно назвать в вызове, назвала бы его под давлением числа.
+Сжатие трогает ТОЛЬКО слой hot: warm и permanent остаются как есть, а текст записей и
+сплошной текст раздела не меняются ни на знак — меняется лишь поле слоя.
 
 ⚖️ ЗАПИСИ ЛЕЖАТ РЯДОМ С ТЕЛОМ, А НЕ ВМЕСТО НЕГО. Пробуждение роли читает то же тело,
 что и вчера, — этот слой сломать его не может. Цена выбора названа прямо: два места
@@ -32,6 +42,8 @@ r"""ПАМЯТЬ ЗАПИСЯМИ С ПОЛЯМИ: завести · отобр�
     python <КОНТУР>/vnext-tools/memory-records.py --role PROTO --показать
     python <КОНТУР>/vnext-tools/memory-records.py --role PROTO --отобрать права
     python <КОНТУР>/vnext-tools/memory-records.py --role PROTO --section state --собрать
+    python <КОНТУР>/vnext-tools/memory-records.py --role PROTO --section state --сжать --dry-run
+    python <КОНТУР>/vnext-tools/memory-records.py --role PROTO --перенести 12 --слой permanent
 """
 from __future__ import annotations
 
@@ -181,6 +193,169 @@ def has_layer(conn) -> bool:
     есть, и будет ждать переноса, которого не будет.
     """
     return any(r[1] == "layer" for r in conn.execute("PRAGMA table_info(phoenix_records)"))
+
+
+LAYERS = ("hot", "warm", "permanent")
+LAYER_STEP = "20261115-phoenix-records-layer.py"
+VOLUME_GUARD = "guard-phoenix-volume.py"
+
+
+def refuse_no_layer(what):
+    """Отказ кодом 1: поля слоя в базе нет, а вызов без него смысла не имеет."""
+    sys.exit(f"⛔ ОТКАЗ: {what} требует поля СЛОЯ памяти у записей, а в этой базе его нет — "
+             "шаг схемы не сведён. Ничего не записано.\n"
+             f"   Свести: python <КОНТУР>/.mezosync/scripts/migrations/{LAYER_STEP}")
+
+
+def volume_limit():
+    """→ (порог, имя источника) либо (None, причина). Читается так же, как у save-phoenix.py.
+
+    ⚖️ ЧИСЛО НЕ ВПИСАНО СЮДА И НЕ ПРИНИМАЕТСЯ ПРИЗНАКОМ. Порог раздела живёт в одном месте —
+    в LIMIT соседнего guard-phoenix-volume.py, — и сжатие обязано мерить тем же числом, каким
+    судится объём при сохранении памяти. «Не прочитан» не схлопывается в «порога нет»:
+    иначе поломка соседнего файла дала бы вечное «уносить нечего».
+    """
+    here = pathlib.Path(__file__).resolve().parent
+    candidates = [here / VOLUME_GUARD, here.parent.parent / "vnext-tools" / VOLUME_GUARD,
+                  here.parent.parent / "vnext" / "prototype" / VOLUME_GUARD]
+    try:   # корень контура — четвёртый кандидат; не найден — не беда, три прежних уже названы
+        candidates.append(mezo_paths.container_root(__file__) / "vnext-tools" / VOLUME_GUARD)
+    except SystemExit:
+        pass
+    file = next((c for c in candidates if c.exists()), candidates[0])
+    if not file.exists():
+        return None, f"файла нет: {file.name} (искал рядом с инструментом и в vnext-tools)"
+    try:
+        spec = importlib.util.spec_from_file_location("guard_phoenix_volume_for_compact", file)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        limit = getattr(module, "LIMIT", None)
+    except Exception as e:                    # noqa: BLE001 — причина важнее вида беды
+        return None, f"{file.name} не прочитан ({type(e).__name__}: {e})"
+    if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
+        return None, f"в {file.name} нет годного LIMIT (получено {limit!r})"
+    return limit, file.name
+
+
+def removal_order(rows):
+    """Порядок ухода записей слоя hot. rows — (id, subject, body_chars, happened_at, alive, ord).
+
+    ① снятые с хода · ② с часом, старшие первыми · ③ без часа, снизу раздела вверх
+    (больший ord раньше). Внутри ① — тем же правилом: сперва с часом по возрасту, потом без часа
+    снизу вверх. Возвращает список (запись, причина).
+    """
+    def key(row):
+        return (row[3] is None, row[3] or "", -row[5])
+
+    revoked = sorted((r for r in rows if r[4] != "active"), key=key)
+    dated = sorted((r for r in rows if r[4] == "active" and r[3]), key=key)
+    undated = sorted((r for r in rows if r[4] == "active" and not r[3]), key=key)
+    out = [(r, "снята с хода") for r in revoked]
+    out += [(r, f"старшая по часу: {r[3]}") for r in dated]
+    out += [(r, f"без часа, место в разделе {r[5]}") for r in undated]
+    return out
+
+
+def compact(conn, role, section, actor, dry_run):
+    """Сжатие слоя hot: записи уходят в warm, пока слой не уложится в порог раздела.
+
+    Исходы: 0 — уложилось либо уносить нечего · 3 — унесено что можно, порог НЕ достигнут.
+    Одна транзакция на весь вызов; текст записей и тело раздела не трогаются.
+    """
+    limit, source = volume_limit()
+    if limit is None:
+        sys.exit(f"⛔ ОТКАЗ: порог раздела не прочитан — {source}. Ничего не записано.\n"
+                 "   Порога признаком не назвать: он читается из guard-phoenix-volume.py.")
+    sections = [section] if section else [r[0] for r in conn.execute(
+        "SELECT DISTINCT section FROM phoenix_records WHERE role=? ORDER BY section", (role,))]
+    has_any = conn.execute(
+        "SELECT 1 FROM phoenix_records WHERE role=?" + (" AND section=?" if section else ""),
+        (role, section) if section else (role,)).fetchone()
+    if not sections or not has_any:
+        sys.exit(f"⛔ ОТКАЗ: у {role}" + (f"·{section}" if section else "") +
+                 " записей нет — сжимать нечего. Разобрать: --section <раздел> --разобрать")
+    print("=" * 96)
+    print(f"СЖАТИЕ СЛОЯ hot у {role}" + (f"·{section}" if section else " (все разделы)") +
+          ("  ⟨ХОЛОСТОЙ ПРОГОН⟩" if dry_run else ""))
+    print("=" * 96)
+    moved_total, chars_total, short = [], 0, False
+    plan = []
+    for sect in sections:
+        rows = conn.execute(
+            "SELECT id, subject, body_chars, happened_at, alive, ord FROM phoenix_records "
+            "WHERE role=? AND section=? AND layer='hot' ORDER BY ord", (role, sect)).fetchall()
+        before_chars, before_n = sum(r[2] for r in rows), len(rows)
+        if before_chars <= limit:
+            print(f"· {sect}: слой hot {before_n} записей, {before_chars} знаков при пороге "
+                  f"{limit} ({source}) — уносить нечего")
+            continue
+        order = removal_order(rows)
+        left, taken = before_chars, []
+        # последняя по порядку ухода запись остаётся всегда
+        for rec, why in order[:-1]:
+            if left <= limit:
+                break
+            taken.append((rec, why))
+            left -= rec[2]
+        print(f"· {sect}: слой hot было {before_chars} знаков в {before_n} записях → стало "
+              f"{left} в {before_n - len(taken)} · порог {limit} ({source})")
+        for rec, why in taken:
+            print(f"    #{rec[0]} · {rec[1]} · {rec[2]} знаков · hot → warm · {why}")
+        if left > limit:
+            short = True
+            reason = ("в слое одна запись, и она сама больше порога" if before_n == 1 else
+                      "унесены все записи, кроме последней по порядку ухода (она остаётся "
+                      "всегда), и остаток всё равно больше порога")
+            print(f"    ⚠️ порог НЕ достигнут: осталось {left} знаков при пороге {limit} — {reason}")
+        plan += [(sect, rec) for rec, _w in taken]
+        moved_total += [rec for rec, _w in taken]
+        chars_total += sum(rec[2] for rec, _w in taken)
+    if not section:
+        # разделы с текстом, но без записей сжатие не видит: не молчим, а называем их и даём команду разбора
+        bare = conn.execute(
+            "SELECT section, length(body) FROM phoenix WHERE role=? AND TRIM(body) <> '' "
+            "AND section NOT IN (SELECT DISTINCT section FROM phoenix_records WHERE role=?) "
+            "ORDER BY section", (role, role)).fetchall()
+        if bare:
+            names = ", ".join(f"{s} ({n} знаков)" for s, n in bare)
+            print(f"⚪ разделы без записей — сжатие их не видит: {names} · "
+                  "разобрать: --section <раздел> --разобрать")
+    print("-" * 96)
+    print(f"ИТОГ ВЫЗОВА: унесено {len(moved_total)} записей, {chars_total} знаков (hot → warm)" +
+          (" · порог достигнут не везде" if short else ""))
+    if dry_run:
+        print("⚪ ХОЛОСТОЙ ПРОГОН: база не тронута — это перечень того, что унесёт настоящий вызов")
+    elif plan:
+        conn.execute("BEGIN")
+        for _sect, rec in plan:
+            conn.execute("UPDATE phoenix_records SET layer='warm', "
+                         "layer_moved_at=datetime('now'), layer_moved_by=? WHERE id=? AND role=?",
+                         (actor, rec[0], role))
+        conn.commit()
+        print("✅ записано одной транзакцией; текст записей и тело разделов не менялись")
+    return 3 if short else 0
+
+
+def move_layer(conn, role, record_id, layer, actor, why):
+    """Перенос одной записи рукой роли. Тот же слой — «менять нечего», код 0."""
+    row = conn.execute("SELECT layer FROM phoenix_records WHERE id=? AND role=?",
+                       (record_id, role)).fetchone()
+    if not row:
+        other = conn.execute("SELECT role FROM phoenix_records WHERE id=?", (record_id,)).fetchone()
+        sys.exit(f"🔴 НЕ ПЕРЕНЕСЕНО: записи #{record_id} у роли {role} нет — " +
+                 (f"она принадлежит роли {other[0]}, а чужую память не правят" if other
+                  else "записи с таким номером нет вовсе"))
+    if row[0] == layer:
+        print(f"⚪ запись #{record_id}: уже в слое {layer} — менять нечего")
+        return 0
+    conn.execute("BEGIN")
+    conn.execute("UPDATE phoenix_records SET layer=?, layer_moved_at=datetime('now'), "
+                 "layer_moved_by=? WHERE id=? AND role=?", (layer, actor, record_id, role))
+    conn.commit()
+    print(f"✅ запись #{record_id}: слой {row[0]} → {layer}")
+    if why:
+        print(f"   причина (в печати; в базе не хранится): {why}")
+    return 0
 
 
 def rebuild(conn, role, section, actor):
@@ -411,12 +586,18 @@ def parse(conn, role, section, actor):
 NO_CONDITION = "никогда"
 
 
-def show(conn, role):
+def show(conn, role, layer=None):
+    layer_known = has_layer(conn)
     rows = conn.execute(
         "SELECT id, section, subject, body_chars, COALESCE(happened_at,'—'), "
         "COALESCE(source,'—'), COALESCE(expiry_cond,'—'), alive, "
-        "substr(replace(body, char(10), ' '), 1, 52), body "
-        "FROM phoenix_records WHERE role=? ORDER BY section, ord", (role,)).fetchall()
+        "substr(replace(body, char(10), ' '), 1, 52), body"
+        + (", layer" if layer_known else "") +
+        " FROM phoenix_records WHERE role=?" + (" AND layer=?" if layer else "") +
+        " ORDER BY section, ord", (role, layer) if layer else (role,)).fetchall()
+    if not rows and layer:
+        print(f"⚪ у роли {role} записей в слое {layer} нет")
+        return
     if not rows:
         print(f"⚪ у роли {role} записей нет. Разобрать раздел: "
               f"--section <раздел> --разобрать")
@@ -440,10 +621,10 @@ def show(conn, role):
           f"решено «условия нет» {decided_none} · ⚠️ НЕ РЕШЕНО {summary[4]}")
     print("=" * 100)
     print(f"{'id':>4} {'раздел':9} {'предмет':12} {'знаков':>7} {'час':11} "
-          f"{'жив':4} начало")
+          f"{'жив':4} " + (f"{'слой':9} " if layer_known else "") + "начало")
     print("-" * 100)
     disputed, manual = 0, 0
-    for id_, sect, subj, chars, when, src, cond, alive, started, body in rows:
+    for id_, sect, subj, chars, when, src, cond, alive, started, body, *layer_cell in rows:
         mark = "✅" if alive == "active" else "⚰️"
         # ⚖️ СПОР ПЕЧАТАЕТСЯ, А НЕ ГЛОТАЕТСЯ (карточка #534). Предмет, назначенный не по
         # примете (рукой через --поля или прежним правилом), помечен ✍ и споров не несёт:
@@ -455,7 +636,8 @@ def show(conn, role):
             tag, disputed = "?", disputed + 1
         else:
             tag = ""
-        print(f"{id_:>4} {sect:9} {(subj + tag):12} {chars:>7} {when:11} {mark:4} {started}")
+        print(f"{id_:>4} {sect:9} {(subj + tag):12} {chars:>7} {when:11} {mark:4} "
+              + (f"{layer_cell[0]:9} " if layer_cell else "") + started)
         if tag == "?":
             print(f"{'':4} {'':9} └ спор: {dispute}")
     print("-" * 100)
@@ -488,9 +670,14 @@ def _fold(text):
 
 
 def select(conn, role, query=None, on_date=None, revoked=False, no_condition=False,
-             full=False):
+             full=False, layer=None):
     clauses, params = ["role=?"], [role]
     heading = []
+    layer_known = has_layer(conn)
+    if layer:
+        clauses.append("layer=?")
+        params.append(layer)
+        heading.append(f"слой {layer}")
     if query:
         # регистр сворачивает Python, а не база: см. _fold и карточку #784
         conn.create_function("fold", 1, _fold, deterministic=True)
@@ -512,7 +699,8 @@ def select(conn, role, query=None, on_date=None, revoked=False, no_condition=Fal
         heading.append("без условия снятия")
     rows = conn.execute(
         "SELECT id, section, subject, body_chars, COALESCE(happened_at,'—'), alive, "
-        "COALESCE(source,'—'), COALESCE(expiry_cond,'—'), body FROM phoenix_records "
+        "COALESCE(source,'—'), COALESCE(expiry_cond,'—'), body"
+        + (", layer" if layer_known else "") + " FROM phoenix_records "
         f"WHERE {' AND '.join(clauses)} ORDER BY section, ord", params).fetchall()
     print("=" * 96)
     print(f"ОТБОР по памяти {role}: {' · '.join(heading) or 'всё'} → записей {len(rows)}")
@@ -549,13 +737,14 @@ def select(conn, role, query=None, on_date=None, revoked=False, no_condition=Fal
     # Тело — по --целиком, и это ВТОРОЙ ход, сделанный осознанно.
     if not full:
         print(f"{'id':>4} {'раздел':9} {'предмет':11} {'знаков':>7} {'час':11} "
-              f"{'жив':9} {'усл':4} начало")
+              f"{'жив':9} {'усл':4} " + (f"{'слой':9} " if layer_known else "") + "начало")
         print("-" * 96)
-        for id_, sect, subj, chars, when, alive, src, cond, body in rows:
+        for id_, sect, subj, chars, when, alive, src, cond, body, *layer_cell in rows:
             mark = "✅" if alive == "active" else "⚰️СНЯТА"
             cond_flag = "—" if cond == "—" else ("нет" if cond.startswith(NO_CONDITION) else "да")
             first_line = body.strip().splitlines()[0] if body.strip() else ""
-            print(f"{id_:>4} {sect:9} {subj:11} {chars:>7} {when:11} {mark:9} {cond_flag:4} {first_line[:40]}")
+            print(f"{id_:>4} {sect:9} {subj:11} {chars:>7} {when:11} {mark:9} {cond_flag:4} "
+                  + (f"{layer_cell[0]:9} " if layer_cell else "") + first_line[:40])
         print("-" * 96)
         # ⚖️ ВОПРОС ВЛАДЕЛЬЦА ЗВУЧИТ «ЧТО СНЯТО И ЧЕМ» — ДВЕ ПОЛОВИНЫ, И ВТОРАЯ ДОРОЖЕ.
         # Список, отвечающий только первой, оставляет снятое без причины: а снятое без
@@ -574,9 +763,10 @@ def select(conn, role, query=None, on_date=None, revoked=False, no_condition=Fal
             print("-" * 96)
         print("👉 тела записей целиком — тем же отбором с ключом --целиком")
         return 0
-    for id_, sect, subj, chars, when, alive, src, cond, body in rows:
+    for id_, sect, subj, chars, when, alive, src, cond, body, *layer_cell in rows:
         mark = "✅" if alive == "active" else "⚰️ СНЯТА"
-        print(f"\n📄 #{id_} · {sect} · предмет «{subj}» · {chars}б · час {when} · {mark}")
+        print(f"\n📄 #{id_} · {sect} · предмет «{subj}» · {chars}б · час {when} · {mark}"
+              + (f" · слой {layer_cell[0]}" if layer_cell else ""))
         print(f"   источник: {src}")
         print(f"   условие снятия: {cond}")
         print("   " + "─" * 88)
@@ -638,6 +828,15 @@ def main() -> int:
     ap.add_argument("--source", "--источник", dest="source")
     ap.add_argument("--condition", "--условие", dest="condition")
     ap.add_argument("--subject", "--предмет", dest="subject")
+    ap.add_argument("--compact", "--сжать", dest="compact", action="store_true",
+                    help="унести записи слоя hot в warm, пока слой не уложится в порог раздела "
+                         "(порог читается из guard-phoenix-volume.py и признаком не задаётся)")
+    ap.add_argument("--dry-run", "--вхолостую", dest="dry_run", action="store_true",
+                    help="с --сжать: показать перечень и ничего не записывать")
+    ap.add_argument("--move", "--перенести", dest="move", type=int, metavar="ID",
+                    help="перенести одну запись в слой, названный ключом --layer")
+    ap.add_argument("--layer", "--слой", dest="layer", choices=LAYERS,
+                    help="слой: цель для --move; отбор для --show и --select")
     a = ap.parse_args()
 
     db = pathlib.Path(a.db) if a.db else mezo_paths.live_db()
@@ -656,7 +855,7 @@ def main() -> int:
     # ⚡ КАРТОЧКА #600 (найдено контуром AIA, подтверждено в нашем коде): --пересобрать
     # ЗДЕСЬ НЕ СЧИТАЛСЯ пишущей операцией и обходил проверку «роль правит СВОЮ память
     # сама» — чужая роль могла пересобрать разбор чужого раздела, не назвавшись.
-    is_write = a.parse or a.rebuild or a.revoke or a.fields
+    is_write = a.parse or a.rebuild or a.revoke or a.fields or a.compact or a.move is not None
     if is_write:
         if not actor:
             sys.exit("⛔ НЕ ЗНАЮ, ЧЬЯ РУКА. Назовись: MEZO_ROLE=<ТВОЯ РОЛЬ>")
@@ -665,6 +864,24 @@ def main() -> int:
                      "память сама (слово владельца 2026-09-04 13:41 UTC).\n"
                      "   Смотреть и отбирать чужую можно: --показать · --отобрать")
 
+    if a.compact and a.move is not None:
+        sys.exit("⛔ --сжать и --перенести — два разных вызова, вместе не зовутся")
+    if a.compact:
+        if a.layer:
+            sys.exit("⛔ --слой не сочетается с --сжать: сжатие само уносит hot → warm")
+        if not has_layer(conn):
+            refuse_no_layer("сжатие")
+        return compact(conn, role, a.section, actor, a.dry_run)
+    if a.move is not None:
+        if not a.layer:
+            sys.exit("⛔ --перенести называет запись, а КУДА — ключ --слой {hot,warm,permanent}")
+        if not has_layer(conn):
+            refuse_no_layer("перенос по слоям")
+        return move_layer(conn, role, a.move, a.layer, actor, a.why)
+    if a.dry_run:
+        sys.exit("⛔ --dry-run работает только с --сжать")
+    if a.layer and not has_layer(conn):
+        refuse_no_layer("отбор по слою")
     if a.rebuild:
         if not a.section:
             sys.exit("⛔ нужен --section")
@@ -725,8 +942,9 @@ def main() -> int:
     if a.select or a.on_date or a.revoked or a.no_condition:
         # исход отбора НЕСЁТСЯ кодом выхода: нашлось 0 · не нашлось при живых
         # записях 2 · записей нет вовсе 3 (карточка #784, критерий ④)
-        return select(conn, role, a.select, a.on_date, a.revoked, a.no_condition, a.full)
-    show(conn, role)
+        return select(conn, role, a.select, a.on_date, a.revoked, a.no_condition, a.full,
+                      a.layer)
+    show(conn, role, a.layer)
     return 0
 
 

@@ -121,6 +121,16 @@ _memory_archive = importlib.util.module_from_spec(_memory_archive_spec)
 _memory_archive_spec.loader.exec_module(_memory_archive)
 
 
+LAYER_NAMES = ("hot", "warm", "permanent")
+
+
+def _has_layer(conn) -> bool:
+    """Есть ли у записей поле слоя (шаг схемы 20261115-phoenix-records-layer сведён).
+    Инструмент стоит у всех ролей, а шаг на их базах может быть не сведён — тогда ищем как
+    прежде и говорим об этом вслух."""
+    return any(r[1] == "layer" for r in conn.execute("PRAGMA table_info(phoenix_records)"))
+
+
 def _tokenize(text: str) -> list[str]:
     return re.findall(r"\w+", text)
 
@@ -190,7 +200,7 @@ def _match_query_phrase_prefix(tokens: list[str], stems: list[str]) -> str:
     return '"' + " ".join(parts) + '"*'
 
 
-def _fetch_records(conn, role, match_query, section, revoked_only, limit):
+def _fetch_records(conn, role, match_query, section, revoked_only, limit, layer=None):
     where_clauses = ["phoenix_records_fts MATCH ?", "pr.role = ?"]
     params: list = [match_query, role]
     if section:
@@ -198,6 +208,9 @@ def _fetch_records(conn, role, match_query, section, revoked_only, limit):
         params.append(section)
     if revoked_only:
         where_clauses.append("pr.alive = 'revoked'")
+    if layer:
+        where_clauses.append("pr.layer = ?")
+        params.append(layer)
     params.append(limit)
     sql = (
         "SELECT pr.id, pr.section, pr.subject, pr.happened_at, pr.alive, pr.revoked_at, "
@@ -210,7 +223,7 @@ def _fetch_records(conn, role, match_query, section, revoked_only, limit):
     return conn.execute(sql, params).fetchall()
 
 
-def _fetch_records_or(conn, role, or_query, section, revoked_only, cap):
+def _fetch_records_or(conn, role, or_query, section, revoked_only, cap, layer=None):
     """Кандидаты ступени C: любая запись, несущая ХОТЯ БЫ ОДИН OR-член. Тянем
     `phoenix_records_fts.rank` отдельным столбцом — он нужен как ВТОРОЙ ключ
     сортировки в Python (первый — число совпавших токенов запроса, его SQL не
@@ -222,6 +235,9 @@ def _fetch_records_or(conn, role, or_query, section, revoked_only, cap):
         params.append(section)
     if revoked_only:
         where_clauses.append("pr.alive = 'revoked'")
+    if layer:
+        where_clauses.append("pr.layer = ?")
+        params.append(layer)
     params.append(cap)
     sql = (
         "SELECT pr.id, pr.section, pr.subject, pr.happened_at, pr.alive, pr.revoked_at, "
@@ -304,10 +320,13 @@ def _rebuild_command(conn, role, section) -> str:
     return f"python {memory_records} --role {role} --section {section} {flag}"
 
 
-def _print_record(row, *, full_body: bool, match_note: str | None = None):
+def _print_record(row, *, full_body: bool, match_note: str | None = None,
+                  layer: str | None = None):
     (record_id, section, subject, happened_at, alive, revoked_at, revoked_note,
      source, body, snippet) = row
     header = f"#{record_id} · {SECTION_LABELS.get(section, section)} · {happened_at or '—'} · {subject}"
+    if layer:
+        header += f" · слой {layer}"
     if match_note:
         header += f" · {match_note}"
     if alive == "revoked":
@@ -391,9 +410,18 @@ def _search(conn, role, args, tokens) -> tuple[int, int]:
         header += " · только снятые"
     if args.phrase:
         header += " · фразой"
+    if args.layer:
+        header += f" · слой {args.layer}"
     print("=" * 84)
     print(header)
     print("=" * 84)
+    layer_known = _has_layer(conn)
+    if not layer_known:
+        # ⚖️ ГОВОРИМ ОДИН РАЗ И ВСЛУХ: поле слоя к этой базе не сведено, и записи искались все
+        # разом. Молчание читалось бы как «слой у записей есть, и поиск по нему прошёл».
+        layer_step = (HERE / "migrations" / "20261115-phoenix-records-layer.py").as_posix()
+        print("⚪ слоя памяти в этой базе нет (шаг схемы не сведён) — ищу по всем записям без "
+              f"различия слоёв. Свести: python {layer_step}")
 
     stems = [_stem(t) for t in tokens]
     # Стемминг СМЕНИЛ хотя бы один токен? Если нет (все токены короче 5 знаков
@@ -404,7 +432,8 @@ def _search(conn, role, args, tokens) -> tuple[int, int]:
 
     # ── УРОВЕНЬ 1, ступень A: ЗАПИСИ, точный AND ────────────────────────────────
     match_query = _match_query_phrase(tokens) if args.phrase else _match_query(tokens)
-    rows = _fetch_records(conn, role, match_query, args.section, args.revoked, args.limit)
+    rows = _fetch_records(conn, role, match_query, args.section, args.revoked, args.limit,
+                          args.layer)
     match_notes: list[str | None] = [None] * len(rows)
 
     # ── УРОВЕНЬ 1, ступень B: ЗАПИСИ, тот же AND, но префиксом ──────────────────
@@ -416,12 +445,12 @@ def _search(conn, role, args, tokens) -> tuple[int, int]:
             shown = " ".join(tokens[:-1] + [f"{stems[-1]}*"])
             print(f"⚠️ точной фразы нет — ищу с началом последнего слова: «{shown}»")
             rows = _fetch_records(conn, role, _match_query_phrase_prefix(tokens, stems),
-                                  args.section, args.revoked, args.limit)
+                                  args.section, args.revoked, args.limit, args.layer)
         else:
             shown = " ".join(f"{s}*" if s != t else t for t, s in zip(tokens, stems))
             print(f"⚠️ точных слов нет — ищу по началу слов: {shown}")
             rows = _fetch_records(conn, role, _match_query_stemmed(tokens, stems),
-                                  args.section, args.revoked, args.limit)
+                                  args.section, args.revoked, args.limit, args.layer)
         match_notes = [None] * len(rows)
 
     # ── УРОВЕНЬ 1, ступень C: ЗАПИСИ, OR по префиксам + порог совпадений ────────
@@ -439,7 +468,7 @@ def _search(conn, role, args, tokens) -> tuple[int, int]:
         if or_query:
             cap = max(args.limit * 5, 50)
             candidates = _fetch_records_or(conn, role, or_query, args.section,
-                                           args.revoked, cap)
+                                           args.revoked, cap, args.layer)
             partial_rows, counts = _partial_matches(candidates, tokens, stems, args.limit)
             if partial_rows:
                 print("⚠️ все слова вместе не встречаются — показываю записи с частью слов")
@@ -447,8 +476,18 @@ def _search(conn, role, args, tokens) -> tuple[int, int]:
                 match_notes = [f"слов {k} из {len(tokens)}" for k in counts]
 
     if rows:
+        layer_of = {}
+        if layer_known:
+            marks = ",".join("?" * len(rows))
+            layer_of = dict(conn.execute(
+                f"SELECT id, layer FROM phoenix_records WHERE id IN ({marks})",
+                [row[0] for row in rows]))
         for row, note in zip(rows, match_notes):
-            _print_record(row, full_body=args.full_body, match_note=note)
+            _print_record(row, full_body=args.full_body, match_note=note,
+                          layer=layer_of.get(row[0]))
+        if layer_known:
+            counts = {name: sum(1 for v in layer_of.values() if v == name) for name in LAYER_NAMES}
+            print("по слоям: " + " · ".join(f"{name} {n}" for name, n in counts.items() if n))
         for section in sorted({row[1] for row in rows}):
             stale, current_len = _section_is_stale(conn, role, section)
             if stale:
@@ -456,6 +495,11 @@ def _search(conn, role, args, tokens) -> tuple[int, int]:
                       f"{current_len} знаков) — пересобери: "
                       f"{_rebuild_command(conn, role, section)}")
         return 0, len(rows)
+
+    if args.layer:
+        # уровни 2–3 слоя не различают: тело раздела и архив лежат вне записей
+        print(f"⚠️ записей слоя {args.layer} с этим словом нет; уровни 2–3 (текст раздела, "
+              "архив) слой не различают — дальше они отвечают без отбора по слою")
 
     # ── УРОВЕНЬ 2: ТЕЛО РАЗДЕЛА (только когда уровень 1 пуст целиком) ───────────
     matched_sections = _level2_exact(conn, role, tokens, args.phrase)
@@ -536,6 +580,9 @@ def main() -> int:
                     help="искать только среди снятых (alive='revoked') записей")
     ap.add_argument("--phrase", dest="phrase", action="store_true",
                     help="искать слова ОДНОЙ фразой подряд, а не по отдельности")
+    ap.add_argument("--layer", choices=LAYER_NAMES, default=None,
+                    help="сузить поиск по записям до одного слоя памяти (по умолчанию — все три "
+                         "слоя разом). На базе без поля слоя — отказ, код 1")
     ap.add_argument("--actor", help="кто читает (роль руки); без него показ подсказки "
                     "засчитывается роли из --role")
     ap.add_argument("--full", action="store_true",
@@ -565,6 +612,13 @@ def main() -> int:
               f"phoenix_records_fts). Накати шаг схемы:\n   python {fts_step}",
               file=sys.stderr)
         return 5
+
+    if args.layer and not _has_layer(conn):
+        layer_step = (HERE / "migrations" / "20261115-phoenix-records-layer.py").as_posix()
+        print(f"⛔ --layer {args.layer}: в этой базе у записей нет поля слоя памяти — отбирать "
+              f"не по чему, поиск НЕ выполнен. Накати шаг схемы:\n   python {layer_step}",
+              file=sys.stderr)
+        return 1
 
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):

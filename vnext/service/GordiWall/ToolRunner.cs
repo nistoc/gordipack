@@ -122,16 +122,74 @@ public sealed class ToolRunner(Contract contract, Manifest manifest, bool readOn
         if (!string.IsNullOrWhiteSpace(nextLabel))
             return ContinuePart(tool, contour, nextLabel);
 
+        // Вариант вызова: выбирается значением аргумента выбора или умолчанием договора. Новое место проверок —
+        // после next_part (часть сохранённого ответа вариантов не знает) и ДО обязательности аргументов.
+        var exec = tool.Exec;
+        if (tool.HasVariants)
+        {
+            var (picked, variantRefusal) = PickVariant(tool, given, contour);
+            if (variantRefusal is not null) return variantRefusal;
+            exec = picked!.Exec;
+        }
+
         foreach (var a in tool.Args)
         {
             var refusal = CheckArg(a, given);
             if (refusal is not null) return Answer.Refuse(refusal, contour.Id, ToolingVersion(contour));
         }
 
-        if (tool.Exec.Kind == "builtin")
-            return Builtin(tool, contour);
+        if (exec!.Kind == "builtin")
+            return Builtin(exec, contour);
 
-        return await RunPythonAsync(tool, contour, given, ct);
+        return await RunPythonAsync(tool, exec, contour, given, ct);
+    }
+
+    /// <summary>Аргумент передан: есть в вызове и не пуст. Пустая строка — как «не передан».</summary>
+    private static bool Passed(IReadOnlyDictionary<string, object?> given, string name) =>
+        !string.IsNullOrWhiteSpace(Val(given, name));
+
+    /// <summary>
+    /// Выбор варианта вызова и проверки, которые зависят от него: аргумент чужого варианта и не переданный обязательный
+    /// аргумент выбранного — отказ ДО запуска тела. Значение выбора вне перечня или пропущенное без умолчания даёт прежний
+    /// отказ по обязательности и enum (его формулирует CheckArg).
+    /// </summary>
+    private (ToolVariant? Variant, Answer? Refusal) PickVariant(ToolDef tool, IReadOnlyDictionary<string, object?> given, ContourInfo contour)
+    {
+        var selector = tool.Args.First(a => a.Name == tool.VariantBy);
+        var key = Val(given, selector.Name);
+        if (string.IsNullOrWhiteSpace(key)) key = tool.DefaultVariant;
+        var variant = tool.FindVariant(key);
+        if (variant is null)
+        {
+            var why = CheckArg(selector, given)
+                      ?? $"у аргумента «{selector.Name}» нет варианта «{key}»: {string.Join(" · ", selector.Enum ?? [])}";
+            return (null, Answer.Refuse(why, contour.Id, ToolingVersion(contour)));
+        }
+
+        var own = tool.ArgsOf(variant);
+        foreach (var a in tool.Args)
+        {
+            if (a.Name == selector.Name || !Passed(given, a.Name) || own.Contains(a.Name)) continue;
+            var owners = tool.VariantList.Where(v => tool.ArgsOf(v).Contains(a.Name)).Select(v => selector.Name + "=" + v.Key);
+            return (null, Answer.Refuse(
+                $"аргумент «{a.Name}» не относится к варианту «{selector.Name}={variant.Key}» вызова «{tool.Name}»; "
+                + $"он относится к вариантам: {string.Join(", ", owners)}. "
+                + "Тело не запускалось: молча выбросить аргумент чужого варианта значило бы ответить на другой вопрос.",
+                contour.Id, ToolingVersion(contour)));
+        }
+
+        foreach (var r in variant.Requires)
+        {
+            if (Passed(given, r)) continue;
+            var decl = tool.Args.FirstOrDefault(a => a.Name == r);
+            return (null, Answer.Refuse(
+                $"в варианте «{selector.Name}={variant.Key}» вызова «{tool.Name}» не передан обязательный аргумент «{r}»"
+                + (string.IsNullOrEmpty(decl?.Description) ? "" : ": " + decl!.Description)
+                + ". Тело не запускалось.",
+                contour.Id, ToolingVersion(contour)));
+        }
+
+        return (variant, null);
     }
 
     /// <summary>Аргумент объявлен в договоре: среди общих или среди аргументов вызова.</summary>
@@ -158,10 +216,10 @@ public sealed class ToolRunner(Contract contract, Manifest manifest, bool readOn
 
     // ── «кто меня судит» отвечает сама стена: это единственный вызов, который обязан
     //    отвечать и тогда, когда за стеной ничего не работает
-    private Answer Builtin(ToolDef tool, ContourInfo contour)
+    private Answer Builtin(ToolExec exec, ContourInfo contour)
     {
-        if (tool.Exec.Builtin != "contour_info")
-            return Answer.Refuse($"встроенного ответчика «{tool.Exec.Builtin}» нет", contour.Id, ToolingVersion(contour));
+        if (exec.Builtin != "contour_info")
+            return Answer.Refuse($"встроенного ответчика «{exec.Builtin}» нет", contour.Id, ToolingVersion(contour));
 
         var sb = new StringBuilder();
         sb.AppendLine("── отвечает САМА стена (эта половина есть всегда, даже когда за стеной ничего не работает)");
@@ -217,14 +275,14 @@ public sealed class ToolRunner(Contract contract, Manifest manifest, bool readOn
         meta.Split('\n').Select(l => l.Split('\t')[0].Trim())
             .Any(k => k.StartsWith("template_", StringComparison.Ordinal) && k != "template_files_count");
 
-    private async Task<Answer> RunPythonAsync(ToolDef tool, ContourInfo contour,
+    private async Task<Answer> RunPythonAsync(ToolDef tool, ToolExec exec, ContourInfo contour,
                                               IReadOnlyDictionary<string, object?> given, CancellationToken ct)
     {
-        if (tool.Exec.Dir is null || !contour.ToolDirs.TryGetValue(tool.Exec.Dir, out var dir))
-            return Answer.Refuse($"у контура «{contour.Id}» не объявлен каталог инструментов «{tool.Exec.Dir}»",
+        if (exec.Dir is null || !contour.ToolDirs.TryGetValue(exec.Dir, out var dir))
+            return Answer.Refuse($"у контура «{contour.Id}» не объявлен каталог инструментов «{exec.Dir}»",
                                  contour.Id, ToolingVersion(contour));
 
-        var script = Path.Combine(dir, tool.Exec.Script!);
+        var script = Path.Combine(dir, exec.Script!);
         if (!File.Exists(script))
             return new Answer(Outcome.NotStarted, false, null, "", contour.Id, ToolingVersion(contour), null,
                               $"тела инструмента нет на месте: {script}. Это НЕ «нечего проверять» — установка неполна.");
@@ -232,7 +290,7 @@ public sealed class ToolRunner(Contract contract, Manifest manifest, bool readOn
         var temps = new List<string>();
         try
         {
-            var argv = BuildArgv(tool, contour, given, temps);
+            var argv = BuildArgv(exec, contour, given, temps);
 
             var psi = new ProcessStartInfo
             {
@@ -256,6 +314,11 @@ public sealed class ToolRunner(Contract contract, Manifest manifest, bool readOn
             psi.Environment["PYTHONIOENCODING"] = "utf-8";
             psi.Environment["GORDI_CONTOUR"] = contour.Id;     // для сообщений тела, не для выбора пути
             psi.Environment["GORDI_ACTOR_WALL"] = "1";
+            // Объявленная передача значения аргумента в среду тела (exec.env договора): ПОСЛЕ стирания MEZO_*, только непустое.
+            // Среда самой службы к телу не протекает: ставится лишь то, что договор назвал, и значение берётся из вызова.
+            foreach (var (envName, argName) in exec.EnvMap)
+                if (Val(given, argName) is { } envValue && !string.IsNullOrWhiteSpace(envValue))
+                    psi.Environment[envName] = envValue;
 
             using var p = Process.Start(psi);
             if (p is null)
@@ -286,7 +349,7 @@ public sealed class ToolRunner(Contract contract, Manifest manifest, bool readOn
             var stderr = await stderrTask;
             var exit = p.ExitCode;
 
-            var outcome = Judge(tool, exit, stdout, stderr);
+            var outcome = Judge(exec, exit, stdout, stderr);
             string? error = outcome == Outcome.Passed ? null : ShortReason(outcome, stderr, stdout);
 
             // Поток ошибок — ОТДЕЛЬНОЕ поле. Отсечение допустимо только здесь, и оно названо.
@@ -342,7 +405,7 @@ public sealed class ToolRunner(Contract contract, Manifest manifest, bool readOn
     /// Выбор исхода. Код выхода — ОДИН из признаков, а не договор:
     /// у тела исходов больше, чем значений у кода.
     /// </summary>
-    private static Outcome Judge(ToolDef tool, int exit, string stdout, string stderr)
+    private static Outcome Judge(ToolExec exec, int exit, string stdout, string stderr)
     {
         if (exit == 0) return Outcome.Passed;
 
@@ -353,7 +416,7 @@ public sealed class ToolRunner(Contract contract, Manifest manifest, bool readOn
             return Outcome.NotStarted;
 
         var all = stdout + "\n" + stderr;
-        foreach (var mark in tool.Exec.MismatchWhen)
+        foreach (var mark in exec.MismatchWhen)
             if (all.Contains(mark, StringComparison.OrdinalIgnoreCase))
                 return Outcome.Mismatch;
 
@@ -490,18 +553,18 @@ public sealed class ToolRunner(Contract contract, Manifest manifest, bool readOn
         };
     }
 
-    private List<string> BuildArgv(ToolDef tool, ContourInfo contour,
+    private List<string> BuildArgv(ToolExec exec, ContourInfo contour,
                                    IReadOnlyDictionary<string, object?> given, List<string> temps)
     {
         var argv = new List<string>();
 
         // ── «pre» идёт ДО подкоманды: у инструмента карточек --db объявлен у корневого разбора
-        foreach (var w in tool.Exec.Pre)
+        foreach (var w in exec.Pre)
             argv.Add(w.Replace("{db}", contour.Storage, StringComparison.Ordinal));
 
-        argv.AddRange(tool.Exec.Sub);
+        argv.AddRange(exec.Sub);
 
-        foreach (var m in tool.Exec.Args)
+        foreach (var m in exec.Args)
         {
             var raw = Val(given, m.Arg);
             var isTrue = IsTrue(given, m.Arg);

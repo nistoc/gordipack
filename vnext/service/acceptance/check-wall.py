@@ -47,6 +47,17 @@
 с признаком, напечатанное раньше причины, её не подменяет), а признак-слово считается только целым словом
 («ERRORS: 0» — не признак).
 
+Карточка 781 (договор 2.0.0, этап Э2) добавила раздел «карточка 781»: варианты вызова (один вызов — несколько тел по значению
+типизированного аргумента) и объявленная передача значения аргумента в переменную среды тела (exec.env); через них в договор
+вошли поиск по памяти, сжатие слоя памяти, запись слова владельца и заведение карточки при прежних ДВЕНАДЦАТИ вызовах.
+Случаи: В1 состав · В2 разбор договора отвергает кривые варианты · В3 выбор варианта (заглушки; служба и режим run) ·
+В4 рука тела (среда службы к телу не протекает; объявленный env доходит) · В5 поиск по трём слоям (критерий ⑥) ·
+В6 сжатие слоя (критерий ④) · В7 завести карточку · В8 записать слово владельца (настоящий искатель, подставной домашний каталог) ·
+В9 читающие вызовы пишут только объявленное. Случаи В5–В9 идут на МАЛОЙ КОПИИ установленного контура в рабочем каталоге
+(<out>/e2/c): инструменты ветки (scripts → .mezosync/scripts, vnext/prototype → vnext-tools) и копия учебной базы с шагом схемы
+слоёв, применённым к КОПИИ; живая и учебная базы не трогаются. Три нарочные поломки (П1–П3) делаются копиями договора, и каждая
+обязана уронить РОВНО свои случаи и названным механизмом (список и прямой признак названы в BREAKS_781). Новые вызовы на живом контуре приёмка не зовёт вовсе.
+
 Исход: 0 — все машинные критерии прошли; 1 — хоть один провалился; 2 — проверять было нечем;
 3 — сборка старше исходников, судить её нельзя (пересобрать и запустить снова).
 """
@@ -68,10 +79,13 @@ DEFAULT_EXE = os.path.join(SERVICE, "GordiWall", "bin", "Debug", "net10.0", "gor
 # Записанный ожидаемый состав договора. Меняется РУКОЙ, когда договор меняют нарочно:
 # иначе «перечень вызовов тот же» нечем подтвердить — отпечаток пересчитается вместе с подменой.
 # Карточка 791: в договор добавлены общий аргумент next_part (часть I) и поле service_writes у читающих вызовов
-# (часть II). Новых ВЫЗОВОВ нет: число прежнее — 12, отпечаток перечня считается по именам и режимам вызовов и поэтому
-# тоже прежний. Если число или отпечаток когда-нибудь сменятся, это решение человека, а не пересчёт приёмки.
+# (часть II). Новых ВЫЗОВОВ нет: число прежнее — 12. Если число или отпечаток когда-нибудь сменятся, это решение
+# человека, а не пересчёт приёмки.
+# Карточка 781: договор 2.0.0 — варианты вызова. Число вызовов по-прежнему 12, но имена и умения другие, а формула отпечатка
+# теперь учитывает ещё аргумент выбора и ключи вариантов: снятый вариант меняет отпечаток. Значение ниже изменено РУКОЙ,
+# по решению PROTO на карточке 781 (17.11.2026 01:55 UTC), а не пересчитано приёмкой.
 EXPECTED_TOOL_COUNT = 12
-EXPECTED_TOOLS_FINGERPRINT = "247dbfb31eaf"
+EXPECTED_TOOLS_FINGERPRINT = "8903ca5bd7e9"
 TOOL_COUNT_RANGE = (8, 12)
 
 CONTOUR_LIVE = "atlas"
@@ -84,7 +98,7 @@ class LiveContourRefusal(Exception):
 
 # На живом контуре приёмка вправе звать ТОЛЬКО измеренное как не пишущее (случай К8 меряет на копии стенда):
 # contour_info и rules_get не меняют ничего; memory_read не меняет ничего ТОЛЬКО при непустом section —
-# без раздела он отмечает подсказку в живой базе (таблица hint_seen). cards_list и feed_read пишут служебные таблицы.
+# без раздела он отмечает подсказку в живой базе (таблица hint_seen). cards_read и feed_read пишут служебные таблицы (hint_seen, read_batches).
 LIVE_ALWAYS_OK = ("contour_info", "rules_get")
 LIVE_OK_WITH_SECTION = ("memory_read",)
 
@@ -225,13 +239,15 @@ def write_json(path, data):
         json.dumps(data, ensure_ascii=False, indent=2))
 
 
-def run_mode(exe, contract, contours, argv):
+def run_mode(exe, contract, contours, argv, env_extra=None):
     """Однократный вызов мимо службы. Отдаёт код выхода, вывод и поток ошибок целиком.
-    Защита живого контура срабатывает ДО запуска процесса."""
+    Защита живого контура срабатывает ДО запуска процесса. env_extra — переменные среды самой службы (случай В4)."""
     if argv:
         guard_live_call(argv[0], argv[1:])
     env = dict(os.environ)
     env["PYTHONUTF8"] = "1"
+    if env_extra:
+        env.update(env_extra)
     p = subprocess.run([exe, "run"] + argv + ["--contract", contract, "--contours", contours],
                        capture_output=True, encoding="utf-8", errors="replace", env=env, timeout=180)
     return p.returncode, p.stdout, p.stderr
@@ -346,14 +362,17 @@ def stand_copy(work, manifest, tag):
     return db, mp
 
 
-def table_digests(db_path):
-    """По каждой таблице базы: (число строк, sha256 по содержимому). Читается только на чтение."""
+def table_digests(db_path, only=None):
+    """По каждой таблице базы: (число строк, sha256 по содержимому). Читается только на чтение.
+    only — перечень имён, если нужны не все таблицы."""
     import hashlib
     import sqlite3
     conn = sqlite3.connect("file:%s?mode=ro" % db_path.replace("\\", "/"), uri=True)
     out = {}
     try:
         names = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY 1")]
+        if only is not None:
+            names = [n for n in names if n in only]
         for n in names:
             rows = sorted(repr(r) for r in conn.execute('SELECT * FROM "%s"' % n))
             h = hashlib.sha256()
@@ -399,14 +418,14 @@ def sync_backoff_writers(runtime_dir):
 
 # пробный вызов каждого читающего вызова договора на своей копии базы стенда
 K8_PROBES = {
-    "memory_read": {"role": "PROTO"},
-    "memory_read_for_edit": {"role": "PROTO", "section": "state"},
+    # договор 2.0.0: вызовы с вариантами пробуются по варианту — каждый обязан укладываться в service_writes вызова
+    "memory_read": [("", {"role": "PROTO"}, None), (" view=edit", {"role": "PROTO", "view": "edit", "section": "state"}, None)],
+    "memory_find": {"role": "PROTO", "query": "слово"},
     # два варианта: обычное чтение и отбор to_me. Каждый обязан задеть свою таблицу — иначе замер её не видел:
     # обычное чтение — read_batches (запись о показанной партии; у роли без непрочитанного её нет, и цикл по ролям идёт дальше),
     # отбор to_me — cursor_segments
     "feed_read": [("", {"role": "COORD"}, "read_batches"), (" to_me", {"role": "COORD", "to_me": True}, "cursor_segments")],
-    "cards_list": {"role": "PROTO"},
-    "cards_show": {"card": 1},
+    "cards_read": [("", {"role": "PROTO"}, None), (" view=card", {"view": "card", "card": 1}, None)],
     "rules_get": {"list": True},
     "owner_words_find": {"text": "слово"},
     "contour_info": {},
@@ -453,7 +472,7 @@ def cases_791(args, work, manifest, contract_doc, carg, v3, s2c):
         d = copy.deepcopy(contract_doc)
         for t in d["tools"]:
             if t["name"] in mapping:
-                t["exec"]["script"] = mapping[t["name"]]
+                set_script_all(t, mapping[t["name"]])
         p = os.path.join(work, "contract-791-%s.json" % tag)
         write_json(p, d)
         return p
@@ -796,16 +815,16 @@ def cases_791(args, work, manifest, contract_doc, carg, v3, s2c):
     # ───────────── К9: тело кончилось ненулевым кодом — исход «тело отказало» (tool_failed), а не «не смог проверить»
     put_stub("stub-k9-stderr.py", "import sys\nsys.stderr.write('нет такой роли: ZZZ\\n')\nsys.exit(1)\n")
     put_stub("stub-k9-stdout3.py", "import sys\nsys.stdout.write('причина только в stdout: ключ подтверждения неверен\\n')\nsys.exit(3)\n")
-    mismatch_marks = [t for t in contract_doc["tools"] if t["name"] == "memory_save"][0]["exec"].get("mismatch_when") or []
+    mismatch_marks = [t for t in contract_doc["tools"] if t["name"] == "memory_write"][0]["variants"]["save"]["exec"].get("mismatch_when") or []
     mismatch_mark = mismatch_marks[0] if mismatch_marks else None
     put_stub("stub-k9-mismatch.py", "import sys\nsys.stdout.write(%r + '\\n')\nsys.exit(1)\n" % (mismatch_mark or ""))
     put_stub("stub-k9-sleep.py", "import time\ntime.sleep(60)\n")
     k9_contract = stub_contract("k9", {"rules_get": "stub-k9-stderr.py", "owner_words_find": "stub-k9-stdout3.py",
-                                        "memory_save": "stub-k9-mismatch.py"})
+                                        "memory_write": "stub-k9-mismatch.py"})
     w9k = Wall(args.exe, k9_contract, m_stub_path)
     k9a, _ = w9k.call("rules_get", {carg: CONTOUR_STAND, "list": True})
     k9b, _ = w9k.call("owner_words_find", {carg: CONTOUR_STAND, "text": "x"})
-    k9c, _ = w9k.call("memory_save", {carg: CONTOUR_STAND, "role": "PROTO", "section": "state", "body": "заглушка", "expect_version": 1})
+    k9c, _ = w9k.call("memory_write", {carg: CONTOUR_STAND, "action": "save", "role": "PROTO", "section": "state", "body": "заглушка", "expect_version": 1})
     w9k.close()
     k9a_code, k9a_out, _ = run_mode(args.exe, k9_contract, m_stub_path, ["rules_get", "--" + carg, CONTOUR_STAND, "--list"])
     ok_k9a = (k9a.get("outcome") == "tool_failed" and (k9a.get("error") or "").startswith("тело отказало:")
@@ -848,11 +867,11 @@ def cases_791(args, work, manifest, contract_doc, carg, v3, s2c):
              % k11_err_text.encode("utf-8"))
     put_stub("stub-k11-trace.py", "import sys\nsys.stderr.buffer.write(%r)\nsys.exit(1)\n" % k11_trace_text.encode("utf-8"))
     k11_contract = stub_contract("k11", {"owner_words_find": "stub-k11-stdout-mark.py", "rules_get": "stub-k11-stderr-mark.py",
-                                          "cards_list": "stub-k11-trace.py"})
+                                          "cards_read": "stub-k11-trace.py"})
     w11 = Wall(args.exe, k11_contract, m_stub_path)
     k11a, _ = w11.call("owner_words_find", {carg: CONTOUR_STAND, "text": "X"})
     k11b, _ = w11.call("rules_get", {carg: CONTOUR_STAND, "list": True})
-    k11c, _ = w11.call("cards_list", {carg: CONTOUR_STAND, "role": "PROTO"})
+    k11c, _ = w11.call("cards_read", {carg: CONTOUR_STAND, "role": "PROTO"})
     w11.close()
     k11_code, k11_run_out, k11_run_err = run_mode(args.exe, k11_contract, m_stub_path,
                                                   ["owner_words_find", "--" + carg, CONTOUR_STAND, "--text", "X"])
@@ -890,12 +909,12 @@ def cases_791(args, work, manifest, contract_doc, carg, v3, s2c):
     put_stub("stub-k12-summary.py", "import sys\nsys.stdout.buffer.write(%r)\nsys.exit(1)\n" % k12_summary.encode("utf-8"))
     put_stub("stub-k12-word.py", "import sys\nsys.stdout.buffer.write(%r)\nsys.exit(1)\n" % k12_word.encode("utf-8"))
     k12_contract = stub_contract("k12", {"owner_words_find": "stub-k12-warn-stdout.py", "rules_get": "stub-k12-warn-stderr.py",
-                                          "cards_list": "stub-k12-summary.py"})
+                                          "cards_read": "stub-k12-summary.py"})
     k12w_contract = stub_contract("k12w", {"owner_words_find": "stub-k12-word.py"})
     w12 = Wall(args.exe, k12_contract, m_stub_path)
     k12a, _ = w12.call("owner_words_find", {carg: CONTOUR_STAND, "text": "X"})
     k12b, _ = w12.call("rules_get", {carg: CONTOUR_STAND, "list": True})
-    k12c, _ = w12.call("cards_list", {carg: CONTOUR_STAND, "role": "PROTO"})
+    k12c, _ = w12.call("cards_read", {carg: CONTOUR_STAND, "role": "PROTO"})
     w12.close()
     w12w = Wall(args.exe, k12w_contract, m_stub_path)
     k12d, _ = w12w.call("owner_words_find", {carg: CONTOUR_STAND, "text": "X"})
@@ -930,14 +949,21 @@ def cases_791(args, work, manifest, contract_doc, carg, v3, s2c):
         ("memory_read без section на живом", "memory_read", {carg: CONTOUR_LIVE, "role": "PROTO"}, True),
         ("memory_read с пустым section на живом", "memory_read", {carg: CONTOUR_LIVE, "role": "PROTO", "section": ""}, True),
         ("memory_read с section на живом", "memory_read", {carg: CONTOUR_LIVE, "role": "PROTO", "section": "identity"}, False),
-        ("cards_list на живом", "cards_list", {carg: CONTOUR_LIVE, "role": "PROTO"}, True),
+        ("memory_read view=edit с section на живом (карточка 781: разрешён в обоих вариантах)", "memory_read",
+         {carg: CONTOUR_LIVE, "role": "PROTO", "view": "edit", "section": "state"}, False),
+        ("memory_read view=edit без section на живом", "memory_read", {carg: CONTOUR_LIVE, "role": "PROTO", "view": "edit"}, True),
+        ("memory_find на живом", "memory_find", {carg: CONTOUR_LIVE, "role": "PROTO", "query": "память"}, True),
+        ("memory_write на живом", "memory_write", {carg: CONTOUR_LIVE, "action": "compact", "role": "PROTO", "actor": "PROTO"}, True),
+        ("cards_read на живом", "cards_read", {carg: CONTOUR_LIVE, "role": "PROTO"}, True),
+        ("cards_write на живом", "cards_write", {carg: CONTOUR_LIVE, "action": "add", "role": "PROTO"}, True),
+        ("owner_words_add на живом", "owner_words_add", {carg: CONTOUR_LIVE, "said_at": "x", "chat": "x", "text": "x", "heard_by": "x"}, True),
         ("feed_read на живом", "feed_read", {carg: CONTOUR_LIVE, "role": "PROTO"}, True),
         ("feed_write на живом", "feed_write", {carg: CONTOUR_LIVE, "role": "PROTO", "to": "COORD", "body": "x"}, True),
         ("contour_info на живом", "contour_info", {carg: CONTOUR_LIVE}, False),
         ("rules_get на живом", "rules_get", {carg: CONTOUR_LIVE, "list": True}, False),
         ("memory_read без section при ДРУГОМ имени аргумента контура", "memory_read", {"where": CONTOUR_LIVE, "role": "PROTO"}, True),
         ("memory_read без section на стенде", "memory_read", {carg: CONTOUR_STAND, "role": "PROTO"}, False),
-        ("cards_list на стенде", "cards_list", {carg: CONTOUR_STAND, "role": "PROTO"}, False),
+        ("cards_read на стенде", "cards_read", {carg: CONTOUR_STAND, "role": "PROTO"}, False),
         ("feed_read на стенде", "feed_read", {carg: CONTOUR_STAND, "role": "PROTO"}, False),
         ("feed_read с выдуманным контуром", "feed_read", {carg: "atlas-typo", "role": "PROTO"}, False),
         ("feed_read без контура", "feed_read", {"role": "PROTO"}, False),
@@ -945,10 +971,12 @@ def cases_791(args, work, manifest, contract_doc, carg, v3, s2c):
         ("argv: memory_read без --section на живом", "memory_read", ["--" + carg, CONTOUR_LIVE, "--role", "PROTO"], True),
         ("argv: memory_read с --section без значения на живом", "memory_read", ["--" + carg, CONTOUR_LIVE, "--role", "PROTO", "--section"], True),
         ("argv: memory_read с --section identity на живом", "memory_read", ["--" + carg, CONTOUR_LIVE, "--role", "PROTO", "--section", "identity"], False),
-        ("argv: cards_list на живом", "cards_list", ["--" + carg, CONTOUR_LIVE, "--role", "PROTO"], True),
+        ("argv: memory_read --view edit с --section на живом", "memory_read",
+         ["--" + carg, CONTOUR_LIVE, "--role", "PROTO", "--view", "edit", "--section", "state"], False),
+        ("argv: cards_read на живом", "cards_read", ["--" + carg, CONTOUR_LIVE, "--role", "PROTO"], True),
         ("argv: feed_read на живом", "feed_read", ["--" + carg, CONTOUR_LIVE, "--role", "PROTO"], True),
         ("argv: contour_info на живом", "contour_info", ["--" + carg, CONTOUR_LIVE], False),
-        ("argv: cards_list на стенде", "cards_list", ["--" + carg, CONTOUR_STAND, "--role", "PROTO"], False),
+        ("argv: cards_read на стенде", "cards_read", ["--" + carg, CONTOUR_STAND, "--role", "PROTO"], False),
         ("argv: feed_read на стенде", "feed_read", ["--" + carg, CONTOUR_STAND, "--role", "PROTO"], False),
     ]
     k10_bad = []
@@ -960,9 +988,880 @@ def cases_791(args, work, manifest, contract_doc, carg, v3, s2c):
         if not good:
             k10_bad.append(label)
     v3.add("791-К10", not k10_bad,
-           "защита живого контура: на живом приёмке разрешены только contour_info, rules_get и memory_read с непустым section; cards_list, feed_read, memory_read без раздела — отказ с названием вызова; на стенде, без контура и с выдуманным контуром — не трогает",
+           "защита живого контура: на живом приёмке разрешены только contour_info, rules_get и memory_read с непустым section (в обоих вариантах); cards_read, feed_read, memory_read без раздела и новые вызовы карточки 781 — отказ с названием вызова; на стенде, без контура и с выдуманным контуром — не трогает",
            "проверено случаев %d (процессы не запускались), не так: %d\n%s"
            % (len(k10_cases), len(k10_bad), "\n".join(k10_rows)))
+
+
+# ═══════════════════════════════════════ карточка 781: варианты вызова, передача в среду тела, память слоями, карточки и слова владельца
+
+# Двенадцать вызовов договора 2.0.0 — РУКОЙ, не из договора: иначе «лишний или пропавший вызов» нечем увидеть.
+EXPECTED_TOOL_NAMES = ["memory_read", "memory_find", "memory_write", "feed_read", "feed_ack", "feed_write",
+                       "cards_read", "cards_write", "rules_get", "owner_words_find", "owner_words_add", "contour_info"]
+# вызовы с вариантами: аргумент выбора и ключи вариантов — тоже рукой
+EXPECTED_VARIANTS = {
+    "memory_read": ("view", ["wake", "edit"]),
+    "memory_write": ("action", ["save", "compact"]),
+    "cards_read": ("view", ["list", "card"]),
+    "cards_write": ("action", ["comment", "add"]),
+}
+STUB_ECHO = "stub-781-echo.py"
+OUTCOME_BY_CODE = {0: "passed", 1: "mismatch", 2: "not_started", 3: "cannot_verify", 4: "refused", 5: "partial", 6: "tool_failed"}
+DAY_781 = "2026-11-13"
+
+# Нарочные поломки карточки 781. «Свои» случаи названы ЗДЕСЬ, до прогона, и под результат не подгоняются.
+#   П1  у варианта compact переменная среды названа не тем именем (MEZO_ROLX вместо MEZO_ROLE) → аргумент actor остаётся при
+#       варианте, тело ЗАПУСКАЕТСЯ, но не знает, чья рука: ломает В4 (рука тела) и В6 (сжатие настоящим телом).
+#       ⚠️ ИСТОРИЯ: до 2026-11-17 поломка СНИМАЛА env целиком. После правила «requires — только из аргументов своего варианта»
+#       такая копия роняла В3, В4 и В6 одним отказом ДО тела («аргумент actor не относится к варианту»), то есть соседним
+#       механизмом, а не названным — нашла TAXO чужой рукой (карточка 781, её разбор 17.11 09:50 UTC). Список «своих» стал
+#       «В4, В6»: В3 больше не падает, потому что actor по-прежнему относится к варианту. Назван здесь ДО прогона.
+#   П2  у вариантов cards_read переставлены ТОЛЬКО подкоманды (sub); аргументы и requires на месте → вариант list зовёт показ
+#       одной карточки и наоборот, тело запускается ЧУЖОЕ: ломает В3 (выбор варианта на заглушках), В7 (карточка: перечень
+#       и показ) и В9 (читающий вызов view=card не ответил «прошло», замер недействителен).
+#       ⚠️ ИСТОРИЯ: до 2026-11-17 переставлялся exec целиком вместе с requires — и случаи падали отказом «аргумент не относится
+#       к варианту», а не вызовом чужого тела (та же находка TAXO).
+#   П3  у варианта add снят requires             → без критерия отказ даёт тело, а не договор: ломает В7
+#       ⚠️ ИСТОРИЯ: до возврата 3 (2026-11-17) признак П3 называл строку без исхода — и засчитывал поломку, где отказал
+#       ДОГОВОР, только по чужому аргументу (requires done_when → tags; контроль TAXO, её разбор 17.11 12:56 UTC).
+#       Теперь признак несёт исход «tool_failed «тело отказало»: названный механизм — отказ ТЕЛА.
+# Четвёртое поле — ПРЯМОЙ ПРИЗНАК: случай и кусок строки, которой этот случай обязан объяснить провал. Он держит МЕХАНИЗМ:
+# «упали ровно свои» мало, если они упали соседним отказом. Признаки тоже названы до прогона.
+BREAKS_781 = [
+    ("П1", "у варианта compact переменная среды названа не тем именем", {"В4", "В6"},
+     ("В4", "вариант compact с actor=PROTO при role=COORD: тело видит ('-', '-')")),
+    ("П2", "у вариантов cards_read переставлены только подкоманды", {"В3", "В7", "В9"},
+     ("В3", "вариант list [serve]: исход passed · тело запускалось: True")),
+    ("П3", "у варианта add снят requires", {"В7"},
+     ("В7", "НЕ ТАК без done_when: исход tool_failed «тело отказало")),
+]
+
+
+def clean_env(extra=None):
+    """Среда для прямого вызова тела ветки: ни одной MEZO_* — так же, как у тела за службой."""
+    env = {k: v for k, v in os.environ.items() if not k.upper().startswith("MEZO_")}
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+    if extra:
+        env.update(extra)
+    return env
+
+
+def run_py(script, argv, env=None, timeout=900):
+    p = subprocess.run([sys.executable, "-X", "utf8", script] + [str(x) for x in argv], capture_output=True,
+                       encoding="utf-8", errors="replace", env=env or clean_env(), timeout=timeout)
+    return p.returncode, p.stdout or "", p.stderr or ""
+
+
+def db_all(path, sql, params=()):
+    import sqlite3
+    conn = sqlite3.connect(path, timeout=60)
+    try:
+        return conn.execute(sql, params).fetchall()
+    finally:
+        conn.close()
+
+
+def db_one(path, sql, params=()):
+    rows = db_all(path, sql, params)
+    return rows[0][0] if rows else None
+
+
+def tool_doc(doc, name):
+    return [t for t in doc["tools"] if t["name"] == name][0]
+
+
+def set_script_all(tool, script):
+    """Подменяет тело вызова заглушкой: у вызова с вариантами — у каждого варианта."""
+    if "variants" in tool:
+        for v in tool["variants"].values():
+            v["exec"]["script"] = script
+    elif tool.get("exec", {}).get("kind") != "builtin":
+        tool["exec"]["script"] = script
+
+
+def parse_hits(text):
+    """{номер записи: слой} из вывода поиска по памяти: строки вида «#44 · … · слой hot»."""
+    import re
+    return dict((int(i), layer) for i, layer in re.findall(r"^#(\d+) · .*слой (\w+)\s*$", text, re.M))
+
+
+def build_small_copy(work, manifest):
+    """Малая копия установленного контура в рабочем каталоге приёмки: инструменты ветки и копия учебной базы с шагом слоёв.
+
+    Живую и учебную базы не трогает: шаг схемы применяется только к КОПИИ. Не вышло — словарь с ключом why."""
+    import sqlite3
+    c = os.path.join(work, "e2", "c")
+    repo = os.path.dirname(os.path.dirname(SERVICE))
+    src_scripts = os.path.join(repo, "scripts")
+    src_proto = os.path.join(repo, "vnext", "prototype")
+    stands = [x for x in manifest["contours"] if x.get("id") == CONTOUR_STAND]
+    lives = [x for x in manifest["contours"] if x.get("id") == CONTOUR_LIVE]
+    if not stands:
+        return {"why": "в манифесте нет учебного контура «%s»" % CONTOUR_STAND}
+    stand_db = stands[0]["storage"]
+    norm = lambda p: os.path.normcase(os.path.abspath(p))
+    if lives and norm(lives[0]["storage"]) == norm(stand_db):
+        return {"why": "источник копии — живая база (storage учебного контура совпал с живым): копировать нельзя"}
+    if not os.path.exists(stand_db):
+        return {"why": "учебной базы нет: %s" % stand_db}
+    for d in (src_scripts, src_proto):
+        if not os.path.isdir(d):
+            return {"why": "в дереве нет каталога инструментов ветки: %s" % d}
+    ignore = shutil.ignore_patterns("__pycache__", "*.pyc")
+    scripts = os.path.join(c, ".mezosync", "scripts")
+    vnext = os.path.join(c, "vnext-tools")
+    shutil.copytree(src_scripts, scripts, dirs_exist_ok=True, ignore=ignore)
+    shutil.copytree(src_proto, vnext, dirs_exist_ok=True, ignore=ignore)
+    base = os.path.join(c, ".mezosync", "mezosync.db")
+    for suffix in ("", "-wal", "-shm"):
+        if os.path.exists(base + suffix):
+            os.remove(base + suffix)
+        if os.path.exists(stand_db + suffix):
+            shutil.copyfile(stand_db + suffix, base + suffix)
+    step = os.path.join(scripts, "migrations", "20261115-phoenix-records-layer.py")
+    if not os.path.exists(step):
+        return {"why": "шага схемы слоёв нет в дереве: %s" % step}
+    code, out, err = run_py(step, ["--db", base])
+    if code != 0:
+        return {"why": "шаг схемы слоёв на копии не применился (код %d): %s" % (code, (out + err).strip()[-300:])}
+    conn = sqlite3.connect(base)
+    try:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(phoenix_records)")]
+    finally:
+        conn.close()
+    if "layer" not in cols:
+        return {"why": "после шага схемы у записей памяти нет поля слоя"}
+    work_db = os.path.join(c, "work", "mezosync.db")
+    if not os.path.isdir(os.path.dirname(work_db)):
+        os.makedirs(os.path.dirname(work_db))
+    import copy
+    m = copy.deepcopy(manifest)
+    for x in m["contours"]:
+        if x.get("id") == CONTOUR_STAND:
+            x["storage"] = work_db
+            x["tools"] = {"runtime": scripts, "vnext": vnext}
+    mp = os.path.join(c, "contours-c.json")
+    write_json(mp, m)
+    code_f, out_f, _ = run_py(os.path.join(scripts, "find-phoenix.py"), ["--db", base, "--role", "PROTO", "память"])
+    return {"c": c, "scripts": scripts, "vnext": vnext, "base_db": base, "work_db": work_db, "manifest_path": mp,
+            "migration": out.strip().splitlines()[-3:], "find_smoke": code_f, "why": None}
+
+
+def fresh_db(small):
+    """Свежая рабочая копия базы малой копии: каждый случай начинает с неё."""
+    for suffix in ("-wal", "-shm"):
+        if os.path.exists(small["work_db"] + suffix):
+            os.remove(small["work_db"] + suffix)
+    shutil.copyfile(small["base_db"], small["work_db"])
+    return small["work_db"]
+
+
+def call_serve(w, tool, carg, args):
+    s, t = w.call(tool, dict(args, **{carg: CONTOUR_STAND}))
+    return s, t
+
+
+def call_run(ctx, contract, manifest_path, tool, args, env_extra=None):
+    """Однократный вызов мимо службы. Возвращает (исход словом, причина, вывод)."""
+    argv = ["--" + ctx["carg"], CONTOUR_STAND]
+    for k, v in args.items():
+        if v is True:
+            argv.append("--" + k.replace("_", "-"))
+        else:
+            argv += ["--" + k.replace("_", "-"), str(v)]
+    code, out, err = run_mode(ctx["exe"], contract, manifest_path, [tool] + argv, env_extra=env_extra)
+    reason = ""
+    for line in out.splitlines():
+        if line.startswith("причина: "):
+            reason = line[len("причина: "):]
+    return OUTCOME_BY_CODE.get(code, "код %s" % code), reason, out
+
+
+def stub_setup_781(ctx, contract_path, tag):
+    """Договор с заглушками на месте тел и манифест, ведущий на каталог заглушек. Заглушка печатает аргументы и среду."""
+    import copy
+    stubs = os.path.join(ctx["work"], "stubs-781")
+    if not os.path.isdir(stubs):
+        os.makedirs(stubs)
+    log = os.path.join(ctx["work"], "stub-781-calls.log")
+    io.open(os.path.join(stubs, STUB_ECHO), "w", encoding="utf-8", newline="\n").write(
+        "import json, os, sys\n"
+        "with open(%r, 'a', encoding='utf-8') as f:\n"
+        "    f.write(json.dumps(sys.argv[1:], ensure_ascii=False) + '\\n')\n"
+        "sys.stdout.write('ARGV ' + json.dumps(sys.argv[1:], ensure_ascii=False) + '\\n')\n"
+        "sys.stdout.write('ENV MEZO_ROLE=%%s MEZO_CONTAINER=%%s\\n' %% (os.environ.get('MEZO_ROLE', '-'), os.environ.get('MEZO_CONTAINER', '-')))\n"
+        % log)
+    doc = copy.deepcopy(read_json(contract_path))
+    for name in ("memory_read", "memory_write", "cards_read", "cards_write", "rules_get"):
+        set_script_all(tool_doc(doc, name), STUB_ECHO)
+    cp = os.path.join(ctx["work"], "contract-781-stub-%s.json" % tag)
+    write_json(cp, doc)
+    m = copy.deepcopy(ctx["manifest"])
+    for x in m["contours"]:
+        x["tools"] = {"runtime": stubs, "vnext": stubs}
+    mp = os.path.join(ctx["work"], "contours-781-stubs.json")
+    write_json(mp, m)
+    return cp, mp, log
+
+
+def log_lines(log):
+    return io.open(log, encoding="utf-8").read().splitlines() if os.path.exists(log) else []
+
+
+def stub_argv(text):
+    import re
+    m = re.search(r"^ARGV (\[.*\])\s*$", text or "", re.M)
+    return json.loads(m.group(1)) if m else None
+
+
+# ───────────── В1 состав
+
+def case_B1(ctx, contract_path):
+    doc = read_json(contract_path)
+    names = [t["name"] for t in doc["tools"]]
+    tools_out = subprocess.run([ctx["exe"], "tools", "--contract", contract_path, "--contours", ctx["contours"]],
+                               capture_output=True, encoding="utf-8", errors="replace", timeout=120).stdout
+    printed_fp = None
+    for line in tools_out.splitlines():
+        if line.startswith("отпечаток перечня"):
+            printed_fp = line.split()[-1]
+    w = Wall(ctx["exe"], contract_path, ctx["contours"])
+    listed = w.list_tools()
+    w.close()
+    problems = []
+    if len(names) != 12 or sorted(names) != sorted(EXPECTED_TOOL_NAMES):
+        problems.append("состав вызовов: лишние %s, пропавшие %s (всего %d)"
+                        % (sorted(set(names) - set(EXPECTED_TOOL_NAMES)), sorted(set(EXPECTED_TOOL_NAMES) - set(names)), len(names)))
+    if sorted(t["name"] for t in listed) != sorted(EXPECTED_TOOL_NAMES):
+        problems.append("tools/list называет другой состав: %s" % [t["name"] for t in listed])
+    if printed_fp != EXPECTED_TOOLS_FINGERPRINT:
+        problems.append("отпечаток перечня %s, записан %s" % (printed_fp, EXPECTED_TOOLS_FINGERPRINT))
+    rows = []
+    for name, (by, keys) in EXPECTED_VARIANTS.items():
+        t = tool_doc(doc, name)
+        if t.get("variant_by") != by or sorted(t.get("variants", {})) != sorted(keys):
+            problems.append("%s: аргумент выбора %r, варианты %s (ждали %s %s)" % (name, t.get("variant_by"), sorted(t.get("variants", {})), by, keys))
+            continue
+        for key in keys:
+            line = [x for x in tools_out.splitlines() if x.strip().startswith("вариант %s=%s" % (by, key))]
+            # строка варианта справки должна идти под своим вызовом: проверяем, что она есть и называет его обязательные аргументы
+            head = line[0].split(" — ")[0].split(" · ")[0] if line else ""
+            required_part = head.split("обязательны", 1)[1].split(";")[0] if "обязательны" in head else ""
+            lacking = [r for r in t["variants"][key].get("requires", []) if r not in required_part]
+            if not line:
+                problems.append("справка tools не печатает вариант %s=%s вызова %s" % (by, key, name))
+            elif lacking:
+                problems.append("справка: у варианта %s=%s вызова %s в «обязательны» нет %s" % (by, key, name, lacking))
+            else:
+                rows.append(line[0].strip())
+        sch = [x for x in listed if x["name"] == name]
+        if not sch:
+            continue
+        schema = sch[0]["inputSchema"]
+        enum = (schema["properties"].get(by) or {}).get("enum")
+        if sorted(enum or []) != sorted(keys):
+            problems.append("tools/list: у %s аргумент %s несёт enum %s, ждали %s" % (name, by, enum, keys))
+        want_required = [carg_name for carg_name in [ctx["carg"]]] + [a["name"] for a in t["args"] if a.get("required")]
+        if sorted(schema.get("required") or []) != sorted(want_required):
+            problems.append("tools/list: у %s required %s, ждали %s (обязательное на уровне вызова)" % (name, schema.get("required"), want_required))
+        if any(("вариант %s=%s" % (by, k)) not in (sch[0].get("description") or "") for k in keys):
+            problems.append("tools/list: описание %s не называет все варианты" % name)
+    return (not problems,
+            "вызовов в договоре %d, в tools/list %d · отпечаток перечня %s (записан %s)\n"
+            "строки вариантов справки tools (по четырём вызовам): %d\n%s%s"
+            % (len(names), len(listed), printed_fp, EXPECTED_TOOLS_FINGERPRINT, len(rows), "\n".join("  " + r for r in rows[:8]),
+               ("\nПРОБЛЕМЫ:\n" + "\n".join(problems)) if problems else ""))
+
+
+def one_line(x):
+    """Значение в одну строку: перевод строки внутри значения сбил бы разметку строк подробностей."""
+    return " ".join(str(x or "").split())
+
+
+def marked(detail, flags):
+    """Строки подробностей: у каждой с флагом — «ок» или «НЕ ТАК» перед текстом. flags[i] None — строка без суждения.
+    Число строк обязано сойтись с числом флагов: иначе пометка встала бы не на ту строку."""
+    lines = detail.split("\n")
+    assert len(lines) == len(flags), (len(lines), len(flags), detail[:200])
+    out = []
+    for line, f in zip(lines, flags):
+        out.append(line if f is None else ("ок " if f else "НЕ ТАК ") + line)
+    return "\n".join(out)
+
+
+# ───────────── В2 разбор договора
+
+def case_B2(ctx):
+    import copy
+    base = ctx["contract_doc"]
+
+    def edit(fn):
+        d = copy.deepcopy(base)
+        fn(d)
+        return d
+
+    def mem_read_exec(d):
+        return d["tools"][[t["name"] for t in d["tools"]].index("memory_read")]
+
+    def drop(d, name, key):
+        tool_doc(d, name).pop(key, None)
+
+    copies = [
+        ("правило 1: exec и variants вместе", edit(lambda d: tool_doc(d, "memory_read").__setitem__("exec", copy.deepcopy(tool_doc(d, "memory_read")["variants"]["wake"]["exec"]))),
+         ["memory_read", "есть и exec, и variant_by/variants"]),
+        ("правило 1: ни exec, ни variants", edit(lambda d: (drop(d, "cards_read", "variant_by"), drop(d, "cards_read", "variants"), drop(d, "cards_read", "default_variant"))),
+         ["cards_read", "нет ни exec, ни variant_by"]),
+        ("правило 2: variant_by называет необъявленный аргумент", edit(lambda d: tool_doc(d, "memory_read").__setitem__("variant_by", "ghost")),
+         ["memory_read", "ghost"]),
+        ("правило 2: у аргумента выбора нет enum", edit(lambda d: [a.pop("enum", None) for a in tool_doc(d, "memory_read")["args"] if a["name"] == "view"]),
+         ["memory_read", "без enum"]),
+        ("правило 2: в enum значение без варианта", edit(lambda d: [a["enum"].append("zzz") for a in tool_doc(d, "memory_read")["args"] if a["name"] == "view"]),
+         ["memory_read", "zzz", "расходится"]),
+        ("правило 2: вариант без значения в enum", edit(lambda d: tool_doc(d, "cards_write")["variants"].__setitem__("extra", copy.deepcopy(tool_doc(d, "cards_write")["variants"]["comment"]))),
+         ["cards_write", "extra", "расходится"]),
+        ("правило 3: default_variant вне enum", edit(lambda d: tool_doc(d, "memory_read").__setitem__("default_variant", "zzz")),
+         ["memory_read", "zzz", "не входит"]),
+        ("правило 3: default_variant у пишущего вызова", edit(lambda d: tool_doc(d, "memory_write").__setitem__("default_variant", "save")),
+         ["memory_write", "default_variant", "пишущего"]),
+        ("правило 3: нет default_variant, а выбор не обязателен", edit(lambda d: drop(d, "memory_read", "default_variant")),
+         ["memory_read", "нет default_variant"]),
+        ("правило 4: exec.args ссылается на необъявленный аргумент", edit(lambda d: tool_doc(d, "memory_read")["variants"]["wake"]["exec"]["args"].append({"arg": "ghost", "form": "flag", "flag": "--ghost"})),
+         ["memory_read", "ghost", "exec.args"]),
+        ("правило 4: requires называет необъявленный аргумент", edit(lambda d: tool_doc(d, "memory_read")["variants"]["edit"]["requires"].append("ghost")),
+         ["memory_read", "ghost", "requires"]),
+        ("правило 4: exec.env передаёт необъявленный аргумент", edit(lambda d: tool_doc(d, "memory_write")["variants"]["compact"]["exec"]["env"].__setitem__("MEZO_ROLE", "ghost")),
+         ["memory_write", "ghost", "exec.env"]),
+        ("правило 5: аргумент не относится ни к одному варианту", edit(lambda d: tool_doc(d, "memory_read")["args"].append({"name": "orphan", "type": "string", "required": False})),
+         ["memory_read", "orphan", "не относится ни к одному"]),
+        ("правило 6: required на вызове у аргумента одного варианта", edit(lambda d: [a.__setitem__("required", True) for a in tool_doc(d, "cards_read")["args"] if a["name"] == "card"]),
+         ["cards_read", "card", "required=true"]),
+        ("правило 7: имя переменной среды по образцу не проходит", edit(lambda d: tool_doc(d, "memory_write")["variants"]["compact"]["exec"].__setitem__("env", {"mezo_role": "actor"})),
+         ["memory_write", "mezo_role", "не по образцу"]),
+        # возврат 1: requires — только аргументы СВОЕГО варианта; вид полей; имя переменной среды только из MEZO_*
+        ("возврат 1 а: requires называет аргумент, который использует только ДРУГОЙ вариант", edit(lambda d: tool_doc(d, "cards_read")["variants"]["list"]["requires"].append("card")),
+         ["cards_read", "list", "card", "не использует"]),
+        ("возврат 1 б: requires — строка, не массив", edit(lambda d: tool_doc(d, "memory_read")["variants"]["edit"].__setitem__("requires", "section")),
+         ["memory_read", "edit", "requires", "не массив"]),
+        ("возврат 1 б: requires — объект, не массив", edit(lambda d: tool_doc(d, "memory_read")["variants"]["edit"].__setitem__("requires", {"section": True})),
+         ["memory_read", "edit", "requires", "не массив"]),
+        ("возврат 1 в: в requires стоит число", edit(lambda d: tool_doc(d, "memory_read")["variants"]["edit"].__setitem__("requires", [5])),
+         ["memory_read", "edit", "requires", "Number"]),
+        ("возврат 1 г: значение в exec.env — число", edit(lambda d: tool_doc(d, "memory_write")["variants"]["compact"]["exec"].__setitem__("env", {"MEZO_ROLE": 5})),
+         ["exec.env", "MEZO_ROLE", "Number"]),
+        ("возврат 1 д: имя переменной среды PATH", edit(lambda d: tool_doc(d, "memory_write")["variants"]["compact"]["exec"].__setitem__("env", {"PATH": "actor"})),
+         ["memory_write", "PATH", "не по образцу"]),
+        ("возврат 1 е: имя переменной среды GORDI_ROLE", edit(lambda d: tool_doc(d, "memory_write")["variants"]["compact"]["exec"].__setitem__("env", {"GORDI_ROLE": "actor"})),
+         ["memory_write", "GORDI_ROLE", "не по образцу"]),
+        ("возврат 1 ж: в enum аргумента стоит число", edit(lambda d: [a["enum"].append(5) for a in tool_doc(d, "memory_read")["args"] if a["name"] == "view"]),
+         ["enum аргумента", "Number"]),
+    ]
+    rows, bad = [], []
+    for i, (label, doc, must) in enumerate(copies):
+        p = os.path.join(ctx["work"], "contract-781-b2-%02d.json" % i)
+        write_json(p, doc)
+        code, err = load_refusal(ctx["exe"], p, ctx["contours"])
+        # в потоке ошибок не должно быть трассировки необработанного исключения: кривой договор — отказ с причиной, не падение
+        trace = ("Unhandled exception" in err) or ("   at " in err) or ("InvalidOperationException" in err)
+        ok = code == 4 and "договор не читается" in err and all(m in err for m in must) and not trace
+        rows.append("%s %s: код %s — %s%s" % ("ок" if ok else "НЕ ТАК", label, code, one_line(err)[:170], " · ТРАССИРОВКА В STDERR" if trace else ""))
+        if not ok:
+            bad.append(label)
+    code_ok, _ = load_refusal(ctx["exe"], ctx["contract"], ctx["contours"])
+    if code_ok != 0:
+        bad.append("встречный: целый договор не загрузился")
+    return (not bad, "кривых копий договора %d, загрузилось или отказ без причины: %d · целый договор: код %s\n%s"
+            % (len(copies), len(bad), code_ok, "\n".join(rows)))
+
+
+# ───────────── В3 выбор варианта на заглушках
+
+def case_B3(ctx, contract_path):
+    cp, mp, log = stub_setup_781(ctx, contract_path, "b3")
+    carg = ctx["carg"]
+    # (подпись, вызов, аргументы, ждём исход, подстроки причины, проверка argv, пишущий?)
+    cases = [
+        ("а memory_read без view → вариант wake", "memory_read", {"role": "PROTO", "section": "identity"}, "passed", [],
+         lambda a: a is not None and "--role" in a and "--section" in a and "--read" not in a, False),
+        ("б memory_read view=edit с section → есть --read", "memory_read", {"view": "edit", "role": "PROTO", "section": "state"}, "passed", [],
+         lambda a: a is not None and "--read" in a, False),
+        ("в memory_read view=edit без section → отказ с вариантом и аргументом", "memory_read", {"view": "edit", "role": "PROTO"}, "refused",
+         ["view=edit", "section"], None, False),
+        ("г cards_read view=card с role → отказ «не относится к варианту»", "cards_read", {"view": "card", "card": 1, "role": "PROTO"}, "refused",
+         ["role", "не относится к варианту", "view=card", "view=list"], None, False),
+        ("д cards_read без view → вариант list", "cards_read", {"role": "PROTO"}, "passed", [],
+         lambda a: a is not None and "list" in a and "show" not in a, False),
+        ("е cards_read view=card с card → вариант card", "cards_read", {"view": "card", "card": 1}, "passed", [],
+         lambda a: a is not None and "show" in a and "list" not in a, False),
+        ("ж cards_write без action → отказ", "cards_write", {"actor": "PROTO", "card": 1, "body": "x"}, "refused",
+         ["action"], None, True),
+        ("з memory_write action=compact с body → отказ", "memory_write", {"action": "compact", "role": "PROTO", "actor": "PROTO", "body": "x"}, "refused",
+         ["body", "action=compact"], None, True),
+        ("и memory_write action=compact верный → есть --compact", "memory_write", {"action": "compact", "role": "PROTO", "actor": "PROTO"}, "passed", [],
+         lambda a: a is not None and "--compact" in a and "--expect-version" not in a, True),
+        ("к memory_write action=save верный → есть --expect-version", "memory_write", {"action": "save", "role": "PROTO", "section": "state", "body": "x", "expect_version": 1}, "passed", [],
+         lambda a: a is not None and "--expect-version" in a and "--compact" not in a, True),
+    ]
+    rows, bad = [], []
+    w = Wall(ctx["exe"], cp, mp)
+    for label, tool, args, want, must, argv_ok, writes in cases:
+        for mode in ("serve", "run"):
+            if mode == "run" and writes:
+                # режим run всегда только-чтение: пишущий вызов отвергнут ДО разбора вариантов — по своей причине; тело не запускается
+                before = len(log_lines(log))
+                outcome, reason, out = call_run(ctx, cp, mp, tool, args)
+                ok = outcome == "refused" and "только-чтение" in out and len(log_lines(log)) == before
+                rows.append("%s %s [run]: %s — отказ режима только-чтение, тело не запускалось: %s" % ("ок" if ok else "НЕ ТАК", label, outcome, len(log_lines(log)) == before))
+                if not ok:
+                    bad.append(label + " [run]")
+                continue
+            before = len(log_lines(log))
+            if mode == "serve":
+                s, t = call_serve(w, tool, carg, args)
+                outcome, reason, text = s.get("outcome"), s.get("error") or "", t
+            else:
+                outcome, reason, text = call_run(ctx, cp, mp, tool, args)
+            ran = len(log_lines(log)) > before
+            a = stub_argv(text)
+            ok = outcome == want and all(m in reason for m in must) and (ran == (want == "passed"))
+            if argv_ok is not None:
+                ok = ok and argv_ok(a)
+            rows.append("%s %s [%s]: исход %s · тело запускалось: %s · %s"
+                        % ("ок" if ok else "НЕ ТАК", label, mode, outcome, ran, ("argv %s" % a) if want == "passed" else reason[:150]))
+            if not ok:
+                bad.append("%s [%s]" % (label, mode))
+    w.close()
+    return (not bad, "проверено половин %d (служба и режим run), не так: %d\n%s" % (len(rows), len(bad), "\n".join(rows)))
+
+
+# ───────────── В4 рука тела
+
+def case_B4(ctx, contract_path):
+    import re
+    cp, mp, log = stub_setup_781(ctx, contract_path, "b4")
+    carg = ctx["carg"]
+    evil = {"MEZO_ROLE": "EVIL", "MEZO_CONTAINER": "X"}
+    w = Wall(ctx["exe"], cp, mp, env_extra=evil)
+
+    def seen(text):
+        m = re.search(r"ENV MEZO_ROLE=(\S*) MEZO_CONTAINER=(\S*)", text or "")
+        return (m.group(1), m.group(2)) if m else None
+
+    s_a, t_a = call_serve(w, "rules_get", carg, {"list": True})
+    s_b, t_b = call_serve(w, "memory_write", carg, {"action": "save", "role": "PROTO", "section": "state", "body": "x", "expect_version": 1})
+    # role и actor НАМЕРЕННО разные: при равных подмена «в MEZO_ROLE уходит role, а не actor» прошла бы молча
+    # (заметка TAXO, её разбор 17.11 12:56 UTC). Тело здесь — заглушка, чужую память она не трогает.
+    s_c, t_c = call_serve(w, "memory_write", carg, {"action": "compact", "role": "COORD", "actor": "PROTO"})
+    before = len(log_lines(log))
+    s_d, t_d = call_serve(w, "memory_write", carg, {"action": "compact", "role": "PROTO"})
+    ran_d = len(log_lines(log)) > before
+    w.close()
+    o_a, _, out_a = call_run(ctx, cp, mp, "rules_get", {"list": True}, env_extra=evil)
+    ok_a = seen(t_a) == ("-", "-") and s_a.get("outcome") == "passed"
+    ok_a_run = seen(out_a) == ("-", "-") and o_a == "passed"
+    ok_b = seen(t_b) == ("-", "-") and s_b.get("outcome") == "passed"
+    ok_c = seen(t_c) == ("PROTO", "-") and s_c.get("outcome") == "passed"
+    ok_d = s_d.get("outcome") == "refused" and "actor" in (s_d.get("error") or "") and not ran_d
+    return (ok_a and ok_a_run and ok_b and ok_c and ok_d, marked(
+            "служба поднята с MEZO_ROLE=EVIL и MEZO_CONTAINER=X в СВОЕЙ среде\n"
+            "вызов без env в договоре (rules_get): тело видит (MEZO_ROLE, MEZO_CONTAINER) = %s · режим run: %s (ждали обе «-»)\n"
+            "вариант save без env (memory_write): тело видит %s (ждали обе «-»)\n"
+            "вариант compact с actor=PROTO при role=COORD: тело видит %s (ждали PROTO и «-»)\n"
+            "compact без actor: исход %s, причина «%s», тело запускалось: %s (ждали отказ до тела)"
+            % (seen(t_a), seen(out_a), seen(t_b), seen(t_c), s_d.get("outcome"), one_line(s_d.get("error"))[:110], ran_d),
+            [None, ok_a and ok_a_run, ok_b, ok_c, ok_d]))
+
+
+# ───────────── В5 поиск по трём слоям, критерий ⑥
+
+def case_B5(ctx, contract_path):
+    import re
+    small = ctx["small"]
+    if small.get("why"):
+        return False, "ПРОВЕРЯТЬ НЕЧЕМ: %s" % small["why"]
+    db = fresh_db(small)
+    find = os.path.join(small["scripts"], "find-phoenix.py")
+    mover = os.path.join(small["vnext"], "memory-records.py")
+    rows = db_all(db, "SELECT role, id, body FROM phoenix_records WHERE alive='active' ORDER BY role, id")
+    by_role = {}
+    for role, rid, body in rows:
+        for tok in set(re.findall(r"[а-яё]{7,}", (body or "").casefold())):
+            by_role.setdefault(role, {}).setdefault(tok, set()).add(rid)
+    cands = [(r, t, ids) for r in sorted(by_role) for t, ids in sorted(by_role[r].items()) if 3 <= len(ids) <= 10]
+    picked = None
+    for role, word, ids in cands[:60]:
+        code, out, _ = run_py(find, ["--db", db, "--role", role, "--limit", 50, word])
+        hits = parse_hits(out)
+        if code == 0 and 3 <= len(hits) <= 20 and set(hits.values()) == {"hot"}:
+            picked = (role, word, hits)
+            break
+    if not picked:
+        return False, "ПРОВЕРЯТЬ НЕЧЕМ: в копии нет слова, которое встречается в трёх и более записях одной роли (проверено кандидатов: %d)" % min(len(cands), 60)
+    role, word, hits = picked
+    ids = sorted(hits)
+    warm_id, perm_id = ids[0], ids[1]
+    prep = []
+    for rid, layer in ((warm_id, "warm"), (perm_id, "permanent")):
+        code, out, err = run_py(mover, ["--db", db, "--role", role, "--move", rid, "--layer", layer], env=clean_env({"MEZO_ROLE": role}))
+        prep.append("перенос #%d в %s: код %d" % (rid, layer, code))
+        if code != 0:
+            return False, "ПРОВЕРЯТЬ НЕЧЕМ: подготовка не удалась — %s: %s" % (prep[-1], (out + err).strip()[-200:])
+    # номер карточки из записей копии
+    num_pick = None
+    for r, rid, body in rows:
+        for m in re.findall(r"#(\d{3,4})\b", body or ""):
+            q = "#" + m
+            code, out, _ = run_py(find, ["--db", db, "--role", r, "--limit", 50, q])
+            hits_n = parse_hits(out)
+            if code == 0 and hits_n:
+                num_pick = (r, q, hits_n)
+                break
+        if num_pick:
+            break
+    carg = ctx["carg"]
+    w = Wall(ctx["exe"], contract_path, small["manifest_path"])
+    s1, t1 = call_serve(w, "memory_find", carg, {"role": role, "query": word, "limit": 50})
+    s2, t2 = call_serve(w, "memory_find", carg, {"role": role, "query": word, "limit": 50, "layer": "warm"})
+    s3, t3 = call_serve(w, "memory_find", carg, {"role": role, "query": word.upper(), "limit": 50})
+    s4, t4 = call_serve(w, "memory_find", carg, {"role": role, "query": word.lower(), "limit": 50})
+    sn = tn = None
+    if num_pick:
+        sn, tn = call_serve(w, "memory_find", carg, {"role": num_pick[0], "query": num_pick[1], "limit": 50})
+    w.close()
+    r1 = call_run(ctx, contract_path, small["manifest_path"], "memory_find", {"role": role, "query": word, "limit": 50})
+    r2 = call_run(ctx, contract_path, small["manifest_path"], "memory_find", {"role": role, "query": word, "limit": 50, "layer": "warm"})
+    r3 = call_run(ctx, contract_path, small["manifest_path"], "memory_find", {"role": role, "query": word.upper(), "limit": 50})
+    r4 = call_run(ctx, contract_path, small["manifest_path"], "memory_find", {"role": role, "query": word.lower(), "limit": 50})
+    h1, h2, h3, h4 = parse_hits(t1), parse_hits(t2), parse_hits(t3), parse_hits(t4)
+    rh1, rh2, rh3, rh4 = parse_hits(r1[2]), parse_hits(r2[2]), parse_hits(r3[2]), parse_hits(r4[2])
+    ok_layers = (s1.get("outcome") == "passed" and h1.get(warm_id) == "warm" and h1.get(perm_id) == "permanent"
+                 and set(h1.values()) == {"hot", "warm", "permanent"} and set(h1) == set(hits))
+    ok_warm = s2.get("outcome") == "passed" and set(h2) == {warm_id} and set(h2.values()) == {"warm"}
+    ok_case = s3.get("outcome") == "passed" and s4.get("outcome") == "passed" and set(h3) == set(h4) == set(hits)
+    ok_run = (r1[0] == "passed" and set(rh1) == set(hits) and set(rh1.values()) == {"hot", "warm", "permanent"}
+              and r2[0] == "passed" and set(rh2) == {warm_id}
+              and r3[0] == "passed" and r4[0] == "passed" and set(rh3) == set(rh4) == set(hits))
+    ok_num = bool(num_pick) and sn is not None and sn.get("outcome") == "passed" and set(parse_hits(tn)) == set(num_pick[2]) and bool(parse_hits(tn))
+    return (ok_layers and ok_warm and ok_case and ok_run and ok_num, marked(
+            "роль %s, слово «%s»; записи до переноса %s; перенесены: #%d → warm, #%d → permanent (%s)\n"
+            "служба, без layer: исход %s · записи %s · слои %s\n"
+            "служба, layer=warm: исход %s · записи %s (ждали только #%d)\n"
+            "служба, запрос ЗАГЛАВНЫМИ: %s · строчными: %s · равны прежнему множеству: %s\n"
+            "режим run: без layer %s %s · warm %s %s · ЗАГЛАВНЫМИ/строчными равны: %s\n"
+            "номер карточки: %s → служба: исход %s · записи %s (прямой вызов тела дал %s)"
+            % (role, word, ids, warm_id, perm_id, "; ".join(prep),
+               s1.get("outcome"), sorted(h1), sorted(set(h1.values())),
+               s2.get("outcome"), sorted(h2), warm_id,
+               sorted(h3), sorted(h4), set(h3) == set(h4) == set(hits),
+               r1[0], sorted(rh1), r2[0], sorted(rh2), set(rh3) == set(rh4) == set(hits),
+               ("%s у роли %s" % (num_pick[1], num_pick[0])) if num_pick else "ПРОВЕРЯТЬ НЕЧЕМ: номера карточки в записях копии нет",
+               sn.get("outcome") if sn else None, sorted(parse_hits(tn)) if tn else None, sorted(num_pick[2]) if num_pick else None),
+            [None, ok_layers, ok_warm, ok_case, ok_run, ok_num]))
+
+
+# ───────────── В6 сжатие, критерий ④
+
+def case_B6(ctx, contract_path):
+    import re
+    small = ctx["small"]
+    if small.get("why"):
+        return False, "ПРОВЕРЯТЬ НЕЧЕМ: %s" % small["why"]
+    db = fresh_db(small)
+    mover = os.path.join(small["vnext"], "memory-records.py")
+    cands = db_all(db, "SELECT role, section, SUM(body_chars) AS c FROM phoenix_records WHERE layer='hot' "
+                       "GROUP BY role, section ORDER BY c DESC LIMIT 25")
+    picked = None
+    for role, section, chars in cands:
+        code, out, _ = run_py(mover, ["--db", db, "--compact", "--role", role, "--section", section, "--dry-run"], env=clean_env({"MEZO_ROLE": role}))
+        m = re.search(r"унесено (\d+) записей", out)
+        if code == 0 and m and int(m.group(1)) >= 1:
+            picked = (role, section, int(chars))
+            break
+    if not picked:
+        return False, "ПРОВЕРЯТЬ НЕЧЕМ: в копии нет роли и раздела, где слой hot длиннее порога (проверено кандидатов: %d)" % len(cands)
+    role, section, chars = picked
+    other = "COORD" if role != "COORD" else "PROTO"
+    carg = ctx["carg"]
+    tabs = ["phoenix_records"]
+
+    def digest():
+        return table_digests(db, tabs)["phoenix_records"]
+
+    d0 = digest()
+    w = Wall(ctx["exe"], contract_path, small["manifest_path"])
+    s_dry, t_dry = call_serve(w, "memory_write", carg, {"action": "compact", "role": role, "section": section, "actor": role, "dry_run": True})
+    d1 = digest()
+    s_bad, t_bad = call_serve(w, "memory_write", carg, {"action": "compact", "role": role, "section": section, "actor": other})
+    d2 = digest()
+    s_th, _ = call_serve(w, "memory_write", carg, {"action": "compact", "role": role, "section": section, "actor": role, "threshold": 100})
+    s_li, _ = call_serve(w, "memory_write", carg, {"action": "compact", "role": role, "section": section, "actor": role, "limit": 1})
+    d3 = digest()
+    s_real, t_real = call_serve(w, "memory_write", carg, {"action": "compact", "role": role, "section": section, "actor": role})
+    w.close()
+    d4 = digest()
+    ids_dry = [int(x) for x in re.findall(r"^\s*#(\d+) · .*hot → warm", t_dry, re.M)]
+    ids_real = [int(x) for x in re.findall(r"^\s*#(\d+) · .*hot → warm", t_real, re.M)]
+    m_chars = re.search(r"слой hot было (\d+) знаков в (\d+) записях → стало (\d+) в (\d+)", t_real)
+    layers = dict(db_all(db, "SELECT id, layer FROM phoenix_records WHERE id IN (%s)" % ",".join(str(i) for i in ids_real or [0])))
+    hot_after = db_one(db, "SELECT COALESCE(SUM(body_chars),0) FROM phoenix_records WHERE role=? AND section=? AND layer='hot'", (role, section))
+    ok_dry = s_dry.get("outcome") == "passed" and bool(ids_dry) and "hot → warm" in t_dry and d1 == d0
+    ok_bad = s_bad.get("outcome") == "tool_failed" and "правит память роли" in (s_bad.get("error") or "") and d2 == d1
+    ok_th = (s_th.get("outcome") == "refused" and "threshold" in (s_th.get("error") or "")
+             and s_li.get("outcome") == "refused" and "limit" in (s_li.get("error") or "") and d3 == d2)
+    ok_real = (s_real.get("outcome") == "passed" and ids_real == ids_dry and bool(ids_real) and m_chars is not None
+               and int(m_chars.group(3)) < int(m_chars.group(1)) and int(m_chars.group(3)) == int(hot_after)
+               and all(layers.get(i) == "warm" for i in ids_real) and d4 != d3)
+    return (ok_dry and ok_bad and ok_th and ok_real, marked(
+            "роль %s, раздел %s: слой hot %d знаков (порог читает тело, в вызове его нет)\n"
+            "холостой прогон: исход %s · записи %s · «hot → warm» в тексте: %s · таблица записей не изменилась: %s\n"
+            "actor=%s при role=%s: исход %s, причина «%s» · таблица не изменилась: %s\n"
+            "аргумент threshold: исход %s «%s» · аргумент limit: исход %s «%s» · таблица не изменилась: %s\n"
+            "настоящий вызов: исход %s · унесено записей %s (равны холостому: %s) · знаков до %s после %s (в базе hot теперь %s) · "
+            "в копии все они в слое warm: %s · таблица изменилась: %s"
+            % (role, section, chars,
+               s_dry.get("outcome"), ids_dry, "hot → warm" in t_dry, d1 == d0,
+               other, role, s_bad.get("outcome"), one_line(s_bad.get("error"))[:100], d2 == d1,
+               s_th.get("outcome"), one_line(s_th.get("error"))[:80], s_li.get("outcome"), one_line(s_li.get("error"))[:80], d3 == d2,
+               s_real.get("outcome"), ids_real, ids_real == ids_dry,
+               m_chars.group(1) if m_chars else None, m_chars.group(3) if m_chars else None, hot_after,
+               all(layers.get(i) == "warm" for i in ids_real), d4 != d3),
+            [None, ok_dry, ok_bad, ok_th, ok_real]))
+
+
+# ───────────── В7 завести карточку
+
+def case_B7(ctx, contract_path):
+    import uuid
+    small = ctx["small"]
+    if small.get("why"):
+        return False, "ПРОВЕРЯТЬ НЕЧЕМ: %s" % small["why"]
+    db = fresh_db(small)
+    carg = ctx["carg"]
+    title = "Проба приёмки 781 " + uuid.uuid4().hex[:8]
+    body = "Тело карточки пробы приёмки.\nВторая строка тела."
+    done = "Критерий пробы: строка в таблице есть."
+    tags = ["проба781", "приёмка781"]
+    n0 = db_one(db, "SELECT COUNT(*) FROM backlog")
+    w = Wall(ctx["exe"], contract_path, small["manifest_path"])
+    s_add, t_add = call_serve(w, "cards_write", carg, {"action": "add", "role": "PROTO", "actor": "PROTO", "title": title, "body": body,
+                                                         "done_when": done, "tags": tags, "priority": "low"})
+    n1 = db_one(db, "SELECT COUNT(*) FROM backlog")
+    row = db_all(db, "SELECT id, title, body_md, done_when, tags, priority FROM backlog WHERE title=?", (title,))
+    new_id = row[0][0] if row else None
+    s_no, _ = call_serve(w, "cards_write", carg, {"action": "add", "role": "PROTO", "actor": "PROTO", "title": title + " без критерия", "body": body})
+    n2 = db_one(db, "SELECT COUNT(*) FROM backlog")
+    comment = "Комментарий пробы приёмки 781."
+    s_cm, _ = call_serve(w, "cards_write", carg, {"action": "comment", "card": new_id or 0, "actor": "PROTO", "body": comment})
+    ev = db_all(db, "SELECT event_type, body_md FROM backlog_events WHERE backlog_id=? AND event_type='comment'", (new_id,)) if new_id else []
+    s_show, t_show = call_serve(w, "cards_read", carg, {"view": "card", "card": new_id or 0})
+    s_list, t_list = call_serve(w, "cards_read", carg, {"view": "list", "role": "PROTO"})
+    w.close()
+    saved_tags = json.loads(row[0][4]) if row and row[0][4] else []
+    ok_add = (s_add.get("outcome") == "passed" and n1 == n0 + 1 and len(row) == 1
+              and row[0][2].strip() == body and row[0][3].strip() == done and sorted(saved_tags) == sorted(tags) and row[0][5] == "low")
+    ok_no = s_no.get("outcome") == "refused" and "done_when" in (s_no.get("error") or "") and n2 == n1
+    ok_cm = s_cm.get("outcome") == "passed" and len(ev) == 1 and ev[0][1].strip() == comment
+    ok_read = (s_show.get("outcome") == "passed" and title in t_show
+               and s_list.get("outcome") in ("passed", "partial") and ("#%s " % new_id) in t_list and title[:18] in t_list)
+    return (ok_add and ok_no and ok_cm and ok_read, marked(
+            "заведена карточка #%s: исход %s · строк backlog было %s стало %s · заголовок, тело, критерий, метки %s, срочность %s совпали: %s (ждали passed, +1 строка, поля совпали)\n"
+            "без done_when: исход %s «%s» (ждали отказ договора, не «тело отказало») · строк backlog %s (было %s)\n"
+            "комментарий: исход %s · событий comment у карточки %d, текст совпал: %s (ждали passed, одно событие, текст совпал)\n"
+            "cards_read view=card: исход %s · заголовок в ответе: %s · view=list role=PROTO: исход %s · карточка перечислена: %s (ждали passed, True, passed, True)"
+            % (new_id, s_add.get("outcome"), n0, n1, saved_tags, row[0][5] if row else None, ok_add,
+               s_no.get("outcome"), one_line(s_no.get("error"))[:120], n2, n1,
+               s_cm.get("outcome"), len(ev), bool(ev) and ev[0][1].strip() == comment,
+               s_show.get("outcome"), title in t_show, s_list.get("outcome"), ("#%s " % new_id) in t_list),
+            [ok_add, ok_no, ok_cm, ok_read]))
+
+
+# ───────────── В8 записать слово владельца: настоящий искатель, подставной домашний каталог
+
+def case_B8(ctx, contract_path):
+    small = ctx["small"]
+    if small.get("why"):
+        return False, "ПРОВЕРЯТЬ НЕЧЕМ: %s" % small["why"]
+    db = fresh_db(small)
+    carg = ctx["carg"]
+    home = os.path.join(small["c"], "home8")
+    project = "C--guts--atlas"
+    chats = os.path.join(home, ".claude", "projects", project)
+    if not os.path.isdir(chats):
+        os.makedirs(chats)
+    tid = "5a5a5a5a-1111-2222-3333-444444444444"
+    text_yes = "проба записи слова через службу сосна восемьсот"
+    text_no = "этого текста нет ни в одной записи пихта восемьсот"
+    lines = []
+    records = [None, None, ("12:10:00", text_yes)]
+    for i, item in enumerate(records):
+        if item is None:
+            lines.append(json.dumps({"type": "assistant", "timestamp": "%sT11:00:%02d.000Z" % (DAY_781, i), "message": {"content": "строка ответа"}}, ensure_ascii=False))
+        else:
+            lines.append(json.dumps({"type": "user", "timestamp": "%sT%s.123Z" % (DAY_781, item[0]), "message": {"content": item[1]},
+                                     "origin": {"kind": "human"}}, ensure_ascii=False))
+    chat_file = os.path.join(chats, tid + ".jsonl")
+    io.open(chat_file, "w", encoding="utf-8", newline="\n").write("\n".join(lines) + "\n")
+    real_line = 3
+    env_home = {"USERPROFILE": home, "HOME": home}
+    n0 = db_one(db, "SELECT COUNT(*) FROM owner_words")
+    w = Wall(ctx["exe"], contract_path, small["manifest_path"], env_extra=env_home)
+    s_ok, t_ok = call_serve(w, "owner_words_add", carg, {"said_at": "%s 12:10:00 UTC" % DAY_781, "chat": tid[:8], "text": text_yes,
+                                                          "heard_by": "ОПЫТ", "note": "проба приёмки 781"})
+    n1 = db_one(db, "SELECT COUNT(*) FROM owner_words")
+    row = db_all(db, "SELECT said_at, chat, text_verbatim, source_file, source_line FROM owner_words WHERE text_verbatim=?", (text_yes,))
+    s_no, t_no = call_serve(w, "owner_words_add", carg, {"said_at": "%s 12:10:00 UTC" % DAY_781, "chat": tid[:8], "text": text_no, "heard_by": "ОПЫТ"})
+    n2 = db_one(db, "SELECT COUNT(*) FROM owner_words")
+    s_fd, t_fd = call_serve(w, "owner_words_find", carg, {"text": "записи слова через службу"})
+    w.close()
+    # realpath, а не abspath: каталог пользователя бывает назван и длинным именем, и короткой формой 8.3
+    norm = lambda p: os.path.normcase(os.path.realpath(p or ""))
+    inside = bool(row) and norm(row[0][3]).startswith(norm(home) + os.sep)
+    ok_add = (s_ok.get("outcome") == "passed" and n1 == n0 + 1 and len(row) == 1 and inside
+              and row[0][4] == real_line and norm(row[0][3]) == norm(chat_file) and DAY_781 in (row[0][0] or "") and "12:10:00" in (row[0][0] or ""))
+    ok_no = s_no.get("outcome") == "tool_failed" and n2 == n1 and "ОТКАЗ" in (s_no.get("error") or "")
+    ok_fd = s_fd.get("outcome") == "passed" and text_yes in t_fd
+    return (ok_add and ok_no and ok_fd, marked(
+            "служба поднята с USERPROFILE и HOME на подставной каталог %s (настоящий искатель из малой копии)\n"
+            "запись: исход %s · строк owner_words было %s стало %s · в строке файл %s внутри подставного каталога: %s, номер строки %s (на самом деле %d), час %s (ждали passed, +1 строка, файл внутри подставного каталога)\n"
+            "текст, которого в записях нет: исход %s «%s» · строк %s (было %s) (ждали tool_failed с ОТКАЗ, строк не прибавилось)\n"
+            "owner_words_find: исход %s · найденное слово в ответе: %s (ждали passed, True)"
+            % (home, s_ok.get("outcome"), n0, n1, row[0][3] if row else None, inside, row[0][4] if row else None, real_line,
+               row[0][0] if row else None, s_no.get("outcome"), one_line(s_no.get("error"))[:110], n2, n1, s_fd.get("outcome"), text_yes in t_fd),
+            [None, ok_add, ok_no, ok_fd]))
+
+
+# ───────────── В9 читающие вызовы пишут только объявленное
+
+def case_B9(ctx, contract_path):
+    small = ctx["small"]
+    if small.get("why"):
+        return False, "ПРОВЕРЯТЬ НЕЧЕМ: %s" % small["why"]
+    carg = ctx["carg"]
+    doc = read_json(contract_path)
+    probes = [
+        ("memory_find", {"query": "память"}, ("PROTO", "COORD", "CORE", "STUD", "ING")),
+        ("memory_read", {"view": "edit", "section": "state"}, ("PROTO",)),
+        ("cards_read", {"view": "card", "card": 1}, (None,)),
+    ]
+    rows, problems = [], []
+    for name, extra, roles in probes:
+        declared = tool_doc(doc, name).get("service_writes")
+        if declared is None:
+            problems.append("%s: у читающего вызова в договоре нет service_writes" % name)
+            declared = []
+        changed, used = set(), ""
+        for role in roles:
+            db = fresh_db(small)
+            before = table_digests(db)
+            args = dict(extra)
+            if role:
+                args["role"] = role
+                used = role
+            w = Wall(ctx["exe"], contract_path, small["manifest_path"])
+            s, _ = call_serve(w, name, carg, args)
+            w.close()
+            after = table_digests(db)
+            changed = set(k for k in before if before[k] != after.get(k))
+            if s.get("outcome") not in ("passed", "partial"):
+                problems.append("%s: пробный вызов дал исход %s — замер недействителен" % (name, s.get("outcome")))
+                break
+            if name != "memory_find" or changed:
+                break
+        if name == "memory_find" and not changed:
+            problems.append("ПРОВЕРЯТЬ НЕЧЕМ: memory_find ни у одной роли ничего не изменил — значение service_writes по замеру не поставить")
+        extra_tables = sorted(changed - set(declared))
+        if extra_tables:
+            problems.append("%s: изменил таблицы, которых нет в service_writes: %s" % (name, ", ".join(extra_tables)))
+        rows.append("%-14s%s изменил: %-22s объявлено: %s" % (name, (" (роль %s)" % used) if used else "", ", ".join(sorted(changed)) or "ничего", ", ".join(declared) or "—"))
+    return (not problems, "сводка по ВСЕМ таблицам копии до и после вызова\n%s%s"
+            % ("\n".join(rows), ("\nПРОБЛЕМЫ:\n" + "\n".join(problems)) if problems else ""))
+
+
+# ───────────── нарочные поломки
+
+def apply_break(doc, key):
+    import copy
+    d = copy.deepcopy(doc)
+    if key == "П1":
+        v = tool_doc(d, "memory_write")["variants"]["compact"]
+        # имя переменной проходит образец ^MEZO_…, аргумент actor остаётся использованным: копия загружается, тело запускается,
+        # но получает не ту переменную и не знает, чья рука
+        v["exec"]["env"] = {"MEZO_ROLX": "actor"}
+    elif key == "П2":
+        v = tool_doc(d, "cards_read")["variants"]
+        # переставляем только подкоманды: аргументы и requires остаются своими, поэтому отказ «аргумент не относится к варианту»
+        # не срабатывает и запускается чужое тело
+        v["list"]["exec"]["sub"], v["card"]["exec"]["sub"] = v["card"]["exec"]["sub"], v["list"]["exec"]["sub"]
+    elif key == "П3":
+        tool_doc(d, "cards_write")["variants"]["add"].pop("requires", None)
+    return d
+
+
+def why_line(detail):
+    """Одна строка из подробностей случая: почему он не прошёл. Сперва строка с «НЕ ТАК», затем первая после «ПРОБЛЕМЫ:», иначе последняя."""
+    lines = [x.strip() for x in detail.strip().splitlines() if x.strip()]
+    for x in lines:
+        if x.startswith("НЕ ТАК"):
+            return x[:190]
+    if "ПРОБЛЕМЫ:" in lines and lines.index("ПРОБЛЕМЫ:") + 1 < len(lines):
+        return lines[lines.index("ПРОБЛЕМЫ:") + 1][:190]
+    return (lines[-1] if lines else "")[:190]
+
+
+def cases_781(args, work, manifest, contract_doc, carg, v4):
+    """Раздел карточки 781. Случаи В1–В9 идут на настоящем договоре, затем три нарочные поломки: каждая — копией договора."""
+    ctx = {"exe": args.exe, "contract": args.contract, "contours": args.contours, "work": work, "manifest": manifest,
+           "carg": carg, "contract_doc": contract_doc}
+    small = build_small_copy(work, manifest)
+    ctx["small"] = small
+    runners = [("В1", lambda p: case_B1(ctx, p), "состав: двенадцать вызовов, отпечаток, варианты в справке и в схеме MCP"),
+               ("В3", lambda p: case_B3(ctx, p), "выбор варианта на заглушках: умолчание, отказ чужого аргумента и не переданного обязательного, служба и run"),
+               ("В4", lambda p: case_B4(ctx, p), "рука тела: среда службы к телу не протекает, объявленный env доходит"),
+               ("В5", lambda p: case_B5(ctx, p), "поиск по памяти: три слоя, слой, регистр, номер карточки (малая копия)"),
+               ("В6", lambda p: case_B6(ctx, p), "сжатие слоя: холостой прогон, чужая рука, порога в аргументах нет, настоящий (малая копия)"),
+               ("В7", lambda p: case_B7(ctx, p), "завести карточку: строка в базе, отказ без критерия от договора, комментарий, показ (малая копия)"),
+               ("В8", lambda p: case_B8(ctx, p), "записать слово владельца: настоящий искатель, подставной домашний каталог (малая копия)"),
+               ("В9", lambda p: case_B9(ctx, p), "читающие вызовы пишут только объявленное (малая копия)")]
+    results = {}
+    for key, fn, title in runners:
+        ok, detail = fn(args.contract)
+        results[key] = ok
+        if key == "В1":
+            ok2, d2 = case_B2(ctx)
+            results["В2"] = ok2
+            v4.add("781-В1", ok, title, detail)
+            v4.add("781-В2", ok2, "разбор договора отвергает кривые варианты: по копии на правила 1–7 и на «default_variant у пишущего вызова»", d2)
+        else:
+            v4.add("781-" + key, ok, title, detail)
+
+    # три нарочные поломки: копия договора, те же случаи В1, В3–В9, судим «ровно свои»
+    for number, (key, what, own, sign) in enumerate(BREAKS_781, 1):
+        broken = apply_break(contract_doc, key)
+        p = os.path.join(work, "contract-781-break-p%d.json" % number)
+        write_json(p, broken)
+        failed = set()
+        notes = []
+        whys = {}
+        for ckey, fn, _title in runners:
+            try:
+                ok, detail = fn(p)
+            except Exception as e:      # поломка вправе уронить случай исключением — это тоже «не прошёл»
+                ok, detail = False, "исключение: %s" % e
+            if not ok:
+                failed.add(ckey)
+                whys[ckey] = why_line(detail)
+                notes.append("%s: %s" % (ckey, whys[ckey]))
+        exact = failed == own
+        # прямой признак: названный случай обязан объяснить провал названной строкой — иначе поломка бьёт в соседний механизм
+        sign_case, sign_text = sign
+        direct = sign_text in whys.get(sign_case, "")
+        v4.add("781-" + key, exact and direct, "нарочная поломка: %s — не проходят РОВНО свои случаи, и названным механизмом" % what,
+               "свои случаи (названы в коде до прогона): %s\nне прошли на поломанной копии: %s\n"
+               "прямой признак (назван в коде до прогона): случай %s объясняет провал строкой с «%s» — %s\n%s"
+               % (", ".join(sorted(own)), ", ".join(sorted(failed)) or "ни один",
+                  sign_case, sign_text, "найден" if direct else "НЕ НАЙДЕН", "\n".join(notes)))
+    return results
 
 
 def main():
@@ -1086,7 +1985,7 @@ def run_acceptance():
 
     # ─────────────────────────────────────── ② типизированный исход и признак усечения
     # (а) расхождение состояния: версия раздела заведомо не та
-    s2a, t2a = w.call("memory_save", {"contour": CONTOUR_STAND, "role": "PROTO", "section": "state",
+    s2a, t2a = w.call("memory_write", {"contour": CONTOUR_STAND, "action": "save", "role": "PROTO", "section": "state",
                                       "body": "проба приёмки стены — записана НЕ должна быть",
                                       "expect_version": 1})
     # (б) усечение. С карточки 791 длинный ВЫВОД тела не режется, а выдаётся частями (случаи К1 и К7);
@@ -1180,12 +2079,12 @@ def run_acceptance():
     # Поломка Б: в копии договора стёрты признаки расхождения ⇒ обязан провалиться РОВНО критерий ②
     broken_b = json.loads(json.dumps(contract_doc))
     for t in broken_b["tools"]:
-        if t["name"] == "memory_save":
-            t["exec"]["mismatch_when"] = []
+        if t["name"] == "memory_write":
+            t["variants"]["save"]["exec"]["mismatch_when"] = []
     path_b = os.path.join(work, "contract-broken-b.json")
     write_json(path_b, broken_b)
     w_b = Wall(args.exe, path_b, args.contours)
-    s_b, t_b = w_b.call("memory_save", {"contour": CONTOUR_STAND, "role": "PROTO", "section": "state",
+    s_b, t_b = w_b.call("memory_write", {"contour": CONTOUR_STAND, "action": "save", "role": "PROTO", "section": "state",
                                         "body": "проба приёмки стены", "expect_version": 1})
     s_b5, t_b5 = w_b.call("memory_read", {"contour": CONTOUR_LIVE, "role": "PROTO", "section": "identity"})
     w_b.close()
@@ -1357,6 +2256,10 @@ def run_acceptance():
     v3 = Verdict()
     cases_791(args, work, manifest, contract_doc, CARG, v3, s2c)
 
+    # ═══════════════════════════════════════ карточка 781: варианты вызова · рука тела · память слоями · карточки · слова владельца
+    v4 = Verdict()
+    cases_781(args, work, manifest, contract_doc, CARG, v4)
+
     # ─────────────────────────────────────── вывод
     print("── ПРИЁМКА СТЕНЫ КОНТУРА GORDI · этап Э1 · карточка 779")
     print("   сборка ... %s" % args.exe)
@@ -1373,20 +2276,23 @@ def run_acceptance():
     print("── случаи карточки 791 (части вместо обрезки · предупреждения отдельно · честный «не запустилось» · отметка сборки · пустая запись · незнакомый аргумент · служебные записи)")
     v3.print_all()
     print("")
+    print("── случаи карточки 781 (варианты вызова · рука тела · поиск и сжатие памяти слоями · завести карточку · слово владельца · три нарочные поломки)")
+    v4.print_all()
+    print("")
     print("⚖️ ЭТИ ДВА КРИТЕРИЯ МАШИНА НЕ СУДИТ — говорю прямо, чтобы зелёное не прочлось шире:")
     print("   ⑥ полный рабочий отрезок роли через стену — доказывается работой роли (записка · память · карточка),")
     print("      а не этим файлом. Прогон приёмки отрезком НЕ является.")
     print("   ⑨ подпись приёмки ставит роль, которая службу НЕ писала. Свой прогон за чужую руку не считается.")
     print("")
-    bad = v.failed() + v2.failed() + v3.failed()
+    bad = v.failed() + v2.failed() + v3.failed() + v4.failed()
     if bad:
-        print("🔴 ПРОВАЛИЛОСЬ %d: %s (карточка 779: %d из %d прошло · карточка 787: %d из %d прошло · карточка 791: %d из %d прошло)"
+        print("🔴 ПРОВАЛИЛОСЬ %d: %s (карточка 779: %d из %d прошло · карточка 787: %d из %d прошло · карточка 791: %d из %d прошло · карточка 781: %d из %d прошло)"
               % (len(bad), " · ".join(r[0] for r in bad),
                  len(v.rows) - len(v.failed()), len(v.rows), len(v2.rows) - len(v2.failed()), len(v2.rows),
-                 len(v3.rows) - len(v3.failed()), len(v3.rows)))
+                 len(v3.rows) - len(v3.failed()), len(v3.rows), len(v4.rows) - len(v4.failed()), len(v4.rows)))
         return 1
-    print("✅ ВСЕ МАШИННЫЕ КРИТЕРИИ ПРОШЛИ: карточка 779 — %d из %d · карточка 787 — %d из %d · карточка 791 — %d из %d (⑥ и ⑨ карточки 779 — за человеком)"
-          % (len(v.rows), len(v.rows), len(v2.rows), len(v2.rows), len(v3.rows), len(v3.rows)))
+    print("✅ ВСЕ МАШИННЫЕ КРИТЕРИИ ПРОШЛИ: карточка 779 — %d из %d · карточка 787 — %d из %d · карточка 791 — %d из %d · карточка 781 — %d из %d (⑥ и ⑨ карточки 779 — за человеком)"
+          % (len(v.rows), len(v.rows), len(v2.rows), len(v2.rows), len(v3.rows), len(v3.rows), len(v4.rows), len(v4.rows)))
     return 0
 
 

@@ -106,6 +106,9 @@ public static class Program
             sb.AppendLine($"  {mode} {t.Name,-18} {commonNames} {argNames}");
             if (t.ServiceWrites is { Count: > 0 } writes)
                 sb.AppendLine($"          служебные записи: {string.Join(", ", writes)}");
+            // строки вариантов строятся из договора, руками не пишутся
+            foreach (var line in Contract.VariantLines(t))
+                sb.AppendLine($"          {line}");
         }
         await Console.Out.WriteAsync(sb.ToString());
         return 0;
@@ -313,7 +316,10 @@ public static class Program
             {
                 ["name"] = t.Name,
                 ["description"] = (string.IsNullOrEmpty(t.Description) ? t.Title : t.Title + ". " + t.Description)
-                                  + (t.ServiceWrites is { Count: > 0 } sw ? " Служебные записи: " + string.Join(", ", sw) + "." : ""),
+                                  + (t.ServiceWrites is { Count: > 0 } sw ? " Служебные записи: " + string.Join(", ", sw) + "." : "")
+                                  // «обязателен в варианте» схема MCP не выражает: в required остаётся только обязательное на уровне вызова,
+                                  // а перечень вариантов строится из договора и идёт в описании
+                                  + (t.HasVariants ? "\n" + string.Join("\n", Contract.VariantLines(t)) : ""),
                 ["inputSchema"] = new JsonObject
                 {
                     ["type"] = "object",
