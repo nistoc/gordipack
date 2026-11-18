@@ -10,7 +10,8 @@ write-message.py — записать сообщение в общую лент�
     python <КОНТУР>/.mezosync/scripts/write-message.py --role CORE --body "коммит abc1234" --priority high --to "OPSSRE"
     ⚠️ АДРЕСАТ — ПОЛЕМ, а не прозой в теле: названный только словами в тексте не увидит
        записку в своём отборе «обращённое лично ко мне». Имена — через запятую ИЛИ пробел,
-       оба разделителя равны; «все» = всем сразу. Опечатка в имени — отказ ДО записи.
+       оба разделителя равны, и повтор флага (--to A --to B) равен «--to A,B»; «все» = всем сразу.
+       Опечатка в имени — отказ ДО записи.
 
 ⚠️ ЧЕМ СОЗДАВАТЬ САМ ФАЙЛ НОТЫ (оплачено 27.08 15:05 UTC, @STUD, записки #3987/#3991).
    Файл клади ИНСТРУМЕНТОМ ЗАПИСИ ФАЙЛА, а вызов зови ОТДЕЛЬНОЙ командой. Составной ход
@@ -357,12 +358,24 @@ def _ahead_minutes(date, hh, mm, now_utc):
     return d - 1440 if d > 720 else d
 
 
-def signature_shift(body: str, now_utc: str):
+def _now_as_text(now_utc):
+    """Час записи как строка «ГГГГ-ММ-ДД ЧЧ:ММ:СС»: принимается и строка (так зовёт main), и datetime
+    (так зовёт следующая рука, написавшая вызов сама — карточка 712). Окна и пороги не трогаются."""
+    if isinstance(now_utc, datetime):
+        if now_utc.tzinfo is not None:
+            now_utc = now_utc.astimezone(timezone.utc).replace(tzinfo=None)
+        return now_utc.strftime("%Y-%m-%d %H:%M:%S")
+    return now_utc
+
+
+def signature_shift(body: str, now_utc):
     """Сдвиг подписи в минутах (кратен 60, больше нуля) и номер её строки — или (None, None).
 
     Подпись пишется ДО отправки: её опережение = сдвиг − разрыв, разрыв от −5 до 45 мин.
     Подпись без сдвига (верная или поздняя) — (None, None): говорить не о чем.
+    Час записи — строкой или datetime, ответ одинаков.
     """
+    now_utc = _now_as_text(now_utc)
     lines = body.rstrip("\n").split("\n")
     for i in range(len(lines) - 1, -1, -1):
         if not lines[i].strip():
@@ -381,9 +394,11 @@ def signature_shift(body: str, now_utc: str):
     return None, None
 
 
-def times_on_signature_shift(body: str, now_utc: str):
+def times_on_signature_shift(body: str, now_utc):
     """Метки «HH:MM UTC» в теле на ТОТ ЖЕ сдвиг, что у подписи. → (сдвиг в минутах, метки)
-    или (None, []). Зовётся на теле ДО исправления подписи: сама подпись не считается."""
+    или (None, []). Зовётся на теле ДО исправления подписи: сама подпись не считается.
+    Час записи — строкой или datetime, ответ одинаков."""
+    now_utc = _now_as_text(now_utc)
     shift, sign_line = signature_shift(body, now_utc)
     if shift is None:
         return None, []
@@ -402,7 +417,7 @@ def times_on_signature_shift(body: str, now_utc: str):
     return shift, found
 
 
-def _save_phoenix_alongside(args, db_path: Path) -> list:
+def _save_phoenix_alongside(args, db_path: Path, msg_id=None) -> list:
     """Сохранить память ТЕМ ЖЕ действием — и сказать вслух, если она отстала.
 
     → список разделов, сохранить которые НЕ УДАЛОСЬ (пустой, если всё легло).
@@ -454,7 +469,11 @@ def _save_phoenix_alongside(args, db_path: Path) -> list:
             # Отказ сохранения НЕ отменяет записку: она уже в базе, и соврать про это хуже.
             # ⚡ НО И УСПЕХОМ ВСЮ ОПЕРАЦИЮ БОЛЬШЕ НЕ ЗОВЁМ — раздел уходит наверх,
             # и код возврата станет 4. Находка @OPSSRE, записка #3776.
-            print(f"⚠️ память (§{section}) НЕ сохранена — записка #уже записана, память НЕТ.",
+            # Карточка 480: номер ушедшей записки называется (роль в этот миг обязана его знать —
+            # сослаться, поправить, не отправить дубль). Записки в этом вызове не было — решётки нет.
+            _note_part = (f"записка #{msg_id} уже записана" if msg_id is not None
+                          else "записки в этом вызове не было")
+            print(f"⚠️ память (§{section}) НЕ сохранена — {_note_part}, память НЕТ.",
                   file=sys.stderr)
             not_saved.append(section)
 
@@ -550,12 +569,19 @@ ADDRESSEE_SYNONYMS = {"OWNER": "ВЛАДЕЛЕЦ", "ALL": "ВСЕ", "ВСЕМ": 
 
 
 def parse_names(s):
-    """Запятая И пробел — оба разделители; «@» и регистр не значимы; синонимы к канону."""
+    """Запятая И пробел — оба разделители; «@» и регистр не значимы; синонимы к канону.
+
+    Карточка 596: s — строка ИЛИ список значений (повтор флага копится: «--to A --to B» и
+    «--to A,B» равны, формы смешиваются). Имена без повторов, порядок первого появления."""
+    pieces = s if isinstance(s, (list, tuple)) else [s]
     names_list = []
-    for x in re.split(r"[,\s]+", s or ""):
-        x = x.strip().upper().lstrip("@")
-        if x:
-            names_list.append(ADDRESSEE_SYNONYMS.get(x, x))
+    for piece in pieces:
+        for x in re.split(r"[,\s]+", piece or ""):
+            x = x.strip().upper().lstrip("@")
+            if x:
+                x = ADDRESSEE_SYNONYMS.get(x, x)
+                if x not in names_list:
+                    names_list.append(x)
     return names_list
 
 
@@ -778,12 +804,17 @@ def main():
     # Прежняя редакция ПРИНИМАЛА имя и ВЫБРАСЫВАЛА его: ставила лишь метку 'field'.
     # Это ровно тот дефект, который ловит guard-printed-names: «флаг принимает значение,
     # которое код только проверяет на истинность». Теперь имена доезжают до таблицы.
-    parser.add_argument("--to", help="кому ОБРАЩЕНА записка: роли через запятую. Имена "
-                                     "ложатся в message_addressee (kind='to') и по ним "
-                                     "строится отбор «только моё»")
-    parser.add_argument("--cc", help="кто В КОПИИ: роли через запятую. Отличие от --to — "
-                                     "весь смысл: замер 08.08 показал, что роль названа "
-                                     "в 132 записках из 145, а ОБРАЩАЮТСЯ к ней в 24")
+    # Карточка 596: повтор флага НАКАПЛИВАЕТ (прежде молча оставалось последнее имя — адресаты
+    # терялись при больше одного имени на флаг). Справка — теми же словами, что у --reviewed.
+    parser.add_argument("--to", action="append", default=None,
+                        help="кому ОБРАЩЕНА записка: роли (несколько — повтором флага ИЛИ через "
+                             "запятую; обе формы равны). Имена ложатся в message_addressee "
+                             "(kind='to') и по ним строится отбор «только моё»")
+    parser.add_argument("--cc", action="append", default=None,
+                        help="кто В КОПИИ: роли (несколько — повтором флага ИЛИ через запятую; "
+                             "обе формы равны). Отличие от --to — "
+                             "весь смысл: замер 08.08 показал, что роль названа "
+                             "в 132 записках из 145, а ОБРАЩАЮТСЯ к ней в 24")
     parser.add_argument("--save-state", metavar="ФАЙЛ",
                         help="сохранить §state памяти роли ТЕМ ЖЕ вызовом (мера ② варианта А, "
                              "слово владельца 2026-08-08 16:19 UTC). Зовёт живой save-phoenix "
@@ -1252,6 +1283,14 @@ def main():
         print(f"⟨ХОЛОСТОЙ ПРОГОН⟩ записка НЕ записана — в копии получила бы номер {msg_id} "
               f"[{args.role}] tags={tags_json} priority={args.priority}; ссылаться на него нельзя")
     elif msg_id is not None:
+        # Карточка 596 Ⓑ: число записанных адресатов — СРАЗУ ПЕРЕД подтверждением, чтобы «OK #»
+        # осталась на прежнем месте от конца вывода. Печатается, когда адресаты названы.
+        if _to_names or _cc_names:
+            print(f"адресатов: {len(_to_names) + len(_cc_names)} — to {len(_to_names)} · cc {len(_cc_names)}"
+                  + (" · всем сразу" if _to_all else ""))
+        elif _to_all:
+            # поимённых нет, записка ушла всем: «адресатов: 0» читалось бы как «никому»
+            print("адресатов: всем сразу")
         print(f"OK #{msg_id} [{args.role}] tags={tags_json} priority={args.priority}")
     if _stamped:
         print(f"  🕐 {_stamped} — сверено с записью в базе по построению; это про ПОДПИСЬ,"
@@ -1281,7 +1320,7 @@ def main():
     #    вложенное ВНУТРЬ этой же отправки (--ack), прижилось. Разница не в дисциплине.
     # ⚖️ Записка пишется тогда, когда сложилось намерение, о котором стоит сказать другим, —
     #    то есть ровно в тот момент, который и надо было сохранять.
-    not_saved = _save_phoenix_alongside(args, db_path)
+    not_saved = _save_phoenix_alongside(args, db_path, msg_id)
     # ⚡ ЧАСТЬ РАБОТЫ НЕ СДЕЛАНА ⇒ ИСХОД НЕ «УСПЕХ». Находка @OPSSRE (записка #3776):
     # отказ сохранения памяти уходил с кодом 0, и роль, зовущая это в конце смены,
     # видела ноль и уходила — память при этом не сохранена.

@@ -767,7 +767,11 @@ def read_with_version(conn, role, section, out, has_history):
             print(f"   👉 python <scripts>/save-phoenix.py --role {role} --section {section} "
                   f"--file {out} --expect-version {vid} --actor <ТЫ>")
     else:
-        print(body, end="" if body.endswith("\n") else "\n")
+        # Карточка 712: на экран окончания строк приводятся к «\n». Печать сама превращает «\n» в «\r\n»
+        # (Windows), и тело с «\r\n» выходило «\r\r\n»: экран, перенаправленный в файл и отданный в
+        # --file, давал пустые строки между строками тела. Путь --out пишет тело как есть — его не трогаем.
+        screen = body.replace("\r\n", "\n").replace("\r", "\n")
+        print(screen, end="" if screen.endswith("\n") else "\n")
 
 
 def main():
