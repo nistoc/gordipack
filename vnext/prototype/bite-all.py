@@ -14,6 +14,10 @@
   ⚠️ НЕ ЗАПУСТИЛАСЬ  приёмке нужен контур/база/аргументы, которых здесь нет
 «Не запустилась» НЕ ЕСТЬ «зелёная». Сваливать их вместе — значит печатать «всё чисто» там,
 где не проверено ничего: это ложный ноль, самый дорогой сорт вранья механизма.
+  ✅ принята, пропущено N — приёмка приняла себя, а N её случаев проверить было не на чем
+                    (карточка #760). Это НЕ отказ мерить: в «не проверено» не считается и код 2 не даёт.
+  Исходы дошли и до КОДА ВЫХОДА набора (карточка #759): есть сломанные — 1 (сильнее «не запустилась»);
+  сломанных нет, но есть не запустившиеся — 2; всё прошло (в том числе «принята с пропуском») — 0.
 
 ⛔ Живую базу приёмки открывают сами и по своим правилам; эта программа только зовёт их.
 
@@ -200,8 +204,39 @@ def bites(where: str, only: str):
     return [n for n in names if not only or only in n]
 
 
+# 🪤 ПРОПУСК ВНУТРИ ПРИНЯТОЙ ПРИЁМКИ (карточка #760). Приёмка bite-launcher-forms печатает
+# «ПРОВЕРКА ПРИНЯТА — … · пропущено 1» и выходит кодом 2 (так принято с карточки #729: «принята,
+# но часть случаев не проверена»). Набор видел код 2 и красил её «не запустилась» — два вердикта
+# об одном прогоне. ⇒ Признак пропуска — число после «пропущено» / «не проверено» в ХВОСТЕ вывода:
+#   код 0 — достаточно числа (приёмка приняла себя, и так же её видели прежде);
+#   код 2 — число обязано стоять в строке, где сказано «ПРИНЯТ» (не «НЕ ПРИНЯТ»), и в выводе не должно
+#           быть «НЕ ЗАПУСТИЛАСЬ»: настоящий отказ мерить (код 2 без «принята») остаётся отказом.
+# Другие коды (1 и прочие) пропуском не бывают.
+SKIP_RE = re.compile(r"(?:пропущено|не проверено)\s+(\d+)", re.IGNORECASE)
+ACCEPTED_RE = re.compile(r"(?<!НЕ )ПРИНЯТ")
+SKIP_TAIL_LINES = 10
+
+
+def skip_count(code: int, out: str) -> int:
+    """Сколько случаев принятая приёмка пропустила (0 — пропуска нет или это не принятая приёмка)."""
+    if code not in (0, 2):
+        return 0
+    tail = [l for l in out.splitlines() if l.strip()][-SKIP_TAIL_LINES:]
+    for line in reversed(tail):
+        m = SKIP_RE.search(line)
+        if not m or int(m.group(1)) == 0:
+            continue
+        if code == 2 and (not ACCEPTED_RE.search(line) or "НЕ ЗАПУСТИЛАСЬ" in out.upper()):
+            continue
+        return int(m.group(1))
+    return 0
+
+
 def verdict(code: int, out: str):
     low = out.lower()
+    skipped = skip_count(code, out)
+    if skipped:
+        return "✅", f"принята, пропущено {skipped}"
     # Код 2 — ОТКАЗ МЕРИТЬ (дисциплина трёх исходов): «испытуемого нет» не есть «сломано».
     # Поймано 09.08 20:10: приёмка честно сказала «испытуемого нет» кодом 2, а набор
     # покрасил её «СЛОМАНО» — то есть перевёл отказ мерить в приговор механизму.
@@ -242,8 +277,14 @@ def save_failure(name: str, out: str) -> None:
         print(f"        ⚠️ вывод сохранить не удалось: {e}")
 
 
-def print_tail(out: str) -> None:
-    tail = [l for l in out.strip().splitlines() if l.strip()][-6:]
+def print_tail(out: str, full: bool = False) -> None:
+    # 🪤 Карточка #760: справка обещала «вывод целиком», а печатались шесть строк — у приёмки с длинным
+    # выводом итоговой строки с числом случаев не было видно. full=True (--verbose) печатает всё;
+    # без него — прежний хвост из шести непустых строк.
+    if full:
+        tail = out.rstrip().splitlines()
+    else:
+        tail = [l for l in out.strip().splitlines() if l.strip()][-6:]
     for line in tail:
         print(f"        {line}")
 
@@ -331,7 +372,7 @@ def run_core_set(entries, where: str, env: dict, timeout: int, verbose: bool) ->
             diverged += 1
         print(f"{mark}  {head} · стало {got[0]} · {got[1]} · {got[2]} · {word} · {took:.0f} с")
         if verbose or not same:
-            print_tail(out)
+            print_tail(out, full=verbose)
         if not same:
             save_failure(name, out)
     print("-" * 78)
@@ -343,14 +384,18 @@ def run_core_set(entries, where: str, env: dict, timeout: int, verbose: bool) ->
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="прогнать все приёмки рядом с этим файлом")
+    ap = argparse.ArgumentParser(
+        description="прогнать все приёмки рядом с этим файлом. Код выхода: 0 — всё прошло; 1 — есть сломанные; "
+                    "2 — сломанных нет, но есть не запустившиеся (проверить не удалось: это не «чисто»)")
     ap.add_argument("--only", default="", help="подстрока имени: прогнать лишь совпавшие")
     ap.add_argument("--timeout", type=int, default=None,
                     help=f"потолок на одну приёмку, сек ({NORMAL_TIMEOUT}; с --set core — {CORE_TIMEOUT})")
     ap.add_argument("--set", choices=("core",), default="",
                     help=f"набор по списку: core — приёмки ядра из {CORE_LIST} в каталоге приёмок; "
                          "строка на приёмку — числа прогона против «было» из списка")
-    ap.add_argument("--verbose", action="store_true", help="печатать вывод каждой приёмки целиком")
+    ap.add_argument("--verbose", action="store_true",
+                    help="печатать вывод каждой приёмки целиком; без ключа печатаются последние шесть "
+                         "непустых строк вывода сломанных приёмок")
     ap.add_argument("--dir", default=HERE,
                     help="каталог с приёмками (по умолчанию — рядом с этим файлом). "
                          "Нужен, чтобы САМ запускатель можно было проверить на подложенных случаях")
@@ -426,7 +471,7 @@ def main() -> int:
         finish_stand(stand, keep=code != 0)
         return code
 
-    green = red = stuck = 0
+    green = red = stuck = skipped = 0
     for name in names:
         try:
             r = subprocess.run([sys.executable, os.path.join(where, name)],
@@ -442,15 +487,18 @@ def main() -> int:
         mark, word = verdict(code, out)
         print(f"{mark}  {name:32} {word}")
         if args.verbose or mark == "🔴":
-            print_tail(out)
+            print_tail(out, full=args.verbose)
         if mark in ("🔴", "⚠️"):
             save_failure(name, out)
-        green += mark == "✅"
+        with_skip = mark == "✅" and word.startswith("принята, пропущено")
+        skipped += with_skip
+        green += mark == "✅" and not with_skip
         red += mark == "🔴"
         stuck += mark == "⚠️"
 
     print("-" * 78)
-    print(f"держится {green} · сломано {red} · НЕ ПРОВЕРЕНО {stuck}")
+    # «принято с пропуском» — отдельное число, не входящее ни в «держится», ни в «НЕ ПРОВЕРЕНО» (карточка #760)
+    print(f"держится {green} · сломано {red} · НЕ ПРОВЕРЕНО {stuck} · принято с пропуском: {skipped}")
     # 🎯 Итог повторяет, ЧТО испытано. Числа без этой строки читаются как «всё цело»
     #    независимо от того, какую копию гоняли, — а копии дают разные числа (замер 09.08).
     print(f"ИСПЫТАНО — {banner}")
@@ -465,7 +513,15 @@ def main() -> int:
     if stuck:
         print("⚠️  «не проверено» — это НЕ «в порядке». Пока такие есть, «всё чисто» сказать нельзя.")
     finish_stand(stand, keep=bool(red or stuck))
-    return 1 if red else 0
+    # 🪤 Карточка #759: прежде здесь стояло `return 1 if red else 0` — приёмка, которой нечем мерить, отдавала
+    # наружу тот же ноль, что прошедшая, и автоматика, читающая код, шла дальше. Теперь три исхода и в коде:
+    # сломанная сильнее не запустившейся (1), не запустившаяся — отдельный код (2), иначе 0.
+    if red:
+        return 1
+    if stuck:
+        print("⛔ код выхода 2: сломанных нет, но не запустилось приёмок — " f"{stuck}. Это НЕ «всё прошло».")
+        return 2
+    return 0
 
 
 if __name__ == "__main__":
