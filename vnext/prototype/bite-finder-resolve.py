@@ -13,17 +13,21 @@ os.path.realpath, nt._getfinalpathname и Path.resolve() — нет. Искат�
 ЧЕМ СУДИТ. Стендом: подсадные записи разговоров в подменённом домашнем каталоге и ПОДСТАВНОЙ resolve —
 модуль sitecustomize на стенде (PYTHONPATH только у дочерних процессов приёмки). В коде искателя
 проверочных лазеек нет; подмена живёт только здесь:
-    FOW_STUB_RESOLVE_BLOCK=<кусок имени> .. Path.resolve() и os.path.realpath на таком файле не
-                                            возвращаются (ждут файла-отпуска приёмки, не дольше 120 с,
-                                            потом процесс кончается кодом 9)
+    FOW_STUB_RESOLVE_BLOCK=<кусок имени> .. Path.resolve(), os.path.realpath и — на Windows — сам системный
+                                            вызов nt._getfinalpathname на таком файле не возвращаются (ждут
+                                            файла-отпуска приёмки, не дольше 120 с, потом процесс кончается
+                                            кодом 9). Подмена на слое nt добавлена по прогону TAXO 18.11:
+                                            без неё код с прямым вызовом nt._getfinalpathname сходился
+                                            по всем 10 случаям
     FOW_STUB_CRASH=<кусок имени> .......... открытие такого файла падает — файл остаётся непрочитанным
 ⚖️ ОЖИДАЕМЫЙ АДРЕС ПРИЁМКА СЧИТАЕТ ИНАЧЕ, ЧЕМ ИСКАТЕЛЬ: настоящим resolve() самого файла в своём
 процессе, где подмены нет. Искатель строит адрес из раскрытого каталога записей и относительного пути.
 Совпадение двух разных способов и есть предмет случаев К, ① ②б и ③.
 
 СЛУЧАИ:
-    С  ПОДМЕНА ДЕЙСТВУЕТ: в дочернем процессе resolve() и realpath на файле с меткой не возвращаются
-       за 3 с, на файле без метки resolve() возвращается. Без этого ① и ② прошли бы по ложной причине
+    С  ПОДМЕНА ДЕЙСТВУЕТ: в дочернем процессе resolve(), realpath и — на Windows — nt._getfinalpathname
+       на файле с меткой не возвращаются за 3 с, на файле без метки resolve() возвращается. Без этого
+       ① и ② прошли бы по ложной причине
     К1 контроль без подмены: находка, код 0, «файл: <resolve файла>:1»
     К2 контроль: чтение файла падает, resolve обычный — код 4, «не прочитан: <resolve файла>»
     ① НАХОДКА в записи, на которой resolve() не возвращается:
@@ -34,19 +38,25 @@ os.path.realpath, nt._getfinalpathname и Path.resolve() — нет. Искат�
        ③а через «..» (на любой системе)
        ③б коротким именем 8.3 (Windows; случай TAXO, записка #6626). Короткой формы нет или она
           не отличается от длинной — случай НЕ ПРОВЕРЕН, и это названо в строке итога
-    П  ПЕСОЧНИЦА: дочерний процесс со средой dict(os.environ) видит Temp и домашний каталог стенда
+    П  ПЕСОЧНИЦА: дочерний процесс со средой dict(os.environ) видит Temp, домашний каталог и каталог
+       вместо Корзины Windows — все три внутри стенда
     ④ НАРОЧНЫЕ ПОЛОМКИ — ожидание записано ДО прогона, каждая роняет РОВНО своё семейство:
        ④а resolve() возвращён у адреса находки ......... семейство ①; у ①а признак «процесс не вернулся»
        ④б resolve() возвращён у строки «не прочитан:» .. семейство ②; у ②а признак «процесс не вернулся»
        ④в каталог записей не раскрывается .............. семейство ③
+       ④г адрес берётся прямым nt._getfinalpathname .... семейства ① и ②; у ①а признак «процесс не вернулся».
+          Только Windows: на другой системе поломка НЕ ПОСТАВЛЕНА, и это названо в строке итога
 ⚡ Поломка сперва проходит разбор копии: упавшая копия «прошла» бы любой случай, ждущий провала.
 ⛔ ПЕСОЧНИЦА ВСЕГО ДЕРЕВА ПРОЦЕССОВ (правило deliberate-break-sandbox-env). Поломки этой приёмки
 удаление и запись НЕ расширяют, но каждый прогон искателя убирает старые каталоги хода в своём Temp.
 Поэтому main() до первого дочернего процесса ставит в os.environ TEMP, TMP, TMPDIR, HOME и USERPROFILE
-стенда; случай П это проверяет. Вызовы процессов в этом файле: run_bounded в find, в С и в П —
+стенда и — шестым местом, вторая редакция правила 18.11 — MEZO_STAND_TEST_BIN: каталог стенда вместо
+Корзины Windows для уборки стендов (mezo_stand). Эта приёмка уборку стендов не зовёт; переменная стоит
+для любого процесса ниже, который до неё дойдёт. Случай П проверяет все три места: Temp, домашний
+каталог и каталог вместо Корзины. Вызовы процессов в этом файле: run_bounded в find, в С и в П —
 все со средой стенда.
 
-КОДЫ ВЫХОДА: 0 — все случаи сошлись (непроверенный ③б назван в строке итога) · 1 — случай или
+КОДЫ ВЫХОДА: 0 — все случаи сошлись (непроверенный ③б и непоставленная ④г названы в строке итога) · 1 — случай или
 нарочная поломка не сошлись · 2 — испытуемого нет рядом: отказ мерить, а не «чисто».
 
 Зовут так (из клона пакета):
@@ -83,11 +93,18 @@ BREAK_UNREAD = ('            print(f"   не прочитан: {full_path(root, 
                 '            print(f"   не прочитан: {uf.resolve().as_posix()} — {why}")  # поломка ④б')
 BREAK_ROOT = ("    root_real = root.resolve()",
               "    root_real = root  # поломка ④в: каталог записей не раскрывается")
-# (метка, имя, (образец, замена), семейство — начала имён случаев, (случай с признаком, признак) или None)
+# ④г — прогон Б2 приёмки чужой рукой (TAXO, 18.11): адрес берётся ПРЯМЫМ системным вызовом, мимо resolve()
+# и realpath. Подмена только на Path.resolve и os.path.realpath такой код пропускала: 10 случаев из 10.
+BREAK_NT = ("        return (root_real / f.relative_to(root)).as_posix()",
+            r'        import nt; return pathlib.Path(nt._getfinalpathname(os.fspath(f))'
+            r'.removeprefix("\\\\?\\")).as_posix()  # поломка ④г')
+# (метка, имя, (образец, замена), семейство — начала имён случаев, (случай с признаком, признак) или None,
+#  только ли Windows — на другой системе поломка не ставится и названа в строке итога)
 BREAKS = [
-    ("④а", "resolve() возвращён у адреса находки", BREAK_HIT, ("①",), ("①а", SIGN_ALIVE)),
-    ("④б", "resolve() возвращён у строки «не прочитан:»", BREAK_UNREAD, ("②",), ("②а", SIGN_ALIVE)),
-    ("④в", "каталог записей не раскрывается", BREAK_ROOT, ("③",), None),
+    ("④а", "resolve() возвращён у адреса находки", BREAK_HIT, ("①",), ("①а", SIGN_ALIVE), False),
+    ("④б", "resolve() возвращён у строки «не прочитан:»", BREAK_UNREAD, ("②",), ("②а", SIGN_ALIVE), False),
+    ("④в", "каталог записей не раскрывается", BREAK_ROOT, ("③",), None, False),
+    ("④г", "адрес берётся прямым nt._getfinalpathname", BREAK_NT, ("①", "②"), ("①а", SIGN_ALIVE), True),
 ]
 
 STUB = r'''
@@ -121,6 +138,19 @@ if _block:
 
     os.path.realpath = _stub_realpath
     pathlib.Path.resolve = _stub_resolve
+
+    # системный слой: прямой вызов nt._getfinalpathname шёл мимо двух подмен выше (прогон TAXO 18.11)
+    if os.name == 'nt':
+        import nt, ntpath
+        _gfp = nt._getfinalpathname
+
+        def _stub_gfp(path, *args, **kwargs):
+            if _block in os.path.basename(os.fspath(path)):
+                _never_returns()
+            return _gfp(path, *args, **kwargs)
+
+        nt._getfinalpathname = _stub_gfp
+        ntpath._getfinalpathname = _stub_gfp     # ntpath держит свою ссылку, взятую при запуске
 
 if _crash:
     _open = builtins.open
@@ -230,10 +260,17 @@ def run_cases(tool: pathlib.Path, work: pathlib.Path, label: str) -> dict:
                              paths["mark"]], block_env, PROBE_CAP)
     s3, o3, _ = run_bounded([sys.executable, "-c", "import pathlib, sys; print(pathlib.Path(sys.argv[1]).resolve())",
                              paths["after"]], block_env, 30)
-    case(f"С подмена действует: resolve() и realpath на файле с меткой не возвращаются за {PROBE_CAP} с, "
-         "на файле без метки resolve() возвращается",
-         s1 is None and s2 is None and s3 == 0 and SIGN_ALIVE in o1 and SIGN_ALIVE in o2,
-         f"resolve с меткой: код {s1} · {o1}\nrealpath с меткой: код {s2} · {o2}\nresolve без метки: код {s3} · {o3}")
+    if os.name == "nt":
+        s4, o4, _ = run_bounded([sys.executable, "-c", "import nt, sys; print(nt._getfinalpathname(sys.argv[1]))",
+                                 paths["mark"]], block_env, PROBE_CAP)
+        nt_ok, nt_note = s4 is None and SIGN_ALIVE in o4, f"\nnt._getfinalpathname с меткой: код {s4} · {o4}"
+    else:
+        nt_ok, nt_note = True, "\nnt._getfinalpathname: не Windows — пробы нет"
+    case(f"С подмена действует: resolve(), realpath и (на Windows) nt._getfinalpathname на файле с меткой "
+         f"не возвращаются за {PROBE_CAP} с, на файле без метки resolve() возвращается",
+         s1 is None and s2 is None and s3 == 0 and SIGN_ALIVE in o1 and SIGN_ALIVE in o2 and nt_ok,
+         f"resolve с меткой: код {s1} · {o1}\nrealpath с меткой: код {s2} · {o2}\nresolve без метки: код {s3} · {o3}"
+         + nt_note)
 
     # ── К: контроль без подставного resolve ──
     c1, oc1, _ = find("охристый замок", base)
@@ -274,13 +311,15 @@ def run_cases(tool: pathlib.Path, work: pathlib.Path, label: str) -> dict:
         case(name_b, b == 0 and hit_line in ob, f"код {b} · корень {short} · жду «{hit_line}»\n{ob}")
 
     # ── П: песочница всего дерева процессов — дочерний процесс со средой системы видит стенд ──
-    probe = "import pathlib, tempfile; print(tempfile.gettempdir()); print(pathlib.Path.home())"
+    probe = ("import os, pathlib, tempfile; print(tempfile.gettempdir()); print(pathlib.Path.home()); "
+             "print(os.environ.get('MEZO_STAND_TEST_BIN', ''))")
     p, op, _ = run_bounded([sys.executable, "-c", probe], dict(os.environ, PYTHONIOENCODING="utf-8"), 30)
     seen = [ln.strip() for ln in op.splitlines() if ln.strip()]
-    inside = len(seen) == 2 and all(
+    inside = len(seen) == 3 and all(
         os.path.normcase(str(pathlib.Path(s).resolve())).startswith(os.path.normcase(str(work.resolve())))
         for s in seen)
-    case("П песочница: дочерний процесс со средой dict(os.environ) видит Temp и домашний каталог стенда",
+    case("П песочница: дочерний процесс со средой dict(os.environ) видит Temp, домашний каталог и каталог "
+         "вместо Корзины Windows — все три внутри стенда",
          p == 0 and inside, f"код {p} · стенд {work.resolve()}\n{op}")
     return res
 
@@ -302,17 +341,20 @@ def main() -> int:
         print(f"⛔ ИСПЫТУЕМОГО НЕТ рядом: {TOOL} — это отказ мерить, а не «чисто»")
         return 2
     failed: list = []
+    unplanted: list = []
     with tempfile.TemporaryDirectory(prefix="bite-finder-resolve-", ignore_cleanup_errors=True) as tmp:
         work = pathlib.Path(tmp)
         # ⛔ ПЕСОЧНИЦА ВСЕГО ДЕРЕВА ПРОЦЕССОВ — до первого дочернего процесса (правило
         # deliberate-break-sandbox-env): наследуют все, и позванные со средой dict(os.environ)
-        sand_tmp, sand_home = work / "sandbox-tmp", work / "sandbox-home"
+        sand_tmp, sand_home, sand_bin = work / "sandbox-tmp", work / "sandbox-home", work / "sandbox-bin"
         sand_tmp.mkdir()
         sand_home.mkdir()
+        sand_bin.mkdir()
         os.environ.update(TEMP=str(sand_tmp), TMP=str(sand_tmp), TMPDIR=str(sand_tmp),
-                          HOME=str(sand_home), USERPROFILE=str(sand_home))
+                          HOME=str(sand_home), USERPROFILE=str(sand_home),
+                          MEZO_STAND_TEST_BIN=str(sand_bin))
         tempfile.tempdir = str(sand_tmp)
-        print(f"песочница: TEMP и HOME всего дерева процессов — внутри {work}")
+        print(f"песочница: TEMP, HOME и каталог вместо Корзины у всего дерева процессов — внутри {work}")
         (work / "stub").mkdir()
         (work / "stub" / "sitecustomize.py").write_text(STUB, encoding="utf-8")
         release = work / "release.flag"
@@ -324,9 +366,13 @@ def main() -> int:
             failed += [n for n, (ok, _) in res.items() if ok is False]
 
             original = TOOL.read_text(encoding="utf-8")
-            for i, (key, title, (pattern, repl), prefix, sign) in enumerate(BREAKS, 1):
+            for i, (key, title, (pattern, repl), prefix, sign, only_nt) in enumerate(BREAKS, 1):
                 print()
                 print(f"── {key} НАРОЧНАЯ ПОЛОМКА: {title} " + "─" * max(4, 70 - len(title)))
+                if only_nt and os.name != "nt":
+                    print(f"  ⚪ {key} НЕ ПОСТАВЛЕНА: такой вызов есть только на Windows (система {os.name})")
+                    unplanted.append(f"{key} {title}")
+                    continue
                 broken_dir = work / f"broken-{i}"
                 broken_dir.mkdir()
                 patched = original.replace(pattern, repl)
@@ -381,17 +427,22 @@ def main() -> int:
     print()
     print("=" * 96)
     print(f"ИТОГ: {'пало ' + str(len(failed)) if failed else 'все проверенные случаи сошлись'} · случаев на "
-          f"испытуемом {len(res)} · не проверено {len(skipped)} · нарочных поломок {len(BREAKS)}")
+          f"испытуемом {len(res)} · не проверено {len(skipped)} · нарочных поломок {len(BREAKS) - len(unplanted)} · "
+          f"не поставлено {len(unplanted)}")
     for n in failed:
         print(f"   🔴 {n}")
     for n in skipped:
         print(f"   ⚪ НЕ ПРОВЕРЕН: {n} — {res[n][1]}")
+    for n in unplanted:
+        print(f"   ⚪ ПОЛОМКА НЕ ПОСТАВЛЕНА: {n} — такой вызов есть только на Windows")
     print("=" * 96)
     print("⚖️ ЧЕГО ЭТА ПРИЁМКА НЕ ПРОВЕРЯЕТ, названо прямо:")
     print("   · НАСТОЯЩЕГО зависания resolve(): подставной ждёт в обычном сне. Почему живой вызов не")
     print("     возвращается на записи работающего чата, не известно; живой прогон — отдельным замером;")
-    print("   · других вызовов, открывающих файл ради его имени (nt._getfinalpathname напрямую и подобные):")
-    print("     подмена стоит только на Path.resolve и os.path.realpath;")
+    print("   · других вызовов, открывающих файл ради его имени (через ctypes и подобные): подмена стоит")
+    print("     на Path.resolve, os.path.realpath и — на Windows — на nt._getfinalpathname (поломка ④г);")
+    print("   · f.stat() у отбора по дате: последнее обращение к записи в основном процессе без предела;")
+    print("     на машине замера оно возвращается сразу, почему — не мерили;")
     print("   · resolve() на самом КАТАЛОГЕ записей: он зовётся один раз и без предела;")
     print("   · ссылку или точку соединения НИЖЕ каталога записей: адрес такой записи искатель больше")
     print("     не раскрывает, а resolve() раскрывал;")
