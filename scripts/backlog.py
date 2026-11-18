@@ -691,6 +691,34 @@ def _criterion_digest(text, width=64):
     return head if len(head) <= width else head[:width - 1] + "…"
 
 
+# Карточка #774: счёт незакрытой работы судит СОСТОЯНИЕ, а работа оставляет СОБЫТИЯ, и эти
+# два признака расходятся молча: по снятой с хода карточке работают, а ни один счёт её не видит.
+# Вторая строка счёта показывает расхождение там, где его читают. Окно — 7 суток от текущего
+# часа UTC по таблице событий карточек (backlog_events.at); событием считается ЛЮБАЯ запись,
+# в том числе сама смена состояния на dropped. Роль — та, чей список печатается (SHARED не входит).
+DROPPED_ACTIVITY_DAYS = 7
+
+
+def dropped_with_recent_events(conn, role):
+    """Номера снятых с хода (dropped) карточек роли, у которых есть события за последние 7 суток."""
+    return [r[0] for r in conn.execute(
+        "SELECT DISTINCT b.id FROM backlog b JOIN backlog_events e ON e.backlog_id = b.id "
+        "WHERE b.role = ? AND b.status = 'dropped' "
+        "AND e.at >= strftime('%Y-%m-%d %H:00:00', 'now', ?) ORDER BY b.id",
+        (role, f"-{DROPPED_ACTIVITY_DAYS} days"))]
+
+
+def print_dropped_activity_line(conn, a):
+    """Вторая строка счёта: снятые с хода, но с недавними событиями. При нуле — не печатается.
+    Не печатается и в отборе, который сам показывает снятые (status dropped / all)."""
+    if a.status in ("dropped", "all"):
+        return
+    ids = dropped_with_recent_events(conn, a.role.upper())
+    if ids:
+        print(f"👁 снятых с хода, но с событиями за {DROPPED_ACTIVITY_DAYS} суток: {len(ids)} "
+              f"(карточки {' · '.join(f'#{i}' for i in ids)})")
+
+
 def cmd_list(conn, a):
     if a.status == "all":
         where_status, params = "1=1", []
@@ -721,6 +749,7 @@ def cmd_list(conn, a):
 
     if not rows:
         print(f"📭 [{a.role.upper()}] backlog пуст (status={a.status}{age_note}).")
+        print_dropped_activity_line(conn, a)
         return
     # Подпись называет ФАКТИЧЕСКИЙ состав (карточка #188): отбор «open» — это ГРУППА статусов,
     # и число из подписи уходит в записки и промпты. «status=open» при blocked внутри — ложь
@@ -731,7 +760,9 @@ def cmd_list(conn, a):
         summary_line = " · ".join(f"{s} {n}" for s, n in status_counts.most_common())
     else:
         summary_line = f"status={next(iter(status_counts))}"
-    print(f"📋 backlog [{a.role.upper()}{'' if a.only_mine else ' + SHARED'}] — {len(rows)} задач ({summary_line}{age_note})\n")
+    print(f"📋 backlog [{a.role.upper()}{'' if a.only_mine else ' + SHARED'}] — {len(rows)} задач ({summary_line}{age_note})")
+    print_dropped_activity_line(conn, a)
+    print()
     # ═══ ПУЛ ПЕРВЫМ (шаг 0 нового порядка, слово владельца 27.08 18:33 UTC) ═══
     # Карточки активного пула стоят В НАЧАЛЕ списка и помечены 🎯. У роли без карточек
     # пула это сказано СЛОВАМИ: пустая секция неотличима от «пула нет» — класс

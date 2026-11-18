@@ -153,6 +153,70 @@ half1 = lines[0].split("ПЕРВАЯ половина")[1].split(",")[0].strip()
 out5, err5, _c = run("read-messages.py", "--db", str(db), "--role", reader, "--ack", f"{half1}-{half2}")
 check("⑤ ack по напечатанным половинкам принят", "[ack]" in out5, out5.strip()[:70] or err5.strip()[:70])
 
+# ═══ Карточка #774: ВТОРАЯ строка счёта — снятые с хода карточки с событиями за 7 суток ═══
+# Свой стенд на копии базы: отдельная роль ACC774 и карточки, заведённые прямо в таблицы;
+# время события задаётся смещением от «сейчас» — так же, как его судит сам инструмент.
+# Окно считается от текущего ЧАСА, поэтому границу пробуем с запасом: 61 минута за краем —
+# вне окна при любой минуте часа, 5 минут внутри края — внутри при любой минуте часа.
+MARK_774 = "снятых с хода, но с событиями за 7 суток"
+ROLE_774 = "ACC774"
+OUT_774 = ("-7 days", "-61 minutes")        # событие старше окна
+IN_774 = ("-7 days", "+5 minutes")          # событие моложе края окна
+
+
+def card_774(con, role, title, status, events):
+    """Карточка роли в нужном состоянии; events — перечень наборов смещений времени, по событию на набор."""
+    bid = con.execute("INSERT INTO backlog (role, title, status, created_by) VALUES (?,?,?, 'ACC')",
+                      (role, title, status)).lastrowid
+    for mods in events:
+        con.execute("INSERT INTO backlog_events (backlog_id, at, actor_role, event_type) "
+                    "VALUES (?, datetime('now', " + ", ".join("?" * len(mods)) + "), 'ACC', 'comment')",
+                    (bid, *mods))
+    return bid
+
+
+def line_774(role=ROLE_774):
+    """Вторая строка счёта из вывода list: (есть ли, номера, число из строки, весь вывод)."""
+    text, _e, _c = run("backlog.py", "--db", str(db), "list", "--role", role)
+    row = [l for l in text.splitlines() if MARK_774 in l]
+    if not row:
+        return False, [], None, text
+    # пустой перечень («(карточки )») — не повод падать: случай ⑨ обязан назвать себя, а не дать трассировку
+    ids = [int(p.strip().lstrip("#")) for p in row[0].split("(карточки")[1].rstrip(") ").split("·")
+           if p.strip().lstrip("#").isdigit()]
+    return True, ids, int(row[0].split("суток:")[1].split("(")[0]), text
+
+
+con = sqlite3.connect(db)
+card_774(con, ROLE_774, "открытая, чтобы список не был пуст", "open", [("-1 hours",)])
+fresh_774 = card_774(con, ROLE_774, "снята, событие час назад", "dropped", [("-1 hours",)])
+bare_774 = card_774(con, ROLE_774, "снята, событий НЕТ вовсе", "dropped", [])
+stale_774 = card_774(con, ROLE_774, "снята, событие старше окна", "dropped", [OUT_774])
+inside_774 = card_774(con, ROLE_774, "снята, событие внутри окна у самого края", "dropped", [IN_774])
+other_774 = card_774(con, "ACC774B", "снята ДРУГОЙ роли, событие час назад", "dropped", [("-1 hours",)])
+con.commit()
+con.close()
+
+has, ids, n_line, out_774 = line_774()
+check("⑥ вторая строка счёта печатается, с числом и номерами снятых с недавними событиями",
+      has and n_line == len(ids) and {fresh_774, inside_774} <= set(ids),
+      f"номера {ids}, число {n_line}")
+check("⑦ встречный: снятая БЕЗ событий за 7 суток (и снятая чужой роли) в строку не попадает",
+      has and bare_774 not in ids and other_774 not in ids,
+      f"без событий #{bare_774}, чужой роли #{other_774}, в строке {ids}")
+check("⑧ встречный (граница окна): событие старше 7 суток карточку не поднимает, моложе — поднимает",
+      has and stale_774 not in ids and inside_774 in ids,
+      f"старше #{stale_774} · моложе #{inside_774} · в строке {ids}")
+# ⑨ при нуле строка не печатается вовсе. Роль БЕЗ снятых карточек: так случай не зависит ни от
+# окна, ни от отбора событий — их судят ⑦ и ⑧, и нарочная поломка одного не роняет чужой случай.
+con = sqlite3.connect(db)
+card_774(con, "ACC774C", "открытая, снятых у роли нет", "open", [("-1 hours",)])
+con.commit()
+con.close()
+has0, ids0, _n0, out0 = line_774("ACC774C")
+check("⑨ встречный: у роли нет снятых — строки НЕТ вовсе, заголовок списка цел",
+      (not has0) and "📋 backlog [ACC774C + SHARED]" in out0, f"строка есть: {has0}")
+
 mezo_stand.release(tmp)  # уборка отложена до исхода прогона
 print("\n" + ("✅ ПРИЁМКА ЗЕЛЁНАЯ" if ok else "🔴 ПРИЁМКА КРАСНАЯ"))
 sys.exit(mezo_stand.finish(0 if ok else 1))
