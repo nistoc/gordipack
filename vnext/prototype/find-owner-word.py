@@ -593,6 +593,29 @@ def is_link(path: str) -> bool:
     return hasattr(os.path, "isjunction") and os.path.isjunction(path)
 
 
+def full_path(root: pathlib.Path, root_real: pathlib.Path, f: pathlib.Path) -> str:
+    """Полный путь записи разговора для адреса слова и строки «не прочитан:» — БЕЗ ОТКРЫТИЯ ФАЙЛА.
+
+    ⛔ На самой записи нельзя звать resolve() и realpath: в Windows они открывают файл, чтобы спросить
+    его окончательное имя, и на записи работающего чата вызов не возвращается. Замер 17.11.2026
+    21:46–21:48 UTC, запись 921 МБ: abspath, stat, чтение начала и хвоста — сразу; realpath и
+    nt._getfinalpathname — нет. Чтение вынесено в бросаемый процесс карточкой #797, а этот вызов
+    оставался в основном процессе в двух местах — у адреса находки и у строки «не прочитан:».
+    Искатель вставал уже после чтения, без читающего процесса и без каталога хода. Какое из двух
+    мест сработало в живом прогоне, не различено: на такой записи встают оба.
+    Поэтому раскрывается ОДИН раз каталог записей (root_real — на каталоге вызов возвращается),
+    а к нему приставляется путь файла относительно этого каталога: у обычной записи выходит то же,
+    что давал resolve(), — и когда каталог записей назван коротким именем 8.3 или через «..».
+    Ссылка или точка соединения НИЖЕ каталога записей при этом не раскрывается.
+    Файл вне каталога записей — abspath, тоже без открытия; короткие имена 8.3 abspath не
+    раскрывает (замер TAXO 17.11.2026). При обходе каталога записей эта ветка не исполняется:
+    все файлы взяты из root.rglob."""
+    try:
+        return (root_real / f.relative_to(root)).as_posix()
+    except ValueError:
+        return pathlib.Path(os.path.abspath(f)).as_posix()
+
+
 def work_home() -> pathlib.Path:
     """Свой каталог-контейнер для каталогов хода: <Temp>/find-owner-word (создаётся при нужде)."""
     home = pathlib.Path(tempfile.gettempdir()) / WORK_HOME
@@ -775,6 +798,8 @@ def main() -> int:
         print("   Это НЕ «слова не было»: искать было негде. Укажи --root.")
         return 2
 
+    # каталог записей раскрывается ОДИН раз и здесь; на самих записях resolve() не зовётся — full_path
+    root_real = root.resolve()
     needle = a.word.lower()
     files_read = 0
     # четыре корзины, и это НЕ оформление — у каждой свой следующий шаг читателя
@@ -844,7 +869,7 @@ def main() -> int:
                 summaries += 1
                 continue
             entry = (ts, f.parent.name, f.name, text)
-            addr.setdefault((ts, f.name, text), (f.resolve().as_posix(), where.get("line")))
+            addr.setdefault((ts, f.name, text), (full_path(root, root_real, f), where.get("line")))
             if kind == "выбор":
                 by_choice.append(entry + (window,))
                 continue
@@ -912,7 +937,7 @@ def main() -> int:
         print(f"⛔ ИСКАЛ НЕ ВЕЗДЕ: не прочитано файлов {len(unread)} из {len(unread) + files_read} "
               f"(предел тишины чтения {a.read_timeout:g} с):")
         for uf, why in unread:
-            print(f"   не прочитан: {uf.resolve().as_posix()} — {why}")
+            print(f"   не прочитан: {full_path(root, root_real, uf)} — {why}")
         print("   счёт и вывод выше — только по прочитанным файлам; непрочитанное могло нести то же слово")
 
     def print_source(src) -> None:
