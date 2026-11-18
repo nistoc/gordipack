@@ -38,11 +38,19 @@
   ㉑ подпись роли COORD-A не делает копию «другой запиской»              РАЗЛИЧАЮЩИЙ (имя роли)
   ㉒ встречный: имя строчными — не подпись, строка цела, подпись дописана
   ㉓ ㉓а встречные: «- 4898 …» / «-- 15 …» последней строкой — не подпись   РАЗЛИЧАЮЩИЕ (буква в имени)
+  ㉔ час записи datetime — те же сдвиг, метки и строка подписи, что со строкой   РАЗЛИЧАЮЩИЙ (карточка 712-①)
+     (встречные — ⑯–⑰б: то же окно по строке; окно 45 минут не расширено)
 
 Нарочная поломка «role-token» (--break role-token) возвращает прежнее имя роли [A-ZА-Я]{2,10}:
 ⑲–㉑ обязаны покраснеть.
 Нарочная поломка «role-letter» (--break role-letter) снимает требование буквы в имени роли
 (выражение первой редакции PR #47): ㉓ ㉓а обязаны покраснеть, ⑲–㉒ — нет.
+
+Нарочная поломка «datetime-off» (--break datetime-off) снимает приём datetime у часа записи
+(карточка 712-①): ㉔ обязан покраснеть, остальные — нет.
+
+ЧЕГО НЕ ПРОВЕРЯЕТ ㉔: datetime с поясом (приводится к UTC — отдельного случая нет) и stamp_signature /
+check_header_times с datetime (они в карточке 712 не названы и строку по-прежнему ждут).
 
 ⛔ Живой базы не касается: своя песочница.
 """
@@ -86,6 +94,9 @@ BREAKS = {
                      "                label",
                      "            if True:\n"
                      "                label"),
+    # карточка 712-①: час записи принимается и строкой, и datetime — поломка «только строка»
+    "datetime-off": ("    if isinstance(now_utc, datetime):\n        if now_utc.tzinfo",
+                     "    if False:\n        if now_utc.tzinfo"),
     # имя роли с цифрой и дефисом (3P, COORD-A): прежнее имя знало только буквы
     "role-token": ('ROLE_TOKEN = r"(?=[A-ZА-Я0-9-]*[A-ZА-Я])[A-ZА-Я0-9][A-ZА-Я0-9-]{1,15}"',
                    'ROLE_TOKEN = r"[A-ZА-Я]{2,10}"'),
@@ -349,6 +360,23 @@ def main() -> int:
                sh == 120 and found == ["16:59 UTC"],
                f"сдвиг {sh} · названы {found} (ожидание: 120 · ['16:59 UTC']; срок 15:45 — "
                f"на 43 мин вперёд, не на 2 ч)", differ=True)
+
+    # ㉔ карточка 712-①: час записи — datetime, а не строка. Следующая рука, позвавшая функции сама,
+    # падала «'datetime.datetime' object is not subscriptable». Ответ обязан совпасть со строковым
+    # (и быть не пустым: сравнивать «ничего» с «ничем» — пустая проверка). Окно 45 минут не тронуто:
+    # встречные случаи ⑰–⑰б выше судят то же окно по строке.
+    NOW_R_DT = datetime(2026, 10, 11, 15, 2)
+    try:
+        sh_dt, found_dt = wm.times_on_signature_shift(body_rcc, NOW_R_DT)
+        sig_dt = wm.signature_shift(body_rcc, NOW_R_DT)
+        dt_err = None
+    except TypeError as exc:
+        sh_dt, found_dt, sig_dt, dt_err = None, [], None, exc
+    sig_str = wm.signature_shift(body_rcc, NOW_R)
+    ok &= case("㉔ час записи datetime — ответ тот же, что со строкой (сдвиг, метки, строка подписи)",
+               dt_err is None and (sh_dt, found_dt) == (120, want) and sig_dt == sig_str == (120, 6),
+               f"datetime: сдвиг {sh_dt} · названы {found_dt} · подпись {sig_dt}; строка: {sig_str}"
+               + (f" · падение {type(dt_err).__name__}: {dt_err}" if dt_err else ""), differ=True)
 
     _sign = _now + timedelta(hours=2)
     _own = _sign - timedelta(minutes=5)

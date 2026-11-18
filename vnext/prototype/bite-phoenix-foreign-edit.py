@@ -54,6 +54,12 @@
   ⑱  тело правили мимо инструмента (новейшая версия прежняя), рука пишет с номером новейшей версии,
      взятым из --history, — ОТКАЗ «мимо инструмента», правка мимо цела
 
+КАРТОЧКА #712-② — роль BITE712I:
+  ⑯б  тело с «\r\n», --read НА ЭКРАН, вывод в файл, затем --file — тело сохраняется без пустых строк
+      ЧЕГО НЕ ПРОВЕРЯЕТ ⑯б: дефект «\r\r\n» рождается переводом «\n» в «\r\n» при печати на Windows;
+      на системе, где печать окончания не переводит, прежний код тоже проходит случай, и поломка
+      screencr там не краснеет. Путь --read --out судит ⑯.
+
 НАРОЧНЫЕ ПОЛОМКИ (в копии инструмента, во временном каталоге). Поломка, валящая всё подряд,
 не доказывала бы, что случаи смотрят на предмет, поэтому у каждой — точный набор провалов:
   --break off     вызов проверки карточки #701 заменён пустым ответом ⇒ ①, ①а, ⑤б, ⑪
@@ -63,6 +69,7 @@
   --break crnote  строка --read о знаках «\r» выключена ⇒ ⑯а
   --break bodynl  --body не приводит окончания ⇒ ⑰
   --break aside   сверка тела с новейшей версией выключена ⇒ ⑱
+  --break screencr  --read на экран не приводит окончания (карточка #712-②) ⇒ ⑯б
 
 Запуск:
   python <пакет>/vnext/prototype/bite-phoenix-foreign-edit.py                  — обычный прогон
@@ -94,6 +101,7 @@ ROLE_E = "BITE705E"
 ROLE_F = "BITE707F"
 ROLE_G = "BITE707G"
 ROLE_H = "BITE707H"
+ROLE_I = "BITE712I"
 CR_NOTE = "знаков «\\r»"
 SECTION = "state"
 WARN = "ЧУЖАЯ ПРАВКА УХОДИТ"
@@ -122,6 +130,11 @@ BREAKS = {
     "aside": ("    if not newer and current is not None and current != versions[i][3]:",
               "    if False:",
               {"⑱"}),
+    # карточка #712-②: на экран тело выходит как есть, без приведения окончаний ⇒ «\r\r\n»
+    "screencr": ('        screen = body.replace("\\r\\n", "\\n").replace("\\r", "\\n")\n'
+                 '        print(screen, end="" if screen.endswith("\\n") else "\\n")',
+                 '        print(body, end="" if body.endswith("\\n") else "\\n")',
+                 {"⑯б"}),
 }
 READ_HEAD = re.compile(r"^версия id=(\d+) · .*--expect-version (\d+)")
 
@@ -551,6 +564,45 @@ def run_cases_707(st, r):
     if CR_NOTE in out_e:
         p.append("строка о «\\r» у тела без них")
     verdict(r, "⑯а", "--read называет знаки «\\r» в теле; у тела без них — молчит", p, out)
+
+    # ⑯б карточка #712-②: --read НА ЭКРАН (без --out) у тела с «\r\n». Печать сама переводит «\n» в «\r\n»,
+    # и тело выходило «\r\r\n»: экран, перенаправленный в файл и отданный в --file, давал пустые строки.
+    # Вывод берётся БАЙТАМИ (как его получил бы файл при перенаправлении): текстовый разбор подпроцесса
+    # склеил бы «\r\r\n» в «\n\n» и скрыл бы сам предмет.
+    i_base = ["# Раздел BITE712I — тело с окончаниями строк Windows, чтение на экран",
+              "строка роли I номер один, окончание Windows",
+              "строка роли I номер два, окончание Windows"]
+    code, out = st.save(ROLE_I, i_base)
+    if code != 0:
+        print(f"⛔ ОПЫТ НЕ ПОСТАВЛЕН: подготовительное сохранение роли {ROLE_I} упало (код {code})")
+        print(out)
+        sys.exit(2)
+    crlf_i = text(i_base).replace("\n", "\r\n")
+    sql(st, "UPDATE phoenix SET body=? WHERE role=? AND section=?", (crlf_i, ROLE_I, SECTION))
+    sql(st, "UPDATE phoenix_history SET body=? WHERE id=?", (crlf_i, st.latest(ROLE_I)))
+    q = subprocess.run([sys.executable, str(st.tool), "--db", str(st.db), "--role", ROLE_I,
+                        "--section", SECTION, "--read"], capture_output=True, env=st.env)
+    raw_screen = q.stdout or b""
+    first_body_line = i_base[0].encode("utf-8")
+    start = raw_screen.find(first_body_line)
+    screen_file = st.workdir / "screen712.md"
+    screen_file.write_bytes(raw_screen[start:] if start >= 0 else b"")
+    p = []
+    if q.returncode != 0:
+        p.append(f"--read на экран: код {q.returncode}")
+    if start < 0:
+        p.append("тела на экране не нашлось")
+    if b"\r\r\n" in raw_screen:
+        p.append("на экране окончания «\\r\\r\\n»")
+    code_i, out_i = save_file(st, ROLE_I, screen_file,
+                              expect=read_id(raw_screen.decode("utf-8", "replace")))
+    if code_i != 0:
+        p.append(f"запись файла из экрана: код {code_i}")
+    if st.body(ROLE_I) != text(i_base):
+        p.append("после круга «экран → файл → --file» тело не равно тому же тексту с «\\n»"
+                 + (" — прибавились пустые строки" if "\n\n" in (st.body(ROLE_I) or "") else ""))
+    verdict(r, "⑯б", "тело с «\\r\\n»: --read на экран → файл → --file — без пустых строк между строками", p,
+            raw_screen.decode("utf-8", "replace") + out_i)
 
     # ⑰ --body с «\r\n» записывается с «\n»
     g_lines = ["# Раздел BITE707G — тело через --body",

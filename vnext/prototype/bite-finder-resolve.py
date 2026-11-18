@@ -263,10 +263,18 @@ def run_cases(tool: pathlib.Path, work: pathlib.Path, label: str) -> dict:
     if os.name == "nt":
         s4, o4, _ = run_bounded([sys.executable, "-c", "import nt, sys; print(nt._getfinalpathname(sys.argv[1]))",
                                  paths["mark"]], block_env, PROBE_CAP)
-        nt_ok, nt_note = s4 is None and SIGN_ALIVE in o4, f"\nnt._getfinalpathname с меткой: код {s4} · {o4}"
+        # ntpath держит СВОЮ ссылку на ту же функцию, взятую при запуске: без отдельной пробы строку
+        # подмены «ntpath._getfinalpathname = _stub_gfp» не держал ни один случай (замечание приёмщика)
+        s5, o5, _ = run_bounded([sys.executable, "-c",
+                                 "import ntpath, sys; print(ntpath._getfinalpathname(sys.argv[1]))",
+                                 paths["mark"]], block_env, PROBE_CAP)
+        nt_ok = s4 is None and SIGN_ALIVE in o4 and s5 is None and SIGN_ALIVE in o5
+        nt_note = (f"\nnt._getfinalpathname с меткой: код {s4} · {o4}"
+                   f"\nntpath._getfinalpathname с меткой: код {s5} · {o5}")
     else:
         nt_ok, nt_note = True, "\nnt._getfinalpathname: не Windows — пробы нет"
-    case(f"С подмена действует: resolve(), realpath и (на Windows) nt._getfinalpathname на файле с меткой "
+    case(f"С подмена действует: resolve(), realpath и (на Windows) nt._getfinalpathname и "
+         f"ntpath._getfinalpathname на файле с меткой "
          f"не возвращаются за {PROBE_CAP} с, на файле без метки resolve() возвращается",
          s1 is None and s2 is None and s3 == 0 and SIGN_ALIVE in o1 and SIGN_ALIVE in o2 and nt_ok,
          f"resolve с меткой: код {s1} · {o1}\nrealpath с меткой: код {s2} · {o2}\nresolve без метки: код {s3} · {o3}"
