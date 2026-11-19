@@ -687,8 +687,15 @@ def test_restore_of_a_much_smaller_version_needs_no_allow_shrink(circuit):
     assert save(circuit, "CORE", "state", small).returncode == 0
     assert save(circuit, "CORE", "state", big).returncode == 0
     small_id = versions(circuit, "CORE", "state")[0][0]
+    # Контроль ①: такое же сокращение обычным сохранением НОВОГО тела — отказ по сокращению, код 1.
+    shrunk = save(circuit, "CORE", "state", body_of("ДРУГАЯ МАЛАЯ", 3))
+    assert shrunk.returncode == 1, "контроль: сокращение обычным сохранением — отказ"
+    # Контроль ② (карточка #792): тело ПРЕЖНЕЙ версии обычным сохранением — свой отказ, код 5; он называет
+    # возврат словом. Прежде и этот случай отвечал кодом 1: отказ по сокращению стоял первым.
     refused = save(circuit, "CORE", "state", small)
-    assert refused.returncode == 1, "контроль: то же сокращение обычным сохранением — отказ"
+    assert refused.returncode == 5, "контроль: тело прежней версии обычным сохранением — отказ кодом 5"
+    assert f"--restore {small_id}" in (refused.stdout + refused.stderr), refused.explain()
+    assert mem(circuit, "CORE", "state")[0] == big, "оба отказа базу не тронули"
     res = circuit.run("save-phoenix.py", "--role", "CORE", "--section", "state",
                       "--restore", str(small_id))
     assert res.returncode == 0, res.explain()

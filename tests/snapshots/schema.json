@@ -8,7 +8,8 @@
   "20260924-role-sessions-transcript-id",
   "20261031-read-mark-at-save",
   "20261114-owner-words",
-  "20261115-phoenix-records-layer"
+  "20261115-phoenix-records-layer",
+  "20261118-read-batches-columns"
  ],
  "tables": {
   "audit_log": {

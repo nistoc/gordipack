@@ -12,8 +12,11 @@
   ② у скрипта СЛОМАН РАЗБОР ПАРАМЕТРА → прибор краснеет            РАЗЛИЧАЮЩИЙ
      ровно дефект 09.08: без флага работает, с флагом падает
   ③ скрипт ИСЧЕЗ из каталога → прибор краснеет и говорит «файла нет» РАЗЛИЧАЮЩИЙ
+     память копии гасится, судится ОДНА подсаженная форма (карточка #745)
+  ③-бис ВСТРЕЧНЫЙ к ③: подсадки нет вовсе — исход «не проверено», а не «прошёл» РАЗЛИЧАЮЩИЙ
   ④ прибор идёт по УКАЗАННОМУ каталогу, а не по живому                РАЗЛИЧАЮЩИЙ
-     без этого зелёный прогон доказывал бы исправность ОРИГИНАЛА, а не копии
+     без этого зелёный прогон доказывал бы исправность ОРИГИНАЛА, а не копии;
+     у случая СВОЙ прогон (карточка #745), а не код возврата случая ③
   ⑤ упоминание в пояснении НЕ считается командой                      РАЗЛИЧАЮЩИЙ
      у ING в памяти лежит `.mezosync\\scripts\\x.py` — пример опасной формы, а не вызов
   ⑥ мутирующая форма НЕ запускается на живой базе (--ack не гасит ключ) РАЗЛИЧАЮЩИЙ
@@ -44,6 +47,9 @@
   ⑪…⑪-тер карточка #720: форма-читатель без --db дольше предела — строка
      «ВИСНЕТ», итог есть, внук формы погашен; поломки «перехват снят» и
      «гасится только ребёнок» роняют каждая свой случай                 РАЗЛИЧАЮЩИЙ
+  ⑬ карточка #745 (доработка): проверка форм запускается из «домашнего» контура внутри стенда
+     и НЕ исполняет ничего вне него — маяк по пути контура из памяти молчит; встречный ⑬-бис:
+     поломка «идёт по пути из памяти как есть» — маяк оставляет метку    РАЗЛИЧАЮЩИЙ
 
 ⛔ Живого контура не касается: работает на копии каталога скриптов и копии базы.
 """
@@ -65,7 +71,7 @@ import mezo_stand  # noqa: E402 — временный каталог убира
 TOOL = Path(__file__).resolve().parent / "guard-launcher-forms.py"
 LIVE_SCRIPTS = mezo_target.scripts_root()
 LIVE_DB = mezo_paths.live_db()
-CASES = DIFFER = 0
+CASES = DIFFER = FAILED = 0
 SKIPPED: list[tuple[str, str]] = []
 
 # Карточка #686, случаи ⑩: роль чужого контура (имени Atlas нет) и порча копии проверки форм.
@@ -149,6 +155,14 @@ WRITE_NEAR_PROBE = ('import sys\n'
                     'print("схема пробы записана:", out)\n')
 # поломка ⑫-бис: корень шаблона снова настоящий — форма идёт из клона, а не из копии в стенде
 REAL_ROOT_PATCH = ("        exe, form_env = in_stand(exe, work)\n", "        form_env = None\n")
+# Случай ⑬ (карточка #745, доработка): маяк — подставной инструмент вне стенда; при запуске пишет метку
+# рядом с собой (имя метки своё на каждый запуск). Метка есть ⇒ проверка форм исполнила его по пути из памяти.
+BEACON = ('import sys, time\n'
+          'from pathlib import Path\n'
+          'Path(__file__).with_name(f"beacon-{time.time_ns()}.mark").write_text("запущен", encoding="utf-8")\n'
+          'print("маяк: запущен")\n')
+# поломка ⑬-бис: проверка идёт по пути из памяти как есть (ветка «указанный ≠ домашний» выключена)
+FOLLOW_PATH_PATCH = ("    if root.resolve() != HOME_SCRIPTS.resolve():", "    if False:")
 
 
 def pid_alive(pid):
@@ -171,9 +185,10 @@ def pid_alive(pid):
 
 
 def case(title, ok, detail, differ=False):
-    global CASES, DIFFER
+    global CASES, DIFFER, FAILED
     CASES += 1
     DIFFER += bool(differ)
+    FAILED += (not ok)
     print(f"{'✅' if ok else '🔴'} {title}")
     print(f"   {detail}")
     return ok
@@ -224,15 +239,45 @@ def sandbox():
     return d, scripts, db
 
 
-def run(scripts, db, *extra):
+HOME_GUARD = {}
+
+
+def home_guard():
+    """Копия проверки форм в «ДОМАШНЕМ» контуре — отдельной песочнице с раскладкой настоящего контура.
+
+    🩸 КАРТОЧКА #745 (доработка 18.11, находка разбора ⑨). Проверка, позванная прямо из пакета, не
+    имеет над своим файлом контейнера, и «домашним» каталогом считает сам стенд из среды (home_scripts()
+    берёт среду ПОСЛЕДНЕЙ). Тогда ветка «указанный каталог ≠ домашний» выключена, и форма, у которой в памяти
+    назван абсолютный путь в контур (.mezosync/scripts), исполняла ОРИГИНАЛ по этому пути — настоящий
+    установленный механизм на машине с живым контуром, а не испытуемую копию. Приёмка тем самым запускала
+    чужое и шесть механизмов ⑨ выходили «слепыми» зря.
+    Копия, положенная внутрь отдельной песочницы, видит над собой её контейнер: «домашний» каталог — её
+    scripts, а указанный вызывающим стенд от него отличается, и пути контура из памяти разрешаются в
+    ИСПЫТУЕМУЮ копию. Песочница одна на прогон приёмки (строится при первом вызове)."""
+    if "tool" not in HOME_GUARD:
+        d = mezo_stand.new("bite-home-")
+        scripts = d / ".mezosync" / "scripts"
+        shutil.copytree(LIVE_SCRIPTS, scripts)
+        mezo_stand.snapshot_db(LIVE_DB, d / ".mezosync" / "mezosync.db")
+        for name in ("mezo_stand.py", "mezo_paths.py"):
+            shutil.copy2(TOOL.parent / name, scripts / name)
+        tool = scripts / TOOL.name
+        shutil.copy2(TOOL, tool)
+        HOME_GUARD["dir"], HOME_GUARD["tool"] = d, tool
+    return HOME_GUARD["tool"]
+
+
+def run(scripts, db, *extra, tool=None):
     # Среда стенда (карточка #613): MEZO_CONTAINER — корень песочницы (она — настоящая раскладка
     # контура: <корень>/.mezosync/mezosync.db), номер чата не передаётся. Прежде проверка форм
     # получала среду вызывающего и по корню контура читала ЖИВОЙ CLAUDE.md рядом с песочницей;
     # теперь — CLAUDE.md песочницы, которого там нет, как и у копий проверки в run_copy ниже.
-    r = subprocess.run([sys.executable, str(TOOL), "--scripts-root", str(scripts),
+    # Сама проверка — копия из «домашнего» контура (home_guard): ничего вне стенда не исполняется.
+    r = subprocess.run([sys.executable, str(tool or home_guard()), "--scripts-root", str(scripts),
                         "--db", str(db), *extra],
                        capture_output=True, text=True, encoding="utf-8", timeout=600,
-                       env=mezo_stand.stand_env(Path(db).parent.parent))
+                       env=mezo_stand.stand_env(Path(db).parent.parent,
+                                                MEZO_TEMPLATE=str(mezo_paths.template_root())))
     return (r.stdout or "") + (r.stderr or ""), r.returncode
 
 
@@ -380,6 +425,19 @@ def rank_mechanism(name, own_ok, own_i, scripts_ok, db_ok, scripts_i, db_i):
                      if remeasure else "🔴 СЛЕП (прямых форм нет — оправдать нечем)")
 
 
+def missing_script_outcome(scripts, db):
+    """Случай ③ (скрипт исчез): три исхода → («pass» | «fail» | «unchecked», причина, вывод).
+
+    «unchecked» — подсаженной формы в памяти копии нет вовсе (сев не лёг, память погашена): судить нечего,
+    и это не «прошёл» и не «провал»: на пустой памяти проверка форм отвечает «СУД НЕ СОСТОЯЛСЯ», а
+    красным или зелёным её исход был бы чужой причиной (карточка #745)."""
+    if commands_in_memory(db, "read-phoenix.py") == 0:
+        return "unchecked", "в памяти копии нет ни одной формы read-phoenix.py — подсадка не легла", ""
+    out, code = run(scripts, db, "--only", "read-phoenix")
+    good = code != 0 and ("ФАЙЛА НЕТ" in out or "НЕТ ПО НАЗВАННОМУ" in out)
+    return ("pass" if good else "fail"), "", out
+
+
 def main() -> int:
     ok = True
     if not TOOL.exists():
@@ -433,22 +491,68 @@ def main() -> int:
     # формы «--only read-phoenix» ничего не находит, и случай судил бы пустоту пакета,
     # а не реакцию на исчезнувший файл. Форма сеется ДО удаления файла: порядок не важен,
     # guard-launcher-forms.py смотрит на диск в момент своего прогона, а не в момент записи памяти.
+    # 🩹 ДОГОН (карточка #745): как у случая ② (#667), память копии ГАСИТСЯ (wipe=True), и судится
+    # ровно одна подсаженная форма. Прежде подсадка тонула среди живых записей других ролей:
+    # исход случая решали чужие данные (на копии живой памяти — провал, на свежем контуре — проход).
     d3, scripts3, db3 = sandbox()
     path3 = str(scripts3).replace("\\", "/")
     seed_source(db3, chr(10) + "```" + chr(10)
-                + f"python {path3}/read-phoenix.py --role PROTO" + chr(10) + "```" + chr(10))
+                + f"python {path3}/read-phoenix.py --role PROTO" + chr(10) + "```" + chr(10), wipe=True)
     (scripts3 / "read-phoenix.py").unlink()
-    out, code = run(scripts3, db3, "--only", "read-phoenix")
-    ok &= case("③ скрипт ИСЧЕЗ — проверка краснеет и называет это «файла нет»",
-               code != 0 and ("ФАЙЛА НЕТ" in out or "НЕТ ПО НАЗВАННОМУ" in out),
-               "роль получила бы «can't open file» в первую же секунду жизни", differ=True)
+    verdict3, why3, out = missing_script_outcome(scripts3, db3)
+    if verdict3 == "unchecked":
+        # третий исход: подсадка не легла — судить нечего, и это не «прошёл»
+        case_skip("③ скрипт ИСЧЕЗ — проверка краснеет и называет это «файла нет»", why3)
+    else:
+        ok &= case("③ скрипт ИСЧЕЗ — проверка краснеет и называет это «файла нет»",
+                   verdict3 == "pass",
+                   "роль получила бы «can't open file» в первую же секунду жизни", differ=True)
+
+    # ── ③-бис ВСТРЕЧНЫЙ к ③: подсадки нет вовсе — исход «не проверено», а не «прошёл» ────
+    # Память копии погашена и НИЧЕГО не подсажено: у скрипта нет ни одной формы. Случай обязан
+    # сказать «не проверено» (третий исход), а не молча пройти и не покраснеть чужой причиной.
+    d3b, scripts3b, db3b = sandbox()
+    con3b = sqlite3.connect(db3b)
+    con3b.execute("UPDATE phoenix SET body=''")
+    con3b.commit()
+    con3b.close()
+    (scripts3b / "read-phoenix.py").unlink()
+    verdict3b, why3b, _ = missing_script_outcome(scripts3b, db3b)
+    ok &= case("③-бис ВСТРЕЧНЫЙ: подсадки нет вовсе — исход «не проверено», а не «прошёл»",
+               verdict3b == "unchecked",
+               f"исход {verdict3b!r}: {why3b or 'судил бы пустоту памяти'}", differ=True)
 
     # ── ④ прибор идёт по УКАЗАННОМУ каталогу, а не по живому ──────────────────
     # живой role-rights.py исправен; в копии он сломан. Если бы прибор ходил по пути
-    # из памяти (абсолютному), он остался бы зелёным — и доказывал бы исправность ОРИГИНАЛА
+    # из памяти (абсолютному), он остался бы зелёным — и доказывал бы исправность ОРИГИНАЛА.
+    # 🩹 ДОГОН (карточка #745): у случая СВОЙ прогон. Прежде он судил код возврата прогона
+    # случая ③ — падал вместе с ним по чужой причине и своего предмета не имел. Теперь:
+    # «живой» каталог здесь — вторая песочница (dL) с ЦЕЛЫМ role-rights.py, и память называет
+    # путь именно к нему; в испытуемой копии (d4) этот файл убран. Идёт проверка по пути из
+    # памяти — ответит «✅» (файл цел); идёт по указанному каталогу — «файла нет».
+    # ⚠️ Проверка узнаёт свой «живой» каталог по МЕСТУ СВОЕГО ФАЙЛА (home_scripts: признак базы
+    # вверх от файла, среда — последней; карточка #613). Лежащая в этой раскладке рядом с приёмкой
+    # (корень пакета без контейнера), она «живым» считала бы сам стенд из среды — и различать
+    # «указанный» и «живой» было бы нечем при любой поломке. Поэтому случай зовёт КОПИЮ проверки,
+    # положенную ВНУТРЬ «живой» песочницы (dL): её контейнер — dL, указанный каталог — scripts4.
+    d4, scripts4, db4 = sandbox()
+    dL, scriptsL, dbL = sandbox()
+    pathL = str(scriptsL).replace("\\", "/")
+    seed_source(db4, chr(10) + "```" + chr(10) + f"python {pathL}/role-rights.py list --role PROTO"
+                + chr(10) + "```" + chr(10), wipe=True)
+    (scripts4 / "role-rights.py").unlink()
+    tool4 = scriptsL / TOOL.name
+    shutil.copy2(TOOL, tool4)
+    r4 = subprocess.run([sys.executable, str(tool4), "--scripts-root", str(scripts4), "--db", str(db4),
+                         "--only", "role-rights"],
+                        capture_output=True, text=True, encoding="utf-8", timeout=600,
+                        env=mezo_stand.stand_env(dL, MEZO_TEMPLATE=str(mezo_paths.template_root())))
+    out4, code4 = (r4.stdout or "") + (r4.stderr or ""), r4.returncode
     ok &= case("④ испытан УКАЗАННЫЙ каталог, а не живой",
-               code != 0,
-               "живой каталог цел; краснота пришла из копии ⇒ проверка смотрела именно на копию",
+               code4 != 0 and "ФАЙЛА НЕТ" in out4 and (scriptsL / "role-rights.py").exists()
+               and not (scripts4 / "role-rights.py").exists(),
+               f"код {code4} · «живой» каталог цел (память называет путь к нему), в указанной копии файла нет; "
+               "краснота пришла из копии ⇒ проверка смотрела именно на неё",
                differ=True)
 
     # ── ⑤ упоминание ≠ команда ────────────────────────────────────────────────
@@ -894,7 +998,10 @@ def main() -> int:
 
     def tool_copy(stand, patches):
         """Копия проверки форм ВНУТРИ песочницы (её контейнер — песочница), с порчей patches."""
-        tdir = stand / "tool-copy"
+        # Копия кладётся в «домашний» контур (карточка #745, доработка): рядом с целой проверкой, в той же
+        # раскладке, — иначе поломка и целый код различались бы ещё и раскладкой, а не одной правкой.
+        home_guard()
+        tdir = HOME_GUARD["dir"] / ".mezosync" / ("tool-copy-" + stand.name)
         tdir.mkdir(exist_ok=True)
         for name in ("mezo_stand.py", "mezo_paths.py"):
             shutil.copy2(TOOL.parent / name, tdir / name)
@@ -1081,7 +1188,7 @@ def main() -> int:
                 time.sleep(0.3)
         return out_, r.returncode, pid, alive
 
-    out11, code11, pid11, alive11 = slow_run(TOOL)
+    out11, code11, pid11, alive11 = slow_run(home_guard())
     hang11 = [l for l in out11.splitlines() if "ВИСНЕТ" in l]
     ok &= case("⑪ форма-читатель без --db дольше предела: строка «ВИСНЕТ» о повторном запуске, итог есть, "
                "трассировки нет, внук формы погашен",
@@ -1142,7 +1249,7 @@ def main() -> int:
         out_ = (r.stdout or "") + (r.stderr or "")
         return out_, r.returncode, changed, forms(out_, "write-near-probe.py")["ok"]
 
-    out12, code12, changed12, ok12 = near_run(TOOL)
+    out12, code12, changed12, ok12 = near_run(home_guard())
     ok &= case("⑫ форма из клона шаблона, пишущая рядом с собой, отвечает — и в корне шаблона не изменилось "
                "ни одного файла (запись ушла в копию корня в стенде)",
                bool(ok12) and not changed12 and "📦 форм из клона шаблона 1" in out12,
@@ -1161,8 +1268,47 @@ def main() -> int:
                    f"код {code12b} · изменено в корне шаблона {len(changed12b)}: {', '.join(changed12b) or '—'}"
                    " (ждём schema/probe.sql)", differ=True)
 
+    # ═══ ⑬ КАРТОЧКА #745 (доработка 18.11): проверка форм не исполняет ничего вне стенда ═══════════════
+    # В память стенда посажена форма с абсолютным путём к маяку ВНЕ стенда; путь устроен как путь контура
+    # (.mezosync/scripts) — именно такие пути в памяти ролей вели проверку к установленным механизмам.
+    # После прогона метки быть не должно, а сама форма должна быть увидена и осуждена по стенду
+    # (иначе тишина — не доказательство, а просто «форма не нашлась»).
+    beacon_dir = mezo_stand.new("bite-beacon-") / "contour" / ".mezosync" / "scripts"
+    beacon_dir.mkdir(parents=True)
+    (beacon_dir / "zzbeacon.py").write_text(BEACON, encoding="utf-8")
+    stand13, scripts13, db13 = sandbox()
+    seed_source(db13, chr(10) + "```" + chr(10)
+                + f"python {str(beacon_dir).replace(chr(92), '/')}/zzbeacon.py list --role PROTO"
+                + chr(10) + "```" + chr(10), wipe=True)
+
+    def beacon_run(tool=None):
+        before = set(beacon_dir.glob("beacon-*.mark"))
+        out_, code_ = run(scripts13, db13, "--only", "zzbeacon", tool=tool)
+        marks_ = sorted(p.name for p in set(beacon_dir.glob("beacon-*.mark")) - before)
+        return out_, code_, marks_
+
+    out13, code13, marks13 = beacon_run()
+    seen13 = "ФАЙЛА НЕТ" in out13 or "НЕТ ПО НАЗВАННОМУ" in out13
+    ok &= case("⑬ путь из памяти вне стенда НЕ исполняется: метка маяка не появилась, форма осуждена по стенду",
+               not marks13 and seen13,
+               f"код {code13} · новых меток маяка {len(marks13)} (ждём 0) · форма "
+               f"{'увидена и осуждена по копии в стенде' if seen13 else 'НЕ увидена — тишина ничего не доказывает'}",
+               differ=True)
+
+    follow, why_follow = tool_copy(stand13, [FOLLOW_PATH_PATCH])
+    if follow is None:
+        ok &= case("⑬-бис поломка «проверка идёт по пути из памяти как есть»", False,
+                   f"⛔ НЕ ЗАПУСТИЛАСЬ: {why_follow}", differ=True)
+    else:
+        out13b, code13b, marks13b = beacon_run(follow)
+        ok &= case("⑬-бис поломка «проверка идёт по пути из памяти как есть»: маяк исполнен и оставил метку — "
+                   "значит, ⑬ держит именно разрешение путей контура в копию стенда",
+                   len(marks13b) == 1,
+                   f"код {code13b} · новых меток маяка {len(marks13b)} (ждём 1)", differ=True)
+
     print()
     print(f"{'✅ ПРОВЕРКА ПРИНЯТА' if ok else '🔴 НЕ ПРИНЯТ'} — случаев {CASES}, различающих {DIFFER}"
+          f" · ПРОВАЛОВ {FAILED}"
           + (f" · пропущено {len(SKIPPED)}" if SKIPPED else ""))
     if SKIPPED and ok:
         print(f"⚪ не проверено {len(SKIPPED)}: " + " · ".join(name for name, _ in SKIPPED))

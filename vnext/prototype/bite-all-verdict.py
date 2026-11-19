@@ -138,7 +138,8 @@ def run_set(runner_path, files, extra=()):
     with tempfile.TemporaryDirectory(prefix="bite-all-verdict-") as tmp:
         bites_dir = Path(tmp) / "bites"
         bites_dir.mkdir()
-        target = Path(tmp) / "stand" / ".mezosync" / "scripts"
+        stand = Path(tmp) / "stand"
+        target = stand / ".mezosync" / "scripts"
         target.mkdir(parents=True)
         (target.parent / "mezosync.db").write_bytes(b"x")   # непустая база рядом: копия «лежит контуром», раскладка не нужна
         for name, body in files.items():
@@ -146,8 +147,12 @@ def run_set(runner_path, files, extra=()):
         # копии провалов набор кладёт во временный каталог: пусть это будет наш, он уйдёт вместе с остальным
         own_temp = Path(tmp) / "own-temp"
         own_temp.mkdir()
-        env = dict(os.environ, PYTHONIOENCODING="utf-8", TEMP=str(own_temp), TMP=str(own_temp),
-                   TMPDIR=str(own_temp))
+        # Среда набора закреплена за подложенным стендом. Без этого набор получал MEZO_CONTAINER вызывающего:
+        # запущенный из живого контура, он искал бы «свой» контур в нём, а не в стенде. Проверка контура
+        # «приёмки: env закреплённого стенда» назвала этот вызов новым после установки выпуска 18.11.
+        import mezo_stand   # лежит рядом с приёмкой; каталог приёмки — первый в пути поиска при запуске файла
+        env = mezo_stand.stand_env(stand, PYTHONIOENCODING="utf-8", TEMP=str(own_temp), TMP=str(own_temp),
+                                   TMPDIR=str(own_temp))
         r = subprocess.run([sys.executable, str(runner_path), "--dir", str(bites_dir), "--target", str(target),
                             "--timeout", "60", *extra], capture_output=True, text=True, encoding="utf-8",
                            errors="replace", cwd=str(HERE), env=env)

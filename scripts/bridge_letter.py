@@ -33,6 +33,9 @@ r"""bridge_letter.py — шапка письма между контурами: 
 такое письмо прежние правила вызывающего (решение Р5 — старые письма не трогаем). Шапка, которую
 начали, но заполнили неверно, — «шапка негодна» с перечнем причин: её не выдают ни за годную,
 ни за отсутствующую.
+Исключение одно и названо прямо: вопрос «это письмо написали мы?» (own_letter_sign). Его задают
+и проверка моста, и запись отметки «разобрано» — признак обязан жить в одном месте (карточка #590),
+а письма без шапки он судит тремя прежними признаками карточки #665, перенесёнными сюда без изменений.
 
 ОДНО МЕСТО РАЗБОРА: модуль зовут guard-all.py и sync_backoff.py. Второй экземпляр разбора в одном
 из них разошёлся бы с первым молча (довод карточки #242).
@@ -254,6 +257,75 @@ def read_header(path) -> Header:
         h.unreadable = f"файл не прочитан ({exc.__class__.__name__})"
         return h
     return parse_header(text)
+
+
+# ═══ ЧЬЁ ЭТО ПИСЬМО — ОДНО МЕСТО ДЛЯ ЧИТАЮЩЕЙ И ПИШУЩЕЙ СТОРОНЫ (карточка #590)
+# Признак «письмо написали мы» знала только проверка моста (guard-all.py): с наших писем она
+# разбора не спрашивает. Запись отметки «разобрано» (write-message.py --reviewed) признака не
+# знала и принимала отметку на своё же письмо. Теперь обе стороны зовут функции ниже: вторая
+# копия признака разошлась бы с первой молча.
+# Письмо БЕЗ шапки судят три признака карточки #665 (текст перенесён из guard-all.py как был):
+#   ① «контура <мы>» в первой строке;
+#   ② «пишет <РОЛЬ> (<мы>)» — вид первой строки до 25.08;
+#   ③ файл лежит в НАШЕЙ исходящей папке «<мы>-<сосед>»: по порядку мостов с 25.08 каждый
+#      контур пишет только в свою папку своего репозитория.
+# ⛔ ПРЕДЕЛ ③, названный прямо: письмо соседа, положенное в нашу папку, по папке не отличить.
+#    Смешанные папки старого обмена (имя не начинается с «<мы>-») признаком ③ не судятся.
+def own_letter_sign_plain(file, own_name):
+    """Каким признаком письмо БЕЗ шапки узнано нашим: 'line' · 'role' · 'folder' · None (не наше)."""
+    if not own_name:
+        return None        # имени не знаем — не гадаем, судим как прежде
+    file = Path(file)
+    try:
+        with file.open(encoding="utf-8", errors="replace") as fh:
+            first_line = fh.readline()
+    except OSError:
+        return None
+    own = own_name.lower()
+    if f"контура {own}" in first_line.lower():
+        return "line"
+    if re.search(r"пишет\s+\**[A-ZА-ЯЁ][A-ZА-ЯЁ0-9_-]*\**\s*\(" + re.escape(own) + r"\)",
+                 first_line, re.IGNORECASE):
+        return "role"
+    if file.parent.name.lower().startswith(own + "-"):
+        return "folder"
+    return None
+
+
+def own_letter_sign(file, own_name, head=None):
+    """Полный ответ «письмо написали мы»: 'fields' · 'line' · 'role' · 'folder' · None (не наше).
+
+    Годная шапка решает сама, по полю from: письмо соседа с полями, лежащее в нашей папке, — не
+    наше. Без годной шапки — три прежних признака. head — уже разобранная шапка, если она есть
+    у вызывающего (второй раз файл тогда не читается)."""
+    if head is None:
+        head = read_header(file)
+    if head.valid:
+        return "fields" if own_name and head.sender_contour() == norm_contour(own_name) else None
+    return own_letter_sign_plain(file, own_name)
+
+
+def bridge_dirs(root) -> list:
+    """Каталоги писем моста у каталога контура root: <root>/bridges и
+    <root>/<репозиторий>/.mezosync/bridges — все найденные, в этом порядке.
+
+    Тем же признаком мост ищет guard-all.py (его _by_marker). Там функция оставлена на месте:
+    её берут из исходника приёмки моста. Что оба поиска дают один ответ, держит случай приёмки
+    bite-reviewed-own-letter.py — разойдись они, отметка проверяла бы не те письма, что проверка."""
+    root = Path(root)
+    found = []
+    own = root / "bridges"
+    if own.is_dir():
+        found.append(own)
+    try:
+        siblings = sorted(d for d in root.iterdir() if d.is_dir())
+    except OSError:
+        siblings = []
+    for repo in siblings:
+        candidate = repo / ".mezosync" / "bridges"
+        if candidate.is_dir():
+            found.append(candidate)
+    return found
 
 
 def resolve_id(letter_id: str, places: dict) -> list:

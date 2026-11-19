@@ -93,28 +93,30 @@ def read_mark_touch(conn, role):
         return [f"⚠️ проверка нового чата НЕ выполнилась ({e}) — отметка прочитанного не тронута"]
 
 
-def ensure_batches_table(conn):
-    # Идемпотентно (правило migration-safety): таблица одноразовых токенов чтения.
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS read_batches ("
-        "  token     TEXT PRIMARY KEY,"
-        "  role      TEXT NOT NULL,"
-        "  last_id   INTEGER NOT NULL,"
-        "  issued_at TEXT NOT NULL DEFAULT (datetime('now')),"
-        # shown_max — СКОЛЬКО ФАКТИЧЕСКИ ПОКАЗАНО. Просил @opssre (#3123): без этого
-        # поля расхождение «показано ≠ подтверждено» существует только в глазах
-        # читающего, и починку читалки нечем проверить на живых данных.
-        "  shown_max INTEGER,"
-        # acked_at — вместо DELETE. Прежде строка СТИРАЛАСЬ при подтверждении, то есть
-        # ровно в тот момент, когда расхождение и возникает: улика короче события
-        # (четвёртый экземпляр этого класса за сутки). Гигиена 7 суток ниже подчистит.
-        "  acked_at TEXT)")
-    # для СУЩЕСТВУЮЩИХ баз CREATE IF NOT EXISTS ничего не добавит — досыпаем колонки
-    have = {r[1] for r in conn.execute("PRAGMA table_info(read_batches)")}
-    for col, decl in (("shown_max", "INTEGER"), ("acked_at", "TEXT")):
-        if col not in have:
-            conn.execute(f"ALTER TABLE read_batches ADD COLUMN {col} {decl}")
-    conn.commit()
+# Шаг схемы, который заводит таблицу выдач ленты и две её поздние колонки (карточка #510).
+BATCHES_STEP = "20261118-read-batches-columns"
+
+
+def batches_table_gap(conn):
+    """→ None, если таблица выдач ленты готова к работе; иначе слова, чего в ней нет.
+
+    Схему базы чтение ленты НЕ правит (карточка #510). Прежде оно само заводило таблицу
+    read_batches и добавляло ей колонки при первом вызове — без строки в журнале схемы: были
+    колонки в базе или нет, зависело от того, что позвали раньше, чтение или шаг схемы.
+    Теперь их заводит шаг migrations/20261118-read-batches-columns.py, а чтение только смотрит.
+      shown_max — сколько записок фактически показано выдачей (просил @opssre, записка #3123):
+                  без него расхождение «показано ≠ подтверждено» видит только читающий,
+                  и починку чтения нечем проверить на данных;
+      acked_at  — час подтверждения вместо удаления строки: прежде строка стиралась ровно
+                  в тот момент, когда расхождение возникает. Уборка через 7 суток — ниже.
+    """
+    have = [r[1] for r in conn.execute("PRAGMA table_info(read_batches)")]
+    if not have:
+        return "таблицы read_batches нет"
+    missing = [name for name in ("shown_max", "acked_at") if name not in have]
+    if missing:
+        return "в таблице read_batches нет колонок: " + ", ".join(missing)
+    return None
 
 
 def do_ack(conn, role, token):
@@ -353,7 +355,16 @@ def main():
     role = args.role.upper()
 
     conn = sqlite3.connect(str(db_path), timeout=5)
-    ensure_batches_table(conn)
+    gap = batches_table_gap(conn)
+    if gap:
+        conn.close()
+        step_file = Path(__file__).resolve().parent / "migrations" / (BATCHES_STEP + ".py")
+        print(f"⛔ НЕ ЗАПУСТИЛОСЬ: {gap}.")
+        print("   Чтение ленты схему базы не правит — это делает шаг схемы, он же записывает "
+              "себя в журнал:")
+        print(f"   python {step_file.as_posix()} --db {db_path.as_posix()}")
+        print("   После шага повтори вызов. Лента не читалась, отметка прочитанного не тронута.")
+        sys.exit(2)
 
     # `is not None`, НЕ truthiness: --ack "" при truthiness МОЛЧА деградирует в обычное
     # чтение — поймано на первом же тесте 16.07 (пустая переменная в bash-подстановке).

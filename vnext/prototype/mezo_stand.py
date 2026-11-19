@@ -932,7 +932,7 @@ def _remove_previous(paths, discard=None) -> tuple[int, list[Path], list[Path]]:
     busy: list[Path] = []
     partial: list[Path] = []
     for p in paths:
-        probe = p.with_name(f"{p.name}.removing-{os.getpid()}")
+        probe = p.with_name(f"{p.name}{_REMOVING}{os.getpid()}")
         try:
             os.rename(p, probe)
         except FileNotFoundError:
@@ -1261,6 +1261,35 @@ def _sweep_aged_once() -> None:
         print(f"⚠️ уборка стендов по сроку не выполнена: {type(e).__name__}: {e}")
 
 
+def _run_name() -> str:
+    """Имя верхнего скрипта прогона: по нему видно, чей это процесс (карточка #790).
+
+    У вызова «python -c …» файла нет, и sys.argv[0] равен «-c»: голое «-c» в строке читается как опечатка,
+    поэтому такой запуск назван словами.
+    """
+    main = sys.argv[0] if sys.argv else ""
+    if main == "-c":
+        return "python -c (код из командной строки, файла нет)"
+    return (Path(main).name if main else "") or "?"
+
+
+def _announce_sweep(temp: Path, hours: float) -> None:
+    """Сказать ДО обхода временной папки, что он начался: обход идёт минуты и без строки читается как зависание.
+
+    Строка идёт в stderr и сразу (flush): её читают из потока процесса ДО его завершения, а stdout у приёмок
+    разбирают — новая строка туда не попадает. Номер процесса и имя верхнего скрипта стоят в той же строке:
+    чужая рука видит, чей это обход. Тот же номер носит остаток прерванной уборки «<имя>.removing-<номер>».
+    Печать не удалась (поток закрыт, кодировка) — уборку это не отменяет.
+    """
+    line = (f"уборка стендов по сроку: обхожу временную папку {temp} — срок {hours:g} ч, "
+            f"обход может занять минуты, это не зависание · процесс pid={os.getpid()} · "
+            f"верхний скрипт прогона: {_run_name()}")
+    try:
+        print(line, file=sys.stderr, flush=True)
+    except (OSError, ValueError):
+        pass
+
+
 def _sweep_aged() -> None:
     hours = max_age_hours()
     if hours is None:
@@ -1269,6 +1298,7 @@ def _sweep_aged() -> None:
     if not _sweep_due(temp):
         return
     limit_s = hours * 3600
+    _announce_sweep(temp, hours)
     marked, unmarked, leftovers = _aged_candidates(temp, limit_s)
     if unmarked or leftovers:
         known = known_prefixes()

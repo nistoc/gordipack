@@ -198,6 +198,9 @@ def main():
                          capture_output=True, text=True)
     rev = _git.run(["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"],
                          capture_output=True, text=True)
+    # Подпись ниже — не адрес и не путь. update-tools.py узнаёт её по образцу EXPORT_LABEL и
+    # отказывает кодом 2, называя --source (карточка #668). Меняешь текст подписи — меняй образец;
+    # что они сходятся, держит приёмка bite-export-source.py.
     origin = (src.stdout or "").strip() or f"локальный каталог {REPO_ROOT} (не репозиторий)"
     commit = (rev.stdout or "").strip()[:12] or "версия неизвестна"
     for k, v in (("template_source", origin), ("template_commit", commit),
@@ -207,8 +210,9 @@ def main():
     conn.commit()
     print(f"  ✅ Происхождение записано: {origin} · версия {commit}")
     if not (src.stdout or "").strip():
-        print("     ⚠️ ИСТОЧНИК — КАТАЛОГ НА ЭТОЙ МАШИНЕ, а не общий репозиторий: обновиться",
-              "у контура будет негде, если каталог исчезнет.")
+        print("     ⚠️ ИСТОЧНИК — КАТАЛОГ НА ЭТОЙ МАШИНЕ, а не общий репозиторий: по такой записи",
+              "update-tools.py не забирает — откажет и назовёт --source. Назови источник один раз:",
+              "update-tools.py --source <адрес или путь репозитория пакета> --record-source --apply")
 
     # 3. Универсальные правила
     rules_sql = UNIVERSAL_RULES.read_text(encoding="utf-8")

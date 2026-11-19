@@ -57,6 +57,7 @@ from pathlib import Path
 from mezo_paths import resolve_db
 import mezo_paths      # файл путей контура: каталог каналов (карточка #677, Э3-Р4)
 import dryrun          # холостой прогон: посмотреть, не сделав (13.08)
+import bridge_letter   # признак «письмо написали мы» — общее место с guard-all.py (карточка #590)
 import mezo_refs       # ОДНО место разрешения номера «#N»: живая лента · архив по возрасту · ретро-импорт (карточка #538 шаг ③)
 # ⚠️ Импорт ОБЁРНУТ намеренно — правка @TAXO (её замер живой эксплуатации 13:18:06 UTC):
 # она поймала этот файл в 15-секундном окне между записью вызова и записью модуля и получила
@@ -745,6 +746,84 @@ def find_open_fence(text: str):
     return None if fence is None else (fence[2], fence[3])
 
 
+# ── ЧЬИ ПИСЬМА НАЗВАНЫ В --reviewed (карточка #590) ────────────────────────────────────────────
+# Признак «письмо написали мы» был у читающей стороны (guard-all.py не спрашивает разбора
+# с наших писем, карточка #573) и не был у пишущей: отметку «разобрано» на своё же письмо запись
+# принимала молча. Восемь таких строк сняты 07.09 по слову владельца; пока обе стороны не знают
+# одного признака, та же беда возвращается тем же путём.
+# Признак берётся из ОБЩЕГО места — bridge_letter.own_letter_sign, его же зовёт guard-all.py.
+# ⚖️ Отказ — только когда письмо САМО называет автором наш контур (поле from шапки или первая
+#    строка). Письмо без названного автора отметку принимает: неизвестное авторство — не «наше»,
+#    и отказ здесь был бы хуже пропуска (пункт ③ критерия карточки). Письмо, которое нашим
+#    делает одна папка, тоже принимается — со строкой об этом: по папке письмо соседа, положенное
+#    в нашу исходящую, не отличить.
+OWN_SIGN_WORDS = {"fields": "поле from в шапке письма называет наш контур",
+                  "line": "первая строка называет автором наш контур",
+                  "role": "первая строка вида «пишет РОЛЬ (наш контур)»"}
+
+
+def reviewed_authorship(names, db_path):
+    """Чьи письма названы в --reviewed. Возвращает (own, folder_only, unchecked):
+      own ......... [(имя, слова признака, папка)] — каждое найденное письмо с этим именем само
+                    называет автором наш контур; отметка на него отклоняется
+      folder_only . [(имя, папка)] — автор в письме не назван, нашим его делает только папка
+      unchecked ... [(имя, причина)] — проверить авторство нечем
+    Письмо соседа и письмо без названного автора ни в один список не попадают."""
+    own_name = None
+    try:
+        con = sqlite3.connect(f"file:{str(db_path).replace(chr(92), '/')}?mode=ro", uri=True)
+        try:
+            row = con.execute("SELECT value FROM meta WHERE key = 'group_name'").fetchone()
+        finally:
+            con.close()
+        own_name = (row[0] if row else "") or None
+    except sqlite3.Error:
+        own_name = None
+    why = ""
+    dirs = []
+    if not own_name:
+        why = "имя своего контура в базе не названо (meta.group_name)"
+    else:
+        # каталог контура — тот, чья база пишется; база вне каталога .mezosync — по расположению инструмента
+        resolved = Path(db_path).resolve()
+        if resolved.parent.name == ".mezosync":
+            root = resolved.parent.parent
+        else:
+            try:
+                root = mezo_paths.container_root(__file__)
+            except SystemExit:
+                root = None
+        if root is None:
+            why = "каталог контура не найден"
+        else:
+            dirs = bridge_letter.bridge_dirs(root)
+            if not dirs:
+                why = "каталога писем моста у контура нет"
+    own, folder_only, unchecked = [], [], []
+    for name in names:
+        if why:
+            unchecked.append((name, why))
+            continue
+        files = []
+        if name == Path(name).name:        # имя с путём внутри в папках моста не ищем
+            for bridges in dirs:
+                try:
+                    boxes = sorted(p for p in bridges.iterdir() if p.is_dir())
+                except OSError:
+                    boxes = []
+                files += [box / name for box in boxes if (box / name).is_file()]
+        if not files:
+            unchecked.append((name, "письма с таким именем в папках моста нет"))
+            continue
+        signs = [bridge_letter.own_letter_sign(f, own_name) for f in files]
+        if all(sign in OWN_SIGN_WORDS for sign in signs):
+            own.append((name, OWN_SIGN_WORDS[signs[0]], files[0].parent.name))
+        elif all(signs):
+            box = next(f.parent.name for f, sign in zip(files, signs) if sign == "folder")
+            folder_only.append((name, box))
+    return own, folder_only, unchecked
+
+
 def main():
     # ⚰️ БЫЛО: «Записать сообщение в mezosync.db + md-канал». Заявка @RCC 2026-08-13 10:06 UTC,
     # первым же прогоном после воскрешения: печатная форма расходилась с тем, чему учит решето.
@@ -841,7 +920,9 @@ def main():
                              " Гасит признак «записка моста без ноты» ЖЕСТОМ, а не"
                              " упоминанием имени: замер @opssre 07.08 16:36 UTC — прежде признак"
                              " гасило ЛЮБОЕ появление имени файла в ленте, и погасила его его же"
-                             " жалоба на то, что записку никто не разобрал. Цитата не разбор.")
+                             " жалоба на то, что записку никто не разобрал. Цитата не разбор."
+                             " Отметка на письмо, которое написал НАШ ЖЕ контур, отклоняется до"
+                             " записи: разбора с наших писем проверка моста не спрашивает.")
     dryrun.add_argument(parser)
     parser.add_argument("--md-dir", default=None,
                         help="⛔ прежний каталог md-файлов ленты. Флаг принимается, но писать "
@@ -980,6 +1061,23 @@ def main():
     if not db_path.exists():
         print(f"ERR: БД не найдена: {db_path}", file=sys.stderr)
         sys.exit(1)
+
+    # ── ОТМЕТКА «РАЗОБРАНО» НА СВОЁ ЖЕ ПИСЬМО — отказ ДО любой записи (карточка #590).
+    # Стоит до предупреждения о ссылках: оно пишет в базу отметку показа, а отклонённый вызов
+    # не должен оставить в ней ничего. Отклоняется вызов ЦЕЛИКОМ, и при списке имён тоже:
+    # записка с частью отметок читалась бы как подтверждение всех. Холостой прогон судит так же.
+    _reviewed_names = ([n.strip() for piece in args.reviewed for n in piece.split(",") if n.strip()]
+                       if args.reviewed else [])
+    _own_letters, _folder_only, _unchecked = (reviewed_authorship(_reviewed_names, db_path)
+                                             if _reviewed_names else ([], [], []))
+    if _own_letters:
+        for _name, _words, _box in _own_letters:
+            print(f"ERR: отметка «разобрано» отклонена: {_name} написал наш же контур "
+                  f"({_words}; лежит в папке {_box}).", file=sys.stderr)
+        print("     Своё письмо разбирать незачем: проверка моста с наших писем разбора не "
+              "спрашивает. Записка НЕ записана — убери названное из --reviewed и повтори.",
+              file=sys.stderr)
+        sys.exit(2)
 
     # ⚠️ ПРЕДУПРЕЖДЕНИЕ О НЕРАЗРЕШИМЫХ ССЫЛКАХ — ДО записи, а не после (правило task-discipline
     # v3, слово владельца 07.08 13:01 UTC). Стоит здесь, потому что чинится это ТОЛЬКО сейчас:
@@ -1191,6 +1289,11 @@ def main():
                           f"лёг бы как прочитанный ролью {args.role}")
                 else:
                     print(f"⚖️ разбор записан: {name} — прочёл {args.role}, нота #{msg_id}")
+            for _name, _box in _folder_only:
+                print(f"   ⚠️ {_name}: автор в письме не назван, нашим его делает только папка "
+                      f"{_box} — проверка моста разбора с него и так не спрашивает")
+            for _name, _why in _unchecked:
+                print(f"   ⚠️ {_name}: чьё это письмо, не проверено — {_why}")
             print("   ⛔ жест говорит «я это прочёл», а не «здесь всё верно» —"
                   " верность содержимого механизм не проверяет и не обещает")
 

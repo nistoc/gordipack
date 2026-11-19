@@ -1589,25 +1589,13 @@ def main():
     #    отличить. Поэтому узнанные ТОЛЬКО по папке считаются отдельно и печатаются числом.
     #    Смешанные папки старого обмена (имя не начинается с «<мы>-», например
     #    aia-stud-exchange) признаком ③ не судятся: там лежат письма обеих сторон.
+    # ⚡ САМ ПРИЗНАК ПЕРЕЕХАЛ В ОБЩЕЕ МЕСТО (карточка #590): bridge_letter.own_letter_sign_plain.
+    # Его же зовёт запись отметки «разобрано» (write-message.py --reviewed): пока признак знала
+    # только читающая сторона, пишущая принимала отметку на своё же письмо. Функция ниже
+    # оставлена тонкой и под прежним именем: приёмки моста берут её из этого исходника.
     def _our_letter_sign(file):
         """Каким признаком письмо узнано нашим: 'line' · 'role' · 'folder' · None (не наше)."""
-        import re as _re
-        if not _own_name:
-            return None        # имени не знаем — не гадаем, судим как прежде
-        try:
-            with file.open(encoding="utf-8", errors="replace") as fh:
-                first_line = fh.readline()
-        except OSError:
-            return None
-        own = _own_name.lower()
-        if f"контура {own}" in first_line.lower():
-            return "line"
-        if _re.search(r"пишет\s+\**[A-ZА-ЯЁ][A-ZА-ЯЁ0-9_-]*\**\s*\(" + _re.escape(own) + r"\)",
-                      first_line, _re.IGNORECASE):
-            return "role"
-        if file.parent.name.lower().startswith(own + "-"):
-            return "folder"
-        return None
+        return bridge_letter.own_letter_sign_plain(file, _own_name)
 
     def _is_our_letter(file) -> bool:
         """Первая строка или наша исходящая папка называют автором НАШ контур ⇒ письмо написали мы."""
@@ -1623,8 +1611,8 @@ def main():
             # Э7: годная шапка решает сама — письмо соседа с полями в нашей папке больше не «наше по папке»
             head = bridge_letter.read_header(f)
             if head.valid:
-                sign = ("fields" if _own_name and head.sender_contour()
-                        == bridge_letter.norm_contour(_own_name) else None)
+                sign = (bridge_letter.own_letter_sign(f, _own_name, head)   # шапка решает сама:
+                        if _own_name else None)                            # 'fields' или «не наше»
             else:
                 sign = _our_letter_sign(f)
             _census_add(f, head, _own_name if sign else "")

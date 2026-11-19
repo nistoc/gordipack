@@ -17,7 +17,13 @@ bite-pool-step0.py — приёмка шага 0 пула: «карточки п
      после всех прогонов побайтно тот же
   ⑨ ОБРАТНЫЙ ХОД: в копии backlog.py пул-ветка ключа сортировки ослаблена —
      случай ① обязан ПОКРАСНЕТЬ (карточка пула тонет)                        РАЗЛИЧАЮЩИЙ
-  ⑩ контроль: живая база прогоном НЕ изменилась (размер+mtime)
+  ⑩ контроль: в живой базе НЕТ следов этой приёмки. Суд — ПО СВОИМ СЛЕДАМ ПОИМЁННО (строки с пробными
+     именами: роли ZZR/ZZEMPTY, пул TRACK-ZZPROBE-POOL; вопрос — mezo_stand.traces, все столбцы всех
+     таблиц, точное совпадение; судится ПРИБАВКА следов, прежние — чужая история), а не по разнице
+     состояния файла: честная запись соседей в живую базу этот случай не краснит (карточка #483). Три встречных:
+     ⑩-а чужая запись случай НЕ роняет · ⑩-б свой след роняет и назван поимённо ·
+     ⑩-в база недоступна — третий исход «НЕ ПРОВЕРЕНО» (свои слова, код выхода 2)
+     Встречные идут на копии живой базы внутри песочницы, настоящая живая база там не пишется.
 
 СУД — ПО ПОДСАЖЕННОМУ КЛЮЧУ (роль ZZR, пул TRACK-ZZPROBE-POOL), не по общему исходу:
 краснота от чужих карточек сюда не доедет (урок bite-launcher-forms 27.08).
@@ -75,10 +81,63 @@ def first_card_line(text):
     return ""
 
 
+# ═══ СУД ПО СВОИМ СЛЕДАМ (карточка #483) ═══════════════════════════════════════════════
+# Пробные имена, которые эта приёмка сеет в копию: роли, пул. Карточки 9001–9004 живут под этими же
+# ролями и пулом, поэтому числовых меток не нужно (число 9001 однажды станет чужим номером записки).
+PROBE_MARKS = ("ZZR", "ZZEMPTY", "TRACK-ZZPROBE-POOL")
+
+
+def ask_traces(path):
+    """Спросить базу о своих следах: (словарь «таблица.столбец» → число строк, "") либо (None, причина).
+    Общий вопрос — mezo_stand.traces: база открыта ТОЛЬКО на чтение (mode=ro), совпадение точное.
+    Не открылась или не ответила — (None, причина): молчание базы нельзя читать как чистоту."""
+    try:
+        con = sqlite3.connect(f"file:{Path(path).as_posix()}?mode=ro", uri=True)
+        try:
+            have = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        finally:
+            con.close()
+        lacking = {"backlog", "backlog_events", "role_status", "tracks"} - have
+        if lacking:                      # пустой или чужой файл: вопрос о следах задать не на чем
+            return None, "в базе нет таблиц: " + ", ".join(sorted(lacking))
+        return mezo_stand.traces(path, PROBE_MARKS), ""
+    except (sqlite3.Error, OSError) as e:
+        return None, f"{type(e).__name__}: {e}"[:120]
+
+
+def own_traces(before, after):
+    """Три исхода: ("clean", [], "") · ("traces", [имена], "") · ("unknown", [], причина).
+    Судится ПРИБАВКА своих следов между двумя вопросами (прежние строки — чужая история),
+    а не разница состояния файла."""
+    for found, why in (before, after):
+        if found is None:
+            return "unknown", [], why
+    grown = sorted(f"{k} +{n - before[0].get(k, 0)}" for k, n in after[0].items() if n > before[0].get(k, 0))
+    return ("traces" if grown else "clean"), grown, ""
+
+
+def traces_words(outcome, names, why):
+    """Слова каждого исхода — разные, чтобы третий не читался как первый."""
+    if outcome == "clean":
+        return "своих следов в базе нет"
+    if outcome == "traces":
+        return "СЛЕДЫ ЕСТЬ: " + ", ".join(names)
+    return f"НЕ ПРОВЕРЕНО: база не ответила на вопрос о следах ({why})"
+
+
+def exit_code(fail, unchecked):
+    """Код выхода приёмки: провал — 1, часть не проверена — 2, иначе 0. Все три различны."""
+    return 1 if fail else (2 if unchecked else 0)
+
+
 stand = mezo_stand.new("pool-step0-")
 db = stand / "mezosync.db"
-live_before = (LIVE_DB.stat().st_size, LIVE_DB.stat().st_mtime_ns)
 mezo_stand.snapshot_db(LIVE_DB, db)
+# Чистая копия для встречных случаев ⑩-а/б/в: снимается ДО подсадок приёмки, из стенда, без
+# обращения к живой базе во второй раз.
+judge_db = stand / "judge.db"
+shutil.copyfile(db, judge_db)
+traces_before = ask_traces(LIVE_DB)
 
 con = sqlite3.connect(str(db))
 # НОРМАЛИЗАЦИЯ ПЕСОЧНИЦЫ: чужие пулы в паузу, аренды прочь (в копии живёт и моя аренда
@@ -199,18 +258,100 @@ _, out9 = run(weak_dir / "backlog.py", "list", "--role", "ZZR", db=db)
 case("⑨ обратный ход: ключ ослаблен → карточка пула БОЛЬШЕ НЕ первая (① краснеет)",
      "#9002" not in first_card_line(out9), f"первая строка: {first_card_line(out9)[:80]}")
 
-# ⑩ живая база не изменилась
-live_after = (LIVE_DB.stat().st_size, LIVE_DB.stat().st_mtime_ns)
-case("⑩ живая база прогоном не тронута", live_before == live_after)
+# ⑩ в живой базе нет следов приёмки — суд ПО СВОИМ СЛЕДАМ поимённо (карточка #483).
+# Разница состояния файла не судится: чужая честная запись в базу за время прогона её меняет.
+# Прежние следы (до прогона) — чужая история: судится ПРИБАВКА между двумя вопросами к базе.
+UNCHECKED = 0
+outcome, names, why = own_traces(traces_before, ask_traces(LIVE_DB))
+note = ""
+if traces_before[0]:
+    note = f" · следов до прогона (не в счёт): {sum(traces_before[0].values())}"
+if outcome == "unknown":
+    UNCHECKED += 1
+    print("⏳ ⑩ живая база прогоном не тронута: НЕ ПРОВЕРЕНО")
+    print(f"   способ: по своим следам — {traces_words(outcome, names, why)}; «следов нет» НЕ утверждается")
+else:
+    case("⑩ живая база прогоном не тронута", outcome == "clean",
+         f"способ: по своим следам — {traces_words(outcome, names, why)}{note}")
 
+# ⑩-а ВСТРЕЧНЫЙ, главный: чужая запись в базу между началом и концом прогона случай НЕ роняет.
+# Подсадка — в копии (judge.db), а суд — те же правила: тот же вопрос о следах, другая база.
+jbase = ask_traces(judge_db)
+jcon = sqlite3.connect(str(judge_db))
+jcon.execute("INSERT INTO backlog (id, role, title, status, priority, done_when, parent_track) "
+             "VALUES (8999,'OTHERROLE','чужая записка о другом','open','normal','есть',NULL)")
+jcon.execute("INSERT INTO role_status (role, status, updated_at) "
+             "VALUES ('OTHERROLE','чужая работа','2026-01-01 00:00:00')")
+jcon.commit()
+foreign_rows = jcon.execute("SELECT (SELECT count(*) FROM backlog WHERE id=8999),"
+                            "(SELECT count(*) FROM role_status WHERE role='OTHERROLE')").fetchone()
+jcon.close()
+o_a, n_a, w_a = own_traces(jbase, ask_traces(judge_db))
+case("⑩-а чужая запись в «живую» базу между началом и концом прогона случай НЕ роняет",
+     jbase[0] is not None and foreign_rows == (1, 1) and o_a == "clean",
+     f"чужих строк записано (карточка, статус роли): {foreign_rows}; суд: {traces_words(o_a, n_a, w_a)}")
+
+# ⑩-б ВСТРЕЧНЫЙ к ⑩-а: свой след роняет и назван поимённо. Следы добавляются по одному ПОВЕРХ
+# чужой записи: каждый шаг называет ровно накопленное, чужая строка в имена не попадает.
+jcon = sqlite3.connect(str(judge_db))
+steps = []
+
+
+def step(label, want):
+    jcon.commit()
+    o, n, _ = own_traces(jbase, ask_traces(judge_db))
+    steps.append((label, o, n, want))
+
+
+jcon.execute("INSERT INTO backlog (id, role, title, status, priority, done_when, parent_track) "
+             "VALUES (9001,'ZZR','пробная карточка','open','critical','есть',NULL)")
+step("карточка", {"backlog.role"})
+jcon.execute("INSERT INTO backlog_events (backlog_id, at, actor_role, event_type) "
+             "VALUES (9001,'2026-01-01 00:00:00','ZZR','status')")
+step("событие", {"backlog.role", "backlog_events.actor_role"})
+jcon.execute("INSERT INTO role_status (role, status, updated_at) VALUES ('ZZEMPTY','проба','2026-01-01 00:00:00')")
+step("статус роли", {"backlog.role", "backlog_events.actor_role", "role_status.role"})
+jcon.execute("INSERT INTO tracks (track_id, title, status) VALUES ('TRACK-ZZPROBE-POOL','проба','paused')")
+step("пул", {"backlog.role", "backlog_events.actor_role", "role_status.role", "tracks.track_id"})
+jcon.close()
+bad = [lab for lab, o, n, want in steps if not (o == "traces" and {x.split(" +")[0] for x in n} == want)]
+case("⑩-б свой след в «живой» базе случай РОНЯЕТ и назван поимённо",
+     not bad, f"шагов {len(steps)}; на последнем: {traces_words('traces', steps[-1][2], '')}"
+     + (f" · НЕ ТО на шагах: {bad}" if bad else ""))
+
+# ⑩-в ТРЕТИЙ ИСХОД: база недоступна — не «следов нет», слова и код свои.
+gone = stand / "нет-такой-базы.db"
+garbage = stand / "битая-база.db"
+garbage.write_bytes("это не база данных, а просто текст".encode("utf-8") * 8)
+empty = stand / "пустая-база.db"
+empty.write_bytes(b"")
+unknown_runs = {p.name: own_traces(jbase, ask_traces(p)) for p in (gone, garbage, empty)}
+clean_words = traces_words("clean", [], "")
+trace_words = traces_words("traces", ["backlog.role +1"], "")
+words_ok = all(
+    r[0] == "unknown" and "НЕ ПРОВЕРЕНО" in traces_words(*r)
+    and traces_words(*r) != clean_words and "нет" not in traces_words(*r).split("(")[0]
+    for r in unknown_runs.values())
+codes = (exit_code(0, 0), exit_code(1, 0), exit_code(0, 1))
+case("⑩-в база недоступна — третий исход «НЕ ПРОВЕРЕНО»: свои слова и свой код, не «следов нет»",
+     words_ok and "НЕ ПРОВЕРЕНО" not in clean_words and "НЕ ПРОВЕРЕНО" not in trace_words
+     and len(set(codes)) == 3 and codes[2] == 2,
+     "исходы: " + ", ".join(f"{k}→{v[0]}" for k, v in unknown_runs.items())
+     + f"; коды (следов нет / следы есть / не проверено): {codes}")
+
+if UNCHECKED:
+    print(f"⏳ НЕ ПРОВЕРЕНО: {UNCHECKED} — база не ответила; прогон выходит кодом 2, а не «прошёл»")
 print(f"\nИТОГ: {OK}/{OK + FAIL}")
 
 # СПРАВКА (не случай): живой инвариант «активный пул ровно один» — решение владельца
-con = sqlite3.connect(f"file:{LIVE_DB}?mode=ro", uri=True)
-active_pools = [r[0] for r in con.execute("SELECT track_id FROM tracks WHERE status='active'")]
-con.close()
-if len(active_pools) != 1:
+try:
+    con = sqlite3.connect(f"file:{LIVE_DB}?mode=ro", uri=True)
+    active_pools = [r[0] for r in con.execute("SELECT track_id FROM tracks WHERE status='active'")]
+    con.close()
+except sqlite3.Error:
+    active_pools = None                      # база не ответила — справка пропускается, случаи это уже сказали
+if active_pools is not None and len(active_pools) != 1:
     print(f"⏳ СПРАВКА: активных пулов в ЖИВОЙ базе {len(active_pools)} ({', '.join(active_pools)}) — "
           f"норма нового порядка: ОДИН; судьба лишнего — слово владельца, механизм это "
           f"печатает сам в каждом list")
-raise SystemExit(mezo_stand.finish(0 if FAIL == 0 else 1))
+raise SystemExit(mezo_stand.finish(exit_code(FAIL, UNCHECKED)))

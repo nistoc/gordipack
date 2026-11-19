@@ -105,6 +105,11 @@ import mezo_target  # noqa: E402
 # живой: прогон «по клону» иначе судил живые скрипты (карточка #682, Э7 #681).
 GUARD_ALL = mezo_target.script("guard-all.py")
 SOURCE_TEXT = GUARD_ALL.read_text(encoding="utf-8")
+# С карточки #590 сам признак своего письма живёт в модуле шапки письма рядом с проверкой
+# (bridge_letter.own_letter_sign_plain); функция проверки его зовёт. Обратные ходы ⑪ и ⑮
+# подменяют поэтому текст модуля, а не текст проверки.
+LETTER_PATH = GUARD_ALL.parent / "bridge_letter.py"
+LETTER_TEXT = LETTER_PATH.read_text(encoding="utf-8") if LETTER_PATH.is_file() else ""
 
 results: list[tuple[str, bool, str]] = []
 
@@ -326,11 +331,13 @@ def own_letter_predicate(group_name: str):
     return own_letter_namespace(group_name)["_is_our_letter"]
 
 
-def own_letter_namespace(group_name: str, source: str = "") -> dict:
+def own_letter_namespace(group_name: str, source: str = "", letter_source: str = "") -> dict:
     """Обе функции различения (_our_letter_sign и _is_our_letter) из исходника проверки.
-    source — подменённый текст для обратного хода; по умолчанию живой исходник."""
+    source — подменённый текст проверки для обратного хода; по умолчанию живой исходник.
+    letter_source — подменённый текст модуля шапки письма: признак живёт там (карточка #590),
+    функция проверки его зовёт, и подмена доходит до ответа только через этот вызов."""
     text = source or SOURCE_TEXT
-    namespace: dict = {"Path": Path}
+    namespace: dict = {"Path": Path, "bridge_letter": bridge_letter_module(letter_source)}
     start = text.index("    def _our_letter_sign(file)")
     end = text.index("    unannounced = []", start)
     body = "\n".join(ln[4:] if ln.startswith("    ") else ln
@@ -340,14 +347,20 @@ def own_letter_namespace(group_name: str, source: str = "") -> dict:
     return namespace
 
 
-def bridge_letter_module():
+def bridge_letter_module(source: str = ""):
     """Модуль шапки письма (bridge_letter.py) рядом с испытуемым guard-all.py. Нет файла — отказ
-    словами: функции сличения без него не исполнить, и «прошло» здесь было бы ложью."""
+    словами: функции сличения без него не исполнить, и «прошло» здесь было бы ложью.
+    source — подменённый текст модуля (обратный ход): исполняется вместо файла."""
     import importlib.util
     path = GUARD_ALL.parent / "bridge_letter.py"
     if not path.is_file():
         sys.exit(f"⛔ приёмка не запустилась: рядом с {GUARD_ALL} нет bridge_letter.py — "
                  "испытуемый guard-all.py его зовёт (Э7, карточка #681)")
+    if source:
+        import types
+        module = types.ModuleType("bridge_letter")
+        exec(compile(source, str(path), "exec"), module.__dict__)  # noqa: S102 — свой же исходник с подменой
+        return module
     spec = importlib.util.spec_from_file_location("bridge_letter", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -474,10 +487,11 @@ def main() -> int:
     record_case("⑩ ВСТРЕЧНЫЙ: то же письмо без автора в СМЕШАННОЙ папке старого обмена — НЕ наше",
                 sign(mixed) is None,
                 f"признак: {sign(mixed)} — признак папки судит только «<мы>-…», иначе чужое стало бы нашим")
-    reverse_src = SOURCE_TEXT.replace('return "role"', "return None").replace('return "folder"', "return None")
-    reverse = own_letter_namespace("atlas", reverse_src)["_our_letter_sign"]
+    reverse_src = LETTER_TEXT.replace('return "role"', "return None").replace('return "folder"', "return None")
+    reverse = own_letter_namespace("atlas", letter_source=reverse_src)["_our_letter_sign"]
     record_case("⑪ ОБРАТНЫЙ ХОД: без признаков ② и ③ письма ⑦ и ⑨ снова не наши",
-                reverse_src != SOURCE_TEXT and reverse(old_kind) is None and reverse(headless) is None,
+                LETTER_TEXT.count('return "role"') == 1 and LETTER_TEXT.count('return "folder"') == 1
+                and reverse(old_kind) is None and reverse(headless) is None,
                 "разница двух прогонов и есть починка; сойдись они — ⑦ и ⑨ зеленели бы по другой причине")
 
     # ⑫–⑬ ответ по ссылке: функции сличения берутся из исходника, папки — на стенде.
@@ -513,10 +527,10 @@ def main() -> int:
                 sign(their_headless) is None,
                 f"признак: {sign(their_headless)} — наше имя в папке есть, но не в начале")
     folder_anchor = 'file.parent.name.lower().startswith(own + "-")'
-    contains_src = SOURCE_TEXT.replace(folder_anchor, "own in file.parent.name.lower()")
-    contains_sign = own_letter_namespace("atlas", contains_src)["_our_letter_sign"]
+    contains_src = LETTER_TEXT.replace(folder_anchor, "own in file.parent.name.lower()")
+    contains_sign = own_letter_namespace("atlas", letter_source=contains_src)["_our_letter_sign"]
     record_case("⑮ ПОЛОМКА: признак папки «содержит имя» вместо «начинается с <мы>-» красит ровно ⑭",
-                SOURCE_TEXT.count(folder_anchor) == 1 and contains_sign(their_headless) == "folder"
+                LETTER_TEXT.count(folder_anchor) == 1 and contains_sign(their_headless) == "folder"
                 and contains_sign(headless) == "folder" and contains_sign(mixed) is None,
                 f"под поломкой: ⑭ → {contains_sign(their_headless)} (ждём folder) · ⑨ → "
                 f"{contains_sign(headless)} · ⑩ → {contains_sign(mixed)} (соседи не задеты)")
