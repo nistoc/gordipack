@@ -57,6 +57,13 @@ def clean_env(home, extra=None):
            if not k.startswith(_ENV_DROP_PREFIXES) and k not in _ENV_DROP_NAMES}
     home = Path(home)
     (home / "AppData" / "Roaming").mkdir(parents=True, exist_ok=True)
+    # Карточка #790. Чистка выше выбрасывает ВСЕ MEZO_*, а с ними и выключатель уборки стендов по сроку, и
+    # каталог вместо Корзины: потомок брал срок по умолчанию (48 ч) и переносил старые стенды из ЖИВОЙ
+    # временной папки машины в настоящую Корзину — посреди теста, на минуты (замер 15.11). Пакет сам ничего
+    # не убирает вне своих временных папок, поэтому оба значения ставятся тут явно, а не наследуются.
+    # Тесту, которому нужна уборка по сроку, достаточно передать свои значения через extra.
+    env["MEZO_STAND_MAX_AGE_H"] = "0"
+    env["MEZO_STAND_TEST_BIN"] = os.environ.get("MEZO_STAND_TEST_BIN", "").strip() or str(home / "stand-bin")
     env.update({
         "HOME": str(home),
         "USERPROFILE": str(home),
