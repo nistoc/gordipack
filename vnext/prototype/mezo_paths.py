@@ -414,6 +414,23 @@ class LocalPath(NamedTuple):
     hint: str | None
 
 
+def _pack_copy_root(start: Path):
+    """Корень копии ПАКЕТА, если каталог инструмента — её scripts/ или каталог под vnext/; иначе None.
+
+    Признак копии пакета — оба каталога инструментов рядом: <корень>/scripts и <корень>/vnext/prototype.
+    В установленном контуре такого нет: там скрипты лежат в .mezosync/scripts, vnext-tools — отдельно."""
+    for root in (start.parent, start.parent.parent):
+        if (root / "scripts").is_dir() and (root / "vnext" / "prototype").is_dir():
+            return root
+    return None
+
+
+def _pack_paths_files(pack: Path) -> list:
+    """Места файла путей у копии пакета. Первое — куда СОВЕТУЕМ класть: оно в .gitignore пакета."""
+    return [pack / "vnext" / LOCAL_PATHS_PARTS[0] / LOCAL_PATHS_PARTS[1],
+            pack / LOCAL_PATHS_PARTS[0] / LOCAL_PATHS_PARTS[1]]
+
+
 def _paths_file_candidates(script_file, mezo_dir) -> list:
     """Где искать файл путей — по порядку. mezo_dir назван — только там (следуем за базой)."""
     if mezo_dir is not None:
@@ -422,6 +439,17 @@ def _paths_file_candidates(script_file, mezo_dir) -> list:
     # ① каталог скриптов лежит в .mezosync, значит файл — рядом с ним: <скрипты>/../local/paths.json.
     #    Так же ищет его копия инструментов ВНЕ контейнера (она несёт свой файл рядом).
     found = [start.parent / LOCAL_PATHS_PARTS[0] / LOCAL_PATHS_PARTS[1]]
+    # ①-бис копия ПАКЕТА вне контейнера несёт ДВА каталога инструментов — scripts/ и vnext/prototype/, —
+    #    и «рядом» у каждого своё: <пакет>/local/ и <пакет>/vnext/local/. Файл путей у копии один
+    #    (карточка #761): какой бы каталог ни спросил, смотрим и место соседа; своё место — первым,
+    #    как прежде. До этого guard-all.py из <пакет>/scripts отказывал «корень мезосинка НЕ НАЙДЕН»
+    #    при файле в <пакет>/vnext/local/, и приёмщик ветки читал отказ как провал ветки (замер COORD,
+    #    записка #6646).
+    pack = _pack_copy_root(start)
+    if pack is not None:
+        for p in _pack_paths_files(pack):
+            if p not in found:
+                found.append(p)
     # ② инструмент лежит ВНУТРИ контейнера, но не в .mezosync (vnext-tools): файл — у предка.
     for cand in (start, *start.parents):
         p = cand / ".mezosync" / LOCAL_PATHS_PARTS[0] / LOCAL_PATHS_PARTS[1]
@@ -560,10 +588,16 @@ def local_dir(db_path) -> Path:
 
 
 def _paths_file_for_advice(res: LocalPath, script_file) -> str:
-    """Куда класть файл путей — текстом для отказа: тот, что искали, либо первый из мест."""
+    """Куда класть файл путей — текстом для отказа: тот, что искали, либо первый из мест.
+
+    У копии ПАКЕТА вне контейнера, пока файла нет, советуем одно место на оба каталога
+    инструментов — <пакет>/vnext/local/paths.json: оно в .gitignore пакета (карточка #761)."""
+    start = Path(script_file or __file__).resolve().parent
+    pack = _pack_copy_root(start)
+    if pack is not None and (res.file is None or res.outcome == LOCAL_NO_FILE):
+        return _pack_paths_files(pack)[0].as_posix()
     if res.file is not None:
         return res.file.as_posix()
-    start = Path(script_file or __file__).resolve().parent
     return (start.parent / LOCAL_PATHS_PARTS[0] / LOCAL_PATHS_PARTS[1]).as_posix()
 
 
@@ -587,10 +621,19 @@ def container_root(script_file=None) -> Path:
     # «я не справился с первым» и идёт чинить не то. Три живых случая за сутки, последний —
     # внутри чужой приёмки, где он выдал себя за «поломки нет».
     paths_file = _paths_file_for_advice(loc, script_file)
+    # Карточка #761: первым назван ФАЙЛ и его содержимое, а не переменная среды. Общий прогон приёмок
+    # по копии (bite-all.py, env_for(laid_out=True)) снимает MEZO_CONTAINER нарочно, и совет «задай
+    # MEZO_CONTAINER» там невыполним: приёмщик ветки задавал переменную, получал тот же отказ и читал
+    # его как провал ветки.
     sys.exit("ERR: контейнер группы НЕ НАЙДЕН (маркер .mezosync/mezosync.db не встретился "
-             "вверх по дереву).\n     Задай MEZO_CONTAINER=<путь> либо создай файл путей "
-             f"{paths_file} с ключом container.\n"
-             f"     Искал от: {start}\n"
+             "вверх по дереву).\n     Создай файл путей "
+             f"{paths_file} с ключом container:\n"
+             '       {"container": "<каталог, ВНУТРИ которого лежит .mezosync/mezosync.db>"}\n'
+             "     либо задай MEZO_CONTAINER=<тот же каталог>. Общий прогон приёмок по копии "
+             "(bite-all.py) эту переменную снимает нарочно — там нужен именно файл.\n"
+             + ("     Файл один на оба каталога инструментов копии пакета: его читают и scripts/, "
+                "и vnext/prototype/.\n" if _pack_copy_root(start) is not None else "")
+             + f"     Искал от: {start}\n"
              + _empty_db_note(start, exact=(loc_dir,))
              + (f"     файл путей: container={loc_dir} — задан, но {DB_NAME} по нему не найден.\n"
                 if loc_dir else "")
