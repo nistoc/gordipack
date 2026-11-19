@@ -16,6 +16,17 @@
   ④ (только при чтении базы) между блоком и записью «смена закрыта» у роли нет записок
   ⑤ строка, похожая на заголовок блока, но не разобранная (нет «#» в начале, дата не через дефис,
     час не UTC) — «блок не узнан» и форма: роль, написавшая блок не по образцу, узнаёт об этом
+  ⑥ (карточка #710 — пять замечаний к карточке #706):
+    · строка без «#» со словами в любом регистре и ПОЛНЫМ часом UTC — тоже «блок не узнан»;
+    · блок уровня «#», в который вошли разделы глубже, — находка: части за их словами не видны;
+    · слова частей заголовками ТОГО ЖЕ уровня сразу за блоком — подсказка «опусти на уровень ниже»;
+    · блок с часом ПОЗЖЕ сохранения раздела (местный час под словом «UTC») новейшим не выбирается
+      и назван находкой;
+    · блок длиннее LONG_BLOCK_LINES непустых строк — в него вошёл прежний текст раздела без заголовка
+  ГРАНИЦА, которую проверка НЕ ловит (карточка #710, вторая половина замечания ②): раздел ГЛУБЖЕ блока,
+    названный словом части («### Ошибки и уроки месяца» под «## КОНЕЦ СМЕНЫ»), прячет пропущенную часть —
+    по форме его не отличить от части-подзаголовка («### Ошибалась»). Замер 2026-11-19 по 1683 версиям
+    раздела state всех ролей: блоков 33, такого раздела нет ни в одном.
 ⚖️ Записки ПОСЛЕ «смена закрыта» — уже новая смена (роль проснулась): они не находка, а строка
   «ℹ️ … блок прошлой смены»; сохранение state и plan тоже не ставит «✅» блоку прошлой смены.
   «смена закрыта» ищется с МИНУТЫ блока (роль часто закрывается в ту же минуту) и в архиве ленты
@@ -44,6 +55,7 @@ import argparse
 import re
 import sqlite3
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 TIME = r"(\d{4}-\d\d-\d\d[ T]\d\d:\d\d(?::\d\d)?)\s*UTC"
@@ -56,7 +68,21 @@ HEADING = re.compile(r"^(#{1,6})[^\w\n]*КОНЕЦ\s+СМЕНЫ\b[^\n]*?" + TIME
 # Замер 2026-10-11 по всем версиям памяти всех ролей: строк такого вида 3, все три — настоящие заголовки.
 LOOKS_LIKE = re.compile(r"^(?:#{1,6}[^\w\n]*(?i:конец\s+смены)|[^\w\n«\"„“'•·-]*КОНЕЦ\s+СМЕНЫ)\b"
                         r"[^\n]*?(?:\d{1,2}[.:]\d\d|\d{4}-\d\d)", re.M)
+# Карточка #710 ①: строка БЕЗ «#», слова в любом регистре («Конец смены …», «**Конец смены …**»), а за
+# ними ПОЛНЫЙ час с «UTC» — тоже несостоявшийся заголовок. До карточки #706 он давал «НЕ УЗНАН», после
+# неё проверка о нём молчала (замечание CORE на карточке #706). Короткая дата («Конец смены 11.10 — …»)
+# остаётся прозой; строка списка («- конец смены 2026-10-11 11:38 UTC — сохранилась») — тоже.
+# Замер 2026-11-19 по 1683 версиям раздела state всех ролей: строк такого вида 1, и она — настоящий
+# заголовок в рамке («═══ … КОНЕЦ СМЕНЫ 2026-10-11 16:40 UTC ═══»), его узнаёт и образец выше.
+LOOKS_LIKE_LOWER = re.compile(r"^[^\w\n«\"„“'•·-]*(?i:конец\s+смены)\b[^\n]*?" + TIME, re.M)
 ANY_HEADING = re.compile(r"^(#{1,6})\s+\S", re.M)
+# Карточка #710 ④: час блока не бывает позже сохранения раздела. Запас — на минуту, округлённую вверх
+# (замер: у OPSSRE блок «16:40» сохранён в 16:39:58), и на правку между часом и сохранением.
+AHEAD_MINUTES = 10
+# Карточка #710 ⑤: блок длиннее этого числа непустых строк — признак, что в него вошёл прежний текст
+# раздела без заголовка. Замер 2026-11-19 по 33 версиям памяти с блоком: настоящие блоки — от 5 до 42
+# строк (самый длинный — у CHROME), а два блока в 247 и 258 строк — RCC: за блоком нет ни одного заголовка.
+LONG_BLOCK_LINES = 80
 # Начало строки части — любые не-буквы: «-», «*», «**», «###», значок (подзаголовки — записка #5738).
 LINE_START = r"^[^\w\n]*"
 # Части узнаются по началу строки: роли разного рода («ошибалась» / «ошибался»), падеж и
@@ -85,8 +111,48 @@ def norm(t):
     return t if len(t) == 19 else t + ":00"
 
 
-def find_block(state_body):
+def ahead_limit(reference):
+    """Предел для часа блока: час сохранения раздела (или «сейчас») плюс запас; None — если часа нет."""
+    if not reference:
+        return None
+    try:
+        at = datetime.strptime(norm(str(reference).strip()[:19]), "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+    return (at + timedelta(minutes=AHEAD_MINUTES)).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def later_than(hour, limit):
+    """Час блока позже предела? Оба — «YYYY-MM-DD HH:MM:SS»; без предела — нет."""
+    return bool(limit) and hour > limit
+
+
+def same_level_parts(state_body, end, level):
+    """Имена частей, записанных заголовками уровня блока ПОДРЯД сразу за ним (карточка #710 ③).
+
+    Ряд кончается первым заголовком того же уровня или выше, который словом части не назван;
+    заголовки глубже лежат внутри этих разделов и ряд не рвут."""
+    names = []
+    for h in ANY_HEADING.finditer(state_body, end):
+        deep = len(h.group(1))
+        if deep > level:
+            continue
+        if deep < level:
+            break
+        text = state_body[h.start():].split("\n", 1)[0]
+        name = next((n for n, rx in PARTS if rx.match(text)), None)
+        if name is None:
+            break
+        names.append(name)
+    return names
+
+
+def find_block(state_body, not_after=None):
     """(час блока, текст блока, начало заголовка) — по НОВЕЙШЕМУ по часу заголовку «КОНЕЦ СМЕНЫ», или None.
+
+    not_after — час сохранения раздела (или «сейчас» при сохранении). Блок с часом ПОЗЖЕ него новейшим
+    быть не может: это местный час под словом «UTC» (карточка #710 ④; такой сдвиг у себя поймала RCC,
+    записка #5752). Если поздние все — выбирать не из чего, судится как прежде, а час назван находкой.
 
     Новейший, а не последний в тексте: новый блок ставят первым, и блок прошлой смены, если его
     не убрали, лежит НИЖЕ — по последнему проверка судила бы его (замечание COORD к карточке #703).
@@ -100,6 +166,9 @@ def find_block(state_body):
     found = list(HEADING.finditer(state_body))
     if not found:
         return None
+    limit = ahead_limit(not_after)
+    timely = [x for x in found if not later_than(norm(x.group(2)), limit)]
+    found = timely or found
     m = max(found, key=lambda x: (norm(x.group(2)), x.start()))
     level = len(m.group(1))
     end = len(state_body)
@@ -119,8 +188,11 @@ def unrecognized(state_body):
     last = max(starts) if starts else -1
     # Строка — целиком, а не совпавший кусок: образец кончается на первой дате, и «26.08 18:5x UTC»
     # иначе показывался бы обрубком «… 26.08» (замер по истории памяти, карточка #706).
-    return [state_body[m.start():].split("\n", 1)[0].strip()[:100] for m in LOOKS_LIKE.finditer(state_body)
-            if m.start() > last and m.start() not in starts]
+    hits = {m.start() for m in LOOKS_LIKE.finditer(state_body)}
+    # Карточка #710 ①: строчными без «#», но с полным часом UTC — тоже несостоявшийся заголовок.
+    hits |= {m.start() for m in LOOKS_LIKE_LOWER.finditer(state_body)}
+    return [state_body[s:].split("\n", 1)[0].strip()[:100] for s in sorted(hits)
+            if s > last and s not in starts]
 
 
 def plan_mark(plan_body):
@@ -135,28 +207,60 @@ def plan_mark(plan_body):
     return None
 
 
-def block_findings(state_body, plan_body):
+def block_findings(state_body, plan_body, not_after=None):
     """(час блока или None, находки по самому блоку, находка по plan или None).
+
+    not_after — час сохранения раздела state (общий прогон) или «сейчас» (сохранение): см. find_block().
 
     Без блока — (None, [], None): роль, не закрывавшая смену, не судится.
     ⚖️ Находка по plan отдана ОТДЕЛЬНО: при сохранении state она — следующий шаг
     (plan сохраняют после state), а при сохранении plan и в общем прогоне — недочёт."""
-    got = find_block(state_body)
+    got = find_block(state_body, not_after)
     if not got:
         return None, [], None
-    when, block, _ = got
+    when, block, start = got
     findings = []
     heads = [norm(x.group(2))[:16] for x in HEADING.finditer(state_body)]
     if len(heads) > 1:
         findings.append(f"блоков «КОНЕЦ СМЕНЫ» в state {len(heads)} ({' · '.join(heads)} UTC) — судится "
                         f"новейший, {when[:16]} UTC; блок прошлой смены убери: блок в state один")
-    starts = []
+    # Карточка #710 ④: час блока позже сохранения раздела — местный час под словом «UTC».
+    limit = ahead_limit(not_after)
+    ahead = [norm(x.group(2))[:16] for x in HEADING.finditer(state_body) if later_than(norm(x.group(2)), limit)]
+    if ahead:
+        findings.append(f"час блока «КОНЕЦ СМЕНЫ» ({' · '.join(ahead)} UTC) позже сохранения раздела "
+                        f"({str(not_after).strip()[:16]} UTC) — похоже на местный час под словом «UTC»: "
+                        "впиши час UTC")
+    # Карточка #710 ②: блок уровня «#» вбирает разделы «##» ниже, и слова этих разделов читаются частями.
+    level = len(block) - len(block.lstrip("#"))
+    inner = [h for h in ANY_HEADING.finditer(block) if h.start() > 0 and len(h.group(1)) > level]
+    if level == 1 and inner:
+        findings.append(f"заголовок блока — уровня «#»: разделов глубже в блок вошло {len(inner)}, и "
+                        "пропущенная часть за их словами не видна; заголовок блока — «## КОНЕЦ СМЕНЫ …»")
+    # Карточка #710 ⑤: прежний текст раздела без заголовка за блоком по форме не отличить от
+    # многострочной части — судится длина: настоящие блоки короткие (замер — у LONG_BLOCK_LINES).
+    lines = len([l for l in block.splitlines() if l.strip()])
+    if lines > LONG_BLOCK_LINES:
+        findings.append(f"блок длиной {lines} непустых строк (обычный — до {LONG_BLOCK_LINES}): похоже, в "
+                        "него вошёл прежний текст раздела без заголовка, и пропущенная часть может прятаться "
+                        "в нём; поставь за блоком заголовок раздела («## Состояние»)")
+    starts, missing = [], []
     for name, rx in PARTS:
         m = rx.search(block)
         if m:
             starts.append((m.start(), name))
         else:
+            missing.append(name)
             findings.append(f"нет части «{name}»")
+    # Карточка #710 ③: часть, записанная заголовком ТОГО ЖЕ уровня, что и блок, блок закрывает.
+    # «нет части» тогда верно по форме, но роль часть написала — говорим, что с ней не так.
+    beside = same_level_parts(state_body, start + len(block), level)
+    named_beside = [name for name in missing if name in beside]
+    if named_beside:
+        findings.append("слово части " + ", ".join(f"«{name}»" for name in named_beside) + " стоит заголовком "
+                        "того же уровня, что и блок, сразу за ним: такой заголовок блок закрывает. Если это "
+                        f"части блока — опусти их на уровень ниже («{'#' * (level + 1)} …») или запиши "
+                        "строками списка")
     # Текст части «последним» — от её начала до начала следующей части (или конца блока).
     starts.sort()
     for i, (pos, name) in enumerate(starts):
@@ -227,14 +331,17 @@ def past_shift_line(con, role, when):
             f"#{closed[0]} ({closed[1]} UTC) роль писала ещё {later}; проверка его как свежий не судит")
 
 
-def save_lines(state_body, plan_body, section, con=None, role=None):
+def save_lines(state_body, plan_body, section, con=None, role=None, now=None):
     """Строки для save-phoenix.py под «OK» (карточка #702, место вызова ①). Без блока — [].
 
     Предупреждение, не отказ: это минута закрытия чата (правило phoenix-save-on-stop).
     con и role (необязательны) — чтобы узнать блок прошлой смены и не ставить ему «✅»."""
     out = [f"⚠️ {line}" for line in unrecognized_lines(state_body)]
     need_form = bool(out)
-    when, findings, plan_finding = block_findings(state_body, plan_body)
+    # Карточка #710 ④: раздел сохраняется сейчас — блок с часом позже «сейчас» новейшим не бывает.
+    # now называет приёмка; в работе — час машины в UTC.
+    reference = now or datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    when, findings, plan_finding = block_findings(state_body, plan_body, reference)
     if when is None:
         return out + (FORM if need_form else [])
     past = past_shift_line(con, role, when)
@@ -259,11 +366,11 @@ def save_lines(state_body, plan_body, section, con=None, role=None):
 def check_role(con, role, soft):
     rows = {s: (b, t) for s, b, t in con.execute(
         "SELECT section, body, saved_at FROM phoenix WHERE role=? AND section IN ('state','plan')", (role,))}
-    state_body = rows.get("state", (None, None))[0]
+    state_body, state_saved = rows.get("state", (None, None))
     plan_body, plan_saved = rows.get("plan", (None, None))
     mark = "⚠️ " if soft else "   "
     bad = unrecognized_lines(state_body)
-    when, findings, plan_finding = block_findings(state_body, plan_body)
+    when, findings, plan_finding = block_findings(state_body, plan_body, state_saved)
     if when is None and not bad:
         return None
     findings = bad + findings

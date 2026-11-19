@@ -27,6 +27,18 @@
      state не ставит «✅» блоку прошлой смены
   ⑥в то же, когда «смена закрыта» ушла в ту же минуту, что блок (карточка #706, замечание CORE ①)
   ⑥г то же, когда записка «смена закрыта» унесена в архив ленты (карточка #706, замечание CORE ②)
+  ⑦а–⑦д — карточка #710, пять замечаний к карточке #706:
+  ⑦а строка без «#» строчными с ПОЛНЫМ часом UTC («Конец смены 2026-10-11 11:38 UTC», «**Конец смены …**») —
+     «блок НЕ УЗНАН» и форма; строка списка и час посреди фразы — тишина; «## Конец смены …» — узнанный блок
+  ⑦б блок уровня «#», в который вошёл раздел глубже («## Ожидания владельца»), — находка «уровня «#»»;
+     блок «#» без разделов глубже, блок «##» и части «### …» под ним — без неё
+  ⑦в слова частей заголовками ТОГО ЖЕ уровня сразу за блоком — «нет части» и подсказка «опусти на уровень
+     ниже» с именами частей; заголовок, не названный словом части, — без подсказки
+  ⑦г прошлый блок с местным часом под словом «UTC» (позже сохранения раздела) новейшим не выбирается:
+     судится новый, его пропущенная часть названа, поздний час назван; без часа сохранения — как прежде;
+     час, округлённый на минуту вверх, поздним не считается
+  ⑦д блок длиннее обычного (прежний текст раздела без заголовка) — находка «блок длиной»; блок ровно
+     в предел и обычные блоки — без неё
 
 ЧЕМ СУДИМ. Функции — из guard-shift-end.py рядом с приёмкой (или --guard). Сохранения —
 настоящим save-phoenix.py (испытуемая копия mezo_target) на СОГЛАСОВАННОЙ КОПИИ живой базы
@@ -40,12 +52,17 @@
   python bite-shift-end.py --break closed     «смена закрыта» не узнаётся → ⑥, ⑥б, ⑥в, ⑥г
   python bite-shift-end.py --break heading    заголовок прежней формы (без значка) → ①в
   python bite-shift-end.py --break looks      похожие заголовки не ищутся → ③б
-  python bite-shift-end.py --break samelevel  заголовок того же уровня блок не кончает → ③в
+  python bite-shift-end.py --break samelevel  заголовок того же уровня блок не кончает → ③в, ⑦в (⑦в стоит на том же)
   python bite-shift-end.py --break prose      похожий заголовок — любая цифра и любой регистр → ③г
   python bite-shift-end.py --break minute     записки — со следующей минуты, как в первой редакции → ⑥в
   python bite-shift-end.py --break archive    читается только messages, без архива → ⑥г
   python bite-shift-end.py --break newest     судится последний в тексте блок, как в первой редакции → ③д
   python bite-shift-end.py --break twoblocks  лишний блок не называется → ③д
+  python bite-shift-end.py --break lowerfull  строчный заголовок с полным часом не ищется → ⑦а
+  python bite-shift-end.py --break toplevel   блок уровня «#» не называется → ⑦б
+  python bite-shift-end.py --break levelhint  подсказки о частях того же уровня нет → ⑦в
+  python bite-shift-end.py --break future     блок с часом позже сохранения выбирается новейшим → ⑦г
+  python bite-shift-end.py --break longblock  длина блока не судится → ⑦д
 """
 from __future__ import annotations
 
@@ -71,7 +88,7 @@ BREAKS = {
              {"①", "⑤а", "③в"}),
     "plan": ("        elif mark < when:", "        elif False:", {"②", "⑤б"}),
     "closed": ("        elif CLOSED.search(", "        elif False and CLOSED.search(", {"⑥", "⑥б", "⑥в", "⑥г"}),
-    "samelevel": ("        if len(h.group(1)) <= level:", "        if len(h.group(1)) < level:", {"③в"}),
+    "samelevel": ("        if len(h.group(1)) <= level:", "        if len(h.group(1)) < level:", {"③в", "⑦в"}),
     "prose": ('[^\\n]*?(?:\\d{1,2}[.:]\\d\\d|\\d{4}-\\d\\d)", re.M)', '[^\\n]*?\\d", re.M | re.I)', {"③г"}),
     "minute": ('    since = when[:16] + ":00"\n', "    since = next_minute\n", {"⑥в"}),
     "archive": ('src = "messages_all" if has_view else "messages"', 'src = "messages" if has_view else "messages"',
@@ -81,6 +98,14 @@ BREAKS = {
     "looks": ("for m in LOOKS_LIKE.finditer(state_body)", 'for m in LOOKS_LIKE.finditer("")', {"③б"}),
     "newest": ("    m = max(found, key=lambda x: (norm(x.group(2)), x.start()))\n", "    m = found[-1]\n", {"③д"}),
     "twoblocks": ("    if len(heads) > 1:\n", "    if False:\n", {"③д"}),
+    # карточка #710
+    "lowerfull": ("for m in LOOKS_LIKE_LOWER.finditer(state_body)", 'for m in LOOKS_LIKE_LOWER.finditer("")',
+                  {"⑦а"}),
+    "toplevel": ("    if level == 1 and inner:\n", "    if False:\n", {"⑦б"}),
+    "levelhint": ("    if named_beside:\n", "    if False:\n", {"⑦в"}),
+    "future": ("    timely = [x for x in found if not later_than(norm(x.group(2)), limit)]\n",
+               "    timely = []\n", {"⑦г"}),
+    "longblock": ("    if lines > LONG_BLOCK_LINES:\n", "    if False:\n", {"⑦д"}),
 }
 
 FULL = """# Состояние роли
@@ -162,6 +187,51 @@ PLAN_FRESH = "# План роли · сверен с state 2026-10-11 10:00 UTC\
 PLAN_OLD = "# План роли · сверен с state 2026-10-11 09:15 UTC\n- пункт\n"
 PLAN_NONE = "# План роли\n- пункт\n"
 PLAN_DEEP = "# План\n- а\n- б\n- в\n- г\n- д\n- сверен с state 2026-10-11 10:00 UTC\n"
+
+# ── карточка #710: пять замечаний к карточке #706 ───────────────────────────────────────────
+LOWER_FULL = {
+    "строчными без «#»": "Конец смены 2026-10-11 11:38 UTC\n- последним: записка #1\n",
+    "«**…**» строчными": "**Конец смены 2026-10-11 11:38 UTC**\n- последним: записка #1\n",
+}
+LOWER_QUIET = {
+    "строка списка": "- конец смены 2026-10-11 11:38 UTC — сохранилась, записка #5\n",
+    "час посреди фразы": "Владелец сказал: конец смены 2026-10-11 11:38 UTC, дальше пауза\n",
+}
+LOWER_HEADING = ("## Конец смены 2026-10-11 10:00 UTC\n- последним: записка #5726\n- не доделано: приёмка\n"
+                 "- жду: вердикт CORE\n- ошибалась: в часе\n")
+# Пример CORE: блок «#» без «жду», а раздел глубже назван словом этой части.
+TOP_LEVEL = ("# КОНЕЦ СМЕНЫ 2026-10-11 10:00 UTC\n- последним: записка #5726\n- не доделано: приёмка\n"
+             "- ошибалась: в часе\n\n## Ожидания владельца\n- жду слова владельца\n")
+TOP_LEVEL_PLAIN = ("# КОНЕЦ СМЕНЫ 2026-10-11 10:00 UTC\n- последним: записка #5726\n- не доделано: приёмка\n"
+                   "- жду: вердикт CORE\n- ошибалась: в часе\n\n# Прочее\n- строка после блока\n")
+# Три части заголовками уровня блока; четвёртая («ошибалась») — строкой внутри блока.
+PARTS_BESIDE = ("### КОНЕЦ СМЕНЫ 2026-10-11 10:00 UTC\n- ошибалась: в часе\n### Последним\nзаписка #5726\n"
+                "### Не доделано\nприёмка\n### Жду\nвердикт CORE\n## Прочее\n")
+# Пример CORE дословно: все четыре части заголовками уровня блока.
+ALL_PARTS_BESIDE = ("### КОНЕЦ СМЕНЫ 2026-10-11 10:00 UTC\n### последним\nзаписка #5726\n### не доделано\n"
+                    "приёмка\n### жду\nвердикт CORE\n### ошибалась\nв часе\n")
+NOT_A_PART_BESIDE = NO_WAIT_NO_ERR + "\n## Прочее\n- жду слова владельца\n- ошибалась в часе\n"
+# По примеру CORE: новый блок 09:30 UTC без одной части первым, ниже — прошлый с местным часом под «UTC».
+# Пропущена «жду», а не «ошибалась» (как у CORE), чтобы случай не зависел от поломки part; между блоками —
+# заголовок уровня «#», чтобы он не зависел от поломки samelevel.
+LOCAL_HOUR = ("## КОНЕЦ СМЕНЫ 2026-10-11 09:30 UTC\n- последним: записка #5752\n- не доделано: приёмка\n"
+              "- ошибалась: в часе\n\n# Состояние роли\n\n"
+              "## КОНЕЦ СМЕНЫ 2026-10-11 11:00 UTC\n- последним: записка #5726\n- не доделано: приёмка\n"
+              "- жду: вердикт CORE\n- ошибалась: в часе\n")
+PLAN_0930 = "# План роли · сверен с state 2026-10-11 09:30 UTC\n- пункт\n"
+# Замер по истории памяти: у OPSSRE блок «16:40» сохранён в 16:39:58 — минута округлена вверх.
+ROUNDED_UP = ("## КОНЕЦ СМЕНЫ 2026-10-11 16:40 UTC\n- последним: записка #5726\n- не доделано: приёмка\n"
+              "- жду: вердикт CORE\n- ошибалась: в часе\n")
+SHORT_BLOCK = ("## КОНЕЦ СМЕНЫ 2026-10-11 10:00 UTC\n- последним: записка #5726\n- не доделано: приёмка\n"
+               "- ошибалась: в часе\n")
+
+
+def swallowed(lines_total):
+    """Блок без «жду» и прежний текст раздела БЕЗ заголовка за ним; непустых строк в блоке — lines_total."""
+    tail = ["⏰ прежний текст раздела, заголовка перед ним нет"]
+    tail += [f"строка прежнего текста {i}" for i in range(lines_total - 6)]
+    tail.insert(len(tail) // 2, "Жду ответа владельца по карточке #1")
+    return SHORT_BLOCK + "\n" + "\n".join(tail) + "\n"
 
 
 def load_guard(path):
@@ -511,6 +581,138 @@ def cases_guard(st, results, guard_path):
     woke_case("⑥г", "BITE706B", "2026-10-11 10:40:00", True, "«смена закрыта» в архиве ленты")
 
 
+def cases_710(st, results, guard_path):
+    """⑦а–⑦д — пять замечаний карточки #710 (приёмка CORE по карточке #706 и граница, названная PROTO)."""
+    g = load_guard(guard_path)
+
+    def run(role, *extra):
+        p = subprocess.run([sys.executable, str(guard_path), "--db", str(st.db), "--role", role, *extra],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", env=st.env)
+        return p.returncode, (p.stdout or "") + (p.stderr or "")
+
+    print("── ⑦а строка без «#» строчными с полным часом UTC")
+    problems, shown = [], []
+    for name, body in LOWER_FULL.items():
+        lines = g.save_lines(body, PLAN_NONE, "state")
+        shown += lines[:1]
+        if not any("НЕ УЗНАН" in l for l in lines):
+            problems.append(f"{name}: нет «НЕ УЗНАН»")
+        if not any("## КОНЕЦ СМЕНЫ <YYYY-MM-DD HH:MM> UTC" in l for l in lines):
+            problems.append(f"{name}: нет формы блока")
+    for name, body in LOWER_QUIET.items():
+        lines = g.save_lines(body, PLAN_NONE, "state")
+        if lines:
+            problems.append(f"{name}: ждали тишину, вышло {lines[:1]}")
+    lines = g.save_lines(LOWER_HEADING, PLAN_FRESH, "plan")
+    if any("НЕ УЗНАН" in l for l in lines) or not any(l.startswith("✅") for l in lines):
+        problems.append(f"«## Конец смены …» с «#» — узнанный блок, ждали «✅» без «НЕ УЗНАН»: {lines}")
+    verdict(results, "⑦а", "«Конец смены 2026-10-11 11:38 UTC» и «**Конец смены …**» — «НЕ УЗНАН» и форма; "
+            "строка списка и час посреди фразы — тишина; «## Конец смены …» — узнан", problems,
+            "\n".join(shown + lines))
+
+    print("── ⑦б блок уровня «#» с разделом глубже")
+    problems = []
+    _, f, _ = g.block_findings(TOP_LEVEL, PLAN_FRESH)
+    if not any("уровня «#»" in x for x in f):
+        problems.append(f"блок «#» с разделом «## Ожидания владельца» не назван: {f}")
+    for name, body in (("блок «#» без разделов глубже", TOP_LEVEL_PLAIN), ("блок «##»", FULL),
+                       ("части «### …» под «##»", SUBHEADS)):
+        _, f2, _ = g.block_findings(body, PLAN_FRESH)
+        if any("уровня «#»" in x for x in f2):
+            problems.append(f"{name}: ложная находка об уровне: {f2}")
+    verdict(results, "⑦б", "«# КОНЕЦ СМЕНЫ» без «жду» + «## Ожидания владельца» — находка «уровня «#»»; "
+            "блок «#» без разделов глубже, блок «##», части «### …» — без неё", problems, "\n".join(f))
+
+    print("── ⑦в части заголовками того же уровня, что и блок")
+    problems = []
+    _, f, _ = g.block_findings(PARTS_BESIDE, PLAN_FRESH)
+    hint = [x for x in f if "заголовком того же уровня" in x]
+    for name in ("последним", "не доделано", "жду"):
+        if f"нет части «{name}»" not in f:
+            problems.append(f"часть «{name}» заголовком уровня блока не названа недостающей: {f}")
+        if not any(f"«{name}»" in x for x in hint):
+            problems.append(f"в подсказке нет части «{name}»: {hint}")
+    if any("«ошибалась»" in x for x in hint):
+        problems.append(f"в подсказку попала часть «ошибалась», стоящая строкой внутри блока: {hint}")
+    _, f4, _ = g.block_findings(ALL_PARTS_BESIDE, PLAN_FRESH)
+    if not any("заголовком того же уровня" in x for x in f4):
+        problems.append(f"четыре части заголовками уровня блока — подсказки нет: {f4}")
+    _, f5, _ = g.block_findings(SAME_LEVEL["жду"], PLAN_FRESH)
+    if not any("заголовком того же уровня" in x and "«жду»" in x for x in f5):
+        problems.append(f"«## Ожидания владельца» сразу за блоком без «жду» — подсказки нет: {f5}")
+    for name, body in (("полный блок", FULL), ("за блоком раздел «## Прочее»", NOT_A_PART_BESIDE)):
+        _, f6, _ = g.block_findings(body, PLAN_FRESH)
+        if any("заголовком того же уровня" in x for x in f6):
+            problems.append(f"{name}: ложная подсказка: {f6}")
+    verdict(results, "⑦в", "«### Последним» · «### Не доделано» · «### Жду» за «### КОНЕЦ СМЕНЫ» — «нет части» "
+            "и подсказка с тремя именами; раздел «## Прочее» и полный блок — без подсказки", problems,
+            "\n".join(f + f4))
+
+    print("── ⑦г прошлый блок с местным часом под словом «UTC»")
+
+    def findings_at(body, plan, saved):
+        """block_findings() с часом сохранения. Прежняя редакция проверки третьего довода не знает —
+        это провал случая с названной причиной, а не обрыв приёмки."""
+        try:
+            return g.block_findings(body, plan, saved)
+        except TypeError as e:
+            return None, [f"испытуемая проверка не принимает час сохранения: {e}"], None
+
+    problems = []
+    w, f, _ = findings_at(LOCAL_HOUR, PLAN_0930, "2026-10-11 09:31:00")
+    if w != "2026-10-11 09:30:00":
+        problems.append(f"при сохранении в 09:31 судится блок {w!r}, ждали 2026-10-11 09:30:00")
+    if "нет части «жду»" not in f:
+        problems.append(f"пропущенная часть нового блока не названа: {f}")
+    if not any("позже сохранения" in x and "11:00" in x for x in f):
+        problems.append(f"блок с часом позже сохранения не назван: {f}")
+    for name, ref in (("без часа сохранения", None), ("оба блока раньше сохранения", "2026-10-11 12:00:00")):
+        w2, f2, _ = findings_at(LOCAL_HOUR, PLAN_0930, ref)
+        if w2 != "2026-10-11 11:00:00" or any("позже сохранения" in x for x in f2):
+            problems.append(f"{name}: ждали прежнее — судится 11:00, находки о часе нет; вышло {w2!r} {f2}")
+    _, f4, _ = findings_at(ROUNDED_UP, PLAN_FRESH, "2026-10-11 16:39:58")
+    if any("позже сохранения" in x for x in f4):
+        problems.append(f"час 16:40 при сохранении в 16:39:58 назван поздним: {f4}")
+    try:
+        lines = g.save_lines(LOCAL_HOUR, PLAN_0930, "plan", now="2026-10-11 09:31:00")
+    except TypeError as e:
+        lines = [f"испытуемая проверка не принимает час «сейчас»: {e}"]
+    if not any("2026-10-11 09:30 UTC" in l and "нет части «жду»" in l for l in lines):
+        problems.append(f"сохранение в 09:31: пропущенная часть блока 09:30 не названа: {lines}")
+    # общий прогон: час сохранения раздела берётся из базы
+    con = sqlite3.connect(st.db)
+    for section, body, saved in (("state", LOCAL_HOUR, "2026-10-11 09:31:00"),
+                                 ("plan", PLAN_0930, "2026-10-11 09:32:00")):
+        con.execute("INSERT INTO phoenix (role, section, body, saved_at) VALUES ('BITE710D',?,?,?) "
+                    "ON CONFLICT(role, section) DO UPDATE SET body=excluded.body, saved_at=excluded.saved_at",
+                    (section, body, saved))
+    con.commit()
+    con.close()
+    code, out = run("BITE710D")
+    if code != 1:
+        problems.append(f"общий прогон: код {code}, ждали 1")
+    for needle in ("КОНЕЦ СМЕНЫ 2026-10-11 09:30 UTC", "нет части «жду»", "позже сохранения"):
+        if needle not in out:
+            problems.append(f"общий прогон: в выводе нет «{needle}»")
+    verdict(results, "⑦г", "новый блок 09:30 над блоком «11:00 UTC» при сохранении в 09:31 — судится 09:30, "
+            "«жду» названа, поздний час назван; без часа сохранения — как прежде; 16:40 при 16:39:58 — "
+            "не поздний", problems, "\n".join(f + lines) + "\n" + out)
+
+    print("── ⑦д блок длиннее обычного: прежний текст раздела без заголовка")
+    problems = []
+    limit = getattr(g, "LONG_BLOCK_LINES", 80)
+    _, f, _ = g.block_findings(swallowed(limit + 1), PLAN_FRESH)
+    if not any("блок длиной" in x and str(limit + 1) in x for x in f):
+        problems.append(f"блок в {limit + 1} непустую строку не назван: {f}")
+    for name, body in ((f"блок ровно в {limit} строк", swallowed(limit)), ("полный блок", FULL),
+                       ("блок CHROME", CHROME)):
+        _, f2, _ = g.block_findings(body, PLAN_FRESH)
+        if any("блок длиной" in x for x in f2):
+            problems.append(f"{name}: ложная находка о длине: {f2}")
+    verdict(results, "⑦д", f"блок без «жду» и прежний текст без заголовка, {limit + 1} строк, — находка "
+            f"«блок длиной»; ровно {limit} строк и обычные блоки — без неё", problems, "\n".join(f))
+
+
 def main():
     ap = argparse.ArgumentParser(description="Приёмка карточки #702: блок «КОНЕЦ СМЕНЫ» в памяти роли")
     ap.add_argument("--guard", help="путь к guard-shift-end.py (по умолчанию — рядом с приёмкой)")
@@ -521,7 +723,11 @@ def main():
                          "plan выключено; closed — «смена закрыта» не узнаётся; heading — заголовок "
                          "прежней формы (без значка); looks — похожие заголовки не ищутся; samelevel — "
                          "заголовок того же уровня блок не кончает; prose — похожий заголовок по любой "
-                         "цифре; minute — записки со следующей минуты; archive — без архива ленты")
+                         "цифре; minute — записки со следующей минуты; archive — без архива ленты; "
+                         "newest — судится последний в тексте блок; twoblocks — лишний блок не называется; "
+                         "lowerfull — строчный заголовок с полным часом не ищется; toplevel — блок уровня "
+                         "«#» не называется; levelhint — подсказки о частях того же уровня нет; future — "
+                         "блок с часом позже сохранения выбирается новейшим; longblock — длина не судится")
     a = ap.parse_args()
 
     guard = Path(a.guard) if a.guard else Path(__file__).resolve().parent / "guard-shift-end.py"
@@ -581,6 +787,7 @@ def main():
         st = Stand(runner, db, workdir, env)
         cases_save(st, results, workdir)
         cases_guard(st, results, guard_run)
+        cases_710(st, results, guard_run)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
