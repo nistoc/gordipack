@@ -723,6 +723,81 @@ def file_time_question(file_path, conn, role, section, new_body, tolerance=2):
     ])
 
 
+# ── 🎯 КАРТОЧКА #792 (передана из #753; случай STUD, записка #6358 §②): ПРОВЕРКА ЦЕЛОСТНОСТИ
+# СУДИЛА «ТЕЛО НЕПУСТОЕ И РАЗБИРАЕТСЯ», А НЕ «ТЕЛО РАВНО ТОМУ, ЧТО РУКА ПОДАЛА». Возврат старого
+# тела для неё неотличим от успешной записи: старое тело непусто и разбирается безупречно.
+# Два места, у каждого свой код выхода (0 записано · 1 отказ · 3 чужое объявление · 4 вопрос
+# про файл · 5 возврат прежней версии · 6 после записи в базе не то тело):
+#   ① stored_body_mismatch — ПОСЛЕ commit тело читается из базы заново и сличается с подаваемым,
+#      знак в знак. Сличение ДОСЛОВНОЕ: приведение окончаний строк инструмент делает ДО записи
+#      (--file читается с приведением, --body приводится выше), поэтому подаваемое тело уже
+#      приведено, а читать из базы нужно то, что легло. Исключение — --restore: тело берётся из
+#      истории как есть, сличаем с ним же.
+#   ② returned_old_version — ДО записи: подано тело, НЕ равное нынешнему, но РАВНОЕ одной из
+#      ПРЕЖНИХ версий раздела (история и её архив) ⇒ отказ, в базе ничего не меняется.
+# ⚖️ ЧЕГО ЭТИ МЕСТА РАЗЛИЧИТЬ НЕ МОГУТ — названо, чтобы не читалось шире:
+#   · подано тело, равное НЫНЕШНЕМУ: «не правил» и «прошлая запись потерялась» не различаются
+#     ничем — у инструмента нет ни прежнего файла, ни прежнего намерения. Это законная ветка
+#     «содержимое не изменилось» (критерий ⑤), она проходит и продолжает проходить;
+#   · возврат, ЗАДУМАННЫЙ рукой без --restore (правка текста вручную дала ровно прежнюю версию):
+#     от случая STUD он неотличим — отказ и подсказка «--restore <id>», а не угадывание.
+def body_fingerprint(text):
+    """Отпечаток тела: sha256 от его utf-8 байт — тем же числом и в строке сличения, и в отказе."""
+    import hashlib
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def stored_body_mismatch(stored, expected, role, section):
+    """Строки о расхождении тела в базе с поданным — или None, если равны знак в знак (пункт ①)."""
+    if stored == expected:
+        return None
+    if stored is None:
+        return [f"⛔ СЛИЧЕНИЕ ПОСЛЕ ЗАПИСИ НЕ СОШЛОСЬ: строки раздела {role}/{section} в базе после "
+                f"записи нет (подано {len(expected)} знаков, sha256 {body_fingerprint(expected)[:12]})."]
+    a, b = expected.splitlines(), stored.splitlines()
+    first = next((i for i in range(min(len(a), len(b))) if a[i] != b[i]), min(len(a), len(b))) + 1
+    return [f"⛔ СЛИЧЕНИЕ ПОСЛЕ ЗАПИСИ НЕ СОШЛОСЬ: в базе у {role}/{section} не то тело, которое подано.",
+            f"   подано ... {len(expected)} знаков, {len(a)} строк, sha256 {body_fingerprint(expected)[:12]}",
+            f"   в базе ... {len(stored)} знаков, {len(b)} строк, sha256 {body_fingerprint(stored)[:12]}",
+            f"   первая отличная строка — {first}",
+            "   👉 Запись состоялась, но тело в базе другое: список версий — --history, "
+            "вернуть нужную — --restore <id>."]
+
+
+def returned_old_version(conn, role, section, body, prev_body, restoring, has_history):
+    """Версия раздела (id, actor, saved_at, body), чьё тело РАВНО поданному, при том что поданное
+    НЕ равно нынешнему, — или None (пункт ②). Несколько таких — берётся новейшая.
+
+    Окончания строк сличаются приведёнными: поданное тело приведено к «\\n» (см. main()), а в
+    истории до карточки #707 бывали тела с «\\r\\n» — без приведения возврат такого тела не нашёлся бы.
+    """
+    if restoring or not has_history or prev_body is None or body == prev_body:
+        return None
+    norm = lambda t: t.replace("\r\n", "\n").replace("\r", "\n")
+    if norm(prev_body) == body:
+        # Тело то же, что нынешнее, с точностью до окончаний строк (круг --read --out → --file, #707):
+        # это НЕ возврат — нынешний текст рука и подала, окончания приведены инструментом.
+        return None
+    same = [v for v in section_versions(conn, role, section) if norm(v[3]) == body]
+    return same[-1] if same else None
+
+
+def old_version_refusal(role, section, version):
+    """Строки отказа ② — номер и час возвращаемой версии и что делать, если возврат задуман."""
+    vid, actor, saved_at, _ = version
+    return [f"⛔ ОТКАЗ: подано тело ПРЕЖНЕЙ версии раздела {role}/{section} — id={vid}, "
+            f"сохранена {saved_at} UTC (сохранил {actor}); нынешнее тело другое. Тело НЕ записано, "
+            f"база не тронута.",
+            "   Так выглядит возврат на старое тело: сборщик упал, файла не создал, и запись взяла",
+            "   ОДНОИМЁННЫЙ файл ПРОШЛОГО хода (карточка #792). Проверка целостности",
+            "   текста этого не видит: старое тело непусто и разбирается, а возврат выглядит для неё",
+            "   дописыванием, а не потерей.",
+            f"   👉 Возврат ЗАДУМАН — скажи это словом: save-phoenix.py --role {role} --section {section} "
+            f"--restore {vid}",
+            "   👉 Возврата не было — собери файл заново из нынешнего тела (--read --out <файл>) "
+            "и повтори."]
+
+
 def read_with_version(conn, role, section, out, has_history):
     """--read (карточка #705): номер версии и тело ОДНИМ запросом SQL; правь тело из --out ЭТОГО ЖЕ вызова.
 
@@ -1101,6 +1176,16 @@ def main():
             "   ⚖️ Писать О таком блоке можно: проверка судит НАЧАЛО строки, а не упоминание.",
         ]))
 
+    # 🎯 КАРТОЧКА #792, ПУНКТ ②: возврат ПРЕЖНЕГО тела — отказ ДО записи (холостой прогон тоже: он
+    # показывает то же, что запись). Стои́т ДО отказа по объёму намеренно: возврат на старое тело
+    # сперва должен быть назван возвратом, а не «сокращением», — иначе строка про --restore потеряется.
+    old_version = returned_old_version(conn, role, args.section, body, prev_body,
+                                       bool(args.restore), has_history)
+    if old_version is not None:
+        conn.close()
+        print("\n".join(old_version_refusal(role, args.section, old_version)), file=sys.stderr)
+        sys.exit(5)
+
     lost = (was - now) / was if was else 0.0
     share, rep = loss_report(prev_body, body) if prev_body is not None else (0.0, [])
 
@@ -1295,6 +1380,16 @@ def main():
                       read_mark_call("remember", conn, role, actor, "save", at=action_time))
 
     conn.commit()
+    # 🎯 КАРТОЧКА #792, ПУНКТ ①: тело читается из базы ЗАНОВО и сличается с поданным знак в знак.
+    # Прежде судили «непусто и разбирается» — а оно у старого тела безупречно.
+    # В холостом прогоне то же соединение видит свою незакоммиченную запись — сличение идёт и там.
+    stored_row = conn.execute("SELECT body FROM phoenix WHERE role=? AND section=?",
+                              (role, args.section)).fetchone()
+    mismatch = stored_body_mismatch(stored_row[0] if stored_row else None, body, role, args.section)
+    if mismatch:
+        conn.close()
+        print("\n".join(mismatch), file=sys.stderr)
+        sys.exit(6)
     # 🎯 КАРТОЧКА #702: второй раздел (state или plan) читается ДО закрытия соединения.
     shift_lines = shift_end_lines(conn, role, args.section, body)
     # 🎯 КАРТОЧКА #656: в холостом прогоне копия для предпросмотра записей снимается ДО
@@ -1314,6 +1409,10 @@ def main():
           + ("   ⚠️ сокращение разрешено словом --allow-shrink"
              if args.allow_shrink and was > now else "")
           + (f"   ✍️ правил {actor} (чужая секция, журнал знает)" if actor != role else ""))
+    # карточка #792 — строка сличения печатается ВСЕГДА, когда сличение сошлось: молчание тут было
+    # бы неотличимо от «не сличали». Отпечаток считается отдельно от самого сличения.
+    print(f"   ✔ сличение после записи: тело в базе равно поданному "
+          f"({len(body)} знаков, sha256 {body_fingerprint(body)[:12]})")
     for line in foreign_lines:     # карточка #701 — сразу под «OK», до прочих строк
         print(line)
     for line in shift_lines:       # карточка #702 — блок «КОНЕЦ СМЕНЫ», если он есть в state
