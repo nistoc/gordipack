@@ -53,7 +53,9 @@ scripts/write-message.py ................ ⚠️ --reviewed до записи с
 scripts/guard-all.py .................... признак берётся из общего модуля; поведение проверки прежнее
 vnext/prototype/guard-phoenix-time.py ... в строке «<дата> <час> UTC → читать <час>» не судится только часть ДО стрелки;
                                           тег correction для этого не нужен. Метка времени ПОСЛЕ стрелки и в других
-                                          строках записки судится как обычно. Номера строк в находках не съезжают
+                                          строках записки судится как обычно. Номера строк в находках не съезжают.
+                                          Час обязан стоять сразу после ПЕРВОЙ стрелки строки: час у стрелки
+                                          правее цитатой начало строки не делает (возврат приёмщика 19.11)
 scripts/mezo_stand.py (обе копии) ....... перед обходом временной папки в stderr печатается строка: путь папки, срок,
                                           «обход может занять минуты, это не зависание», номер процесса, имя верхнего
                                           скрипта. При выключенной уборке (MEZO_STAND_MAX_AGE_H=0) строки нет
@@ -107,7 +109,7 @@ ACCEPTING-A-BRANCH.md ................... НОВЫЙ документ: поря�
 приёмки ................................. новые: bite-reviewed-own-letter.py (13 случаев) · bite-stand-sweep-notice.py (6) ·
                                           bite-phoenix-body-equal.py (10) · bite-read-batches-columns.py (12) ·
                                           bite-export-source.py (7) · bite-pack-copy-paths.py (7);
-                                          дополнены: guard-phoenix-time.py --selftest 19 → 23 · bite-phoenix-volume.py
+                                          дополнены: guard-phoenix-time.py --selftest 19 → 25 · bite-phoenix-volume.py
                                           6 → 10 · bite-memory-archive.py 16 → 19 (без названной копии базы — отказ,
                                           код 2) · bite-pool-step0.py 14 → 17 · bite-launcher-forms.py 36 → 39 ·
                                           bite-shift-end.py 18 → 23 (нарочных поломок 11 → 16);
@@ -188,7 +190,7 @@ vnext/prototype/guard-phoenix-time.py, guard-phoenix-volume.py,
                          Шесть новых приёмок есть только в ветке, все шесть держатся: итог ветки — держится 208
 по карточкам ........... каждая приёмка — отдельным процессом, ожидания записаны до прогона:
                          bite-reviewed-own-letter.py — 13 случаев, 4 нарочные поломки ·
-                         guard-phoenix-time.py --selftest — 23 случая, 4 поломки ·
+                         guard-phoenix-time.py --selftest — 25 случаев, 6 поломок ·
                          bite-stand-sweep-notice.py — 6 из 6, 6 поломок ·
                          bite-phoenix-body-equal.py — 10 случаев, 2 поломки ·
                          bite-phoenix-volume.py — 10 случаев · bite-memory-archive.py — 19 ·
