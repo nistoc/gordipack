@@ -61,6 +61,18 @@ def main() -> int:
 
     conn = sqlite3.connect(f"file:{str(db).replace(chr(92), '/')}?mode=rw", uri=True, timeout=10)
 
+    # Частичный индекс ниже стоит на колонке acked_at, а этот шаг её не заводит (карточка #510).
+    # На базе, где чтение ленты ещё не звали, шаг прежде падал ошибкой SQLite без единого слова.
+    batch_columns = {r[1] for r in conn.execute("PRAGMA table_info(read_batches)")}
+    if "acked_at" not in batch_columns:
+        conn.close()
+        columns_step = Path(__file__).resolve().parent / "20261118-read-batches-columns.py"
+        print("⛔ НЕ ЗАПУСТИЛСЯ: в таблице read_batches нет колонки acked_at, а замок строится по ней.")
+        print("   Сначала шаг схемы, который её заводит:")
+        print(f"   python {columns_step.as_posix()} --db {db.as_posix()}")
+        print("   Этот шаг ничего не менял.")
+        return 2
+
     idx_before = {n for n, in conn.execute(
         "SELECT name FROM sqlite_master WHERE type='index'")}
     batches_before = conn.execute("SELECT COUNT(*) FROM read_batches").fetchone()[0]
