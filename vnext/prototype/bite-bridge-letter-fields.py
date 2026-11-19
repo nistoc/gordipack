@@ -565,7 +565,7 @@ def main() -> int:
         old_sign_src = "\n".join(ln[4:] if ln.startswith("    ") else ln for ln in source[start:end].splitlines())
 
         def old_sign(own: str):
-            ns = {"Path": Path, "_own_name": own}
+            ns = {"Path": Path, "_own_name": own, "bridge_letter": bl}   # признак — в модуле шапки (карточка #590)
             exec(old_sign_src, ns)  # noqa: S102 — свой же исходник, функция прежнего признака
             return ns["_our_letter_sign"]
         ok &= case("⑦ прежний разбор адресатов (_letter_addressees) находит адресата нашего нового письма",
