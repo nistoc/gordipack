@@ -260,24 +260,39 @@ def corrected_ids(con):
 # покрасила САМУ ПОПРАВКУ: без цитаты поправка не сообщает ничего, а с цитатой она
 # неотличима от утверждения. Гашение через corrected_ids тут не спасает НАРОЧНО:
 # оно гасит записку ЦЕЛИКОМ и укрыло бы новую ошибку рядом с цитатой.
-СТРЕЛКА_ЦИТАТЫ = "→ читать"
+QUOTE_ARROW = "→ читать"
+# Карточка #751: цитату узнают по ФОРМЕ строки, а не по тегу записки. После стрелки обязан стоять час
+# («→ читать 21:11 UTC»; допустимы дата перед часом и открывающая кавычка): «→ читать ленту дальше» —
+# обычная речь, а не поправка, и метка перед такой стрелкой судится как всякая другая.
+HOUR_AFTER_ARROW = re.compile(re.escape(QUOTE_ARROW) + r"\s*[«\"]?(?:\d{4}-\d{2}-\d{2}[ T])?\d{1,2}:\d{2}")
 
 
-def без_цитат_поправки(body, tags):
-    """→ (тело без строк-цитат, сколько строк погашено). Гасится ТОЛЬКО строка,
-    несущая И стрелку цитаты, И часовую метку, И только под тегом correction.
-    📏 Замер 29.08 по всей ленте (124130 строк): стрелка с часом — 2 строки,
-    из них под тегом correction — 1 (та самая поправка). Ложных гашений признак
-    не даёт; НОВАЯ ошибка поправки (своя подпись без стрелки) судится как обычно."""
-    if "correction" not in (tags or ""):
-        return body, 0
-    kept, погашено = [], 0
+def strip_correction_quotes(body):
+    """→ (тело без цитат исправляемого, сколько цитат погашено).
+
+    Гасится ЧАСТЬ СТРОКИ ДО СТРЕЛКИ, и только у строки, написанной по форме поправки: метка времени стоит
+    ДО стрелки, час — сразу ПОСЛЕ неё. Всё от стрелки и правее судится как обычно, остальные строки
+    записки — тоже: новая ошибка поправки (своя подпись, новая метка после стрелки) остаётся находкой.
+
+    Тег correction для гашения цитаты НЕ нужен (карточка #751). Прежде гашение стояло под условием тега,
+    а про тег знал только код: форме «→ читать» учат правила и сама лента, и роль, написавшая поправку
+    по форме без тега, получала находку за то, что чинит (записка #6357, замер TAXO 13.11.2026).
+    Прежде гасилась строка ЦЕЛИКОМ; теперь строка остаётся на месте — номера строк в находках не съезжают,
+    а метка, поставленная после стрелки, больше не прячется за цитатой.
+
+    📏 Замер 18.11.2026 по копии ленты (2803 записки): строк со стрелкой 31, из них с меткой времени 12 —
+    все двенадцать написаны по форме (метка до стрелки и час после); под тегом correction 11, без тега 1.
+    """
+    kept, quotes = [], 0
     for line in (body or "").splitlines():
-        if СТРЕЛКА_ЦИТАТЫ in line and (STAMP.search(line) or STAMP_DATE_ONLY.search(line)):
-            погашено += 1
-            continue
+        cut = line.find(QUOTE_ARROW)
+        if cut >= 0 and HOUR_AFTER_ARROW.search(line):
+            before = line[:cut]
+            if STAMP.search(before) or STAMP_DATE_ONLY.search(before):
+                quotes += 1
+                line = line[cut:]
         kept.append(line)
-    return "\n".join(kept), погашено
+    return "\n".join(kept), quotes
 
 
 def run_messages(db, role=None, since_hours=None):
@@ -314,7 +329,7 @@ def run_messages(db, role=None, since_hours=None):
                 f"WHERE timestamp < datetime('now','-{int(since_hours)} hours') ORDER BY id"):
             if mid in fixed:
                 continue
-            body, _ = без_цитат_поправки(body, tags)   # карточка #438: та же мерка, что в окне
+            body, _ = strip_correction_quotes(body)   # карточки #438 и #751: та же мерка, что в окне
             if check_section(body, ts, ref_label="timestamp ноты"):
                 outside.append((mid, wrole))
     q = "SELECT id, writer_role, body_md, timestamp, COALESCE(tags,'') FROM messages"
@@ -336,10 +351,10 @@ def run_messages(db, role=None, since_hours=None):
         print(f"⚠️ messages не прочитаны ({e}) — эта поверхность НЕ проверена")
         return None
     con.close()
-    red = yellow = healed = цитат = красных_поправок = 0
+    red = yellow = healed = quotes_total = red_corrections = 0
     for mid, wrole, body, ts, tags in rows:
-        body, гашено = без_цитат_поправки(body, tags)   # карточка #438
-        цитат += гашено
+        body, quotes = strip_correction_quotes(body)   # карточки #438 и #751
+        quotes_total += quotes
         hits = check_section(body, ts, ref_label="timestamp ноты")
         if not hits:
             continue
@@ -351,28 +366,28 @@ def run_messages(db, role=None, since_hours=None):
         print(f"── #{mid} [{wrole}]   (timestamp {str(ts)[:16]} UTC)")
         for kind, where, line in hits:
             print(f"   {kind}\n      {where}  {line}")
-        красных_тут = sum(1 for k, _, _ in hits if k.startswith("🔴"))
-        red += красных_тут
+        red_here = sum(1 for k, _, _ in hits if k.startswith("🔴"))
+        red += red_here
         yellow += sum(1 for k, _, _ in hits if k.startswith("🟡"))
         # Считается ИМЕННО красное: поправка с одной жёлтой находкой границы не зовёт —
         # первый живой прогон посчитал такую, и граница загорелась без красной поправки.
-        if красных_тут and "correction" in (tags or ""):
-            красных_поправок += 1
+        if red_here and "correction" in (tags or ""):
+            red_corrections += 1
     print(f"{'🔴' if red else '✅'} messages (ноты): 🔴 {red} · 🟡 {yellow} · "
           f"нот проверено {len(rows)}" + (f" · погашено ПОПРАВКОЙ {healed}" if healed else ""))
-    if цитат:
+    if quotes_total:
         # Карточка #438, встречный ③: граница печатается В ВЫВОДЕ, а не живёт в карточке.
-        print(f"⚖️ погашено ЦИТАТ ПОПРАВКИ: {цитат} — строка «{СТРЕЛКА_ЦИТАТЫ}» с часом "
-              f"под тегом correction не судится (цитата исправляемого); НОВАЯ ошибка "
-              f"в той же поправке краснеет как обычно")
-    if красных_поправок:
+        print(f"⚖️ погашено ЦИТАТ ПОПРАВКИ: {quotes_total} — в строке вида «<дата час UTC> {QUOTE_ARROW} <час>» "
+              f"не судится часть ДО стрелки (цитата исправляемого), с тегом correction и без него; "
+              f"всё от стрелки и правее и НОВАЯ метка в той же записке судятся как обычно")
+    if red_corrections:
         # ═══ Карточка #449 (находка TAXO при приёмке карточки #438): прежде граница
         # печаталась только при УСПЕШНОМ гашении (`if цитат:`) — её видел тот, у кого
         # получилось, а покрасневший оставался без объяснения. Теперь она приходит
         # ВМЕСТЕ с красным, как в проверке сроков годности. Всегда не печатается
         # нарочно: счётчик, горящий всегда, не значит ничего.
-        print(f"⚖️ ГРАНИЦА: покраснели записки-ПОПРАВКИ (тег correction) — {красных_поправок}. "
-              f"Не судится в поправке РОВНО строка «{СТРЕЛКА_ЦИТАТЫ}» с часовой меткой; "
+        print(f"⚖️ ГРАНИЦА: покраснели записки-ПОПРАВКИ (тег correction) — {red_corrections}. "
+              f"Не судится РОВНО цитата до стрелки в строке вида «<дата час UTC> {QUOTE_ARROW} <час>»; "
               f"исправляемое, названное иначе (словом «верно», прозой), судится как обычная "
               f"строка. Назови цитату этой формой — она погаснет; НОВАЯ ошибка краснеет всегда")
     if since_hours:
@@ -468,8 +483,8 @@ def selftest():
     # без неё РОНЯЕТ прогон трассировкой. Ровно так эта самопроверка умерла молча:
     # колонку добавили в живую схему, стенды не догнали — найдено при работе
     # по карточке #438 (прогон падал «no such column: tags»).
-    def стенд_база(имя):
-        p = mezo_stand.new("guard-ptime-") / имя
+    def stand_db(db_name):
+        p = mezo_stand.new("guard-ptime-") / db_name
         c = sqlite3.connect(str(p))
         c.execute("CREATE TABLE phoenix (role TEXT, section TEXT, body TEXT, saved_at TEXT)")
         c.execute("CREATE TABLE messages (id INTEGER, writer_role TEXT, body_md TEXT, "
@@ -490,7 +505,7 @@ def selftest():
                   "body_md, tags, 'live' AS source FROM messages")
         return c, p
 
-    con, tmp = стенд_база("m.db")
+    con, tmp = stand_db("m.db")
     con.commit()
     con.close()
     rc = run(tmp)
@@ -499,7 +514,7 @@ def selftest():
     cases += 1
     print(f"{'✅' if good else '🔴'} пустая БД (обе таблицы) → rc={rc} (ждём 2: отказ, а не «чисто»)")
     # messages видит СВОЙ класс отдельно от phoenix — не только «пришит к той же функции»
-    con, tmp2 = стенд_база("m2.db")
+    con, tmp2 = stand_db("m2.db")
     con.execute("INSERT INTO phoenix VALUES ('X','state','чисто','2026-07-28 09:00:00')")
     con.execute("INSERT INTO messages (id, writer_role, body_md, timestamp) "
                 "VALUES (1,'X','местное время 2026-07-28 11:05 UTC','2026-07-28 09:04:50')")
@@ -511,7 +526,7 @@ def selftest():
     cases += 1
     print(f"{'✅' if good else '🔴'} messages ловит СВОЙ дефект (не только phoenix) → 🔴{red} нот={n}")
     # ── Карточка #438: цитата исправляемого в САМОЙ поправке ──
-    con, tmp3 = стенд_база("m3.db")
+    con, tmp3 = stand_db("m3.db")
     con.executemany(
         "INSERT INTO messages (id, writer_role, body_md, timestamp, tags) VALUES (?,?,?,?,?)",
         [(1, "X", "шапка «2026-08-29 23:11 UTC» → читать 21:11 UTC",
@@ -523,17 +538,17 @@ def selftest():
     con.commit()
     con.close()
     red, yellow, n = run_messages(tmp3, role=None)
-    good = red == 2 and n == 3
+    good = red == 1 and n == 3
     ok &= good
     cases += 1
-    print(f"{'✅' if good else '🔴'} карточка #438: цитата поправки ГАСИТСЯ (ровно под тегом), "
-          f"НОВАЯ ошибка в поправке и стрелка БЕЗ тега КРАСНЕЮТ → 🔴{red} нот={n} (ждём 🔴2 из 3)")
+    print(f"{'✅' if good else '🔴'} карточки #438 и #751: цитата поправки ГАСИТСЯ по форме, с тегом и без, "
+          f"НОВАЯ ошибка в поправке остаётся находкой → 🔴{red} нот={n} (ждём 🔴1 из 3)")
     # ── Карточка #449 (стенд ② TAXO): поправка БЕЗ стрелки и БЕЗ погашаемой цитаты
     # рядом краснеет — и обязана получить ГРАНИЦУ вместе с красным, а не остаться
     # без объяснения (прежде границу видел только тот, у кого гашение УДАЛОСЬ).
     import contextlib
     import io
-    con, tmp4 = стенд_база("m4.db")
+    con, tmp4 = stand_db("m4.db")
     con.executemany(
         "INSERT INTO messages (id, writer_role, body_md, timestamp, tags) VALUES (?,?,?,?,?)",
         [(1, "X", "в шапке стояло «2026-08-29 23:11 UTC», верно 21:11 UTC",
@@ -542,80 +557,116 @@ def selftest():
           "2026-08-29 21:14:00", '["correction"]')])
     con.commit()
     con.close()
-    буф = io.StringIO()
-    with contextlib.redirect_stdout(буф):
+    captured = io.StringIO()
+    with contextlib.redirect_stdout(captured):
         red, yellow, n = run_messages(tmp4, role=None)
-    вывод = буф.getvalue()
-    good = (red == 2 and n == 2 and "ГРАНИЦА: покраснели записки-ПОПРАВКИ" in вывод
-            and "погашено ЦИТАТ" not in вывод)
+    printed = captured.getvalue()
+    good = (red == 2 and n == 2 and "ГРАНИЦА: покраснели записки-ПОПРАВКИ" in printed
+            and "погашено ЦИТАТ" not in printed)
     ok &= good
     cases += 1
     print(f"{'✅' if good else '🔴'} карточка #449: поправки БЕЗ стрелки красные И граница "
           f"напечатана ИМ (без успешного гашения) → 🔴{red} нот={n}, граница "
-          f"{'есть' if 'ГРАНИЦА' in вывод else 'НЕТ'} (ждём 🔴2 и границу)")
+          f"{'есть' if 'ГРАНИЦА' in printed else 'НЕТ'} (ждём 🔴2 и границу)")
+
+    # ── Карточка #751: цитата гасится по ФОРМЕ, без тега. Каждый случай — своей базой из одной записки,
+    # чтобы упавший назывался по имени, а не терялся в общей сумме находок.
+    def quote_case(name, body, saved_at, want_red, want_quotes, title):
+        con, path = stand_db(name)
+        con.execute("INSERT INTO messages (id, writer_role, body_md, timestamp, tags) "
+                    "VALUES (1, 'X', ?, ?, '')", (body, saved_at))
+        con.commit()
+        con.close()
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            red, _, n = run_messages(path, role=None)
+        text = buf.getvalue()
+        if "погашено ЦИТАТ" not in text:
+            quotes = 0
+        else:
+            quotes = 1 if "погашено ЦИТАТ ПОПРАВКИ: 1 " in text else -1
+        good = red == want_red and n == 1 and quotes == want_quotes
+        print(f"{'✅' if good else '🔴'} {title} → 🔴{red} · цитат погашено {quotes} "
+              f"(ждём 🔴{want_red} · цитат {want_quotes})")
+        return good
+
+    for name, body, saved_at, want_red, want_quotes, title in (
+        ("q1.db", "было «2026-08-29 23:40 UTC» → читать 21:40 UTC", "2026-08-29 21:41:00", 0, 1,
+         "карточка #751 ②: поправка по форме БЕЗ тега — цитата не судится"),
+        ("q2.db", "было «2026-08-29 23:40 UTC» → читать 21:40 UTC\n— X 2026-08-29 23:42 UTC",
+         "2026-08-29 21:42:00", 1, 1,
+         "карточка #751 ③ ВСТРЕЧНЫЙ: новая метка в той же записке, в строке без стрелки, — находка"),
+        ("q3.db", "было «2026-08-29 23:40 UTC» → читать 2026-08-29 23:44 UTC", "2026-08-29 21:44:00", 1, 1,
+         "карточка #751 ③б ВСТРЕЧНЫЙ: метка ПОСЛЕ стрелки судится — находка"),
+        ("q4.db", "сохранено 2026-08-29 23:46 UTC → читать ленту дальше", "2026-08-29 21:46:00", 1, 0,
+         "карточка #751 ③в ВСТРЕЧНЫЙ: стрелка без часа после неё — не форма поправки, находка"),
+    ):
+        good = quote_case(name, body, saved_at, want_red, want_quotes, title)
+        ok &= good
+        cases += 1
 
     # ═══ Карточка #516: НАЗВАННЫЙ СРОК против МЕТКИ СОБЫТИЯ.
     # Все три случая идут по ОДНОМУ телу и различаются только часом прогона —
     # так видно, что различает именно он, а не текст.
-    ТЕЛО_СРОК = ("🛑 стоп ....... 2026-08-31 02:06 UTC, час перемерен по записи\n"
+    BODY_DEADLINE = ("🛑 стоп ....... 2026-08-31 02:06 UTC, час перемерен по записи\n"
                  "[STUD 2026-07-18 20:03 UTC] DONE страница ЖИВАЯ (коммит 758a249)")
-    СОХРАНЁН = "2026-07-18 18:03:00"
+    SAVED = "2026-07-18 18:03:00"
 
     # ① срок ещё НЕ наступил ⇒ 🟢, не судится; настоящий дефект рядом ОБЯЗАН остаться красным
-    hits = check_section(ТЕЛО_СРОК, СОХРАНЁН, now=datetime(2026, 8, 31, 0, 30))
-    виды = [k[0] for k, _, _ in hits]
-    good = (виды.count("🟢") == 1 and виды.count("🔴") == 1 and виды.count("🟡") == 0)
+    hits = check_section(BODY_DEADLINE, SAVED, now=datetime(2026, 8, 31, 0, 30))
+    kinds = [k[0] for k, _, _ in hits]
+    good = (kinds.count("🟢") == 1 and kinds.count("🔴") == 1 and kinds.count("🟡") == 0)
     ok &= good
     cases += 1
     print(f"{'✅' if good else '🔴'} карточка #516 ①: срок в будущем → 🟢, а настоящий дефект "
-          f"в той же записи остаётся 🔴 → получено {''.join(виды) or 'ничего'} (ждём 🟢+🔴)")
+          f"в той же записи остаётся 🔴 → получено {''.join(kinds) or 'ничего'} (ждём 🟢+🔴)")
 
     # ② ВСТРЕЧНЫЙ: тот же текст ПОСЛЕ наступления срока. Сильный признак больше не работает,
     #    и красное обязано смениться жёлтым — но НЕ исчезнуть: слово срока не оправдание.
-    hits = check_section(ТЕЛО_СРОК, СОХРАНЁН, now=datetime(2026, 8, 31, 3, 0))
-    виды = [k[0] for k, _, _ in hits]
-    good = (виды.count("🟢") == 0 and виды.count("🟡") >= 1 and виды.count("🔴") == 1)
+    hits = check_section(BODY_DEADLINE, SAVED, now=datetime(2026, 8, 31, 3, 0))
+    kinds = [k[0] for k, _, _ in hits]
+    good = (kinds.count("🟢") == 0 and kinds.count("🟡") >= 1 and kinds.count("🔴") == 1)
     ok &= good
     cases += 1
     print(f"{'✅' if good else '🔴'} карточка #516 ②: тот же текст ПОСЛЕ срока → 🟡 (не 🟢 "
-          f"и не пропажа), дефект по-прежнему 🔴 → получено {''.join(виды)} (ждём 🟡+🔴)")
+          f"и не пропажа), дефект по-прежнему 🔴 → получено {''.join(kinds)} (ждём 🟡+🔴)")
 
     # ③ ВСТРЕЧНЫЙ к словарю: слово срока ДАЛЕКО от метки не спасает.
     #    Живой случай — записка #2388: местное под UTC в начале, «watch-стопа (стоп studio)»
     #    в 420 знаках правее. Первая редакция понижала её до жёлтого.
-    ДАЛЕКО = ("[STUD 2026-07-18 20:03 UTC] DONE страница ЖИВАЯ" + " ." * 200
+    FAR = ("[STUD 2026-07-18 20:03 UTC] DONE страница ЖИВАЯ" + " ." * 200
               + " правка хоста сделана в окне watch-стопа (стоп studio->правка->старт)")
-    hits = check_section(ДАЛЕКО, СОХРАНЁН, now=datetime(2026, 8, 31, 3, 0))
-    виды = [k[0] for k, _, _ in hits]
-    good = виды.count("🔴") == 1 and виды.count("🟡") == 0
+    hits = check_section(FAR, SAVED, now=datetime(2026, 8, 31, 3, 0))
+    kinds = [k[0] for k, _, _ in hits]
+    good = kinds.count("🔴") == 1 and kinds.count("🟡") == 0
     ok &= good
     cases += 1
     print(f"{'✅' if good else '🔴'} карточка #516 ③: слово срока ДАЛЕКО от метки не понижает "
-          f"→ получено {''.join(виды) or 'ничего'} (ждём ровно 🔴)")
+          f"→ получено {''.join(kinds) or 'ничего'} (ждём ровно 🔴)")
 
     # ④ 🩸 НАХОДКА @STUD ПРИ ПРИЁМКЕ карточки #516: свежий дефект БЕЗ слова срока.
     #    Роль пишет записку СЕЙЧАС; ошибись она поясом — её метка тоже впереди часа
     #    прогона. Первая редакция звала это сроком и гасила ровно тот класс, ради
     #    которого проверка заведена. Случай построен ЕГО контролем, дословно.
-    ТЕЛО_СВЕЖИЙ = "подпись — STUD 2026-08-31 02:03 UTC"
-    hits = check_section(ТЕЛО_СВЕЖИЙ, "2026-08-31 00:03:00", now=datetime(2026, 8, 31, 0, 30))
-    виды = [k[0] for k, _, _ in hits]
-    good = виды == ["🔴"]
+    BODY_FRESH = "подпись — STUD 2026-08-31 02:03 UTC"
+    hits = check_section(BODY_FRESH, "2026-08-31 00:03:00", now=datetime(2026, 8, 31, 0, 30))
+    kinds = [k[0] for k, _, _ in hits]
+    good = kinds == ["🔴"]
     ok &= good
     cases += 1
     print(f"{'✅' if good else '🔴'} карточка #516 ④: свежий дефект в будущем БЕЗ слова срока "
-          f"остаётся 🔴 → получено {''.join(виды) or 'ничего'} (ждём ровно 🔴)")
+          f"остаётся 🔴 → получено {''.join(kinds) or 'ничего'} (ждём ровно 🔴)")
 
     # ⑤ ВСТРЕЧНЫЙ к ④: та же метка, но со словом срока рядом ⇒ 🟢. Без этой пары
     #    случай ④ доказывал бы только «краснеет всегда».
-    ТЕЛО_СРОК_РЯДОМ = "🛑 стоп сверок — 2026-08-31 02:03 UTC"
-    hits = check_section(ТЕЛО_СРОК_РЯДОМ, "2026-08-31 00:03:00", now=datetime(2026, 8, 31, 0, 30))
-    виды = [k[0] for k, _, _ in hits]
-    good = виды == ["🟢"]
+    BODY_DEADLINE_NEAR = "🛑 стоп сверок — 2026-08-31 02:03 UTC"
+    hits = check_section(BODY_DEADLINE_NEAR, "2026-08-31 00:03:00", now=datetime(2026, 8, 31, 0, 30))
+    kinds = [k[0] for k, _, _ in hits]
+    good = kinds == ["🟢"]
     ok &= good
     cases += 1
     print(f"{'✅' if good else '🔴'} карточка #516 ⑤: та же метка СО СЛОВОМ срока рядом → 🟢 "
-          f"→ получено {''.join(виды) or 'ничего'} (ждём ровно 🟢)")
+          f"→ получено {''.join(kinds) or 'ничего'} (ждём ровно 🟢)")
 
     # Ноль случаев — это КРАСНЫЙ, замаскированный под зелёный. Отказываем вслух.
     if cases == 0:
