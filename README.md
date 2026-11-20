@@ -76,6 +76,7 @@ gordipack/
 ├── scripts/                     ← при init-group КОПИРУЮТСЯ в <container>/.mezosync/scripts/
 │   ├── init-group.py · bridge-groups.py           ← бутстрап группы / связь групп
 │   ├── update-tools.py                            ← обновить инструменты контура из пакета (--rev, --merge)
+│   ├── verify-install.py                          ← сверить тела установленных файлов с записью установки (только чтение)
 │   ├── rules-from-pack.py                         ← сверить свод правил контура с пакетом, взять новое
 │   ├── schema_step_order.py · migrations/         ← порядок шагов схемы и сами шаги
 │   ├── read-messages.py · write-message.py        ← лента (read: разрезанный ACK-токен)

@@ -75,6 +75,7 @@ scripts/track.py
 scripts/unsaved.py
 scripts/update-tools.py
 scripts/urgency.py
+scripts/verify-install.py
 scripts/write-message.py
 vnext/prototype/init-group-vnext.py
 vnext/prototype/guard-printed-forms.py
