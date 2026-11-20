@@ -2294,12 +2294,17 @@ def cases_e3p1(args, work, manifest, contract_doc, carg, v5):
             notes4.append("%s без режима: код %s, текст %s общей справке (знаков %d против %d)"
                           % (flag, c, "равен" if o == ref_o else "НЕ равен", len(o), len(ref_o)))
     ref_tc, ref_tool_text, _, _ = run_cli(exe, ["help", probe, "--contract", marker_contract])
+    # две формы вызова: голая — справка обязана выйти и без обязательных аргументов; полная — только она
+    # способна запустить тело, поэтому лишь на ней «следа запуска нет» что-то различает (находка приёмки чужой рукой)
+    help_forms = (("без аргументов", []), ("с полными аргументами", [cflag, CONTOUR_STAND, "--text", "x"]))
     for flag in ("--help", "-h"):
-        c, o, e, to = run_cli(exe, ["run", probe, flag, "--contract", marker_contract, "--contours", m_stub_path])
-        if to:
-            notes4.append("run %s %s: %s" % (probe, flag, timed_out_note("", True)))
-        elif c != 0 or o != ref_tool_text or not o.strip():
-            notes4.append("run %s %s: код %s, текст %s справке по вызову" % (probe, flag, c, "равен" if o == ref_tool_text else "НЕ равен"))
+        for form, extra in help_forms:
+            c, o, e, to = run_cli(exe, ["run", probe] + extra + [flag, "--contract", marker_contract, "--contours", m_stub_path])
+            if to:
+                notes4.append("run %s %s (%s): %s" % (probe, flag, form, timed_out_note("", True)))
+            elif c != 0 or o != ref_tool_text or not o.strip():
+                notes4.append("run %s %s (%s): код %s, текст %s справке по вызову"
+                              % (probe, flag, form, c, "равен" if o == ref_tool_text else "НЕ равен"))
     if os.path.exists(marker):
         notes4.append("тело инструмента-заглушки запустилось от --help: файл-отметка есть")
     # встречная проба: тот же вызов без --help тело запускает — иначе «следа нет» ничего бы не доказывало
@@ -2308,7 +2313,7 @@ def cases_e3p1(args, work, manifest, contract_doc, carg, v5):
     if not control:
         notes4.append("встречная проба: вызов без --help тело заглушки НЕ запустил, отметка не появилась — случай ничего не доказывает")
     v5.add("814-С4", not notes4, "--help и -h без режима дают общую справку и завершаются сами за %d с; run <вызов> --help не запускает тело" % HELP_LIMIT_S,
-           "проверено: --help и -h без режима · run %s --help и -h на заглушке · встречная проба (след запуска без --help есть: %s)\n%s"
+           "проверено: --help и -h без режима · run %s --help и -h на заглушке, без аргументов и с полными · встречная проба (след запуска без --help есть: %s)\n%s"
            % (probe, control, "\n".join(notes4) if notes4 else "тексты равны справкам, следа запуска от --help нет"))
 
     # ───────────── С5 справка без манифеста контуров
