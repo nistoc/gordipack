@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using System.Text.Json.Nodes;
 
 namespace GordiWall;
 
@@ -8,6 +9,7 @@ namespace GordiWall;
 /// полон ли текст и кто её судит.
 /// Предупреждения тела (поток ошибок) идут ОТДЕЛЬНЫМ полем и к тексту не приклеиваются.
 /// Длинный вывод выдаётся частями: part / parts / next_part; у ответа не по частям part=1, parts=1.
+/// Details — необязательные поля, которые объявляет сам вызов (у contour_info это блоки manifest и judge); у остальных вызовов null.
 /// </summary>
 public sealed record Answer(
     Outcome Outcome,
@@ -23,7 +25,8 @@ public sealed record Answer(
     int Parts = 1,
     string? NextPart = null,
     Outcome? FinalOutcome = null,
-    string? NextHint = null)
+    string? NextHint = null,
+    JsonObject? Details = null)
 {
     /// <summary>Строка, которой кончается блок предупреждений: по ней отделяют предупреждения от текста.</summary>
     public const string WarningsEnd = "── конец предупреждений ──";
@@ -214,66 +217,24 @@ public sealed class ToolRunner(Contract contract, Manifest manifest, bool readOn
         return null;
     }
 
-    // ── «кто меня судит» отвечает сама стена: это единственный вызов, который обязан
-    //    отвечать и тогда, когда за стеной ничего не работает
+    // ── «кто меня судит» отвечает сама стена: это единственный вызов, который обязан отвечать и тогда, когда за стеной
+    //    ничего не работает. Ответ строится из ПОЛЕЙ (значение · источник · состояние): текст — из тех же объектов,
+    //    структура для CLI и MCP — из них же. Исход всегда «прошло»: «нечем проверить» говорит поле, а не вызов.
     private Answer Builtin(ToolExec exec, ContourInfo contour)
     {
         if (exec.Builtin != "contour_info")
             return Answer.Refuse($"встроенного ответчика «{exec.Builtin}» нет", contour.Id, ToolingVersion(contour));
 
-        var sb = new StringBuilder();
-        sb.AppendLine("── отвечает САМА стена (эта половина есть всегда, даже когда за стеной ничего не работает)");
-        sb.AppendLine($"контур ................. {contour.Id} — {contour.Title}");
-        sb.AppendLine($"хранилище .............. {contour.Storage}");
-        foreach (var (key, dir) in contour.ToolDirs)
-            sb.AppendLine($"каталог «{key}» ........ {dir}");
-        sb.AppendLine($"договор ................ {_contract.Path}");
-        sb.AppendLine($"версия договора ........ {_contract.Version} (этап {_contract.Stage})");
-        sb.AppendLine($"отпечаток договора ..... {_contract.Fingerprint} (по содержимому файла)");
-        sb.AppendLine($"вызовов в договоре ..... {_contract.Tools.Count}, отпечаток перечня {_contract.ToolsFingerprint()}");
-        sb.AppendLine($"режим стены ............ {(_readOnly ? "только-чтение" : "чтение и запись")}");
-        sb.AppendLine($"манифест контуров ...... {_manifest.Path}");
-        foreach (var line in BuildInfo.Lines())
-            sb.AppendLine(line);
+        Func<string, int, StorageResult> ask = (sql, limit) => AskStorage(contour, sql, limit);
+        var install = InstallRecord.Read(ask);
+        var manifestFields = ContourReport.ManifestBlock(_manifest, contour, install);
+        var judgeFields = ContourReport.JudgeBlock(_contract, RulesRecord.Read(ask));
+        var notes = ContourReport.Notes(contour);
+        var text = ContourReport.Text(_contract, _manifest, contour, _readOnly, manifestFields, judgeFields, notes);
 
-        // Вторая половина — из ХРАНИЛИЩА контура: там установщик и пишет версию.
-        // Манифест её не держит намеренно: два списка версий расходятся молча.
-        sb.AppendLine();
-        const string sql = "SELECT key, value FROM meta WHERE key IN "
-            + "('group_name','template_commit','template_source','template_recorded_at','template_checkout','md_phase') "
-            + "UNION ALL SELECT 'template_files_count', count(*) FROM json_each((SELECT value FROM meta WHERE key='template_files_sha'))";
-        var answered = AskStorage(contour, sql, out var meta);
-        if (answered && !HasInstallerRecord(meta))
-        {
-            // Хранилище ответило, но установщик в него ничего не записал: это не «всё совпадает» и не «ответ есть».
-            sb.AppendLine("── из хранилища контура: хранилище ответило, записи установщика НЕТ — нечем проверить");
-            sb.AppendLine(meta.TrimEnd());
-            sb.Append("⚠️ в таблице meta нет строк template_* (commit, источник, час записи, отпечатки). Версия тулинга и отпечаток установки "
-                      + "НЕ ПРОЧИТАНЫ: нечем проверить, а не «всё совпадает». "
-                      + Or(contour.Tooling.Version, "Запасного поля в манифесте тоже нет"));
-        }
-        else if (answered)
-        {
-            sb.AppendLine("── из хранилища контура (запись установщика; это и есть источник о версии тулинга)");
-            sb.Append(meta.TrimEnd());
-            sb.AppendLine();
-            sb.Append("⚖️ отпечатки установленных файлов считаются по СОДЕРЖИМОМУ (meta.template_files_sha), "
-                      + "а не по именам: сверка по именам уже один раз показала совпадение там, где его не было (карточка 771)");
-        }
-        else
-        {
-            sb.AppendLine("── из хранилища контура: НЕ ОТВЕТИЛО");
-            sb.Append("⚠️ версия тулинга и отпечатки установки НЕ ПРОЧИТАНЫ. Это «нечем проверить», а не «всё совпадает». "
-                      + Or(contour.Tooling.Version, "Запасного поля в манифесте тоже нет"));
-        }
-
-        return new Answer(Outcome.Passed, false, null, sb.ToString(), contour.Id, ToolingVersion(contour), null, null);
+        return new Answer(Outcome.Passed, false, null, text, contour.Id, ToolingVersion(contour), null, null,
+                          Details: ContourReport.Details(manifestFields, judgeFields, notes));
     }
-
-    /// <summary>В ответе хранилища есть хотя бы одна строка установщика (template_commit и соседние). Счётчик файлов есть всегда — он не признак.</summary>
-    private static bool HasInstallerRecord(string meta) =>
-        meta.Split('\n').Select(l => l.Split('\t')[0].Trim())
-            .Any(k => k.StartsWith("template_", StringComparison.Ordinal) && k != "template_files_count");
 
     private async Task<Answer> RunPythonAsync(ToolDef tool, ToolExec exec, ContourInfo contour,
                                               IReadOnlyDictionary<string, object?> given, CancellationToken ct)
@@ -625,38 +586,37 @@ public sealed class ToolRunner(Contract contract, Manifest manifest, bool readOn
         return string.Equals(s, "true", StringComparison.OrdinalIgnoreCase) || s == "1";
     }
 
-    private static string Or(string value, string whenEmpty) => string.IsNullOrWhiteSpace(value) ? whenEmpty : value;
-
     // ──────────────────── версия тулинга: спрашиваем ХРАНИЛИЩЕ контура
 
     private string ToolingVersion(ContourInfo contour)
     {
         if (_versionCache.TryGetValue(contour.Id, out var cached)) return cached;
 
+        // Общее поле ответа «версия тулинга» берётся ТОЛЬКО из хранилища; нечем взять — пустая строка, а не догадка
         var value = "";
-        if (AskStorage(contour, "SELECT value FROM meta WHERE key='template_commit'", out var text))
+        var asked = AskStorage(contour, "SELECT value FROM meta WHERE key='template_commit'", 10);
+        if (asked.Ok && asked.Rows.Count == 1 && asked.Rows[0].Length == 1)
         {
-            // Вывод читающего инструмента: шапка, имя столбца, значения. Берём последнюю непустую строку.
-            var last = text.Split('\n', StringSplitOptions.RemoveEmptyEntries).LastOrDefault()?.Trim() ?? "";
-            if (last.Length is > 0 and <= 80 && !last.StartsWith("──", StringComparison.Ordinal) && last != "value")
-                value = last;
+            var one = asked.Rows[0][0].Trim();
+            if (one.Length is > 0 and <= 80 && one != StorageResult.NullMark) value = one;
         }
-
-        if (value.Length == 0)
-            // Не выдумываем: пусто — значит хранилище не ответило, а запасное поле манифеста необязательно
-            value = string.IsNullOrWhiteSpace(contour.Tooling.Version) ? "" : contour.Tooling.Version + " (из манифеста, не из хранилища)";
 
         _versionCache[contour.Id] = value;
         return value;
     }
 
-    /// <summary>Один читающий запрос к хранилищу контура через штатный читающий инструмент. Ничего не меняет.</summary>
-    private bool AskStorage(ContourInfo contour, string sql, out string text)
+    /// <summary>
+    /// Один читающий запрос к хранилищу контура через штатный читающий инструмент (db-q.py). Ничего не меняет.
+    /// Ответ разбирается недоверчиво (StorageResult.Parse): число строк сверено с шапкой, слова об обрезании, пустой ответ
+    /// и неразбираемая форма дают отказ с причиной, а не значение из усечённого чтения. limit — явный предел строк запроса.
+    /// </summary>
+    private StorageResult AskStorage(ContourInfo contour, string sql, int limit)
     {
-        text = "";
-        if (!contour.ToolDirs.TryGetValue("runtime", out var dir)) return false;
+        if (!contour.ToolDirs.TryGetValue("runtime", out var dir))
+            return StorageResult.Fail("хранилище не ответило: у контура не объявлен каталог инструментов «runtime»");
         var script = Path.Combine(dir, "db-q.py");
-        if (!File.Exists(script)) return false;
+        if (!File.Exists(script))
+            return StorageResult.Fail($"хранилище не ответило: читающего инструмента db-q.py нет на месте: {script}");
 
         try
         {
@@ -673,6 +633,8 @@ public sealed class ToolRunner(Contract contract, Manifest manifest, bool readOn
             psi.ArgumentList.Add(script);
             psi.ArgumentList.Add("--db");
             psi.ArgumentList.Add(contour.Storage);
+            psi.ArgumentList.Add("--limit");
+            psi.ArgumentList.Add(limit.ToString(System.Globalization.CultureInfo.InvariantCulture));
             psi.ArgumentList.Add(sql);
             foreach (var key in psi.Environment.Keys.Where(k => k.StartsWith("MEZO_", StringComparison.OrdinalIgnoreCase)).ToList())
                 psi.Environment.Remove(key);
@@ -680,21 +642,27 @@ public sealed class ToolRunner(Contract contract, Manifest manifest, bool readOn
             psi.Environment["PYTHONIOENCODING"] = "utf-8";
 
             using var p = Process.Start(psi);
-            if (p is null) return false;
-            var stdout = p.StandardOutput.ReadToEnd();
-            var stderr = p.StandardError.ReadToEnd();
+            if (p is null) return StorageResult.Fail("хранилище не ответило: процесс читающего инструмента не запустился");
+            var stdoutTask = p.StandardOutput.ReadToEndAsync();
+            var stderrTask = p.StandardError.ReadToEndAsync();
             if (!p.WaitForExit(20_000))
             {
                 try { p.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
-                return false;
+                return StorageResult.Fail("хранилище не ответило: читающий инструмент не уложился в 20 с и остановлен");
             }
-            if (p.ExitCode != 0) { text = stderr; return false; }
-            text = stdout;
-            return true;
+            var stdout = stdoutTask.GetAwaiter().GetResult();
+            var stderr = stderrTask.GetAwaiter().GetResult();
+            if (p.ExitCode != 0)
+            {
+                var first = stderr.Split('\n').Select(l => l.Trim()).FirstOrDefault(l => l.Length > 0) ?? "(поток ошибок пуст)";
+                if (first.Length > 160) first = first[..160] + "…";
+                return StorageResult.Fail($"хранилище не ответило: читающий инструмент вернул код {p.ExitCode}: {first}");
+            }
+            return StorageResult.Parse(stdout, stderr);
         }
         catch (Exception e) when (e is System.ComponentModel.Win32Exception or IOException)
         {
-            return false;
+            return StorageResult.Fail("хранилище не ответило: " + e.Message);
         }
     }
 }

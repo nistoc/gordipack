@@ -2,15 +2,16 @@ using System.Text.Json;
 
 namespace GordiWall;
 
-public sealed record ToolingInfo(string Version, string Source, string Hash, string InstalledAt);
-
-/// <summary>Один контур: ЕГО хранилище и ЕГО каталоги инструментов.</summary>
+/// <summary>
+/// Один контур: ЕГО хранилище и ЕГО каталоги инструментов. О версии и отпечатках тулинга манифест НЕ судит: их пишет
+/// установщик в хранилище. LegacyToolingBlock — только ФАКТ «в файле остался блок tooling»; его значения не читаются.
+/// </summary>
 public sealed record ContourInfo(
     string Id,
     string Title,
     string Storage,
     IReadOnlyDictionary<string, string> ToolDirs,
-    ToolingInfo Tooling);
+    bool LegacyToolingBlock);
 
 /// <summary>
 /// Манифест контуров. Отвечает на имя контура, переданное В ВЫЗОВЕ, — и только на него.
@@ -48,20 +49,12 @@ public sealed class Manifest
                 foreach (var p in jt.EnumerateObject())
                     if (p.Value.GetString() is { } dir) dirs[p.Name] = dir;
 
-            var tooling = new ToolingInfo("", "", "", "");
-            if (c.TryGetProperty("tooling", out var jg) && jg.ValueKind == JsonValueKind.Object)
-                tooling = new ToolingInfo(
-                    Str(jg, "version") ?? "",
-                    Str(jg, "source") ?? "",
-                    Str(jg, "hash") ?? "",
-                    Str(jg, "installed_at") ?? "");
-
             contours.Add(new ContourInfo(
                 Id: Str(c, "id") ?? throw new InvalidDataException("в манифесте контур без имени"),
                 Title: Str(c, "title") ?? "",
                 Storage: Str(c, "storage") ?? throw new InvalidDataException("в манифесте контур без хранилища"),
                 ToolDirs: dirs,
-                Tooling: tooling));
+                LegacyToolingBlock: c.TryGetProperty("tooling", out _)));
         }
 
         return new Manifest
