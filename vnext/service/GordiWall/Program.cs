@@ -9,7 +9,8 @@ namespace GordiWall;
 /// Стена контура gordi. Три режима одной сборки — договор у них ОДИН файл:
 ///   serve  — служба MCP по стандартному вводу-выводу (роли зовут её как инструменты);
 ///   run    — однократный вызов мимо службы, ТОЛЬКО чтение (запас на случай, когда служба не поднялась);
-///   tools  — перечень вызовов и отпечатки (ими судит приёмка).
+///   tools  — перечень вызовов и отпечатки (ими судит приёмка);
+///   help   — справка: общая и по вызову (то же дают --help и -h). Ей нужен только договор.
 /// </summary>
 public static class Program
 {
@@ -19,22 +20,76 @@ public static class Program
         WriteIndented = false,
     };
 
+    // ────────────────────────────────── перечень режимов: ОДНО место, его берут справка и отказ «режима нет»
+
+    private const string ServeMode = "serve", RunMode = "run", ToolsMode = "tools", HelpMode = "help";
+
+    private sealed record ModeInfo(string Name, string Purpose);
+
+    private static readonly ModeInfo[] Modes =
+    [
+        new(ServeMode, "служба MCP по стандартному вводу-выводу (так её зовут роли)"),
+        new(RunMode, "однократный вызов мимо службы, только чтение (запас на случай, когда служба не поднялась)"),
+        new(ToolsMode, "перечень вызовов, число и отпечатки договора (ими судит приёмка)"),
+        new(HelpMode, "эта справка; «help <вызов>» — справка по вызову; то же дают --help и -h"),
+    ];
+
+    private static string ModeNames => string.Join(" · ", Modes.Select(m => m.Name));
+
+    // ────────────────────────────────── исход → код выхода режима run: ОДНО место, его берут RunOnceAsync и справка
+
+    private static readonly (Outcome Outcome, int Code)[] ExitCodes =
+    [
+        (Outcome.Passed, 0),
+        (Outcome.Mismatch, 1),
+        (Outcome.NotStarted, 2),
+        (Outcome.CannotVerify, 3),
+        (Outcome.Refused, 4),
+        (Outcome.Partial, 5),       // ответ отдан частями: есть продолжение (аргумент next_part)
+        (Outcome.ToolFailed, 6),    // тело запустилось и отказало определённо (ненулевой код тела), причина — в error
+    ];
+
+    // Код выхода ПОВТОРЯЕТ типизированный исход, а не заменяет его: договор — в тексте. Неизвестный исход — как отказ.
+    private static int ExitCodeOf(Outcome o) =>
+        ExitCodes.Where(e => e.Outcome == o).Select(e => e.Code).DefaultIfEmpty(4).First();
+
+    // Код отказа до исполнения: и для отказов самого режима (нет договора, нет вызова), и для исхода Refused.
+    private static readonly int RefusalCode = ExitCodeOf(Outcome.Refused);
+
     public static async Task<int> Main(string[] rawArgs)
     {
         Console.OutputEncoding = new UTF8Encoding(false);
         var args = rawArgs.ToList();
-        var mode = args.Count > 0 && !args[0].StartsWith('-') ? args[0] : "serve";
-        if (args.Count > 0 && !args[0].StartsWith('-')) args.RemoveAt(0);
+
+        // --help и -h распознаются ДО выбора режима по умолчанию: иначе первый аргумент с «-» дал бы режим serve,
+        // и вместо справки поднялась бы служба и стала ждать ввода.
+        var wantsHelp = args.Any(IsHelpFlag);
+        string mode;
+        if (args.Count > 0 && !args[0].StartsWith('-'))
+        {
+            mode = args[0];
+            args.RemoveAt(0);
+        }
+        else mode = wantsHelp ? HelpMode : ServeMode;
+
+        // Справку по вызову берут режимы help и run (run <вызов> --help); у остальных режимов справка общая
+        var modeTakesTool = mode is RunMode or HelpMode;
+        if (wantsHelp && Modes.Any(m => m.Name == mode))
+        {
+            args.RemoveAll(IsHelpFlag);
+            mode = HelpMode;
+        }
 
         var contractPath = Take(args, "--contract") ?? Environment.GetEnvironmentVariable("GORDI_CONTRACT") ?? ProbeContract();
         var contoursPath = Take(args, "--contours") ?? Environment.GetEnvironmentVariable("GORDI_CONTOURS") ?? ProbeContours();
-        var readOnly = TakeSwitch(args, "--read-only") || mode == "run";
+        var readOnly = TakeSwitch(args, "--read-only") || mode == RunMode;
+        var helpTool = mode == HelpMode && modeTakesTool && args.Count > 0 && !args[0].StartsWith('-') ? args[0] : null;
 
         if (contractPath is null)
         {
             await Console.Error.WriteLineAsync("отказ: файла договора нет. Укажите --contract <путь> или GORDI_CONTRACT. "
                 + "Ожидался contract/gordi-contract.json рядом со сборкой или выше по дереву.");
-            return 4;
+            return RefusalCode;
         }
 
         Contract contract;
@@ -45,18 +100,22 @@ public static class Program
         catch (Exception e) when (e is IOException or JsonException or InvalidDataException)
         {
             await Console.Error.WriteLineAsync($"отказ: договор не читается ({contractPath}): {e.Message}");
-            return 4;
+            return RefusalCode;
         }
 
-        if (mode == "tools")
+        if (mode == ToolsMode)
             return await PrintToolsAsync(contract, contoursPath);
+
+        // Справке нужен только договор: ветка стоит ДО проверки манифеста контуров, как и tools
+        if (mode == HelpMode)
+            return await PrintHelpAsync(contract, helpTool);
 
         if (contoursPath is null)
         {
             await Console.Error.WriteLineAsync("отказ: манифеста контуров нет. Укажите --contours <путь> или GORDI_CONTOURS. "
                 + "Стена НАМЕРЕННО не угадывает контур по своему расположению: образец — contour/gordi-contours.example.json, "
                 + "боевой файл кладёт установщик тулинга под именем contour/gordi-contours.json.");
-            return 4;
+            return RefusalCode;
         }
 
         Manifest manifest;
@@ -67,23 +126,149 @@ public static class Program
         catch (Exception e) when (e is IOException or JsonException or InvalidDataException)
         {
             await Console.Error.WriteLineAsync($"отказ: манифест не читается ({contoursPath}): {e.Message}");
-            return 4;
+            return RefusalCode;
         }
 
         var runner = new ToolRunner(contract, manifest, readOnly);
 
         return mode switch
         {
-            "serve" => await ServeAsync(contract, manifest, runner),
-            "run" => await RunOnceAsync(contract, runner, args),
+            ServeMode => await ServeAsync(contract, manifest, runner),
+            RunMode => await RunOnceAsync(contract, runner, args),
             _ => await UnknownModeAsync(mode),
         };
     }
 
+    private static bool IsHelpFlag(string a) =>
+        string.Equals(a, "--help", StringComparison.Ordinal) || string.Equals(a, "-h", StringComparison.Ordinal);
+
     private static async Task<int> UnknownModeAsync(string mode)
     {
-        await Console.Error.WriteLineAsync($"отказ: режима «{mode}» нет. Есть: serve · run · tools");
-        return 4;
+        await Console.Error.WriteLineAsync($"отказ: режима «{mode}» нет. Есть: {ModeNames}");
+        return RefusalCode;
+    }
+
+    // ────────────────────────────────── справка: всё из договора и из двух мест кода (режимы, коды выхода)
+
+    private static string ModeWord(ToolDef t) => t.Mode == "write" ? "запись" : "чтение";
+
+    /// <summary>Имя аргумента как флаг командной строки: «next_part» → «--next-part» (обратное правило — в RunOnceAsync).</summary>
+    private static string Flag(string argName) => "--" + argName.Replace('_', '-');
+
+    /// <summary>Первые строки договора: их печатают и tools, и справка, расходиться им не с чем.</summary>
+    private static void AppendContractLines(StringBuilder sb, Contract contract)
+    {
+        sb.AppendLine($"договор ................ {contract.Path}");
+        sb.AppendLine($"версия ................. {contract.Version} (этап {contract.Stage})");
+        sb.AppendLine($"отпечаток договора ..... {contract.Fingerprint}");
+        sb.AppendLine($"отпечаток перечня ...... {contract.ToolsFingerprint()}");
+    }
+
+    private static async Task<int> PrintHelpAsync(Contract contract, string? toolName)
+    {
+        if (toolName is null)
+        {
+            await Console.Out.WriteAsync(GeneralHelp(contract));
+            return 0;
+        }
+
+        var tool = contract.Find(toolName);
+        if (tool is null)
+        {
+            // стандартный вывод остаётся пустым: справка по несуществующему вызову не должна ничего выдавать за ответ
+            await Console.Error.WriteLineAsync($"отказ: вызова «{toolName}» в договоре нет. Есть: "
+                + string.Join(" · ", contract.Tools.Select(t => t.Name)));
+            return RefusalCode;
+        }
+
+        await Console.Out.WriteAsync(ToolHelp(contract, tool));
+        return 0;
+    }
+
+    private static string GeneralHelp(Contract contract)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("gordi-wall — стена контура: вызовы тулинга по одному файлу договора");
+        sb.AppendLine();
+        sb.AppendLine("режимы:");
+        foreach (var m in Modes)
+            sb.AppendLine($"  {m.Name,-8} {m.Purpose}");
+        sb.AppendLine();
+        sb.AppendLine("договор:");
+        AppendContractLines(sb, contract);
+        sb.AppendLine();
+        sb.AppendLine($"вызовы ({contract.Tools.Count}): чтение или запись · имя · заголовок");
+        foreach (var t in contract.Tools)
+            sb.AppendLine($"  {ModeWord(t)}  {t.Name,-18} {t.Title}");
+        sb.AppendLine();
+        sb.AppendLine("форма вызова в режиме run (только чтение):");
+        // Имя аргумента выбора контура — из договора, как и в отказе «не назван вызов»
+        sb.AppendLine($"  gordi-wall run <вызов> {Flag(contract.ContourArgName)} <контур> [--аргумент значение]");
+        sb.AppendLine("справка по вызову:");
+        sb.AppendLine("  gordi-wall help <вызов>");
+        sb.AppendLine();
+        sb.AppendLine("исход вызова и код выхода режима run:");
+        foreach (var (outcome, code) in ExitCodes)
+            sb.AppendLine($"  {code}  {OutcomeNames.Id(outcome),-14} {OutcomeNames.Title(outcome)}");
+        return sb.ToString();
+    }
+
+    private static string ToolHelp(Contract contract, ToolDef t)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"вызов {t.Name} — {ModeWord(t)}");
+        sb.AppendLine($"заголовок: {t.Title}");
+        if (!string.IsNullOrEmpty(t.Description))
+            sb.AppendLine($"описание: {t.Description.ReplaceLineEndings(" ")}");
+        sb.AppendLine();
+        sb.AppendLine("общие аргументы (у каждого вызова):");
+        foreach (var a in contract.CommonArgs)
+            AppendArg(sb, a);
+        sb.AppendLine("аргументы вызова:");
+        if (t.Args.Count == 0)
+            sb.AppendLine("  нет");
+        foreach (var a in t.Args)
+            AppendArg(sb, a);
+        if (t.HasVariants)
+        {
+            sb.AppendLine("варианты (строки те же, что в режиме tools):");
+            // строки вариантов строятся из договора, руками не пишутся
+            foreach (var line in Contract.VariantLines(t))
+                sb.AppendLine($"  {line}");
+        }
+        sb.AppendLine(t.ServiceWrites is { Count: > 0 } writes
+            ? $"служебные записи: {string.Join(", ", writes)}"
+            : t.ServiceWrites is null ? "служебные записи: в договоре не объявлены" : "служебные записи: нет");
+        sb.AppendLine();
+        sb.AppendLine("пример формы вызова через run:");
+        sb.AppendLine($"  {ExampleLine(contract, t)}");
+        if (t.Mode == "write")
+            sb.AppendLine("  режим run этот вызов отвергнет: он пишет; зовите его через службу MCP.");
+        else if (t.HasVariants)
+            sb.AppendLine("  обязательное по вариантам — в строках вариантов выше.");
+        return sb.ToString();
+    }
+
+    private static void AppendArg(StringBuilder sb, ToolArg a)
+    {
+        var line = $"  {Flag(a.Name)} <{a.Type}> · {(a.Required ? "обязателен" : "не обязателен")}";
+        if (a.Enum is { Count: > 0 } values)
+            line += " · значения: " + string.Join(" | ", values);
+        sb.AppendLine(line);
+        if (!string.IsNullOrEmpty(a.Description))
+            sb.AppendLine("      " + a.Description.ReplaceLineEndings(" "));
+    }
+
+    /// <summary>Форма вызова: обязательные общие аргументы и все аргументы вызова (необязательные — в скобках).</summary>
+    private static string ExampleLine(Contract contract, ToolDef t)
+    {
+        static string Placeholder(ToolArg a) =>
+            a.Selects == Contract.SelectsContour ? " <контур>" : a.Type == "bool" ? "" : $" <{a.Type}>";
+
+        var parts = new List<string> { "gordi-wall", RunMode, t.Name };
+        parts.AddRange(contract.CommonArgs.Where(a => a.Required).Select(a => Flag(a.Name) + Placeholder(a)));
+        parts.AddRange(t.Args.Select(a => a.Required ? Flag(a.Name) + Placeholder(a) : "[" + Flag(a.Name) + Placeholder(a) + "]"));
+        return string.Join(" ", parts);
     }
 
     // ────────────────────────────────── перечень вызовов
@@ -91,19 +276,15 @@ public static class Program
     private static async Task<int> PrintToolsAsync(Contract contract, string? contoursPath)
     {
         var sb = new StringBuilder();
-        sb.AppendLine($"договор ................ {contract.Path}");
-        sb.AppendLine($"версия ................. {contract.Version} (этап {contract.Stage})");
-        sb.AppendLine($"отпечаток договора ..... {contract.Fingerprint}");
-        sb.AppendLine($"отпечаток перечня ...... {contract.ToolsFingerprint()}");
+        AppendContractLines(sb, contract);
         sb.AppendLine($"манифест контуров ...... {contoursPath ?? "НЕ НАЗВАН"}");
         sb.AppendLine($"вызовов ................ {contract.Tools.Count}");
         sb.AppendLine();
         var commonNames = string.Join(" ", contract.CommonArgs.Select(a => a.Required ? a.Name : "[" + a.Name + "]"));
         foreach (var t in contract.Tools)
         {
-            var mode = t.Mode == "write" ? "запись " : "чтение ";
             var argNames = t.Args.Count == 0 ? "—" : string.Join(" ", t.Args.Select(a => a.Required ? a.Name : "[" + a.Name + "]"));
-            sb.AppendLine($"  {mode} {t.Name,-18} {commonNames} {argNames}");
+            sb.AppendLine($"  {ModeWord(t)}  {t.Name,-18} {commonNames} {argNames}");
             if (t.ServiceWrites is { Count: > 0 } writes)
                 sb.AppendLine($"          служебные записи: {string.Join(", ", writes)}");
             // строки вариантов строятся из договора, руками не пишутся
@@ -123,7 +304,7 @@ public static class Program
             // Имя аргумента выбора контура — из договора, а не литерал: договор вправе его переименовать
             await Console.Error.WriteLineAsync("отказ: не назван вызов. Форма: gordi-wall run <вызов> --"
                 + contract.ContourArgName.Replace('_', '-') + " <контур> [--аргумент значение]");
-            return 4;
+            return RefusalCode;
         }
 
         var toolName = args[0];
@@ -148,17 +329,8 @@ public static class Program
         // У ответа по частям текст печатается как есть: лишний перевод строки сломал бы точность склейки частей
         if (answer.Parts == 1 && !answer.ForRole().EndsWith('\n')) await Console.Out.WriteLineAsync();
 
-        // Код выхода ПОВТОРЯЕТ типизированный исход, а не заменяет его: договор — в тексте
-        return answer.Outcome switch
-        {
-            Outcome.Passed => 0,
-            Outcome.Mismatch => 1,
-            Outcome.NotStarted => 2,
-            Outcome.CannotVerify => 3,
-            Outcome.Partial => 5,       // ответ отдан частями: есть продолжение (аргумент next_part)
-            Outcome.ToolFailed => 6,    // тело запустилось и отказало определённо (ненулевой код тела), причина — в error
-            _ => 4,
-        };
+        // Таблица «исход → код выхода» — одна, над Main: её же печатает справка
+        return ExitCodeOf(answer.Outcome);
     }
 
     // ────────────────────────────────── служба MCP по стандартному вводу-выводу

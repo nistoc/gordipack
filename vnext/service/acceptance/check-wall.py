@@ -58,6 +58,13 @@
 слоёв, применённым к КОПИИ; живая и учебная базы не трогаются. Три нарочные поломки (П1–П3) делаются копиями договора, и каждая
 обязана уронить РОВНО свои случаи и названным механизмом (список и прямой признак названы в BREAKS_781). Новые вызовы на живом контуре приёмка не зовёт вовсе.
 
+Карточка 814 (этап Э3, предмет П1) добавила раздел «Э3-П1»: справка службы строится из того же файла договора. Случаи С1–С8:
+С1 общая справка · С2 справка по каждому вызову · С3 незнакомый вызов (код 4) · С4 --help и -h без режима (предел 20 с на процесс,
+закрытый ввод) и run <вызов> --help без запуска тела · С5 без манифеста контуров · С6 копия договора с тринадцатым вызовом и
+переименованным аргументом, без пересборки · С7 перечень режимов в отказе и в справке · С8 таблица «исход → код выхода» против режима run
+на заглушках. Проверяющие С1–С3 и С6–С8 чистые (текст справки + договор + код выхода → исход); нарочные поломки Л1–Л3 портят ТЕКСТ,
+Л4 подаёт справку от целого договора в случай С6. Ключ --only-e3p1 судит один этот раздел (в том числе на сборке без справки: прогон «до»).
+
 Исход: 0 — все машинные критерии прошли; 1 — хоть один провалился; 2 — проверять было нечем;
 3 — сборка старше исходников, судить её нельзя (пересобрать и запустить снова).
 """
@@ -1864,6 +1871,545 @@ def cases_781(args, work, manifest, contract_doc, carg, v4):
     return results
 
 
+# ═══════════════════════════════════════ карточка 814, этап Э3, предмет П1: справка службы из того же файла договора
+#
+# Восемь случаев (С1–С8) и четыре нарочные поломки (Л1–Л4). Проверяющие функции С1–С3 и С6–С8 ЧИСТЫЕ: на входе текст справки,
+# разобранный договор, код выхода — на выходе (прошло, подробности). Поэтому поломки Л1–Л3 делаются над текстом, без пересборки
+# службы, а Л4 — подачей справки от ЦЕЛОГО договора в случай по копии договора.
+# Живой контур этому разделу не нужен вовсе: справка читает один файл договора, тела инструментов не запускаются
+# (кроме заглушек и только на контуре-копии базы).
+
+HELP_LIMIT_S = 20          # предел времени на один процесс справки: служба, ждущая ввода вместо справки, не должна зависнуть
+# Режимы названы РУКОЙ: перечня режимов в договоре нет, он живёт в одном месте кода службы (там же берёт его отказ «режима нет»)
+HELP_MODES = ["serve", "run", "tools", "help"]
+HELP_UNKNOWN_TOOL = "нет-такого-вызова"
+HELP_UNKNOWN_MODE = "нет-такого-режима"
+HELP_NEW_TOOL = "stand_probe_tool"          # тринадцатый вызов копии договора (случай С6)
+HELP_NEW_TITLE = "Нарочный тринадцатый вызов приёмки"
+HELP_RENAME = ("owner_words_find", "text", "fragment")   # (вызов, старое имя аргумента, новое имя) в копии договора (С6)
+HELP_RUN_STAND_CODES = {0: "passed", 1: "mismatch", 6: "tool_failed"}   # что даёт режим run на заглушках (С8)
+
+
+def help_flag(name):
+    """Имя аргумента как флаг командной строки: next_part → --next-part."""
+    return "--" + name.replace("_", "-")
+
+
+def squash(text):
+    """Пробельные последовательности в один пробел: описание в справке вправе перенестись."""
+    return " ".join((text or "").split())
+
+
+def help_section(text, header):
+    """Строки раздела справки: после строки, начинающейся с header, и до первой пустой строки. Нет раздела — None."""
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if line.startswith(header):
+            out = []
+            for x in lines[i + 1:]:
+                if not x.strip():
+                    break
+                out.append(x)
+            return out
+    return None
+
+
+def tools_contract_lines(tools_text):
+    """Из вывода режима tools: строки версии и двух отпечатков — их справка обязана повторить буква в букву."""
+    got = {}
+    for prefix in ("версия", "отпечаток договора", "отпечаток перечня"):
+        for line in tools_text.splitlines():
+            if line.startswith(prefix):
+                got[prefix] = line.strip()
+                break
+    return got
+
+
+def tools_variant_lines(tools_text, name):
+    """Из вывода режима tools: строки вариантов одного вызова (отступ глубокий, начинаются со слова «вариант»)."""
+    import re
+    out = []
+    inside = False
+    for line in tools_text.splitlines():
+        m = re.match(r"^  (чтение|запись)\s+(\S+)", line)
+        if m:
+            inside = (m.group(2) == name)
+            continue
+        if inside and line.strip().startswith("вариант "):
+            out.append(line.strip())
+    return out
+
+
+def arg_block(lines, flag):
+    """Блок аргумента в справке по вызову: его строка (отступ 2, начинается с флага) и строки описания (отступ 6)."""
+    for i, line in enumerate(lines):
+        if line.startswith("  ") and not line.startswith("   ") and line.strip().startswith(flag + " "):
+            block = [line]
+            for x in lines[i + 1:]:
+                if x.startswith("      "):
+                    block.append(x)
+                else:
+                    break
+            return block
+    return None
+
+
+def judge_help_general(text, doc, code, tools_text):
+    """С1. Общая справка: код 0 · на КАЖДЫЙ вызов договора строка с его именем и заголовком · режимов четыре ·
+    версия и отпечатки те же строки, что печатает режим tools · форма вызова run называет аргумент выбора контура из договора."""
+    notes = []
+    lines = text.splitlines()
+    if code != 0:
+        notes.append("код выхода %s, ждали 0" % code)
+    missing = [t["name"] for t in doc["tools"]
+               if not any(t["name"] in l and t["title"] in l for l in lines)]
+    if missing:
+        notes.append("нет строки с именем и заголовком вызова: %s" % ", ".join(missing))
+    mode_lines = help_section(text, "режимы:")
+    modes = [l.split()[0] for l in mode_lines if l.split()] if mode_lines else []
+    if sorted(modes) != sorted(HELP_MODES):
+        notes.append("режимы в справке: %s (ждали %s)" % (", ".join(modes) or "раздела нет", ", ".join(HELP_MODES)))
+    shared = tools_contract_lines(tools_text)
+    if len(shared) != 3:
+        notes.append("режим tools не выдал строки версии и отпечатков: судить не с чем")
+    stripped = set(l.strip() for l in lines)
+    lacking = [k for k, v in shared.items() if v not in stripped]
+    if lacking:
+        notes.append("строки, которых нет в справке буква в букву, как в tools: %s" % ", ".join(lacking))
+    carg = [a["name"] for a in doc["common_args"] if a.get("selects") == "contour"]
+    if not carg or ("run <вызов> " + help_flag(carg[0])) not in text:
+        notes.append("форма вызова run не называет аргумент выбора контура из договора")
+    detail = ("код %s · вызовов договора %d, строк найдено %d · режимы: %s\n"
+              % (code, len(doc["tools"]), len(doc["tools"]) - len(missing), ", ".join(modes) or "—"))
+    detail += "\n".join(notes) if notes else "всё названное найдено"
+    return not notes, detail
+
+
+def judge_help_tool(text, tool, common, code, variant_lines):
+    """С2. Справка по одному вызову: код 0 · имя, заголовок, описание · КАЖДЫЙ общий и свой аргумент назван флагом
+    с типом и пометкой обязательности из договора · перечень значений там, где он есть · строки вариантов те же, что в tools ·
+    служебные записи · пример формы."""
+    notes = []
+    lines = text.splitlines()
+    if code != 0:
+        notes.append("код выхода %s, ждали 0" % code)
+    if not lines or tool["name"] not in lines[0]:
+        notes.append("первая строка не называет вызов")
+    if not any(l.startswith("заголовок:") and tool["title"] in l for l in lines):
+        notes.append("нет строки «заголовок:» с заголовком из договора")
+    if tool.get("description") and squash(tool["description"]) not in squash(text):
+        notes.append("описание вызова из договора не напечатано")
+    for a in list(common) + list(tool.get("args", [])):
+        flag = help_flag(a["name"])
+        block = arg_block(lines, flag)
+        if block is None:
+            notes.append("аргумент %s не назван" % flag)
+            continue
+        head = block[0]
+        if ("<%s>" % a.get("type", "string")) not in head:
+            notes.append("у %s нет типа <%s>" % (flag, a.get("type", "string")))
+        mark = "· обязателен" if a.get("required") else "· не обязателен"
+        if mark not in head:
+            notes.append("у %s нет пометки «%s»" % (flag, mark[2:]))
+        body = "\n".join(block)
+        # перечень значений судим по строке самого аргумента, а не по всему блоку: слово из перечня может стоять и в описании
+        if a.get("enum") and ("значения: " + " | ".join(a["enum"])) not in head:
+            notes.append("у %s нет перечня значений «%s» в строке аргумента" % (flag, " | ".join(a["enum"])))
+        if a.get("description") and squash(a["description"]) not in squash(body):
+            notes.append("у %s нет описания из договора" % flag)
+    stripped = set(l.strip() for l in lines)
+    for v in variant_lines:
+        if v not in stripped:
+            notes.append("нет строки варианта, как в tools: %s" % v[:70])
+    writes = tool.get("service_writes")
+    if writes:
+        wl = [l for l in lines if l.startswith("служебные записи:")]
+        if not wl or any(w not in wl[0] for w in writes):
+            notes.append("служебные записи не названы: %s" % ", ".join(writes))
+    if not any(("run " + tool["name"]) in l and l.startswith("  gordi-wall") for l in lines):
+        notes.append("нет примера формы вызова через run")
+    n_args = len(common) + len(tool.get("args", []))
+    detail = "вызов %s · код %s · аргументов проверено %d · строк вариантов %d\n" % (tool["name"], code, n_args, len(variant_lines))
+    detail += "\n".join(notes) if notes else "всё названное найдено"
+    return not notes, detail
+
+
+def judge_help_unknown(stdout, stderr, code, doc):
+    """С3. Незнакомый вызов в справке: код 4 · в потоке ошибок названы ВСЕ вызовы договора · стандартный вывод пуст."""
+    notes = []
+    if code != 4:
+        notes.append("код выхода %s, ждали 4" % code)
+    lacking = [t["name"] for t in doc["tools"] if t["name"] not in stderr]
+    if lacking:
+        notes.append("в потоке ошибок не названы вызовы: %s" % ", ".join(lacking))
+    if stdout != "":
+        notes.append("стандартный вывод не пуст (%d знаков)" % len(stdout))
+    detail = "код %s · вызовов названо %d из %d · знаков в стандартном выводе %d\n" % (
+        code, len(doc["tools"]) - len(lacking), len(doc["tools"]), len(stdout))
+    detail += "\n".join(notes) if notes else "всё названное найдено"
+    return not notes, detail
+
+
+def judge_help_from_copy(general_text, probe_text, renamed_text, spec):
+    """С6. Справка по КОПИИ договора (тринадцатый вызов, переименованный аргумент): общая называет новый вызов,
+    справка по новому вызову печатается, справка по вызову с переименованным аргументом называет новый флаг, старого — нет."""
+    import re
+    notes = []
+    if not any(spec["new_tool"] in l and spec["new_title"] in l for l in general_text.splitlines()):
+        notes.append("общая справка не называет новый вызов %s с его заголовком" % spec["new_tool"])
+    first = probe_text.splitlines()[0] if probe_text.strip() else ""
+    if spec["new_tool"] not in first:
+        notes.append("справка по новому вызову не напечатана")
+    if not renamed_text.strip():
+        notes.append("справки по вызову с переименованным аргументом нет")
+    else:
+        if arg_block(renamed_text.splitlines(), spec["new_flag"]) is None:
+            notes.append("справка по вызову %s не называет новый флаг %s" % (spec["tool"], spec["new_flag"]))
+        if re.search(re.escape(spec["old_flag"]) + r"(?![\w-])", renamed_text):
+            notes.append("в справке по вызову %s остался старый флаг %s" % (spec["tool"], spec["old_flag"]))
+    detail = "новый вызов %s · флаг %s → %s в вызове %s\n" % (spec["new_tool"], spec["old_flag"], spec["new_flag"], spec["tool"])
+    detail += "\n".join(notes) if notes else "новое имя названо, старого нет"
+    return not notes, detail
+
+
+def judge_help_modes(general_text, refusal_stderr, code):
+    """С7. Отказ «режима нет» называет те же режимы, что общая справка; код 4."""
+    notes = []
+    if code != 4:
+        notes.append("код выхода %s, ждали 4" % code)
+    mode_lines = help_section(general_text, "режимы:")
+    in_help = sorted(l.split()[0] for l in mode_lines if l.split()) if mode_lines else []
+    named = []
+    if "Есть: " in refusal_stderr:
+        tail = refusal_stderr.split("Есть: ", 1)[1].strip().splitlines()[0]
+        named = sorted(x.strip() for x in tail.split(" · ") if x.strip())
+    if not in_help:
+        notes.append("в общей справке нет раздела режимов")
+    if named != in_help:
+        notes.append("отказ называет режимы %s, справка — %s" % (named or "не названы", in_help or "не названы"))
+    detail = "код %s · отказ: %s · справка: %s\n" % (code, ", ".join(named) or "—", ", ".join(in_help) or "—")
+    detail += "\n".join(notes) if notes else "перечни совпали"
+    return not notes, detail
+
+
+def judge_help_exit_table(general_text, observed):
+    """С8. Таблица «исход → код выхода» в общей справке совпадает с тем, что режим run отдал на заглушках.
+    observed — список (код выхода, стандартный вывод) для не меньше трёх разных исходов: 0, 1 и 6."""
+    import re
+    notes = []
+    rows = {}
+    section = help_section(general_text, "исход вызова и код выхода")
+    for line in section or []:
+        m = re.match(r"^\s*(\d+)\s+(\w+)\s+(.+?)\s*$", line)
+        if m:
+            rows[int(m.group(1))] = (m.group(2), m.group(3))
+    if not rows:
+        notes.append("в общей справке нет таблицы «исход → код выхода»")
+    for code, ident in OUTCOME_BY_CODE.items():
+        if rows and rows.get(code, ("", ""))[0] != ident:
+            notes.append("в таблице у кода %d исход «%s», ждали «%s»" % (code, rows.get(code, ("нет строки",))[0], ident))
+    seen = sorted(set(c for c, _ in observed))
+    for need in sorted(HELP_RUN_STAND_CODES):
+        if need not in seen:
+            notes.append("режим run не отдал код %d на заглушках: сверять нечем" % need)
+    for code, out in observed:
+        title = rows.get(code, ("", ""))[1]
+        if not title or ("исход: " + title) not in out:
+            notes.append("код %s: в таблице заголовок «%s», а режим run напечатал не его" % (code, title))
+    detail = "строк таблицы %d · коды, отданные режимом run на заглушках: %s\n" % (len(rows), ", ".join(str(c) for c in seen) or "—")
+    detail += "\n".join(notes) if notes else "таблица совпала с режимом run"
+    return not notes, detail
+
+
+def help_scenario(doc, tools_text, general, per_tool, unknown):
+    """Прогоняет чистые проверяющие С1–С3 над набором текстов; отдаёт множество не прошедших случаев.
+    general — (код, текст); per_tool — {имя вызова: (код, текст)}; unknown — (код, стандартный вывод, поток ошибок)."""
+    failed = set()
+    if not judge_help_general(general[1], doc, general[0], tools_text)[0]:
+        failed.add("С1")
+    for t in doc["tools"]:
+        code, text = per_tool.get(t["name"], (None, ""))
+        if not judge_help_tool(text, t, doc["common_args"], code, tools_variant_lines(tools_text, t["name"]))[0]:
+            failed.add("С2")
+            break
+    if not judge_help_unknown(unknown[1], unknown[2], unknown[0], doc)[0]:
+        failed.add("С3")
+    return failed
+
+
+def break_drop_tool_line(general, name):
+    """Л1: из общей справки убраны строки одного вызова."""
+    code, text = general
+    return code, "\n".join(l for l in text.splitlines() if name not in l) + "\n"
+
+
+def break_drop_arg_line(per_tool, name, flag):
+    """Л2: из справки по вызову убрана строка одного аргумента."""
+    out = dict(per_tool)
+    code, text = out[name]
+    out[name] = (code, "\n".join(l for l in text.splitlines()
+                                 if not (l.startswith("  ") and l.strip().startswith(flag + " "))) + "\n")
+    return out
+
+
+def break_unknown_code(unknown):
+    """Л3: тот же текст отказа, но код выхода 0."""
+    return 0, unknown[1], unknown[2]
+
+
+def run_cli(exe, argv, env_extra=None, timeout=HELP_LIMIT_S):
+    """Одиночный процесс службы со ЗАКРЫТЫМ вводом и пределом времени. Отдаёт (код, вывод, поток ошибок, не уложился ли).
+    Служба, вместо справки поднявшаяся ждать ввода, получает конец ввода сразу и всё равно ограничена пределом: зависание = случай не прошёл."""
+    env = dict(os.environ)
+    env["PYTHONUTF8"] = "1"
+    for k in ("GORDI_CONTRACT", "GORDI_CONTOURS"):
+        env.pop(k, None)
+    if env_extra:
+        env.update(env_extra)
+    try:
+        p = subprocess.run([exe] + list(argv), stdin=subprocess.DEVNULL, capture_output=True, encoding="utf-8",
+                           errors="replace", env=env, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return None, "", "", True
+    return p.returncode, p.stdout, p.stderr, False
+
+
+def rename_arg_in_doc(tool, old, new):
+    """Переименовывает аргумент вызова в копии договора: объявление, отображение в exec.args, requires и env у вариантов."""
+    for a in tool.get("args", []):
+        if a["name"] == old:
+            a["name"] = new
+    execs = [tool["exec"]] if "exec" in tool else [v["exec"] for v in tool.get("variants", {}).values()]
+    for ex in execs:
+        for m in ex.get("args", []):
+            if m.get("arg") == old:
+                m["arg"] = new
+        for k, v in list((ex.get("env") or {}).items()):
+            if v == old:
+                ex["env"][k] = new
+    for v in tool.get("variants", {}).values():
+        v["requires"] = [new if r == old else r for r in v.get("requires", [])]
+
+
+def cases_e3p1(args, work, manifest, contract_doc, carg, v5):
+    """Раздел «Э3-П1»: С1–С8 на настоящем договоре и копиях, затем Л1–Л4."""
+    import copy
+    d = os.path.join(work, "e3-p1")
+    if not os.path.isdir(d):
+        os.makedirs(d)
+    exe, contract, contours = args.exe, args.contract, args.contours
+    doc = contract_doc
+    common = doc["common_args"]
+
+    def timed_out_note(label, flag):
+        return ("%s: процесс не завершился за %d с — зависание = случай не прошёл" % (label, HELP_LIMIT_S)) if flag else ""
+
+    # перечень tools — эталон строк версии, отпечатков и вариантов
+    tc, tools_text, _, tto = run_cli(exe, ["tools", "--contract", contract, "--contours", contours])
+
+    # ───────────── С1 общая справка
+    gc, gout, gerr, gto = run_cli(exe, ["help", "--contract", contract])
+    if gto:
+        ok1, det1 = False, timed_out_note("help", True)
+    else:
+        ok1, det1 = judge_help_general(gout, doc, gc, tools_text)
+        if gc != 0:
+            det1 += "\nпоток ошибок: %s" % squash(gerr)[:160]
+    v5.add("814-С1", ok1, "общая справка из договора: вызовы с заголовками, четыре режима, версия и отпечатки как в tools", det1)
+
+    # ───────────── С2 справка по КАЖДОМУ вызову
+    per_tool = {}
+    bad2 = []
+    done2 = 0
+    for t in doc["tools"]:
+        c, o, e, to = run_cli(exe, ["help", t["name"], "--contract", contract])
+        per_tool[t["name"]] = (c, o)
+        if to:
+            bad2.append("%s: %s" % (t["name"], timed_out_note("help", True)))
+            continue
+        ok, det = judge_help_tool(o, t, common, c, tools_variant_lines(tools_text, t["name"]))
+        done2 += 1
+        if not ok:
+            bad2.append("%s: %s" % (t["name"], squash(det.split("\n", 1)[1])[:200]))
+    ok2 = not bad2 and done2 == len(doc["tools"])
+    v5.add("814-С2", ok2, "справка по КАЖДОМУ вызову договора: аргументы с типом, обязательностью и перечнем значений, строки вариантов как в tools",
+           "вызовов проверено %d из %d\n%s" % (done2, len(doc["tools"]), "\n".join(bad2) if bad2 else "всё названное найдено у каждого"))
+
+    # ───────────── С3 незнакомый вызов
+    uc, uout, uerr, uto = run_cli(exe, ["help", HELP_UNKNOWN_TOOL, "--contract", contract])
+    uc2, uout2, uerr2, uto2 = run_cli(exe, ["run", HELP_UNKNOWN_TOOL, "--help", "--contract", contract])
+    if uto or uto2:
+        ok3, det3 = False, timed_out_note("help <вызов>", True)
+    else:
+        ok3a, det3a = judge_help_unknown(uout, uerr, uc, doc)
+        ok3b, det3b = judge_help_unknown(uout2, uerr2, uc2, doc)
+        ok3 = ok3a and ok3b
+        det3 = "help <вызов>: %s\nrun <вызов> --help: %s" % (squash(det3a), squash(det3b))
+    v5.add("814-С3", ok3, "незнакомый вызов в справке: код 4, в потоке ошибок все вызовы договора, стандартный вывод пуст", det3)
+
+    # ───────────── стенд для С4 и С8: заглушки тел и манифест, ведущий на каталог заглушек
+    stubs = os.path.join(d, "stubs")
+    if not os.path.isdir(stubs):
+        os.makedirs(stubs)
+
+    def put_stub(name, source):
+        io.open(os.path.join(stubs, name), "w", encoding="utf-8", newline="\n").write(source)
+
+    marker = os.path.join(d, "stub-started.txt")
+    if os.path.exists(marker):
+        os.remove(marker)
+    put_stub("stub-pass.py", "import sys\nsys.stdout.write('pass stub\\n')\n")
+    put_stub("stub-mismatch.py", "import sys\nsys.stdout.write('E3-MISMATCH-MARK\\n')\nsys.exit(1)\n")
+    put_stub("stub-fail.py", "import sys\nsys.stdout.write('fail stub\\n')\nsys.exit(1)\n")
+    put_stub("stub-marker.py", "import sys\nopen(%r, 'w').write('started')\nsys.stdout.write('marker stub ran\\n')\n" % marker)
+    m_stub = copy.deepcopy(manifest)
+    for c in m_stub["contours"]:
+        c["tools"] = {"runtime": stubs, "vnext": stubs}
+    m_stub_path = os.path.join(d, "contours-stubs.json")
+    write_json(m_stub_path, m_stub)
+
+    def stub_contract(tag, mapping, mismatch=None):
+        dd = copy.deepcopy(doc)
+        for t in dd["tools"]:
+            if t["name"] in mapping:
+                set_script_all(t, mapping[t["name"]])
+            if mismatch and t["name"] in mismatch:
+                t["exec"]["mismatch_when"] = mismatch[t["name"]]
+        p = os.path.join(d, "contract-%s.json" % tag)
+        write_json(p, dd)
+        return p
+
+    probe = "owner_words_find"            # читающий вызов с одним обязательным аргументом: на нём видно, запустилось ли тело
+    marker_contract = stub_contract("marker", {probe: "stub-marker.py"})
+    cflag = help_flag(carg)
+
+    # ───────────── С4 --help и -h
+    notes4 = []
+    ref_c, ref_o, _, ref_to = run_cli(exe, ["help", "--contract", contract])
+    for flag in ("--help", "-h"):
+        c, o, e, to = run_cli(exe, [flag, "--contract", contract])
+        if to:
+            notes4.append("%s без режима: %s" % (flag, timed_out_note("", True)))
+        elif c != 0 or o != ref_o or not o.strip():
+            notes4.append("%s без режима: код %s, текст %s общей справке (знаков %d против %d)"
+                          % (flag, c, "равен" if o == ref_o else "НЕ равен", len(o), len(ref_o)))
+    ref_tc, ref_tool_text, _, _ = run_cli(exe, ["help", probe, "--contract", marker_contract])
+    for flag in ("--help", "-h"):
+        c, o, e, to = run_cli(exe, ["run", probe, flag, "--contract", marker_contract, "--contours", m_stub_path])
+        if to:
+            notes4.append("run %s %s: %s" % (probe, flag, timed_out_note("", True)))
+        elif c != 0 or o != ref_tool_text or not o.strip():
+            notes4.append("run %s %s: код %s, текст %s справке по вызову" % (probe, flag, c, "равен" if o == ref_tool_text else "НЕ равен"))
+    if os.path.exists(marker):
+        notes4.append("тело инструмента-заглушки запустилось от --help: файл-отметка есть")
+    # встречная проба: тот же вызов без --help тело запускает — иначе «следа нет» ничего бы не доказывало
+    run_cli(exe, ["run", probe, cflag, CONTOUR_STAND, "--text", "x", "--contract", marker_contract, "--contours", m_stub_path], timeout=60)
+    control = os.path.exists(marker)
+    if not control:
+        notes4.append("встречная проба: вызов без --help тело заглушки НЕ запустил, отметка не появилась — случай ничего не доказывает")
+    v5.add("814-С4", not notes4, "--help и -h без режима дают общую справку и завершаются сами за %d с; run <вызов> --help не запускает тело" % HELP_LIMIT_S,
+           "проверено: --help и -h без режима · run %s --help и -h на заглушке · встречная проба (след запуска без --help есть: %s)\n%s"
+           % (probe, control, "\n".join(notes4) if notes4 else "тексты равны справкам, следа запуска от --help нет"))
+
+    # ───────────── С5 справка без манифеста контуров
+    notes5 = []
+    first_tool = doc["tools"][0]["name"]
+    for label, extra in (("манифест не назван", []),
+                         ("манифест назван несуществующим файлом", ["--contours", os.path.join(d, "нет-такого-манифеста.json")])):
+        for argv in (["help"], ["help", first_tool]):
+            c, o, e, to = run_cli(exe, argv + ["--contract", contract] + extra)
+            if to:
+                notes5.append("%s, %s: %s" % (label, " ".join(argv), timed_out_note("", True)))
+            elif c != 0 or not o.strip():
+                notes5.append("%s, %s: код %s, стандартный вывод %d знаков, ошибки: %s" % (label, " ".join(argv), c, len(o), squash(e)[:120]))
+    v5.add("814-С5", not notes5, "справка и справка по вызову работают без манифеста контуров (не назван и назван несуществующим файлом)",
+           "\n".join(notes5) if notes5 else "четыре запуска: код 0, текст есть")
+
+    # ───────────── С6 справка строится из ДОГОВОРА: копия с тринадцатым вызовом и переименованным аргументом, без пересборки
+    copy_doc = copy.deepcopy(doc)
+    donor = copy.deepcopy(tool_doc(copy_doc, probe))
+    donor["name"] = HELP_NEW_TOOL
+    donor["title"] = HELP_NEW_TITLE
+    copy_doc["tools"].append(donor)
+    rename_arg_in_doc(tool_doc(copy_doc, HELP_RENAME[0]), HELP_RENAME[1], HELP_RENAME[2])
+    copy_path = os.path.join(d, "contract-copy-13.json")
+    write_json(copy_path, copy_doc)
+    cc, cgen, _, cto1 = run_cli(exe, ["help", "--contract", copy_path])
+    pc, cprobe, _, cto2 = run_cli(exe, ["help", HELP_NEW_TOOL, "--contract", copy_path])
+    rc, crenamed, _, cto3 = run_cli(exe, ["help", HELP_RENAME[0], "--contract", copy_path])
+    spec = {"new_tool": HELP_NEW_TOOL, "new_title": HELP_NEW_TITLE, "tool": HELP_RENAME[0],
+            "old_flag": help_flag(HELP_RENAME[1]), "new_flag": help_flag(HELP_RENAME[2])}
+    if cto1 or cto2 or cto3:
+        ok6, det6 = False, timed_out_note("help на копии договора", True)
+    else:
+        ok6, det6 = judge_help_from_copy(cgen, cprobe, crenamed, spec)
+        if cc != 0 or pc != 0 or rc != 0:
+            ok6 = False
+            det6 += "\nкоды выхода трёх справок: %s, %s, %s (ждали 0)" % (cc, pc, rc)
+    v5.add("814-С6", ok6, "справка строится из договора: на копии с тринадцатым вызовом и переименованным аргументом — без пересборки службы", det6)
+
+    # ───────────── С7 перечень режимов: справка и отказ «режима нет»
+    mc, mout, merr, mto = run_cli(exe, [HELP_UNKNOWN_MODE, "--contract", contract, "--contours", contours])
+    if mto or gto:
+        ok7, det7 = False, timed_out_note("режим, которого нет", True)
+    else:
+        ok7, det7 = judge_help_modes(gout, merr, mc)
+    v5.add("814-С7", ok7, "отказ «режима нет» называет те же режимы, что общая справка", det7)
+
+    # ───────────── С8 таблица «исход → код выхода» и режим run на заглушках
+    codes_contract = stub_contract("codes", {"rules_get": "stub-pass.py", "owner_words_find": "stub-mismatch.py",
+                                             "feed_read": "stub-fail.py"},
+                                   mismatch={"owner_words_find": ["E3-MISMATCH-MARK"]})
+    runs8 = [["rules_get", cflag, CONTOUR_STAND, "--list"],
+             ["owner_words_find", cflag, CONTOUR_STAND, "--text", "x"],
+             ["feed_read", cflag, CONTOUR_STAND, "--role", "COORD"]]
+    observed = []
+    for argv in runs8:
+        c, o, e = run_mode(exe, codes_contract, m_stub_path, argv)
+        observed.append((c, o))
+    if gto:
+        ok8, det8 = False, timed_out_note("help", True)
+    else:
+        ok8, det8 = judge_help_exit_table(gout, observed)
+    v5.add("814-С8", ok8, "таблица «исход → код выхода» в справке совпадает с режимом run на заглушках (0 прошло · 1 расхождение · 6 тело отказало)", det8)
+
+    # ───────────── нарочные поломки: Л1–Л3 над ТЕКСТОМ без пересборки, Л4 — справка от целого договора в случае по копии
+    general = (gc, gout)
+    unknown = (uc, uout, uerr)
+    base_failed = help_scenario(doc, tools_text, general, per_tool, unknown)
+    victim_tool = doc["tools"][-1]["name"]
+    victim_arg_tool = "memory_read"
+    victim_flag = help_flag(tool_doc(doc, victim_arg_tool)["args"][0]["name"])
+    breaks = [
+        ("Л1", "С1", "из общей справки убраны строки вызова %s" % victim_tool,
+         lambda: help_scenario(doc, tools_text, break_drop_tool_line(general, victim_tool), per_tool, unknown)),
+        ("Л2", "С2", "из справки по вызову %s убрана строка аргумента %s" % (victim_arg_tool, victim_flag),
+         lambda: help_scenario(doc, tools_text, general, break_drop_arg_line(per_tool, victim_arg_tool, victim_flag), unknown)),
+        ("Л3", "С3", "отказу по незнакомому вызову дан код выхода 0 при том же тексте",
+         lambda: help_scenario(doc, tools_text, general, per_tool, break_unknown_code(unknown))),
+    ]
+    for key, own, what, scenario in breaks:
+        title = "нарочная поломка: %s — падает РОВНО случай %s" % (what, own)
+        if base_failed:
+            v5.add("814-" + key, False, title,
+                   "СУДИТЬ НЕЧЕМ: до поломки не прошли случаи %s — поломка не на чем видна" % ", ".join(sorted(base_failed)))
+        else:
+            failed = scenario()
+            v5.add("814-" + key, failed == {own}, title,
+                   "не прошли после поломки: %s (ждали только %s)" % (", ".join(sorted(failed)) or "ни один", own))
+    # Л4: тот же случай С6, но справка взята от ЦЕЛОГО договора — копии в нём нет, случай обязан упасть
+    title4 = "нарочная поломка: справка от ЦЕЛОГО договора вместо копии — падает случай С6 (разница двух прогонов — довод)"
+    if not ok6:
+        v5.add("814-Л4", False, title4, "СУДИТЬ НЕЧЕМ: на самой копии случай С6 не прошёл")
+    else:
+        whole_probe = run_cli(exe, ["help", HELP_NEW_TOOL, "--contract", contract])[1]
+        whole_renamed = per_tool.get(HELP_RENAME[0], (None, ""))[1]
+        ok_whole, det_whole = judge_help_from_copy(gout, whole_probe, whole_renamed, spec)
+        v5.add("814-Л4", not ok_whole, title4,
+               "на копии С6 прошёл; на справке целого договора С6 %s: %s"
+               % ("прошёл" if ok_whole else "не прошёл", squash(det_whole.split("\n", 1)[1])[:200]))
+
+
 def main():
     try:
         return run_acceptance()
@@ -1878,6 +2424,9 @@ def run_acceptance():
     ap.add_argument("--exe", default=DEFAULT_EXE)
     ap.add_argument("--contract", default=CONTRACT)
     ap.add_argument("--out", default=None, help="каталог для копий договора и манифеста (по умолчанию — временный)")
+    ap.add_argument("--only-e3p1", action="store_true",
+                    help="судить ТОЛЬКО раздел «Э3-П1» (справка службы); сборку старше исходников в этом режиме судит как СТАРУЮ, "
+                         "чтобы получить прогон «до» на сборке без справки; в общий прогон не входит")
     args = ap.parse_args()
 
     if not os.path.exists(args.exe):
@@ -1896,7 +2445,10 @@ def run_acceptance():
     print("── ЧАС СБОРКИ И ИСХОДНИКОВ")
     print("   сборка исполнимого файла ... %s" % utc(exe_time))
     print("   последняя правка исходников  %s (%s)" % (utc(src_time), src_file))
-    if exe_time < src_time:
+    if exe_time < src_time and args.only_e3p1:
+        print("ℹ️ СБОРКА СТАРШЕ ИСХОДНИКОВ, но задан --only-e3p1: раздел «Э3-П1» судит её как СТАРУЮ сборку (прогон «до»).")
+        print("   Это не приёмка новой службы: общий прогон такую сборку по-прежнему не судит.")
+    elif exe_time < src_time:
         print("⏸ СБОРКА СТАРШЕ ИСХОДНИКОВ: приёмка её НЕ СУДИТ. Это не провал и не проход —")
         print("   она проверила бы не то, что написано. Пересобрать: dotnet build %s, затем запустить снова."
               % os.path.join(SERVICE, "GordiWall"))
@@ -1925,6 +2477,18 @@ def run_acceptance():
               % (args.contract, len(contour_args)))
         return 2
     CARG = contour_args[0]
+
+    if args.only_e3p1:
+        v5 = Verdict()
+        cases_e3p1(args, work, manifest, contract_doc, CARG, v5)
+        print("── случаи карточки 814 (этап Э3, предмет П1: справка из того же договора) — ТОЛЬКО этот раздел")
+        v5.print_all()
+        if v5.failed():
+            print("🔴 ПРОВАЛИЛОСЬ %d: %s (карточка 814: %d из %d прошло)"
+                  % (len(v5.failed()), " · ".join(r[0] for r in v5.failed()), len(v5.rows) - len(v5.failed()), len(v5.rows)))
+            return 1
+        print("✅ РАЗДЕЛ Э3-П1 ПРОШЁЛ: карточка 814 — %d из %d" % (len(v5.rows), len(v5.rows)))
+        return 0
 
     # ─────────────────────────────────────── ① перечень вызовов из ОДНОГО файла
     code, out, err = run_mode(args.exe, args.contract, args.contours, ["contour_info", "--contour", CONTOUR_LIVE])
@@ -2260,6 +2824,10 @@ def run_acceptance():
     v4 = Verdict()
     cases_781(args, work, manifest, contract_doc, CARG, v4)
 
+    # ═══════════════════════════════════════ карточка 814 (этап Э3, предмет П1): справка службы из того же договора
+    v5 = Verdict()
+    cases_e3p1(args, work, manifest, contract_doc, CARG, v5)
+
     # ─────────────────────────────────────── вывод
     print("── ПРИЁМКА СТЕНЫ КОНТУРА GORDI · этап Э1 · карточка 779")
     print("   сборка ... %s" % args.exe)
@@ -2279,20 +2847,24 @@ def run_acceptance():
     print("── случаи карточки 781 (варианты вызова · рука тела · поиск и сжатие памяти слоями · завести карточку · слово владельца · три нарочные поломки)")
     v4.print_all()
     print("")
+    print("── случаи карточки 814 (этап Э3, предмет П1: справка из того же договора · восемь случаев С1–С8 и четыре нарочные поломки Л1–Л4)")
+    v5.print_all()
+    print("")
     print("⚖️ ЭТИ ДВА КРИТЕРИЯ МАШИНА НЕ СУДИТ — говорю прямо, чтобы зелёное не прочлось шире:")
     print("   ⑥ полный рабочий отрезок роли через стену — доказывается работой роли (записка · память · карточка),")
     print("      а не этим файлом. Прогон приёмки отрезком НЕ является.")
     print("   ⑨ подпись приёмки ставит роль, которая службу НЕ писала. Свой прогон за чужую руку не считается.")
     print("")
-    bad = v.failed() + v2.failed() + v3.failed() + v4.failed()
+    bad = v.failed() + v2.failed() + v3.failed() + v4.failed() + v5.failed()
     if bad:
-        print("🔴 ПРОВАЛИЛОСЬ %d: %s (карточка 779: %d из %d прошло · карточка 787: %d из %d прошло · карточка 791: %d из %d прошло · карточка 781: %d из %d прошло)"
+        print("🔴 ПРОВАЛИЛОСЬ %d: %s (карточка 779: %d из %d прошло · карточка 787: %d из %d прошло · карточка 791: %d из %d прошло · карточка 781: %d из %d прошло · карточка 814: %d из %d прошло)"
               % (len(bad), " · ".join(r[0] for r in bad),
                  len(v.rows) - len(v.failed()), len(v.rows), len(v2.rows) - len(v2.failed()), len(v2.rows),
-                 len(v3.rows) - len(v3.failed()), len(v3.rows), len(v4.rows) - len(v4.failed()), len(v4.rows)))
+                 len(v3.rows) - len(v3.failed()), len(v3.rows), len(v4.rows) - len(v4.failed()), len(v4.rows),
+                 len(v5.rows) - len(v5.failed()), len(v5.rows)))
         return 1
-    print("✅ ВСЕ МАШИННЫЕ КРИТЕРИИ ПРОШЛИ: карточка 779 — %d из %d · карточка 787 — %d из %d · карточка 791 — %d из %d · карточка 781 — %d из %d (⑥ и ⑨ карточки 779 — за человеком)"
-          % (len(v.rows), len(v.rows), len(v2.rows), len(v2.rows), len(v3.rows), len(v3.rows), len(v4.rows), len(v4.rows)))
+    print("✅ ВСЕ МАШИННЫЕ КРИТЕРИИ ПРОШЛИ: карточка 779 — %d из %d · карточка 787 — %d из %d · карточка 791 — %d из %d · карточка 781 — %d из %d · карточка 814 — %d из %d (⑥ и ⑨ карточки 779 — за человеком)"
+          % (len(v.rows), len(v.rows), len(v2.rows), len(v2.rows), len(v3.rows), len(v3.rows), len(v4.rows), len(v4.rows), len(v5.rows), len(v5.rows)))
     return 0
 
 
