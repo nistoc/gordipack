@@ -65,8 +65,18 @@
 на заглушках. Проверяющие С1–С3 и С6–С8 чистые (текст справки + договор + код выхода → исход); нарочные поломки Л1–Л3 портят ТЕКСТ,
 Л4 подаёт справку от целого договора в случай С6. Ключ --only-e3p1 судит один этот раздел (в том числе на сборке без справки: прогон «до»).
 
+Карточка 816 (этап Э3, предмет П2) добавила раздел «Э3-П2»: ответ contour_info несёт поля блоков manifest (шесть полей манифеста контура)
+и judge («кто меня судит»), у каждого значение · источник · состояние. Случаи: М1 шесть полей · М2 текст из полей · М3 отпечаток по всей записи
+установки (больше 200 файлов; встречные: один знак меняет, перестановка пар нет) · М4а, М4б, М4в «нечем проверить» трёх видов (удалены строки
+установщика · хранилище не отвечает · запись не разбирается или прочитана не целиком) · М5 один источник версии · М6 свод правил (встречные
+на копии базы) · М7 CLI и MCP — одно. Свёртки приёмка считает САМА на Python по формулам из карточки. Все записи — только в малые копии
+таблиц meta и rules, которые приёмка сама делает из базы стенда в своём каталоге. Нарочные поломки Л1–Л6 делаются В КОДЕ СЛУЖБЫ: исходники
+копируются в рабочий каталог, заменяется одна названная строка (якорь обязан найтись ровно один раз), копия собирается заново (dotnet build -m:1,
+сеть закрыта), случаи М1–М7 идут на собранной копии, имена упавших сверяются с ожидаемыми. Ключ --only-e3p2 судит один этот раздел.
+
 Исход: 0 — все машинные критерии прошли; 1 — хоть один провалился; 2 — проверять было нечем;
-3 — сборка старше исходников, судить её нельзя (пересобрать и запустить снова).
+3 — сборка старше исходников, судить её нельзя (пересобрать и запустить снова). С ключом --only-e3p1 или --only-e3p2 такая сборка
+судится как СТАРАЯ (прогон «до»): провал остаётся кодом 1, а проход отдаётся кодом 3, и итоговая строка называет сборку старой.
 """
 import argparse
 import io
@@ -703,16 +713,29 @@ def cases_791(args, work, manifest, contract_doc, carg, v3, s2c):
     c5.close()
     _, out5, _ = run_mode(args.exe, args.contract, mp5, ["contour_info", "--" + carg, CONTOUR_STAND])
     _, out5ok, _ = run_mode(args.exe, args.contract, args.contours, ["contour_info", "--" + carg, CONTOUR_STAND])
-    ok5e = (removed5 > 0
+    # Карточка 816: блок из хранилища стал ПОЛЯМИ ответа, и прежние слова «это и есть источник о версии» из текста ушли. Смысл случая прежний:
+    # пустая запись говорит «записи установщика НЕТ — нечем проверить» и НЕ показывает версию; целая запись показывает версию из хранилища.
+    # Версию стенда приёмка читает сама, из базы стенда только на чтение.
+    import sqlite3 as _sqlite3
+    stand_db5 = [c for c in manifest["contours"] if c.get("id") == CONTOUR_STAND][0]["storage"]
+    c5s = _sqlite3.connect("file:%s?mode=ro" % stand_db5.replace("\\", "/"), uri=True)
+    try:
+        stand_commit5 = c5s.execute("SELECT value FROM meta WHERE key='template_commit'").fetchone()[0]
+    finally:
+        c5s.close()
+    ver_lines5 = [l for l in out5.splitlines() if l.startswith("версия тулинга")]
+    ver_lines5ok = [l for l in out5ok.splitlines() if l.startswith("версия тулинга")]
+    ok5e = (removed5 > 0 and bool(stand_commit5)
             and "записи установщика НЕТ" in out5 and "нечем проверить" in out5
-            and "это и есть источник" not in out5
-            and "это и есть источник о версии" in out5ok and "записи установщика НЕТ" not in out5ok)
-    v3.add("791-К5", ok5e, "пустая запись установщика: блок из хранилища говорит «записи установщика НЕТ — нечем проверить» и не зовёт себя источником о версии",
+            and stand_commit5 not in out5 and bool(ver_lines5) and all("нечем проверить" in l for l in ver_lines5)
+            and any(stand_commit5 in l for l in ver_lines5ok) and "записи установщика НЕТ" not in out5ok)
+    v3.add("791-К5", ok5e, "пустая запись установщика: поля из хранилища говорят «записи установщика НЕТ — нечем проверить» и не показывают версию; целая запись версию показывает",
            "на своей копии удалено строк template_*: %d\n"
-           "копия: «записи установщика НЕТ»: %s · «нечем проверить»: %s · «это и есть источник» (ждали: нет): %s\n"
-           "встречный, целая запись: «это и есть источник о версии» есть: %s · «записи установщика НЕТ» нет: %s"
-           % (removed5, "записи установщика НЕТ" in out5, "нечем проверить" in out5, "это и есть источник" in out5,
-              "это и есть источник о версии" in out5ok, "записи установщика НЕТ" not in out5ok))
+           "копия: «записи установщика НЕТ»: %s · «нечем проверить»: %s · версия стенда (%s) в тексте (ждали: нет): %s · строка версии — «нечем проверить»: %s\n"
+           "встречный, целая запись: версия стенда в строке «версия тулинга»: %s · «записи установщика НЕТ» нет: %s"
+           % (removed5, "записи установщика НЕТ" in out5, "нечем проверить" in out5, stand_commit5, stand_commit5 in out5,
+              bool(ver_lines5) and all("нечем проверить" in l for l in ver_lines5),
+              any(stand_commit5 in l for l in ver_lines5ok), "записи установщика НЕТ" not in out5ok))
 
     # ───────────── К6: незнакомый аргумент — отказ с его именем, тело не запускалось (находка С6)
     k6_marker = os.path.join(work, "stub-791-k6-started.txt")
@@ -2294,12 +2317,17 @@ def cases_e3p1(args, work, manifest, contract_doc, carg, v5):
             notes4.append("%s без режима: код %s, текст %s общей справке (знаков %d против %d)"
                           % (flag, c, "равен" if o == ref_o else "НЕ равен", len(o), len(ref_o)))
     ref_tc, ref_tool_text, _, _ = run_cli(exe, ["help", probe, "--contract", marker_contract])
+    # две формы вызова: голая — справка обязана выйти и без обязательных аргументов; полная — только она
+    # способна запустить тело, поэтому лишь на ней «следа запуска нет» что-то различает (находка приёмки чужой рукой)
+    help_forms = (("без аргументов", []), ("с полными аргументами", [cflag, CONTOUR_STAND, "--text", "x"]))
     for flag in ("--help", "-h"):
-        c, o, e, to = run_cli(exe, ["run", probe, flag, "--contract", marker_contract, "--contours", m_stub_path])
-        if to:
-            notes4.append("run %s %s: %s" % (probe, flag, timed_out_note("", True)))
-        elif c != 0 or o != ref_tool_text or not o.strip():
-            notes4.append("run %s %s: код %s, текст %s справке по вызову" % (probe, flag, c, "равен" if o == ref_tool_text else "НЕ равен"))
+        for form, extra in help_forms:
+            c, o, e, to = run_cli(exe, ["run", probe] + extra + [flag, "--contract", marker_contract, "--contours", m_stub_path])
+            if to:
+                notes4.append("run %s %s (%s): %s" % (probe, flag, form, timed_out_note("", True)))
+            elif c != 0 or o != ref_tool_text or not o.strip():
+                notes4.append("run %s %s (%s): код %s, текст %s справке по вызову"
+                              % (probe, flag, form, c, "равен" if o == ref_tool_text else "НЕ равен"))
     if os.path.exists(marker):
         notes4.append("тело инструмента-заглушки запустилось от --help: файл-отметка есть")
     # встречная проба: тот же вызов без --help тело запускает — иначе «следа нет» ничего бы не доказывало
@@ -2308,7 +2336,7 @@ def cases_e3p1(args, work, manifest, contract_doc, carg, v5):
     if not control:
         notes4.append("встречная проба: вызов без --help тело заглушки НЕ запустил, отметка не появилась — случай ничего не доказывает")
     v5.add("814-С4", not notes4, "--help и -h без режима дают общую справку и завершаются сами за %d с; run <вызов> --help не запускает тело" % HELP_LIMIT_S,
-           "проверено: --help и -h без режима · run %s --help и -h на заглушке · встречная проба (след запуска без --help есть: %s)\n%s"
+           "проверено: --help и -h без режима · run %s --help и -h на заглушке, без аргументов и с полными · встречная проба (след запуска без --help есть: %s)\n%s"
            % (probe, control, "\n".join(notes4) if notes4 else "тексты равны справкам, следа запуска от --help нет"))
 
     # ───────────── С5 справка без манифеста контуров
@@ -2410,6 +2438,777 @@ def cases_e3p1(args, work, manifest, contract_doc, carg, v5):
                % ("прошёл" if ok_whole else "не прошёл", squash(det_whole.split("\n", 1)[1])[:200]))
 
 
+# ═══════════════════════════════════════ карточка 816 (этап Э3, предмет П2): шесть полей манифеста контура и блок «кто меня судит»
+#                                          полями ответа contour_info; свёртки приёмка считает САМА, независимо от службы
+
+E3P2_DIR = "e3-p2"
+E3P2_TOOL = "contour_info"
+E3P2_BUILD_LIMIT_S = 900                       # предел времени на сборку копии службы
+E3P2_LEGACY_VERSION = "LEGACY-VERSION-E3P2"    # чужая версия в оставленном блоке tooling манифеста (М5)
+E3P2_MARK_A = "записи установщика НЕТ"         # причина (а): в копии базы удалены строки установщика
+E3P2_MARK_B = "не ответило"                    # причина (б): хранилище не отвечает
+E3P2_MARK_C1 = "не разбирается"                # причина (в): запись установки не разбирается
+E3P2_MARK_C2 = "не целиком"                    # причина (в): запись установки прочитана не целиком
+E3P2_ALL_MARKS = (E3P2_MARK_A, E3P2_MARK_B, E3P2_MARK_C1, E3P2_MARK_C2)
+E3P2_TOOLING_PATHS = ["manifest.tooling.version", "manifest.tooling.source.package", "manifest.tooling.source.commit",
+                      "manifest.tooling.hash", "manifest.tooling.files", "manifest.installed.at"]
+# Имена полей ответа — РУКОЙ, не из договора: иначе пропавшее или лишнее поле нечем увидеть.
+E3P2_FIELD_NAMES = ["manifest.contour.id", "manifest.tooling.version", "manifest.tooling.source.package",
+                    "manifest.tooling.source.commit", "manifest.tooling.hash", "manifest.tooling.files",
+                    "manifest.storage.path", "manifest.installed.at",
+                    "judge.service_build_commit", "judge.contract_version", "judge.contract_fingerprint",
+                    "judge.rules", "judge.rules_active", "judge.rules_revoked"]
+# Имена, которые по порядку байтов UTF-8 стоят иначе, чем при сравнении без учёта регистра или по алфавиту
+E3P2_NASTY_NAMES = ["A-e3p2.py", "a-e3p2.py", "_e3p2.py", "é-e3p2.py", "я-e3p2.py"]
+
+# Нарочные поломки карточки 816: В КОДЕ СЛУЖБЫ, в копии исходников, с пересборкой. «Свои» случаи названы ЗДЕСЬ, до прогона.
+# Якорь — одна строка исходника, обязана найтись РОВНО один раз; иначе случай говорит «поломка не наложилась».
+E3P2_ANCHOR_HASH = '        install.Hash.ToField("manifest.tooling.hash", "отпечаток установки", SourceHash),'
+E3P2_ANCHOR_VERSION = '        install.Commit.ToField("manifest.tooling.version", "версия тулинга", SourceVersion),'
+E3P2_ANCHOR_UNKNOWN = "Field.Unknown(path, label, source, Reason!)"
+E3P2_ANCHOR_RULES = "var rulesFold = Fold.Sha12(rulesText);"
+E3P2_ANCHOR_LINE = "{Label} {dots} {Convert.ToString(Value, CultureInfo.InvariantCulture)} · источник: {Source}"
+E3P2_BROKEN_LINE = "{Label} {dots} значение-не-из-поля · источник: {Source}"
+E3P2_ANCHOR_JSON = "await Console.Out.WriteLineAsync(StructuredOf(answer).ToJsonString(Json));"
+E3P2_BROKEN_JSON = 'var cliDoc = StructuredOf(answer); cliDoc.Remove("details"); await Console.Out.WriteLineAsync(cliDoc.ToJsonString(Json));'
+E3P2_LEGACY_CODE = (
+    '        ((Func<Field>)(() => { using var legacyDoc = System.Text.Json.JsonDocument.Parse(File.ReadAllBytes(manifest.Path)); '
+    'foreach (var c in legacyDoc.RootElement.GetProperty("contours").EnumerateArray()) '
+    'if (c.GetProperty("id").GetString() == contour.Id && c.TryGetProperty("tooling", out var legacy)) '
+    'return Field.Fill("manifest.tooling.version", "версия тулинга", legacy.GetProperty("version").GetString()!, "блок tooling манифеста контуров"); '
+    'return install.Commit.ToField("manifest.tooling.version", "версия тулинга", SourceVersion); }))(),')
+E3P2_BREAKS = [
+    ("Л1", "ответ без поля отпечатка: из списка полей убрана строка tooling.hash", "GordiWall/ManifestFields.cs",
+     E3P2_ANCHOR_HASH, "", {"М1", "М3"}),
+    ("Л2", "версия взята из блока tooling манифеста вместо хранилища", "GordiWall/ManifestFields.cs",
+     E3P2_ANCHOR_VERSION, E3P2_LEGACY_CODE, {"М5"}),
+    ("Л3", "пустая строка выдана за заполненное: «нечем проверить» заменено на заполненное поле со значением «»", "GordiWall/ManifestFields.cs",
+     E3P2_ANCHOR_UNKNOWN, 'Field.Fill(path, label, "", source)', {"М4а", "М4б", "М4в"}),
+    ("Л4", "свёртка свода правил постоянная: вместо подсчёта по строкам таблицы стоит одно и то же значение", "GordiWall/ManifestFields.cs",
+     E3P2_ANCHOR_RULES, 'var rulesFold = "000000000000";', {"М6"}),
+    # Л5 и Л6 критерий карточки не требует: добавлены при разборе, потому что случаи М2 и М7 без них ни разу не падали,
+    # а случай, который не падал ни на одной поломке, ничего не доказывает.
+    ("Л5", "текст ответа не из поля: в строке заполненного поля вместо значения стоит постоянное слово", "GordiWall/ManifestFields.cs",
+     E3P2_ANCHOR_LINE, E3P2_BROKEN_LINE, {"М2"}),
+    ("Л6", "режим run с флагом --json отдаёт документ без поля details: CLI и MCP расходятся", "GordiWall/Program.cs",
+     E3P2_ANCHOR_JSON, E3P2_BROKEN_JSON, {"М7"}),
+]
+
+
+def e3p2_sha12(text):
+    import hashlib
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+
+
+def e3p2_fold_install(pairs):
+    """Свёртка записи установки: пары «имя → отпечаток» по имени побайтно (UTF-8), строка «имя<TAB>отпечаток<LF>», sha256, 12 знаков."""
+    names = sorted(pairs, key=lambda n: n.encode("utf-8"))
+    return e3p2_sha12("".join("%s\t%s\n" % (n, pairs[n]) for n in names))
+
+
+def e3p2_fold_rules(rows):
+    """Свёртка свода правил: действующие правила по ключу побайтно (UTF-8), строка «ключ<TAB>номер редакции<LF>», sha256, 12 знаков."""
+    ordered = sorted(rows, key=lambda r: r[0].encode("utf-8"))
+    return e3p2_sha12("".join("%s\t%s\n" % (k, v) for k, v in ordered))
+
+
+def e3p2_write(db, sql, params=()):
+    """Единственное место, где приёмка пишет в базу этого раздела: только в КОПИИ внутри своего рабочего каталога."""
+    import sqlite3
+    full = os.path.abspath(db).replace("\\", "/")
+    if "/%s/" % E3P2_DIR not in full:
+        raise RuntimeError("приёмка отказывается писать в базу вне своего каталога %s: %s" % (E3P2_DIR, db))
+    con = sqlite3.connect(db, timeout=60)
+    try:
+        n = con.execute(sql, params).rowcount
+        con.commit()
+        return n
+    finally:
+        con.close()
+
+
+def e3p2_small_db(ctx, tag):
+    """Малая копия базы стенда: таблицы meta и rules (схема и строки как у стенда) в рабочем каталоге раздела.
+    Целая база стенда — 127 МБ; полная копия под каждый случай не нужна, а читающему инструменту хватает этих двух таблиц.
+    Читает базу стенда только на чтение. Отдаёт (путь к копии, путь к копии манифеста с этим storage)."""
+    import sqlite3
+    stand_db = [c for c in ctx["manifest"]["contours"] if c.get("id") == CONTOUR_STAND][0]["storage"]
+    d = os.path.join(ctx["work"], tag)
+    if not os.path.isdir(d):
+        os.makedirs(d)
+    db = os.path.join(d, "mezosync.db")
+    for suffix in ("", "-wal", "-shm"):
+        if os.path.exists(db + suffix):
+            os.remove(db + suffix)
+    src = sqlite3.connect("file:%s?mode=ro" % stand_db.replace("\\", "/"), uri=True)
+    dst = sqlite3.connect(db)
+    try:
+        for name in ("meta", "rules"):
+            ddl = src.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone()[0]
+            dst.execute(ddl)
+            rows = src.execute('SELECT * FROM "%s"' % name).fetchall()
+            if rows:
+                dst.executemany('INSERT INTO "%s" VALUES (%s)' % (name, ",".join("?" * len(rows[0]))), rows)
+        dst.commit()
+    finally:
+        src.close()
+        dst.close()
+    return db, e3p2_manifest(ctx, tag, storage=db)
+
+
+def e3p2_manifest(ctx, tag, storage=None, runtime=None, legacy_tooling=None):
+    """Копия манифеста контуров: у контура стенда подменены storage, каталог runtime или добавлен блок tooling."""
+    import copy
+    m = copy.deepcopy(ctx["manifest"])
+    for c in m["contours"]:
+        c.pop("tooling", None)   # в живом манифесте блок мог остаться: копия для проверки чистая, блок добавляется только по legacy_tooling
+        if c.get("id") == CONTOUR_STAND:
+            if storage is not None:
+                c["storage"] = storage
+            if runtime is not None:
+                c["tools"] = dict(c["tools"], runtime=runtime)
+            if legacy_tooling is not None:
+                c["tooling"] = legacy_tooling
+    d = os.path.join(ctx["work"], tag)
+    if not os.path.isdir(d):
+        os.makedirs(d)
+    mp = os.path.join(d, "contours-%s.json" % tag)
+    write_json(mp, m)
+    return mp
+
+
+def e3p2_base(ctx, tag):
+    """Малая копия с длинной записью установки: больше 200 файлов и имена, у которых порядок по байтам — особый."""
+    import json
+    db, mp = e3p2_small_db(ctx, tag)
+    pairs = json.loads(db_one(db, "SELECT value FROM meta WHERE key='template_files_sha'"))
+    for n in E3P2_NASTY_NAMES:
+        pairs[n] = e3p2_sha12(n)
+    i = 0
+    while len(pairs) <= 230:
+        pairs["e3p2-file-%03d.py" % i] = e3p2_sha12("e3p2-%d" % i)
+        i += 1
+    e3p2_write(db, "UPDATE meta SET value=? WHERE key='template_files_sha'", (json.dumps(pairs, ensure_ascii=False),))
+    return db, mp
+
+
+def e3p2_expected(db):
+    """Что приёмка САМА читает из копии базы: запись установки и свод правил, свёртки — её формулами."""
+    import json
+    pairs = json.loads(db_one(db, "SELECT value FROM meta WHERE key='template_files_sha'"))
+    rules = db_all(db, "SELECT rule_key, version, status FROM rules")
+    active = [(k, v) for k, v, s in rules if s == "active"]
+    return {"commit": db_one(db, "SELECT value FROM meta WHERE key='template_commit'"),
+            "package": db_one(db, "SELECT value FROM meta WHERE key='template_source'"),
+            "recorded_at": db_one(db, "SELECT value FROM meta WHERE key='template_recorded_at'"),
+            "files": len(pairs), "hash": e3p2_fold_install(pairs),
+            "rules_hash": e3p2_fold_rules(active), "active": len(active), "revoked": len(rules) - len(active),
+            "active_keys": sorted((k for k, _ in active), key=lambda x: x.encode("utf-8"))}
+
+
+def e3p2_serve(ctx, mp, read_only=False):
+    w = Wall(ctx["exe"], ctx["contract"], mp, read_only=read_only)
+    try:
+        return w.call(E3P2_TOOL, {ctx["carg"]: CONTOUR_STAND})
+    finally:
+        w.close()
+
+
+def e3p2_cli(ctx, mp, extra=None, tool=E3P2_TOOL):
+    return run_mode(ctx["exe"], ctx["contract"], mp, [tool, "--" + ctx["carg"], CONTOUR_STAND] + list(extra or []))
+
+
+def e3p2_is_field(node):
+    return isinstance(node, dict) and set(node.keys()) == {"value", "source", "state", "reason"}
+
+
+def e3p2_field(struct, path):
+    node = struct.get("details") or {}
+    for part in path.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return None
+        node = node[part]
+    return node if e3p2_is_field(node) else None
+
+
+def e3p2_all_fields(node, prefix=""):
+    out = {}
+    if isinstance(node, dict):
+        if e3p2_is_field(node):
+            out[prefix] = node
+        else:
+            for k, v in node.items():
+                out.update(e3p2_all_fields(v, (prefix + "." if prefix else "") + k))
+    return out
+
+
+def e3p2_show(f):
+    if f is None:
+        return "поля в ответе нет"
+    return "значение %r · состояние %s%s" % (f.get("value"), f.get("state"),
+                                              (" · причина «%s»" % one_line(f.get("reason"))[:110]) if f.get("reason") else "")
+
+
+def e3p2_check_filled(struct, path, want):
+    """Поле есть, заполнено, значение равно ожидаемому, источник словами непуст, причины нет. Отдаёт строку-замечание или None."""
+    f = e3p2_field(struct, path)
+    if f is None:
+        return "%s: поля в ответе нет" % path
+    if f["state"] != "filled" or f["value"] != want or f["reason"] is not None or not (isinstance(f["source"], str) and f["source"].strip()):
+        return "%s: ждали заполненное %r с источником, в ответе %s" % (path, want, e3p2_show(f))
+    return None
+
+
+def e3p2_m1(ctx):
+    db, mp = e3p2_base(ctx, "m1")
+    exp = e3p2_expected(db)
+    storage = [c for c in read_json(mp)["contours"] if c.get("id") == CONTOUR_STAND][0]["storage"]
+    s, t = e3p2_serve(ctx, mp)
+    want = [("manifest.contour.id", CONTOUR_STAND), ("manifest.tooling.version", exp["commit"]),
+            ("manifest.tooling.source.package", exp["package"]), ("manifest.tooling.source.commit", exp["commit"]),
+            ("manifest.tooling.hash", exp["hash"]), ("manifest.storage.path", storage),
+            ("manifest.installed.at", exp["recorded_at"])]
+    notes = [n for n in (e3p2_check_filled(s, p, v) for p, v in want) if n]
+    fv = e3p2_field(s, "manifest.tooling.version")
+    if fv is not None and not ("commit" in fv["source"] and "не ведёт" in fv["source"]):
+        notes.append("manifest.tooling.version: в источнике не сказано, что номера версии пакет не ведёт и версией служит commit: «%s»" % fv["source"][:140])
+    if s.get("outcome") != "passed":
+        notes.append("исход %s, ждали passed" % s.get("outcome"))
+    fi = e3p2_field(s, "manifest.installed.at")
+    if fi is not None and "не двигает" not in fi["source"]:
+        notes.append("manifest.installed.at: в источнике не названа граница (обновление установленного час записи не двигает): «%s»" % fi["source"][:140])
+    detail = ("исход %s · значений проверено %d — шесть полей, источник двумя частями (id · версия · источник: пакет и commit · отпечаток · хранилище · час установки)\n"
+              % (s.get("outcome"), len(want)))
+    detail += "ожидали из базы копии и файла манифеста: версия %s · пакет %s · отпечаток %s · час %s\n" % (exp["commit"], exp["package"], exp["hash"], exp["recorded_at"])
+    detail += "\n".join(notes) if notes else "все поля заполнены, значения и источники на месте"
+    return not notes, detail
+
+
+def e3p2_m2(ctx):
+    db, mp = e3p2_base(ctx, "m2")
+    s, t = e3p2_serve(ctx, mp)
+    code, out, err = e3p2_cli(ctx, mp)
+    notes = []
+    fields = e3p2_all_fields(s.get("details") or {})
+    manifest_fields = dict((p, f) for p, f in fields.items() if p.startswith("manifest."))
+    if not manifest_fields:
+        notes.append("в ответе нет ни одного поля блока manifest: судить текст не из чего")
+    for label, text in (("служба", t), ("режим run", out)):
+        for p, f in sorted(manifest_fields.items()):
+            if f["state"] == "filled" and str(f["value"]) not in text:
+                notes.append("%s: значение поля %s (%s) в тексте не встречается" % (label, p, f["value"]))
+        if "\t" in text:
+            notes.append("%s: в тексте есть знак табуляции — сырой вывод читающего инструмента не убран" % label)
+        # общая шапка ответа (строки до первой пустой) — общее поле любого вызова «версия тулинга», не строка поля блока manifest
+        body_lines = [l for l in text.splitlines() if not l.startswith("исход: ")]
+        for p in E3P2_TOOLING_PATHS:
+            f = manifest_fields.get(p)
+            if f is not None and f["state"] == "filled" and f["source"].strip():
+                stray = [l for l in body_lines if str(f["value"]) in l and " · источник: " not in l]
+                if stray:
+                    notes.append("%s: значение поля %s стоит в строке, которая не строка поля: «%s»" % (label, p, stray[0][:90]))
+    detail = "заполненных полей manifest в ответе: %d · текст службы %d знаков, текст режима run %d знаков\n" % (
+        len([f for f in manifest_fields.values() if f["state"] == "filled"]), len(t), len(out))
+    detail += "\n".join(notes) if notes else "каждое значение есть в тексте, чужих строк о версии, источнике, отпечатке и часе нет"
+    return not notes, detail
+
+
+def e3p2_m3(ctx):
+    import json
+    notes, lines = [], []
+
+    def one(tag, mutate, expect):
+        db, mp = e3p2_base(ctx, tag)
+        pairs = json.loads(db_one(db, "SELECT value FROM meta WHERE key='template_files_sha'"))
+        new_raw = mutate(pairs)
+        if new_raw is not None:
+            e3p2_write(db, "UPDATE meta SET value=? WHERE key='template_files_sha'", (new_raw,))
+        exp = e3p2_expected(db)
+        s, _ = e3p2_serve(ctx, mp)
+        return exp, s
+
+    base_exp, s0 = one("m3a", lambda p: None, None)
+    problems = [n for n in (e3p2_check_filled(s0, "manifest.tooling.hash", base_exp["hash"]),
+                            e3p2_check_filled(s0, "manifest.tooling.files", base_exp["files"])) if n]
+    if base_exp["files"] <= 200:
+        problems.append("запись установки у копии короче 201 файла (%d): случай ничего не доказывает" % base_exp["files"])
+    fh = e3p2_field(s0, "manifest.tooling.hash")
+    if fh is not None and not ("не перечитывает" in fh["source"] and "сверка тел" in fh["source"]):
+        problems.append("в источнике отпечатка не сказано, что тела файлов служба не перечитывает и сверка тел — отдельная команда: «%s»" % fh["source"][:140])
+    lines.append("запись установки: %d файлов · свёртка приёмки %s · в ответе %s" % (
+        base_exp["files"], base_exp["hash"], (fh or {}).get("value")))
+    notes += problems
+
+    def flip(pairs):
+        names = sorted(pairs, key=lambda n: n.encode("utf-8"))
+        key = names[len(names) // 2]
+        h = pairs[key]
+        pairs[key] = ("1" if h[0] != "1" else "2") + h[1:]
+        return json.dumps(pairs, ensure_ascii=False)
+
+    def reverse(pairs):
+        return json.dumps(dict(reversed(list(pairs.items()))), ensure_ascii=False)
+
+    exp_f, s_f = one("m3b", flip, None)
+    n_f = e3p2_check_filled(s_f, "manifest.tooling.hash", exp_f["hash"])
+    if exp_f["hash"] == base_exp["hash"]:
+        notes.append("встречный (один знак в одном отпечатке): свёртка приёмки не изменилась — случай ничего не доказывает")
+    if n_f:
+        notes.append("встречный (один знак в одном отпечатке меняет свёртку): " + n_f)
+    lines.append("один знак в одном отпечатке: свёртка приёмки %s → %s, в ответе %s" % (
+        base_exp["hash"], exp_f["hash"], (e3p2_field(s_f, "manifest.tooling.hash") or {}).get("value")))
+
+    exp_r, s_r = one("m3c", reverse, None)
+    n_r = e3p2_check_filled(s_r, "manifest.tooling.hash", base_exp["hash"])
+    if exp_r["hash"] != base_exp["hash"]:
+        notes.append("встречный (перестановка пар): свёртка приёмки изменилась — формула приёмки не от порядка в записи")
+    if n_r:
+        notes.append("встречный (перестановка пар НЕ меняет свёртку): " + n_r)
+    lines.append("пары записи в обратном порядке: в ответе %s (ждали прежнюю %s)" % (
+        (e3p2_field(s_r, "manifest.tooling.hash") or {}).get("value"), base_exp["hash"]))
+    return not notes, "\n".join(lines) + "\n" + ("\n".join(notes) if notes else "свёртка по всей записи, число файлов равно числу пар; встречные сработали")
+
+
+def e3p2_unknown_case(ctx, mp, own_mark, db_expect_filled=True):
+    """Общая проверка случаев М4: поля записи установки и час установки — «нечем проверить» с причиной своего вида, значения нет;
+    id и путь хранилища заполнены; исход «прошло»."""
+    s, t = e3p2_serve(ctx, mp)
+    notes, reasons = [], {}
+    if s.get("outcome") != "passed":
+        notes.append("исход %s, ждали passed" % s.get("outcome"))
+    seen = 0
+    for p in E3P2_TOOLING_PATHS:
+        f = e3p2_field(s, p)
+        if f is None:
+            continue
+        seen += 1
+        reason = f.get("reason") or ""
+        reasons[p] = reason
+        if f["state"] != "cannot_verify" or f["value"] is not None or not reason.strip():
+            notes.append("%s: ждали «нечем проверить» без значения и с причиной, в ответе %s" % (p, e3p2_show(f)))
+            continue
+        if own_mark not in reason:
+            notes.append("%s: в причине нет слов своего случая «%s»: «%s»" % (p, own_mark, reason[:110]))
+        for other in E3P2_ALL_MARKS:
+            if other != own_mark and other in reason:
+                notes.append("%s: в причине слова чужого случая «%s»: «%s»" % (p, other, reason[:110]))
+    if seen == 0:
+        notes.append("ни одного поля записи установки в ответе: судить нечем")
+    for p, want in (("manifest.contour.id", CONTOUR_STAND),):
+        n = e3p2_check_filled(s, p, want)
+        if n:
+            notes.append(n)
+    fs = e3p2_field(s, "manifest.storage.path")
+    if fs is None or fs["state"] != "filled" or not fs["value"]:
+        notes.append("manifest.storage.path: ждали заполненное, в ответе %s" % e3p2_show(fs))
+    if "нечем проверить" not in t:
+        notes.append("в тексте ответа нет слов «нечем проверить»")
+    first = next(iter(reasons.values()), "")
+    detail = "исход %s · полей записи установки в ответе %d · причина одного из них: «%s»\n" % (s.get("outcome"), seen, one_line(first)[:150])
+    detail += "\n".join(notes) if notes else "все поля записи — «нечем проверить» с причиной, значения нет; id и хранилище заполнены"
+    return not notes, detail, first
+
+
+def e3p2_m4a(ctx):
+    db, mp = e3p2_base(ctx, "m4a")
+    removed = e3p2_write(db, "DELETE FROM meta WHERE key LIKE 'template_%'")
+    if removed <= 0:
+        return False, "СУДИТЬ НЕЧЕМ: в копии не нашлось строк template_*, удалять нечего"
+    ok, detail, _ = e3p2_unknown_case(ctx, mp, E3P2_MARK_A)
+    return ok, "в копии базы удалено строк template_*: %d\n%s" % (removed, detail)
+
+
+def e3p2_m4b(ctx):
+    db, mp0 = e3p2_base(ctx, "m4b")
+    gone = os.path.join(ctx["work"], "m4b", "нет-такой-базы", "mezosync.db")
+    mp = e3p2_manifest(ctx, "m4b", storage=gone)
+    ok, detail, _ = e3p2_unknown_case(ctx, mp, E3P2_MARK_B)
+    return ok, "storage манифеста ведёт на несуществующий файл\n%s" % detail
+
+
+def e3p2_stub_dbq(ctx, tag, body):
+    d = os.path.join(ctx["work"], tag, "stub-runtime")
+    if not os.path.isdir(d):
+        os.makedirs(d)
+    io.open(os.path.join(d, "db-q.py"), "w", encoding="utf-8", newline="\n").write(body)
+    return d
+
+
+def e3p2_m4c(ctx):
+    import json
+    parts = []
+    allok = True
+    # (в1) запись установки не разбирается как JSON
+    db, mp = e3p2_base(ctx, "m4c1")
+    e3p2_write(db, "UPDATE meta SET value=? WHERE key='template_files_sha'", ('{"имя-файла": "0123456789ab", ',))
+    ok1, d1, r1 = e3p2_unknown_case(ctx, mp, E3P2_MARK_C1)
+    parts.append("в1 (JSON записи оборван): %s\n%s" % ("прошёл" if ok1 else "не прошёл", d1))
+    # (в2) читающий инструмент отдал меньше строк, чем назвал в шапке
+    stub2 = e3p2_stub_dbq(ctx, "m4c2", "import sys\nsys.stdout.write('value\\nabc\\n')\nsys.stderr.write('── строк: 2 · база: stub.db\\n')\n")
+    db2, _ = e3p2_base(ctx, "m4c2")
+    mp2 = e3p2_manifest(ctx, "m4c2", storage=db2, runtime=stub2)
+    ok2, d2, r2 = e3p2_unknown_case(ctx, mp2, E3P2_MARK_C2)
+    parts.append("в2 (строк в выводе меньше, чем в шапке): %s\n%s" % ("прошёл" if ok2 else "не прошёл", d2))
+    # (в3) читающий инструмент сам назвал обрезание
+    stub3 = e3p2_stub_dbq(ctx, "m4c3", "import sys\nsys.stdout.write('value\\nabc\\n')\n"
+                                       "sys.stderr.write('⚠️ показано 1 строк, ЕСТЬ ЕЩЁ — сузь запрос или подними --limit (обрезание названо, не молчит)\\n── строк: 1 · база: stub.db\\n')\n")
+    mp3 = e3p2_manifest(ctx, "m4c3", storage=db2, runtime=stub3)
+    ok3, d3, r3 = e3p2_unknown_case(ctx, mp3, E3P2_MARK_C2)
+    parts.append("в3 (читающий инструмент назвал обрезание): %s\n%s" % ("прошёл" if ok3 else "не прошёл", d3))
+    return ok1 and ok2 and ok3, "\n".join(parts)
+
+
+def e3p2_scan_sources(src_dir):
+    """Чтение блока tooling в коде службы: показано поиском по *.cs. Допустима ТОЛЬКО проверка наличия блока: TryGetProperty("tooling", out _)."""
+    import re
+    bad, files = [], 0
+    for root, dirs, names in os.walk(src_dir):
+        dirs[:] = [d for d in dirs if d not in ("bin", "obj")]
+        for n in names:
+            if not n.endswith(".cs"):
+                continue
+            files += 1
+            path = os.path.join(root, n)
+            for i, line in enumerate(io.open(path, encoding="utf-8").read().splitlines(), 1):
+                if re.search(r"\bToolingInfo\b|\.Tooling\b|\"installed_at\"", line):
+                    bad.append("%s:%d: %s" % (n, i, line.strip()[:100]))
+                elif '"tooling"' in line and not re.search(r'TryGetProperty\("tooling", out _\)', line):
+                    bad.append("%s:%d: %s" % (n, i, line.strip()[:100]))
+    return bad, files
+
+
+def e3p2_m5(ctx):
+    db, mp_clean = e3p2_base(ctx, "m5")
+    exp = e3p2_expected(db)
+    legacy = {"version": E3P2_LEGACY_VERSION, "source": "https://example.invalid/legacy.git", "hash": "legacyhash000",
+              "installed_at": "2001-01-01T00:00:00Z"}
+    mp = e3p2_manifest(ctx, "m5-legacy", storage=db, legacy_tooling=legacy)
+    s, t = e3p2_serve(ctx, mp)
+    code, out, _ = e3p2_cli(ctx, mp)
+    s0, t0 = e3p2_serve(ctx, mp_clean)
+    notes = []
+    n = e3p2_check_filled(s, "manifest.tooling.version", exp["commit"])
+    if n:
+        notes.append("при оставленном блоке: " + n)
+    whole = json.dumps(s, ensure_ascii=False)
+    for label, text in (("структурный ответ", whole), ("текст службы", t), ("текст режима run", out)):
+        if E3P2_LEGACY_VERSION in text:
+            notes.append("чужая версия %s встречается: %s" % (E3P2_LEGACY_VERSION, label))
+    if s.get("tooling_version") != exp["commit"]:
+        notes.append("общее поле tooling_version = %r, ждали версию из хранилища %r" % (s.get("tooling_version"), exp["commit"]))
+    warn_lines = [l for l in t.splitlines() if "блок tooling" in l]
+    notes_field = (s.get("details") or {}).get("notes")
+    if not warn_lines:
+        notes.append("в тексте нет строки предупреждения об оставшемся блоке tooling")
+    if not (isinstance(notes_field, list) and any("tooling" in str(x) for x in notes_field)):
+        notes.append("в details.notes нет предупреждения об оставшемся блоке tooling: %r" % (notes_field,))
+    if any("блок tooling" in l for l in t0.splitlines()):
+        notes.append("встречный: у манифеста БЕЗ блока предупреждение об блоке всё равно напечатано")
+    bad, nfiles = e3p2_scan_sources(ctx["src_dir"])
+    if nfiles == 0:
+        notes.append("поиск по исходникам: каталог %s пуст, искать негде" % ctx["src_dir"])
+    notes += ["в коде службы читается блок tooling: " + b for b in bad]
+    ex = read_json(ctx["example"])
+    with_block = [c.get("id") for c in ex.get("contours", []) if "tooling" in c]
+    if with_block:
+        notes.append("в файле-образце манифеста остался блок tooling у контуров: %s" % ", ".join(with_block))
+    detail = ("оставлен блок tooling с версией %s; версия в ответе: %s · предупреждающих строк в тексте: %d\n"
+              "поиск по %d исходникам службы: чтений блока tooling %d · блоков tooling в образце манифеста: %d\n"
+              % (E3P2_LEGACY_VERSION, (e3p2_field(s, "manifest.tooling.version") or {}).get("value"), len(warn_lines),
+                 nfiles, len(bad), len(with_block)))
+    detail += "\n".join(notes) if notes else "версия из хранилища, чужое значение нигде не встречается, предупреждение есть, чтения блока в коде нет"
+    return not notes, detail
+
+
+def e3p2_judge_problems(s, exp, ctx, cfp, cver):
+    """Блок judge ответа против ожидаемого, посчитанного приёмкой. Отдаёт список замечаний."""
+    got = []
+    for p, want in (("judge.service_build_commit", ctx["head"]), ("judge.contract_version", cver), ("judge.contract_fingerprint", cfp),
+                    ("judge.rules", exp["rules_hash"]), ("judge.rules_active", exp["active"]), ("judge.rules_revoked", exp["revoked"])):
+        n = e3p2_check_filled(s, p, want)
+        if n:
+            got.append(n)
+    return got
+
+
+def e3p2_m6(ctx):
+    import hashlib
+    notes, lines = [], []
+    cver = read_json(ctx["contract"])["contract"]["version"]
+    cfp = hashlib.sha256(io.open(ctx["contract"], "rb").read()).hexdigest()[:12]
+    if not ctx["head"]:
+        return False, "СУДИТЬ НЕЧЕМ: git не ответил в дереве службы, commit сборки сверить не с чем"
+
+    db, mp = e3p2_base(ctx, "m6a")
+    exp0 = e3p2_expected(db)
+    s0, _ = e3p2_serve(ctx, mp)
+    if s0.get("outcome") != "passed":
+        notes.append("исход %s, ждали passed" % s0.get("outcome"))
+    notes += e3p2_judge_problems(s0, exp0, ctx, cfp, cver)
+    fr = e3p2_field(s0, "judge.rules")
+    if fr is not None and "без смены номера редакции" not in fr["source"]:
+        notes.append("в источнике поля rules не названа граница (правка тела без смены номера редакции свёртку не меняет): «%s»" % fr["source"][:140])
+    lines.append("свод: действующих %d, снятых %d, свёртка приёмки %s, в ответе %s · commit сборки ждали %s, версия договора %s, отпечаток договора %s" % (
+        exp0["active"], exp0["revoked"], exp0["rules_hash"], (fr or {}).get("value"), ctx["head"][:12], cver, cfp))
+    keys = exp0["active_keys"]
+    if len(keys) < 3:
+        return False, "СУДИТЬ НЕЧЕМ: в своде меньше трёх действующих правил"
+
+    # встречный 1: смена номера редакции одного действующего правила меняет свёртку
+    db1, mp1 = e3p2_base(ctx, "m6b")
+    e3p2_write(db1, "UPDATE rules SET version = version + 1 WHERE rule_key = ?", (keys[0],))
+    exp1 = e3p2_expected(db1)
+    s1, _ = e3p2_serve(ctx, mp1)
+    if exp1["rules_hash"] == exp0["rules_hash"]:
+        notes.append("встречный 1: свёртка приёмки не изменилась — случай ничего не доказывает")
+    notes += ["встречный 1 (смена номера редакции): " + x for x in e3p2_judge_problems(s1, exp1, ctx, cfp, cver)]
+    lines.append("номер редакции правила %s увеличен: свёртка %s → %s" % (keys[0], exp0["rules_hash"], exp1["rules_hash"]))
+
+    # встречный 2: снятие правила меняет свёртку и оба числа
+    db2, mp2 = e3p2_base(ctx, "m6c")
+    e3p2_write(db2, "UPDATE rules SET status='revoked', revoked_at='2026-11-20 00:00:00', revoked_by='e3p2', "
+                    "revoked_reason='проба приёмки' WHERE rule_key = ?", (keys[1],))
+    exp2 = e3p2_expected(db2)
+    s2, _ = e3p2_serve(ctx, mp2)
+    if (exp2["rules_hash"] == exp0["rules_hash"] or exp2["active"] != exp0["active"] - 1 or exp2["revoked"] != exp0["revoked"] + 1):
+        notes.append("встречный 2: формулы приёмки не дали ожидаемого изменения свёртки и чисел — случай ничего не доказывает")
+    notes += ["встречный 2 (снятие правила): " + x for x in e3p2_judge_problems(s2, exp2, ctx, cfp, cver)]
+    lines.append("правило %s снято: свёртка %s → %s, действующих %d → %d, снятых %d → %d" % (
+        keys[1], exp0["rules_hash"], exp2["rules_hash"], exp0["active"], exp2["active"], exp0["revoked"], exp2["revoked"]))
+
+    # встречный 3: правка тела БЕЗ смены номера редакции свёртку не меняет
+    db3, mp3 = e3p2_base(ctx, "m6d")
+    e3p2_write(db3, "UPDATE rules SET body = body || ' (проба приёмки)' WHERE rule_key = ?", (keys[2],))
+    exp3 = e3p2_expected(db3)
+    s3, _ = e3p2_serve(ctx, mp3)
+    if exp3["rules_hash"] != exp0["rules_hash"]:
+        notes.append("встречный 3: после правки тела номер редакции у копии сменился сам (триггер?) — случай ничего не доказывает")
+    notes += ["встречный 3 (правка тела без смены номера): " + x for x in e3p2_judge_problems(s3, exp3, ctx, cfp, cver)]
+    lines.append("тело правила %s изменено, номер редакции прежний: свёртка в ответе %s (ждали прежнюю %s)" % (
+        keys[2], (e3p2_field(s3, "judge.rules") or {}).get("value"), exp0["rules_hash"]))
+
+    # встречный 4: свод не читается — «нечем проверить», исход «прошло»
+    db4, mp4 = e3p2_base(ctx, "m6e")
+    e3p2_write(db4, "ALTER TABLE rules RENAME TO rules_e3p2_gone")
+    s4, t4 = e3p2_serve(ctx, mp4)
+    if s4.get("outcome") != "passed":
+        notes.append("встречный 4 (свод не читается): исход %s, ждали passed" % s4.get("outcome"))
+    for p in ("judge.rules", "judge.rules_active", "judge.rules_revoked"):
+        f = e3p2_field(s4, p)
+        if f is None or f["state"] != "cannot_verify" or f["value"] is not None or not (f.get("reason") or "").strip():
+            notes.append("встречный 4: %s — ждали «нечем проверить» без значения и с причиной, в ответе %s" % (p, e3p2_show(f)))
+    for p, want in (("judge.contract_version", cver), ("judge.contract_fingerprint", cfp)):
+        n = e3p2_check_filled(s4, p, want)
+        if n:
+            notes.append("встречный 4: " + n)
+    lines.append("таблица правил недоступна: исход %s, свёртка — %s" % (s4.get("outcome"), e3p2_show(e3p2_field(s4, "judge.rules"))))
+    return not notes, "\n".join(lines) + "\n" + ("\n".join(notes) if notes else "свёртка равна посчитанной приёмкой; встречные 1–4 сработали")
+
+
+def e3p2_m7(ctx):
+    import copy
+    import json
+    notes, lines = [], []
+    db, mp = e3p2_base(ctx, "m7")
+    s, t = e3p2_serve(ctx, mp, read_only=True)   # режим run всегда только-чтение: строка «режим стены» в тексте у обоих одна
+    code, out, err = e3p2_cli(ctx, mp, ["--json"])
+    doc = None
+    try:
+        doc = json.loads(out)
+    except ValueError:
+        notes.append("режим run с --json: в стандартном выводе не один документ JSON (код %s, начало: «%s»)" % (code, one_line(out)[:90]))
+    if code != 0:
+        notes.append("режим run с --json: код выхода %s, ждали 0 (исход «прошло»)" % code)
+    if doc is not None:
+        if json.dumps(doc, sort_keys=True, ensure_ascii=False) != json.dumps(s, sort_keys=True, ensure_ascii=False):
+            diff = [k for k in sorted(set(doc) | set(s)) if doc.get(k) != s.get(k)]
+            notes.append("документ режима run не равен структурному ответу службы: расходятся ключи %s" % ", ".join(diff))
+        f_cli = e3p2_all_fields((doc.get("details") or {}))
+        f_mcp = e3p2_all_fields((s.get("details") or {}))
+        if f_cli != f_mcp:
+            notes.append("поля блоков manifest и judge в режиме run и в ответе службы различаются")
+        names = sorted(f_mcp)
+        declared_doc = tool_doc(read_json(ctx["contract"]), E3P2_TOOL).get("answer_fields")
+        declared = [x.get("name") for x in declared_doc] if isinstance(declared_doc, list) else None
+        if declared is None:
+            notes.append("в договоре у вызова %s нет перечня answer_fields" % E3P2_TOOL)
+        else:
+            undeclared = [n for n in names if n not in declared]
+            lacking = [n for n in E3P2_FIELD_NAMES if n not in declared]
+            if undeclared:
+                notes.append("в ответе есть поля, которых договор не объявляет: %s" % ", ".join(undeclared))
+            if lacking:
+                notes.append("договор не объявляет поля: %s" % ", ".join(lacking))
+        lines.append("полей в ответе %d · объявлено в answer_fields %s · документ режима run равен ответу службы: %s" % (
+            len(names), len(declared) if declared else "—", doc == s))
+    shape = read_json(ctx["contract"]).get("answer_shape", {}).get("fields", [])
+    det = [f for f in shape if f.get("name") == "details"]
+    if not det or det[0].get("required") is not False:
+        notes.append("в answer_shape договора нет необязательного поля details")
+    # флаг действует для любого вызова: на вызове с телом на Python
+    c2, o2, _ = e3p2_cli(ctx, mp, ["--list", "--json"], tool="rules_get")
+    try:
+        d2 = json.loads(o2)
+        if "outcome" not in d2 or d2.get("details") is not None:
+            notes.append("--json у вызова rules_get: документ без исхода или с чужим details")
+    except ValueError:
+        notes.append("--json у вызова rules_get: в стандартном выводе не один документ JSON (код %s)" % c2)
+    # справка называет флаг
+    hc, hout, _, hto = run_cli(ctx["exe"], ["help", "--contract", ctx["contract"]])
+    if hto or hc != 0 or "--json" not in hout:
+        notes.append("общая справка не называет флаг --json (код %s)" % hc)
+    # договор с аргументом json: служба отказывает при запуске, флаг не заслоняет аргумент молча
+    clash = copy.deepcopy(read_json(ctx["contract"]))
+    tool_doc(clash, "rules_get")["args"].append({"name": "json", "type": "bool", "required": False, "description": "нарочный аргумент приёмки с именем, занятым флагом"})
+    cpath = os.path.join(ctx["work"], "m7", "contract-json-arg.json")
+    write_json(cpath, clash)
+    rc, rout, rerr = run_mode(ctx["exe"], cpath, mp, [E3P2_TOOL, "--" + ctx["carg"], CONTOUR_STAND, "--json"])
+    sc, sout, serr, sto = run_cli(ctx["exe"], ["serve", "--contract", cpath, "--contours", mp])
+    if rc != 4 or "json" not in rerr or rout.strip():
+        notes.append("run при договоре с аргументом json: код %s (ждали 4), причина в потоке ошибок: «%s», стандартный вывод %d знаков" % (rc, one_line(rerr)[:90], len(rout)))
+    if sto or sc != 4 or "json" not in serr:
+        notes.append("serve при договоре с аргументом json: код %s (ждали 4), причина: «%s»" % (sc, one_line(serr)[:90]))
+    lines.append("--json у rules_get: код %s · справка называет флаг: %s · договор с аргументом json: run код %s, serve код %s" % (
+        c2, "--json" in hout, rc, sc))
+    return not notes, "\n".join(lines) + "\n" + ("\n".join(notes) if notes else "поля одинаковы в службе и режиме run, форма объявлена в договоре, флаг описан в справке и не заслоняет аргумент")
+
+
+E3P2_CASES = [
+    ("М1", "шесть полей манифеста — полями ответа (значение · источник · состояние), значения равны прочитанному приёмкой из базы стенда и манифеста", e3p2_m1),
+    ("М2", "текст ответа строится из полей: каждое заполненное значение в тексте, строк о версии и отпечатке вне полей и сырого вывода db-q нет", e3p2_m2),
+    ("М3", "отпечаток — по ВСЕЙ записи установки (больше 200 файлов): свёртка и число файлов равны посчитанным приёмкой; встречные: один знак меняет, перестановка пар нет", e3p2_m3),
+    ("М4а", "«нечем проверить» (а): в копии базы удалены строки установщика — без значения, с причиной, id и хранилище заполнены, исход «прошло»", e3p2_m4a),
+    ("М4б", "«нечем проверить» (б): хранилище не отвечает — без значения, причина другая, исход «прошло»", e3p2_m4b),
+    ("М4в", "«нечем проверить» (в): запись установки не разбирается или прочитана не целиком — без значения, причины третьего вида, исход «прошло»", e3p2_m4c),
+    ("М5", "один источник версии: блок tooling манифеста с другой версией не попадает в ответ, предупреждение есть, чтения блока в коде и блока в образце нет", e3p2_m5),
+    ("М6", "блок «кто меня судит»: commit сборки, версия и отпечаток договора, свёртка свода правил и числа; встречные на копии базы и «свод не читается»", e3p2_m6),
+    ("М7", "CLI и MCP — одно: поля одинаковы, форма объявлена в договоре, флаг --json описан в справке и не заслоняет аргумент договора", e3p2_m7),
+]
+
+
+def e3p2_run_all(ctx):
+    """Все случаи М1–М7 на одной сборке. Отдаёт список (ключ, прошёл, заголовок, подробности). Исключение внутри случая — провал со словами."""
+    results = []
+    for key, title, fn in E3P2_CASES:
+        try:
+            ok, detail = fn(ctx)
+        except LiveContourRefusal:
+            raise
+        except Exception as e:  # noqa: BLE001 — любой сбой разбора ответа старой сборки есть провал случая, а не остановка приёмки
+            ok, detail = False, "случай не дошёл до сличения: %s: %s" % (type(e).__name__, one_line(str(e))[:200])
+        results.append((key, ok, title, detail))
+    return results
+
+
+def e3p2_break_copy(work, tag, rel_file, anchor, replacement, head):
+    """Копия исходников службы (GordiWall, contract, contour) в рабочем каталоге; в одном файле заменена ОДНА названная строка.
+    Отдаёт (каталог копии службы или None, замечание). Якорь не найден ровно один раз — «поломка не наложилась»."""
+    root = os.path.join(work, tag)
+    if os.path.isdir(root):
+        shutil.rmtree(root)
+    svc = os.path.join(root, "service")
+    os.makedirs(svc)
+    ignore = shutil.ignore_patterns("bin", "obj")
+    for sub in ("GordiWall", "contract", "contour"):
+        shutil.copytree(os.path.join(SERVICE, sub), os.path.join(svc, sub), ignore=ignore)
+    io.open(os.path.join(svc, "build-stamp.txt"), "w", encoding="utf-8", newline="\n").write((head or "") + "\n")
+    target = os.path.join(svc, rel_file)
+    if not os.path.exists(target):
+        return None, "поломка не наложилась: файла %s в копии нет" % rel_file
+    raw = io.open(target, encoding="utf-8", newline="").read()
+    eol = "\r\n" if "\r\n" in raw else "\n"
+    found = raw.count(anchor)
+    if found != 1:
+        return None, "поломка не наложилась: якорь найден %d раз (нужно ровно один) в %s" % (found, rel_file)
+    io.open(target, "w", encoding="utf-8", newline="").write(raw.replace(anchor, replacement.replace("\n", eol)))
+    return svc, ""
+
+
+def e3p2_build(svc, tag_dir):
+    """Сборка копии: dotnet build -m:1; сеть закрыта (прокси на глухой порт), предел времени. Отдаёт (код, путь к исполнимому, путь к выводу сборки)."""
+    env = clean_env({"HTTP_PROXY": "http://127.0.0.1:9", "HTTPS_PROXY": "http://127.0.0.1:9", "NO_PROXY": "",
+                     "DOTNET_CLI_TELEMETRY_OPTOUT": "1", "DOTNET_NOLOGO": "1"})
+    for k in list(env):
+        if k.upper().startswith("MEZO_"):
+            env.pop(k)
+    csproj = os.path.join(svc, "GordiWall", "GordiWall.csproj")
+    log = os.path.join(tag_dir, "build.txt")
+    try:
+        p = subprocess.run(["dotnet", "build", csproj, "-m:1", "--nologo", "-v:q", "-nodeReuse:false"], capture_output=True,
+                           encoding="utf-8", errors="replace", env=env, timeout=E3P2_BUILD_LIMIT_S)
+        io.open(log, "w", encoding="utf-8").write((p.stdout or "") + (p.stderr or ""))
+        code = p.returncode
+    except subprocess.TimeoutExpired:
+        io.open(log, "w", encoding="utf-8").write("предел времени сборки %d с" % E3P2_BUILD_LIMIT_S)
+        code = -1
+    exe = os.path.join(svc, "GordiWall", "bin", "Debug", "net10.0", "gordi-wall.exe")
+    return code, exe, log
+
+
+def cases_e3p2(args, work, manifest, contract_doc, carg, v6):
+    """Раздел «Э3-П2» (карточка 816): М1–М7 на собранной службе, затем Л1–Л6 — поломки В КОДЕ СЛУЖБЫ на пересобранной копии."""
+    d = os.path.join(work, E3P2_DIR)
+    if not os.path.isdir(d):
+        os.makedirs(d)
+    head = git_out(SERVICE, "rev-parse", "HEAD")
+    ctx = {"exe": args.exe, "contract": args.contract, "manifest": manifest, "carg": carg, "head": head,
+           "work": os.path.join(d, "tree"), "src_dir": os.path.join(SERVICE, "GordiWall"),
+           "example": os.path.join(SERVICE, "contour", "gordi-contours.example.json")}
+    results = e3p2_run_all(ctx)
+    for key, ok, title, detail in results:
+        v6.add("816-" + key, ok, title, detail)
+    base_failed = [k for k, ok, _, _ in results if not ok]
+
+    for number, (key, what, rel_file, anchor, replacement, expected) in enumerate(E3P2_BREAKS, 1):
+        title = "нарочная поломка В КОДЕ СЛУЖБЫ с пересборкой: %s — падают РОВНО %s" % (what, ", ".join(sorted(expected)))
+        svc, why = e3p2_break_copy(d, "break-%d" % number, rel_file, anchor, replacement, head)
+        if svc is None:
+            v6.add("816-" + key, False, title, why)
+            continue
+        if base_failed:
+            v6.add("816-" + key, False, title, "СУДИТЬ НЕЧЕМ: на целой службе не прошли случаи %s — поломка не на чем видна" % ", ".join(base_failed))
+            continue
+        code, exe, log = e3p2_build(svc, os.path.dirname(svc))
+        if code != 0 or not os.path.exists(exe):
+            tail = io.open(log, encoding="utf-8", errors="replace").read().strip().splitlines()[-6:]
+            v6.add("816-" + key, False, title, "сборка копии НЕ прошла (код %s): %s\nвывод сборки: %s" % (code, exe, " | ".join(x.strip()[:120] for x in tail)))
+            continue
+        cctx = dict(ctx, exe=exe, contract=os.path.join(svc, "contract", "gordi-contract.json"),
+                    src_dir=os.path.join(svc, "GordiWall"), example=os.path.join(svc, "contour", "gordi-contours.example.json"),
+                    work=os.path.join(os.path.dirname(svc), "run"))
+        broken = e3p2_run_all(cctx)
+        failed = set(k for k, ok, _, _ in broken if not ok)
+        lines = ["судилась ПЕРЕСОБРАННАЯ копия: %s" % exe.replace("\\", "/"),
+                 "сборка копии прошла (код 0), якорь найден ровно один раз в %s" % rel_file,
+                 "не прошли после поломки: %s (ждали ровно %s)" % (", ".join(sorted(failed)) or "ни один", ", ".join(sorted(expected)))]
+        for k, ok, _, det in broken:
+            if not ok and k in expected:
+                lines.append("  %s: %s" % (k, one_line(det)[:170]))
+        v6.add("816-" + key, failed == expected, title, "\n".join(lines))
+
+
+STALE_BUILD_WORDS = "сборка СТАРШЕ исходников: это прогон «до», а не приёмка новой службы"
+
+
+def section_verdict(section, card, verdict, stale):
+    """Итог прогона ОДНОГО раздела (ключи --only-e3p1 и --only-e3p2). На сборке старше исходников итоговая строка называет сборку
+    старой, и проход отдаётся кодом 3, а не 0: иначе прогон «до» читается как приёмка новой службы (замечание приёмки чужой рукой,
+    карточка 814). Провал остаётся кодом 1 на любой сборке."""
+    failed = verdict.failed()
+    total = len(verdict.rows)
+    if failed:
+        print("🔴 ПРОВАЛИЛОСЬ %d: %s (карточка %s: %d из %d прошло)%s"
+              % (len(failed), " · ".join(r[0] for r in failed), card, total - len(failed), total,
+                 (" · " + STALE_BUILD_WORDS) if stale else ""))
+        return 1
+    if stale:
+        print("⏸ РАЗДЕЛ %s НА СТАРОЙ СБОРКЕ: карточка %s — %d из %d, но %s. Пересобрать и запустить снова."
+              % (section, card, total, total, STALE_BUILD_WORDS))
+        return 3
+    print("✅ РАЗДЕЛ %s ПРОШЁЛ: карточка %s — %d из %d" % (section, card, total, total))
+    return 0
+
+
 def main():
     try:
         return run_acceptance()
@@ -2427,6 +3226,9 @@ def run_acceptance():
     ap.add_argument("--only-e3p1", action="store_true",
                     help="судить ТОЛЬКО раздел «Э3-П1» (справка службы); сборку старше исходников в этом режиме судит как СТАРУЮ, "
                          "чтобы получить прогон «до» на сборке без справки; в общий прогон не входит")
+    ap.add_argument("--only-e3p2", action="store_true",
+                    help="судить ТОЛЬКО раздел «Э3-П2» (карточка 816: поля манифеста и блок «кто меня судит» в ответе contour_info); "
+                         "сборку старше исходников судит как СТАРУЮ (прогон «до»); без стенда раздел не работает")
     args = ap.parse_args()
 
     if not os.path.exists(args.exe):
@@ -2445,9 +3247,9 @@ def run_acceptance():
     print("── ЧАС СБОРКИ И ИСХОДНИКОВ")
     print("   сборка исполнимого файла ... %s" % utc(exe_time))
     print("   последняя правка исходников  %s (%s)" % (utc(src_time), src_file))
-    if exe_time < src_time and args.only_e3p1:
-        print("ℹ️ СБОРКА СТАРШЕ ИСХОДНИКОВ, но задан --only-e3p1: раздел «Э3-П1» судит её как СТАРУЮ сборку (прогон «до»).")
-        print("   Это не приёмка новой службы: общий прогон такую сборку по-прежнему не судит.")
+    if exe_time < src_time and (args.only_e3p1 or args.only_e3p2):
+        print("ℹ️ СБОРКА СТАРШЕ ИСХОДНИКОВ, но задан ключ --only-e3p1 или --only-e3p2: раздел судит её как СТАРУЮ сборку (прогон «до»).")
+        print("   Это не приёмка новой службы: общий прогон такую сборку по-прежнему не судит, а проход раздела на ней отдаётся кодом 3, не 0.")
     elif exe_time < src_time:
         print("⏸ СБОРКА СТАРШЕ ИСХОДНИКОВ: приёмка её НЕ СУДИТ. Это не провал и не проход —")
         print("   она проверила бы не то, что написано. Пересобрать: dotnet build %s, затем запустить снова."
@@ -2483,12 +3285,14 @@ def run_acceptance():
         cases_e3p1(args, work, manifest, contract_doc, CARG, v5)
         print("── случаи карточки 814 (этап Э3, предмет П1: справка из того же договора) — ТОЛЬКО этот раздел")
         v5.print_all()
-        if v5.failed():
-            print("🔴 ПРОВАЛИЛОСЬ %d: %s (карточка 814: %d из %d прошло)"
-                  % (len(v5.failed()), " · ".join(r[0] for r in v5.failed()), len(v5.rows) - len(v5.failed()), len(v5.rows)))
-            return 1
-        print("✅ РАЗДЕЛ Э3-П1 ПРОШЁЛ: карточка 814 — %d из %d" % (len(v5.rows), len(v5.rows)))
-        return 0
+        return section_verdict("Э3-П1", "814", v5, exe_time < src_time)
+
+    if args.only_e3p2:
+        v6 = Verdict()
+        cases_e3p2(args, work, manifest, contract_doc, CARG, v6)
+        print("── случаи карточки 816 (этап Э3, предмет П2: шесть полей манифеста и блок «кто меня судит» полями ответа) — ТОЛЬКО этот раздел")
+        v6.print_all()
+        return section_verdict("Э3-П2", "816", v6, exe_time < src_time)
 
     # ─────────────────────────────────────── ① перечень вызовов из ОДНОГО файла
     code, out, err = run_mode(args.exe, args.contract, args.contours, ["contour_info", "--contour", CONTOUR_LIVE])
@@ -2828,6 +3632,10 @@ def run_acceptance():
     v5 = Verdict()
     cases_e3p1(args, work, manifest, contract_doc, CARG, v5)
 
+    # ═══════════════════════════════════════ карточка 816 (этап Э3, предмет П2): поля манифеста и блок «кто меня судит» в ответе
+    v6 = Verdict()
+    cases_e3p2(args, work, manifest, contract_doc, CARG, v6)
+
     # ─────────────────────────────────────── вывод
     print("── ПРИЁМКА СТЕНЫ КОНТУРА GORDI · этап Э1 · карточка 779")
     print("   сборка ... %s" % args.exe)
@@ -2850,21 +3658,25 @@ def run_acceptance():
     print("── случаи карточки 814 (этап Э3, предмет П1: справка из того же договора · восемь случаев С1–С8 и четыре нарочные поломки Л1–Л4)")
     v5.print_all()
     print("")
+    print("── случаи карточки 816 (этап Э3, предмет П2: поля манифеста и блок «кто меня судит» · девять случаев М1–М7 и шесть нарочных поломок Л1–Л6 в коде службы)")
+    v6.print_all()
+    print("")
     print("⚖️ ЭТИ ДВА КРИТЕРИЯ МАШИНА НЕ СУДИТ — говорю прямо, чтобы зелёное не прочлось шире:")
     print("   ⑥ полный рабочий отрезок роли через стену — доказывается работой роли (записка · память · карточка),")
     print("      а не этим файлом. Прогон приёмки отрезком НЕ является.")
     print("   ⑨ подпись приёмки ставит роль, которая службу НЕ писала. Свой прогон за чужую руку не считается.")
     print("")
-    bad = v.failed() + v2.failed() + v3.failed() + v4.failed() + v5.failed()
+    bad = v.failed() + v2.failed() + v3.failed() + v4.failed() + v5.failed() + v6.failed()
     if bad:
-        print("🔴 ПРОВАЛИЛОСЬ %d: %s (карточка 779: %d из %d прошло · карточка 787: %d из %d прошло · карточка 791: %d из %d прошло · карточка 781: %d из %d прошло · карточка 814: %d из %d прошло)"
+        print("🔴 ПРОВАЛИЛОСЬ %d: %s (карточка 779: %d из %d прошло · карточка 787: %d из %d прошло · карточка 791: %d из %d прошло · карточка 781: %d из %d прошло · карточка 814: %d из %d прошло · карточка 816: %d из %d прошло)"
               % (len(bad), " · ".join(r[0] for r in bad),
                  len(v.rows) - len(v.failed()), len(v.rows), len(v2.rows) - len(v2.failed()), len(v2.rows),
                  len(v3.rows) - len(v3.failed()), len(v3.rows), len(v4.rows) - len(v4.failed()), len(v4.rows),
-                 len(v5.rows) - len(v5.failed()), len(v5.rows)))
+                 len(v5.rows) - len(v5.failed()), len(v5.rows), len(v6.rows) - len(v6.failed()), len(v6.rows)))
         return 1
-    print("✅ ВСЕ МАШИННЫЕ КРИТЕРИИ ПРОШЛИ: карточка 779 — %d из %d · карточка 787 — %d из %d · карточка 791 — %d из %d · карточка 781 — %d из %d · карточка 814 — %d из %d (⑥ и ⑨ карточки 779 — за человеком)"
-          % (len(v.rows), len(v.rows), len(v2.rows), len(v2.rows), len(v3.rows), len(v3.rows), len(v4.rows), len(v4.rows), len(v5.rows), len(v5.rows)))
+    print("✅ ВСЕ МАШИННЫЕ КРИТЕРИИ ПРОШЛИ: карточка 779 — %d из %d · карточка 787 — %d из %d · карточка 791 — %d из %d · карточка 781 — %d из %d · карточка 814 — %d из %d · карточка 816 — %d из %d (⑥ и ⑨ карточки 779 — за человеком)"
+          % (len(v.rows), len(v.rows), len(v2.rows), len(v2.rows), len(v3.rows), len(v3.rows), len(v4.rows), len(v4.rows), len(v5.rows), len(v5.rows),
+             len(v6.rows), len(v6.rows)))
     return 0
 
 

@@ -29,15 +29,14 @@ public static class BuildInfo
     /// <summary>Значение для поля serverInfo: commit или слово «unknown».</summary>
     public static string CommitForServerInfo => CommitKnown ? Commit : "unknown";
 
-    /// <summary>Строки для contour_info. Незнание названо прямо: «собрано не из git», а не пустое место.</summary>
-    public static IEnumerable<string> Lines()
+    /// <summary>
+    /// Слова об отметке сборки для источника поля commit сборки: были ли незакоммиченные правки, адрес исходника и каталог сборки.
+    /// Незнание названо прямо: «собрано не из git», а не пустое место.
+    /// </summary>
+    public static string SourceNote()
     {
         if (!CommitKnown)
-        {
-            yield return "commit сборки ......... НЕИЗВЕСТЕН — собрано не из git (и не из выгрузки git archive с подстановкой commit)";
-            yield return $"каталог сборки ........ {Or(BuildDir)}";
-            yield break;
-        }
+            return $"каталог сборки {Or(BuildDir)}";
 
         var dirty = Dirty switch
         {
@@ -45,9 +44,7 @@ public static class BuildInfo
             "no" => "незакоммиченных правок в дереве не было",
             _ => "были ли незакоммиченные правки — неизвестно (сборка из выгрузки)",
         };
-        yield return $"commit сборки ......... {Commit} ({dirty})";
-        yield return $"исходник .............. {Or(SourceUrl, "адрес origin неизвестен")} · {Or(SourcePath)}";
-        yield return $"каталог сборки ........ {Or(BuildDir)}";
+        return $"{dirty}; исходник {Or(SourceUrl, "адрес origin неизвестен")} · {Or(SourcePath)}; каталог сборки {Or(BuildDir)}";
     }
 
     private static string Or(string value, string whenEmpty = "неизвестно") =>

@@ -24,6 +24,9 @@ public static class Program
 
     private const string ServeMode = "serve", RunMode = "run", ToolsMode = "tools", HelpMode = "help";
 
+    /// <summary>Флаг режима run: вместо текста один документ JSON. Имя занято: договор не вправе объявить аргумент с таким именем.</summary>
+    private const string JsonFlag = "--json";
+
     private sealed record ModeInfo(string Name, string Purpose);
 
     private static readonly ModeInfo[] Modes =
@@ -35,6 +38,13 @@ public static class Program
     ];
 
     private static string ModeNames => string.Join(" · ", Modes.Select(m => m.Name));
+
+    // флаги режима run: ТО ЖЕ место, откуда справка берёт режимы
+    private static readonly ModeInfo[] RunFlags =
+    [
+        new(JsonFlag, "вместо текста один документ JSON: тот же структурный ответ, что служба MCP кладёт в structuredContent "
+                      + "(общие поля и details); код выхода прежний, по исходу; действует для любого вызова"),
+    ];
 
     // ────────────────────────────────── исход → код выхода режима run: ОДНО место, его берут RunOnceAsync и справка
 
@@ -83,7 +93,14 @@ public static class Program
         var contractPath = Take(args, "--contract") ?? Environment.GetEnvironmentVariable("GORDI_CONTRACT") ?? ProbeContract();
         var contoursPath = Take(args, "--contours") ?? Environment.GetEnvironmentVariable("GORDI_CONTOURS") ?? ProbeContours();
         var readOnly = TakeSwitch(args, "--read-only") || mode == RunMode;
+        var asJson = TakeSwitch(args, JsonFlag);
         var helpTool = mode == HelpMode && modeTakesTool && args.Count > 0 && !args[0].StartsWith('-') ? args[0] : null;
+
+        if (asJson && mode != RunMode)
+        {
+            await Console.Error.WriteLineAsync($"отказ: флаг {JsonFlag} действует только в режиме {RunMode}, а режим здесь «{mode}».");
+            return RefusalCode;
+        }
 
         if (contractPath is null)
         {
@@ -105,6 +122,14 @@ public static class Program
 
         if (mode == ToolsMode)
             return await PrintToolsAsync(contract, contoursPath);
+
+        // Имя флага занято: договор с таким аргументом не должен молча терять его за флагом режима run
+        if ((mode == RunMode || mode == ServeMode) && JsonFlagClash(contract) is { } clash)
+        {
+            await Console.Error.WriteLineAsync($"отказ: договор объявляет аргумент «json» ({clash}), а имя {JsonFlag} занято флагом режима {RunMode} "
+                + "(вывод одним документом JSON). Переименуйте аргумент в договоре: флаг не должен молча заслонять аргумент.");
+            return RefusalCode;
+        }
 
         // Справке нужен только договор: ветка стоит ДО проверки манифеста контуров, как и tools
         if (mode == HelpMode)
@@ -134,9 +159,17 @@ public static class Program
         return mode switch
         {
             ServeMode => await ServeAsync(contract, manifest, runner),
-            RunMode => await RunOnceAsync(contract, runner, args),
+            RunMode => await RunOnceAsync(contract, runner, args, asJson),
             _ => await UnknownModeAsync(mode),
         };
+    }
+
+    /// <summary>Где в договоре объявлен аргумент с именем «json» (общий или аргумент вызова); нет такого — null.</summary>
+    private static string? JsonFlagClash(Contract contract)
+    {
+        if (contract.CommonArgs.Any(a => Flag(a.Name) == JsonFlag)) return "общий аргумент";
+        var tool = contract.Tools.FirstOrDefault(t => t.Args.Any(a => Flag(a.Name) == JsonFlag));
+        return tool is null ? null : $"аргумент вызова «{tool.Name}»";
     }
 
     private static bool IsHelpFlag(string a) =>
@@ -193,6 +226,10 @@ public static class Program
         sb.AppendLine("режимы:");
         foreach (var m in Modes)
             sb.AppendLine($"  {m.Name,-8} {m.Purpose}");
+        sb.AppendLine();
+        sb.AppendLine("флаги режима run:");
+        foreach (var f in RunFlags)
+            sb.AppendLine($"  {f.Name,-8} {f.Purpose}");
         sb.AppendLine();
         sb.AppendLine("договор:");
         AppendContractLines(sb, contract);
@@ -297,7 +334,7 @@ public static class Program
 
     // ────────────────────────────────── однократный вызов мимо службы (только чтение)
 
-    private static async Task<int> RunOnceAsync(Contract contract, ToolRunner runner, List<string> args)
+    private static async Task<int> RunOnceAsync(Contract contract, ToolRunner runner, List<string> args, bool asJson)
     {
         if (args.Count == 0 || args[0].StartsWith('-'))
         {
@@ -325,6 +362,14 @@ public static class Program
             + "Запись этим путём отвергается намеренно.");
 
         var answer = await runner.CallAsync(toolName, given, CancellationToken.None);
+
+        // --json: один документ JSON, тот же структурный ответ, что служба MCP кладёт в structuredContent
+        if (asJson)
+        {
+            await Console.Out.WriteLineAsync(StructuredOf(answer).ToJsonString(Json));
+            return ExitCodeOf(answer.Outcome);
+        }
+
         await Console.Out.WriteAsync(answer.ForRole());
         // У ответа по частям текст печатается как есть: лишний перевод строки сломал бы точность склейки частей
         if (answer.Parts == 1 && !answer.ForRole().EndsWith('\n')) await Console.Out.WriteLineAsync();
@@ -433,24 +478,6 @@ public static class Program
 
         var answer = await runner.CallAsync(name, given, CancellationToken.None);
 
-        var structured = new JsonObject
-        {
-            ["outcome"] = OutcomeNames.Id(answer.Outcome),
-            ["outcome_title"] = OutcomeNames.Title(answer.Outcome),
-            ["truncated"] = answer.Truncated,
-            ["truncate_reason"] = answer.TruncateReason,
-            ["text"] = answer.Text,
-            ["warnings"] = answer.Warnings,
-            ["part"] = answer.Part,
-            ["parts"] = answer.Parts,
-            ["next_part"] = answer.NextPart,
-            ["final_outcome"] = answer.FinalOutcome is { } fin ? OutcomeNames.Id(fin) : null,
-            ["contour"] = answer.Contour,
-            ["tooling_version"] = answer.ToolingVersion,
-            ["child_exit"] = answer.ChildExit,
-            ["error"] = answer.Error,
-        };
-
         return Result(id, new JsonObject
         {
             ["content"] = new JsonArray(new JsonObject
@@ -458,12 +485,32 @@ public static class Program
                 ["type"] = "text",
                 ["text"] = answer.ForRole(),
             }),
-            ["structuredContent"] = structured,
+            ["structuredContent"] = StructuredOf(answer),
             // isError НЕ равен «исход не passed»: расхождение и явное незнание — тоже честные ответы,
             // а не поломка вызова. Поломкой здесь считается только отказ договора.
             ["isError"] = answer.Outcome == Outcome.Refused,
         });
     }
+
+    /// <summary>Структурный ответ вызова: его кладёт в structuredContent служба MCP и печатает режим run с флагом --json. Одно место для обоих.</summary>
+    private static JsonObject StructuredOf(Answer answer) => new()
+    {
+        ["outcome"] = OutcomeNames.Id(answer.Outcome),
+        ["outcome_title"] = OutcomeNames.Title(answer.Outcome),
+        ["truncated"] = answer.Truncated,
+        ["truncate_reason"] = answer.TruncateReason,
+        ["text"] = answer.Text,
+        ["warnings"] = answer.Warnings,
+        ["part"] = answer.Part,
+        ["parts"] = answer.Parts,
+        ["next_part"] = answer.NextPart,
+        ["final_outcome"] = answer.FinalOutcome is { } fin ? OutcomeNames.Id(fin) : null,
+        ["contour"] = answer.Contour,
+        ["tooling_version"] = answer.ToolingVersion,
+        ["child_exit"] = answer.ChildExit,
+        ["error"] = answer.Error,
+        ["details"] = answer.Details?.DeepClone(),
+    };
 
     private static JsonArray ToolList(Contract contract)
     {
