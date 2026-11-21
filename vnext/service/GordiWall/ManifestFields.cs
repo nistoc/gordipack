@@ -174,6 +174,7 @@ public sealed record InstallRecord(Piece Commit, Piece Package, Piece RecordedAt
         if (firstFail is not null)
             all = all.Select(p => p.Reason is null ? Piece.Fail("запись установки в целом не принята — " + firstFail.Reason) : p).ToArray();
 
+        // Граница (договор 2.2.1, карточка 823): общее поле — commit как есть и целость записи установки не проверяет; при записи, не принятой целиком, «нечем проверить» отвечает manifest.tooling.version.
         // общее поле версии — из того же чтения, что и поля записи; не вышло прочесть commit — пустая строка, а не догадка
         var version = small.Ok ? PickVersion(small.Rows.FirstOrDefault(r => r.Length == 2 && r[0] == "template_commit")?[1] ?? "") : "";
         return new InstallRecord(all[0], all[1], all[2], all[3], all[4], version);

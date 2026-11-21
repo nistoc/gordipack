@@ -64,6 +64,12 @@
 переименованным аргументом, без пересборки · С7 перечень режимов в отказе и в справке · С8 таблица «исход → код выхода» против режима run
 на заглушках. Проверяющие С1–С3 и С6–С8 чистые (текст справки + договор + код выхода → исход); нарочные поломки Л1–Л3 портят ТЕКСТ,
 Л4 подаёт справку от целого договора в случай С6. Ключ --only-e3p1 судит один этот раздел (в том числе на сборке без справки: прогон «до»).
+Сдача этапа (карточка 812) добавила в тот же раздел два случая о носителе MCP. С9 — встречные случаи пунктов ① и ② критерия этапа
+для ОБОИХ носителей: на копии договора с тринадцатым вызовом и отметками в описании вызова и его аргумента перечень CLI, справка CLI
+и перечень MCP (tools/list) называют одно и то же, без пересборки службы; нарочная поломка Л5 подаёт в случай перечень MCP от целого
+договора. С10 — у MCP аргументы КАЖДОГО вызова (имена, типы, обязательность, перечни значений) равны договору, на целом договоре
+и на копии со сменённым типом одного аргумента; таблица «тип в договоре → тип в схеме MCP» записана в приёмке рукой, незнакомый тип —
+замечание, а не пропуск; нарочная поломка Л6 подаёт в случай перечень MCP от целого договора против копии.
 
 Карточка 816 (этап Э3, предмет П2) добавила раздел «Э3-П2»: ответ contour_info несёт поля блоков manifest (шесть полей манифеста контура)
 и judge («кто меня судит»), у каждого значение · источник · состояние. Случаи: М1 шесть полей · М2 текст из полей · М3 отпечаток по всей записи
@@ -73,6 +79,11 @@
 таблиц meta и rules, которые приёмка сама делает из базы стенда в своём каталоге. Нарочные поломки Л1–Л6 делаются В КОДЕ СЛУЖБЫ: исходники
 копируются в рабочий каталог, заменяется одна названная строка (якорь обязан найтись ровно один раз), копия собирается заново (dotnet build -m:1,
 сеть закрыта), случаи М1–М7 идут на собранной копии, имена упавших сверяются с ожидаемыми. Ключ --only-e3p2 судит один этот раздел.
+Сдача этапа (карточка 812) добавила в тот же раздел случай М8 — пункт ④ критерия этапа на ЖИВОМ контуре: читающий вызов contour_info
+отвечает «прошло», все поля заполнены, версия установленного, commit сборки, версия договора и свёртка свода правил названы и полями,
+и текстом. Значения из хранилища живого контура приёмка с базой НЕ сличает (к живой базе она сама не ходит) — равенство посчитанному
+судят М1 и М6 на копии базы стенда. Нарочная поломка Л7 подаёт в проверяющий М8 ответ по копии базы без записи установщика.
+На пересобранных копиях службы (Л1–Л6) случай М8 не идёт.
 
 Карточка 821 (договор 2.2.0, этап Э3, предмет П4) добавила раздел «Э3-П4»: поле stage договора и справка (Ч1) · общие ключи службы в справке из
 договора, две переменные среды (Ч2) · код и договор называют одни и те же общие ключи в обе стороны, кривые записи отвергает разбор (Ч3) ·
@@ -80,8 +91,15 @@
 одно чтение версии на вызов (Ч6) · договор поднят аддитивно, отпечаток перечня вызовов прежний (Ч7). Нарочные поломки ЛЧ1–ЛЧ3 делаются в коде
 службы на пересобранной копии (ЛЧ1 → ровно Ч2, ЛЧ2 → ровно Ч5, ЛЧ3 → ровно Ч6). Ключ --only-e3p4 судит один этот раздел.
 
+Карточка 823 (договор 2.2.1, доделка этапа Э3) добавила раздел «Э3-П5»: граница общего поля tooling_version названа словами в договоре
+и в справке по вызову contour_info, там же сказано, КАК читать два поля версии (Д2), а на записи установки с испорченной template_files_sha
+общее поле несёт commit, и тот же ответ называет manifest.tooling.version «нечем проверить» (Д1). Нарочные поломки — копии договора:
+ЛД1 без фразы о границе, ЛД2 без фразы «как читать»; каждая → ровно Д2 и называет убранную фразу. Ключ --only-e3p5 судит один этот раздел.
+В разделе «Э3-П4» случай Ч7 разрешает рост слов только этим двум текстам договора и только дописыванием в конец; встречные в нём
+показывают, что дописывание в другом тексте и правка не в конец дают замечание.
+
 Исход: 0 — все машинные критерии прошли; 1 — хоть один провалился; 2 — проверять было нечем;
-3 — сборка старше исходников, судить её нельзя (пересобрать и запустить снова). С ключом --only-e3p1, --only-e3p2 или --only-e3p4 такая сборка
+3 — сборка старше исходников, судить её нельзя (пересобрать и запустить снова). С ключом --only-e3p1, --only-e3p2, --only-e3p4 или --only-e3p5 такая сборка
 судится как СТАРАЯ (прогон «до»): провал остаётся кодом 1, а проход отдаётся кодом 3, и итоговая строка называет сборку старой.
 """
 import argparse
@@ -1902,9 +1920,11 @@ def cases_781(args, work, manifest, contract_doc, carg, v4):
 
 # ═══════════════════════════════════════ карточка 814, этап Э3, предмет П1: справка службы из того же файла договора
 #
-# Восемь случаев (С1–С8) и четыре нарочные поломки (Л1–Л4). Проверяющие функции С1–С3 и С6–С8 ЧИСТЫЕ: на входе текст справки,
+# Десять случаев (С1–С10) и шесть нарочных поломок (Л1–Л6). Проверяющие функции С1–С3 и С6–С10 ЧИСТЫЕ: на входе текст справки,
 # разобранный договор, код выхода — на выходе (прошло, подробности). Поэтому поломки Л1–Л3 делаются над текстом, без пересборки
-# службы, а Л4 — подачей справки от ЦЕЛОГО договора в случай по копии договора.
+# службы, а Л4 — подачей справки от ЦЕЛОГО договора в случай по копии договора. С9 и С10 (карточка 812) судят носитель MCP:
+# С9 — перечень CLI, справку CLI и перечень MCP на одной копии договора, С10 — аргументы каждого вызова у MCP против договора;
+# Л5 и Л6 делаются подачей перечня MCP от ЦЕЛОГО договора в случай по копии.
 # Живой контур этому разделу не нужен вовсе: справка читает один файл договора, тела инструментов не запускаются
 # (кроме заглушек и только на контуре-копии базы).
 
@@ -1915,6 +1935,10 @@ HELP_UNKNOWN_TOOL = "нет-такого-вызова"
 HELP_UNKNOWN_MODE = "нет-такого-режима"
 HELP_NEW_TOOL = "stand_probe_tool"          # тринадцатый вызов копии договора (случай С6)
 HELP_NEW_TITLE = "Нарочный тринадцатый вызов приёмки"
+HELP_MARK_TOOL = "НАРОЧНАЯ ОТМЕТКА ПРИЁМКИ В ОПИСАНИИ ВЫЗОВА"        # копия договора, описание вызова (случай С9)
+HELP_MARK_ARG = "НАРОЧНАЯ ОТМЕТКА ПРИЁМКИ В ОПИСАНИИ АРГУМЕНТА"      # копия договора, описание аргумента (случай С9)
+# Тип аргумента в договоре → тип в схеме MCP. РУКОЙ, не из службы: иначе новый или перепутанный тип нечем увидеть (случай С10).
+MCP_TYPE_OF = {"string": "string", "text": "string", "int": "integer", "bool": "boolean", "list<string>": "array"}
 HELP_RENAME = ("owner_words_find", "text", "fragment")   # (вызов, старое имя аргумента, новое имя) в копии договора (С6)
 HELP_RUN_STAND_CODES = {0: "passed", 1: "mismatch", 6: "tool_failed"}   # что даёт режим run на заглушках (С8)
 
@@ -2101,6 +2125,84 @@ def judge_help_from_copy(general_text, probe_text, renamed_text, spec):
     return not notes, detail
 
 
+def judge_both_carriers(tools_text, help_text, mcp_tools, spec):
+    """С9. Копия договора с тринадцатым вызовом и отметками в описании вызова и его аргумента: CLI и MCP называют одно и то же —
+    число вызовов, новый вызов, обе отметки. Чистый проверяющий: перечень CLI + справка CLI по вызову + перечень MCP → исход."""
+    notes = []
+    count_line = [l for l in tools_text.splitlines() if l.startswith("вызовов ")]
+    last = count_line[0].split()[-1] if count_line else ""
+    printed = int(last) if last.isdigit() else None
+    names = [t.get("name") for t in mcp_tools]
+    if printed != spec["count"]:
+        notes.append("перечень CLI называет вызовов %s, в копии договора их %d" % (printed, spec["count"]))
+    if len(names) != spec["count"]:
+        notes.append("MCP объявил вызовов %d, в копии договора их %d" % (len(names), spec["count"]))
+    if not any(spec["new_tool"] in l for l in tools_text.splitlines()):
+        notes.append("перечень CLI не называет новый вызов %s" % spec["new_tool"])
+    if spec["new_tool"] not in names:
+        notes.append("MCP не объявил новый вызов %s" % spec["new_tool"])
+    for mark, what in ((spec["mark_tool"], "описании вызова"), (spec["mark_arg"], "описании аргумента %s" % spec["arg"])):
+        if mark not in help_text:
+            notes.append("справка CLI по вызову %s не несёт отметку в %s" % (spec["tool"], what))
+    own = [t for t in mcp_tools if t.get("name") == spec["tool"]]
+    if not own:
+        notes.append("MCP не объявил вызов %s" % spec["tool"])
+    else:
+        if spec["mark_tool"] not in (own[0].get("description") or ""):
+            notes.append("описание вызова %s у MCP без отметки" % spec["tool"])
+        prop = ((own[0].get("inputSchema") or {}).get("properties") or {}).get(spec["arg"]) or {}
+        if spec["mark_arg"] not in (prop.get("description") or ""):
+            notes.append("описание аргумента %s вызова %s у MCP без отметки" % (spec["arg"], spec["tool"]))
+    detail = "в копии договора вызовов %d · перечень CLI назвал %s · MCP объявил %d · отметки — в вызове %s и его аргументе %s\n" % (
+        spec["count"], printed, len(names), spec["tool"], spec["arg"])
+    detail += "\n".join(notes) if notes else "новый вызов и обе отметки есть в обоих носителях"
+    return not notes, detail
+
+
+def judge_mcp_schema(mcp_tools, doc):
+    """С10. У MCP аргументы КАЖДОГО вызова равны договору: имена (общие и свои), тип, обязательность, перечень значений.
+    Чистый проверяющий: перечень MCP + договор → исход. Тип договора, которого нет в таблице приёмки, — замечание, а не пропуск."""
+    notes, seen = [], 0
+    common = doc.get("common_args") or []
+    by_name = dict((t.get("name"), t) for t in mcp_tools)
+    for t in doc["tools"]:
+        own = by_name.get(t["name"])
+        if own is None:
+            notes.append("%s: MCP этот вызов не объявил" % t["name"])
+            continue
+        schema = own.get("inputSchema") or {}
+        props = schema.get("properties") or {}
+        declared = common + (t.get("args") or [])
+        want = [a["name"] for a in declared]
+        if sorted(props) != sorted(want):
+            notes.append("%s: у MCP лишние аргументы %s, пропавшие %s" % (t["name"], sorted(set(props) - set(want)), sorted(set(want) - set(props))))
+        want_required = sorted(a["name"] for a in declared if a.get("required"))
+        if sorted(schema.get("required") or []) != want_required:
+            notes.append("%s: обязательные у MCP %s, по договору %s" % (t["name"], sorted(schema.get("required") or []), want_required))
+        for a in declared:
+            p = props.get(a["name"])
+            if p is None:
+                continue
+            seen += 1
+            mapped = MCP_TYPE_OF.get(a.get("type"))
+            if mapped is None:
+                notes.append("%s.%s: тип договора %r приёмке незнаком — таблица типов не дополнена" % (t["name"], a["name"], a.get("type")))
+            elif p.get("type") != mapped:
+                notes.append("%s.%s: тип у MCP %r, по договору %r (ждали %r)" % (t["name"], a["name"], p.get("type"), a.get("type"), mapped))
+            elif mapped == "array" and (p.get("items") or {}).get("type") != "string":
+                notes.append("%s.%s: у списка тип элемента %r, ждали 'string'" % (t["name"], a["name"], (p.get("items") or {}).get("type")))
+            if (a.get("enum") or None) != (p.get("enum") or None):
+                notes.append("%s.%s: перечень значений у MCP %s, в договоре %s" % (t["name"], a["name"], p.get("enum"), a.get("enum")))
+    extra = sorted(set(by_name) - set(t["name"] for t in doc["tools"]))
+    if extra:
+        notes.append("MCP объявил вызовы, которых нет в договоре: %s" % extra)
+    detail = "вызовов в договоре %d · у MCP %d · аргументов сверено %d (имя, тип, обязательность, перечень значений)\n" % (
+        len(doc["tools"]), len(mcp_tools), seen)
+    detail += ("\n".join(notes[:12]) + ("\n… и ещё замечаний: %d" % (len(notes) - 12) if len(notes) > 12 else "")) if notes \
+        else "у каждого вызова аргументы MCP равны договору"
+    return not notes, detail
+
+
 def judge_help_modes(general_text, refusal_stderr, code):
     """С7. Отказ «режима нет» называет те же режимы, что общая справка; код 4."""
     notes = []
@@ -2221,7 +2323,7 @@ def rename_arg_in_doc(tool, old, new):
 
 
 def cases_e3p1(args, work, manifest, contract_doc, carg, v5):
-    """Раздел «Э3-П1»: С1–С8 на настоящем договоре и копиях, затем Л1–Л4."""
+    """Раздел «Э3-П1»: С1–С8 на настоящем договоре и копиях, затем Л1–Л4; С9, С10, Л5 и Л6 — носитель MCP против договора и CLI."""
     import copy
     d = os.path.join(work, "e3-p1")
     if not os.path.isdir(d):
@@ -2443,6 +2545,77 @@ def cases_e3p1(args, work, manifest, contract_doc, carg, v5):
                "на копии С6 прошёл; на справке целого договора С6 %s: %s"
                % ("прошёл" if ok_whole else "не прошёл", squash(det_whole.split("\n", 1)[1])[:200]))
 
+    # ───────────── С9 встречные случаи пунктов ① и ② критерия этапа (карточка 812) для ОБОИХ носителей: копия договора
+    #               с тринадцатым вызовом и отметками в описании вызова и его аргумента, без пересборки службы
+    copy9 = copy.deepcopy(copy_doc)
+    tool9 = tool_doc(copy9, probe)
+    arg9 = [a for a in tool9.get("args", []) if a.get("description")][0]
+    tool9["description"] = HELP_MARK_TOOL + " · " + (tool9.get("description") or "")
+    arg9["description"] = HELP_MARK_ARG + " · " + arg9["description"]
+    copy9_path = os.path.join(d, "contract-copy-13-marks.json")
+    write_json(copy9_path, copy9)
+    spec9 = {"count": len(copy9["tools"]), "new_tool": HELP_NEW_TOOL, "tool": probe, "arg": arg9["name"],
+             "mark_tool": HELP_MARK_TOOL, "mark_arg": HELP_MARK_ARG}
+
+    def mcp_listed(path):
+        wall9 = Wall(exe, path, contours)
+        try:
+            return wall9.list_tools()
+        finally:
+            wall9.close()
+
+    whole_listed = mcp_listed(contract)
+    t9c, tools9_text, _, t9to = run_cli(exe, ["tools", "--contract", copy9_path, "--contours", contours])
+    h9c, help9_text, _, h9to = run_cli(exe, ["help", probe, "--contract", copy9_path])
+    if t9to or h9to:
+        ok9, det9 = False, timed_out_note("tools и help на копии договора", True)
+    else:
+        ok9, det9 = judge_both_carriers(tools9_text, help9_text, mcp_listed(copy9_path), spec9)
+        if t9c != 0 or h9c != 0:
+            ok9 = False
+            det9 += "\nкоды выхода tools и help: %s, %s (ждали 0)" % (t9c, h9c)
+    v5.add("814-С9", ok9, "оба носителя из одной копии договора: перечень CLI, справка CLI и перечень MCP называют тринадцатый вызов "
+           "и отметки в описании вызова и аргумента — без пересборки службы (пункты ① и ② этапа, карточка 812)", det9)
+    # Л5: тот же случай С9, но перечень MCP взят от ЦЕЛОГО договора — нового вызова и отметок в нём нет, случай обязан упасть
+    title5 = "нарочная поломка: перечень MCP от ЦЕЛОГО договора вместо копии — падает случай С9 (разница двух прогонов — довод)"
+    if not ok9:
+        v5.add("814-Л5", False, title5, "СУДИТЬ НЕЧЕМ: на самой копии случай С9 не прошёл")
+    else:
+        ok_w9, det_w9 = judge_both_carriers(tools9_text, help9_text, whole_listed, spec9)
+        v5.add("814-Л5", not ok_w9, title5,
+               "на копии С9 прошёл; с перечнем MCP целого договора С9 %s: %s"
+               % ("прошёл" if ok_w9 else "не прошёл", squash(det_w9.split("\n", 1)[1])[:200]))
+
+    # ───────────── С10 пункт ① критерия этапа (карточка 812): у MCP аргументы КАЖДОГО вызова — имена, типы, обязательность,
+    #                перечни значений — равны договору: на целом договоре и на копии, где у одного аргумента сменён тип
+    title10 = ("аргументы КАЖДОГО вызова у MCP равны договору — имена, типы, обязательность, перечни значений; тип, сменённый "
+               "в копии договора, меняется и у MCP без пересборки службы (пункт ① этапа, карточка 812)")
+    title6 = "нарочная поломка: перечень MCP от ЦЕЛОГО договора против копии со сменённым типом — падает случай С10 и называет аргумент"
+    copy10 = copy.deepcopy(copy9)
+    typed10 = [(t, a) for t in copy10["tools"] if t["name"] != HELP_NEW_TOOL for a in t.get("args", []) if a.get("type") == "int"]
+    if not typed10:
+        v5.add("814-С10", False, title10, "СУДИТЬ НЕЧЕМ: в договоре нет ни одного аргумента типа int — сменить тип не у чего")
+        v5.add("814-Л6", False, title6, "СУДИТЬ НЕЧЕМ: случай С10 не судился")
+    else:
+        tool10, arg10 = typed10[0]
+        arg10["type"] = "string"
+        named10 = "%s.%s" % (tool10["name"], arg10["name"])
+        copy10_path = os.path.join(d, "contract-copy-13-type.json")
+        write_json(copy10_path, copy10)
+        ok10a, det10a = judge_mcp_schema(whole_listed, doc)
+        ok10b, det10b = judge_mcp_schema(mcp_listed(copy10_path), copy10)
+        v5.add("814-С10", ok10a and ok10b, title10,
+               "целый договор: %s\nкопия (тип %s сменён с int на string): %s" % (det10a, named10, det10b))
+        # Л6: договор — копия со сменённым типом, а перечень MCP взят от ЦЕЛОГО договора: тип у MCP прежний, случай обязан упасть
+        if not (ok10a and ok10b):
+            v5.add("814-Л6", False, title6, "СУДИТЬ НЕЧЕМ: случай С10 не прошёл")
+        else:
+            ok_w10, det_w10 = judge_mcp_schema(whole_listed, copy10)
+            v5.add("814-Л6", (not ok_w10) and named10 in det_w10, title6,
+                   "с перечнем MCP целого договора С10 %s, аргумент %s назван: %s · %s"
+                   % ("прошёл" if ok_w10 else "не прошёл", named10, "да" if named10 in det_w10 else "нет",
+                      squash(det_w10.split("\n", 1)[1])[:200]))
+
 
 # ═══════════════════════════════════════ карточка 816 (этап Э3, предмет П2): шесть полей манифеста контура и блок «кто меня судит»
 #                                          полями ответа contour_info; свёртки приёмка считает САМА, независимо от службы
@@ -2522,8 +2695,8 @@ def e3p2_write(db, sql, params=()):
     """Единственное место, где приёмка пишет в базу этого раздела: только в КОПИИ внутри своего рабочего каталога."""
     import sqlite3
     full = os.path.abspath(db).replace("\\", "/")
-    if "/%s/" % E3P2_DIR not in full and "/%s/" % E3P4_DIR not in full:
-        raise RuntimeError("приёмка отказывается писать в базу вне своего каталога %s или %s: %s" % (E3P2_DIR, E3P4_DIR, db))
+    if "/%s/" % E3P2_DIR not in full and "/%s/" % E3P4_DIR not in full and "/%s/" % E3P5_DIR not in full:
+        raise RuntimeError("приёмка отказывается писать в базу вне своего каталога %s, %s или %s: %s" % (E3P2_DIR, E3P4_DIR, E3P5_DIR, db))
     con = sqlite3.connect(db, timeout=60)
     try:
         n = con.execute(sql, params).rowcount
@@ -3079,6 +3252,79 @@ def e3p2_m7(ctx):
     return not notes, "\n".join(lines) + "\n" + ("\n".join(notes) if notes else "поля одинаковы в службе и режиме run, форма объявлена в договоре, флаг описан в справке и не заслоняет аргумент")
 
 
+def e3p2_judge_live(s, text, cli_code, cli_out, want):
+    """М8. Чистый проверяющий: ответ contour_info (поля и текст) и ответ режима run → исход. want — что приёмка знает сама:
+    имя контура, путь хранилища из манифеста, commit дерева службы, версия и отпечаток файла договора."""
+    notes = []
+    if s.get("outcome") != "passed":
+        notes.append("исход %s, ждали passed" % s.get("outcome"))
+    fields = e3p2_all_fields(s.get("details") or {})
+    filled = 0
+    for p in E3P2_FIELD_NAMES:
+        f = fields.get(p)
+        if f is None:
+            notes.append("%s: поля в ответе нет" % p)
+        elif (f["state"] != "filled" or f["value"] in (None, "") or f["reason"] is not None
+              or not (isinstance(f["source"], str) and f["source"].strip())):
+            notes.append("%s: ждали заполненное с источником, в ответе %s" % (p, e3p2_show(f)))
+        else:
+            filled += 1
+
+    def val(p):
+        f = fields.get(p)
+        return f["value"] if f is not None and f["state"] == "filled" else None
+
+    for p, v in (("manifest.contour.id", want["contour"]), ("manifest.storage.path", want["storage"]),
+                 ("judge.service_build_commit", want["head"]), ("judge.contract_version", want["cver"]),
+                 ("judge.contract_fingerprint", want["cfp"])):
+        if val(p) is not None and val(p) != v:
+            notes.append("%s: в ответе %r, приёмка ждала %r" % (p, val(p), v))
+    rules = val("judge.rules")
+    if rules is not None and not (isinstance(rules, str) and len(rules) == 12 and all(ch in "0123456789abcdef" for ch in rules)):
+        notes.append("judge.rules: ждали свёртку из 12 знаков, в ответе %r" % (rules,))
+    for p, least in (("judge.rules_active", 1), ("judge.rules_revoked", 0), ("manifest.tooling.files", 1)):
+        x = val(p)
+        if x is not None and not (isinstance(x, int) and not isinstance(x, bool) and x >= least):
+            notes.append("%s: ждали целое не меньше %d, в ответе %r" % (p, least, x))
+    for p, what in (("manifest.tooling.version", "версия установленного"), ("judge.service_build_commit", "commit сборки службы"),
+                    ("judge.contract_version", "версия договора"), ("judge.rules", "свёртка свода правил")):
+        if val(p) is not None and str(val(p)) not in text:
+            notes.append("в тексте ответа нет значения поля %s (%s)" % (p, what))
+    if cli_code != 0 or "исход: прошло" not in cli_out:
+        notes.append("режим run: код %s, слова «исход: прошло» в выводе %s" % (cli_code, "есть" if "исход: прошло" in cli_out else "нет"))
+    if val("judge.service_build_commit") is not None and str(val("judge.service_build_commit")) not in cli_out:
+        notes.append("режим run: в выводе нет commit сборки из ответа службы")
+    detail = ("исход %s · полей заполнено %d из %d · версия установленного %s · commit сборки %s · договор %s (отпечаток %s) · "
+              "свод правил %s, действующих %s, снятых %s · режим run: код %s\n"
+              % (s.get("outcome"), filled, len(E3P2_FIELD_NAMES), val("manifest.tooling.version"),
+                 str(val("judge.service_build_commit"))[:12], val("judge.contract_version"), val("judge.contract_fingerprint"),
+                 rules, val("judge.rules_active"), val("judge.rules_revoked"), cli_code))
+    detail += "\n".join(notes) if notes else "все поля заполнены; то, что приёмка знает сама, совпало; четыре значения пункта ④ названы и в тексте"
+    return not notes, detail
+
+
+def e3p2_m8_live(ctx, contours_path):
+    """М8 (сдача этапа, карточка 812, пункт ④): «кто меня судит» на ЖИВОМ контуре. Два читающих вызова, ни одной записи;
+    к базе живого контура приёмка сама не ходит. Отдаёт (прошёл, подробности, данные для поломки Л7 или None)."""
+    import hashlib
+    lives = [c for c in ctx["manifest"]["contours"] if c.get("id") == CONTOUR_LIVE]
+    if not lives:
+        return False, "СУДИТЬ НЕЧЕМ: в манифесте контуров нет контура %s" % CONTOUR_LIVE, None
+    if not ctx["head"]:
+        return False, "СУДИТЬ НЕЧЕМ: git не ответил в дереве службы, commit сборки сверить не с чем", None
+    want = {"contour": CONTOUR_LIVE, "storage": lives[0].get("storage"), "head": ctx["head"],
+            "cver": read_json(ctx["contract"])["contract"]["version"],
+            "cfp": hashlib.sha256(io.open(ctx["contract"], "rb").read()).hexdigest()[:12]}
+    w = Wall(ctx["exe"], ctx["contract"], contours_path)
+    try:
+        s, t = w.call(E3P2_TOOL, {ctx["carg"]: CONTOUR_LIVE})
+    finally:
+        w.close()
+    code, out, _ = run_mode(ctx["exe"], ctx["contract"], contours_path, [E3P2_TOOL, "--" + ctx["carg"], CONTOUR_LIVE])
+    ok, detail = e3p2_judge_live(s, t, code, out, want)
+    return ok, detail, (want, code, out)
+
+
 E3P2_CASES = [
     ("М1", "шесть полей манифеста — полями ответа (значение · источник · состояние), значения равны прочитанному приёмкой из базы стенда и манифеста", e3p2_m1),
     ("М2", "текст ответа строится из полей: каждое заполненное значение в тексте, строк о версии и отпечатке вне полей и сырого вывода db-q нет", e3p2_m2),
@@ -3152,7 +3398,8 @@ def e3p2_build(svc, tag_dir):
 
 
 def cases_e3p2(args, work, manifest, contract_doc, carg, v6):
-    """Раздел «Э3-П2» (карточка 816): М1–М7 на собранной службе, затем Л1–Л6 — поломки В КОДЕ СЛУЖБЫ на пересобранной копии."""
+    """Раздел «Э3-П2» (карточка 816): М1–М7 на собранной службе, М8 и Л7 — «кто меня судит» на живом контуре (карточка 812),
+    затем Л1–Л6 — поломки В КОДЕ СЛУЖБЫ на пересобранной копии."""
     d = os.path.join(work, E3P2_DIR)
     if not os.path.isdir(d):
         os.makedirs(d)
@@ -3164,6 +3411,37 @@ def cases_e3p2(args, work, manifest, contract_doc, carg, v6):
     for key, ok, title, detail in results:
         v6.add("816-" + key, ok, title, detail)
     base_failed = [k for k, ok, _, _ in results if not ok]
+
+    # ───────────── М8 пункт ④ критерия этапа (карточка 812) на ЖИВОМ контуре; на пересобранных копиях службы случай не идёт
+    title8 = ("«кто меня судит» на ЖИВОМ контуре: исход «прошло», все поля заполнены; версия установленного, commit сборки, версия договора "
+              "и свёртка свода правил названы и полями, и текстом; режим run отвечает так же (пункт ④ этапа, карточка 812)")
+    try:
+        ok8, det8, live8 = e3p2_m8_live(ctx, args.contours)
+    except LiveContourRefusal:
+        raise
+    except Exception as e:  # noqa: BLE001 — сбой разбора ответа есть провал случая, а не остановка приёмки
+        ok8, det8, live8 = False, "случай не дошёл до сличения: %s: %s" % (type(e).__name__, one_line(str(e))[:200]), None
+    v6.add("816-М8", ok8, title8, det8)
+    # Л7: тому же проверяющему подан ответ по копии базы стенда БЕЗ записи установщика (состояние случая М4а) — версии в нём нет
+    title7 = ("нарочная поломка: проверяющему случая М8 подан ответ по копии базы без записи установщика — случай обязан не пройти "
+              "и назвать поле версии (разница двух прогонов — довод)")
+    if not ok8 or live8 is None:
+        v6.add("816-Л7", False, title7, "СУДИТЬ НЕЧЕМ: на живом контуре случай М8 не прошёл")
+    else:
+        try:
+            want8, code8, out8 = live8
+            db7, mp7 = e3p2_base(ctx, "m8-break")
+            removed7 = e3p2_write(db7, "DELETE FROM meta WHERE key LIKE 'template_%'")
+            s7, t7 = e3p2_serve(ctx, mp7)
+            storage7 = [c for c in read_json(mp7)["contours"] if c.get("id") == CONTOUR_STAND][0]["storage"]
+            ok_b7, det_b7 = e3p2_judge_live(s7, t7, code8, out8, dict(want8, contour=CONTOUR_STAND, storage=storage7))
+            v6.add("816-Л7", (not ok_b7) and removed7 > 0 and "manifest.tooling.version" in det_b7, title7,
+                   "в копии базы удалено строк template_*: %d · на живом контуре М8 прошёл; с этим ответом М8 %s: %s"
+                   % (removed7, "прошёл" if ok_b7 else "не прошёл", one_line(det_b7.split("\n", 1)[1])[:220]))
+        except LiveContourRefusal:
+            raise
+        except Exception as e:  # noqa: BLE001
+            v6.add("816-Л7", False, title7, "поломка не дошла до сличения: %s: %s" % (type(e).__name__, one_line(str(e))[:200]))
 
     for number, (key, what, rel_file, anchor, replacement, expected) in enumerate(E3P2_BREAKS, 1):
         title = "нарочная поломка В КОДЕ СЛУЖБЫ с пересборкой: %s — падают РОВНО %s" % (what, ", ".join(sorted(expected)))
@@ -3199,7 +3477,7 @@ def cases_e3p2(args, work, manifest, contract_doc, carg, v6):
 E3P4_DIR = "e3-p4"
 E3P4_BASE_COMMIT = "cb8a730"           # main пакета до этого предмета: от него берётся «прежний договор» (случай Ч7)
 E3P4_STAGE = "E3"                      # значение поля stage после этого предмета — РУКОЙ, из договора его не берём
-E3P4_VERSION = "2.2.0"                 # версия договора после этого предмета — РУКОЙ
+E3P4_VERSION = "2.2.1"                 # версия договора после доделки карточки 823 (прежде 2.2.0, карточка 821) — РУКОЙ
 E3P4_OLD_VERSION = "2.1.0"             # версия договора в commit cb8a730
 E3P4_NAMES = ["--contract", "--contours", "--read-only", "GORDI_CONTRACT", "GORDI_CONTOURS"]   # что обязана назвать справка (Ч2)
 E3P4_BLOCK_HEADER = "общие ключи службы:"
@@ -3525,9 +3803,30 @@ def e3p4_c6(ctx):
     return not notes, detail
 
 
-def e3p4_subset(old, new, path=""):
+E3P4_GROWN = (("answer_shape", "tooling_version", "note"),       # раздел договора · имя словаря в нём · поле-текст, которому разрешён рост слов
+              ("tools", "contour_info", "description"))
+
+
+def e3p4_path_of(node, name, path):
+    """Путь (в записи e3p4_subset) первого словаря, у которого поле name равно названному; нет такого — None."""
+    if isinstance(node, dict):
+        if node.get("name") == name:
+            return path
+        for k, v in node.items():
+            r = e3p4_path_of(v, name, "%s/%s" % (path, k))
+            if r is not None:
+                return r
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            r = e3p4_path_of(v, name, "%s[%d]" % (path, i))
+            if r is not None:
+                return r
+    return None
+
+
+def e3p4_subset(old, new, path="", grown=()):
     """Всё, что есть в old, есть в new: словари — по ключам вглубь, списки — поэлементно по порядку (в new может быть дольше), прочее — равенство.
-    Отдаёт список мест, где не сошлось."""
+    Отдаёт список мест, где не сошлось. grown — пути текстов, которым разрешён рост: только дописывание в конец (прежний текст — начало нового)."""
     out = []
     if isinstance(old, dict):
         if not isinstance(new, dict):
@@ -3536,14 +3835,17 @@ def e3p4_subset(old, new, path=""):
             if k not in new:
                 out.append("%s/%s: поля больше нет" % (path, k))
             else:
-                out += e3p4_subset(v, new[k], "%s/%s" % (path, k))
+                out += e3p4_subset(v, new[k], "%s/%s" % (path, k), grown)
     elif isinstance(old, list):
         if not isinstance(new, list) or len(new) < len(old):
             return ["%s: список стал короче или не списком" % (path or "/")]
         for i, v in enumerate(old):
-            out += e3p4_subset(v, new[i], "%s[%d]" % (path, i))
+            out += e3p4_subset(v, new[i], "%s[%d]" % (path, i), grown)
     elif old != new:
-        out.append("%s: было %r, стало %r" % (path, old, new))
+        # дописывать слова в конец можно только текстам, названным поимённо (договор 2.2.1, карточка 823); любая другая правка текста — не аддитивна
+        appended = path in grown and isinstance(old, str) and isinstance(new, str) and new.startswith(old)
+        if not appended:
+            out.append("%s: было %r, стало %r" % (path, old, new))
     return out
 
 
@@ -3576,11 +3878,36 @@ def e3p4_c7(ctx):
         notes.append("в commit %s версия договора %r, ждали %r: случай сличает не то" % (E3P4_BASE_COMMIT, old_doc["contract"].get("version"), E3P4_OLD_VERSION))
     if new_doc["contract"].get("version") != E3P4_VERSION:
         notes.append("версия нового договора %r, ждали %r" % (new_doc["contract"].get("version"), E3P4_VERSION))
+    grown = []
+    for top, name, leaf in E3P4_GROWN:
+        at = e3p4_path_of(old_doc.get(top), name, "/" + top)
+        if at is None:
+            notes.append("в прежнем договоре, в разделе %s, нет «%s»: разрешённый рост слов привязать не к чему" % (top, name))
+        else:
+            grown.append("%s/%s" % (at, leaf))
     missing = []
     for k in ("outcomes", "answer_shape", "common_args", "tools"):
-        missing += e3p4_subset(old_doc.get(k), new_doc.get(k), "/" + k)
+        missing += e3p4_subset(old_doc.get(k), new_doc.get(k), "/" + k, grown)
     if missing:
         notes.append("прежнее не на месте (%d): %s" % (len(missing), "; ".join(missing[:5])))
+    # встречные к разрешённому росту слов: дописывание в НЕназванном тексте и правка названного текста НЕ в конец обязаны дать замечание
+    import copy
+    tools_old = old_doc.get("tools", [])
+    grown_tool = E3P4_GROWN[1][1]
+    other = [i for i, t in enumerate(tools_old) if t.get("name") != grown_tool and isinstance(t.get("description"), str)]
+    mine = [i for i, t in enumerate(tools_old) if t.get("name") == grown_tool and isinstance(t.get("description"), str)]
+    if not other or not mine:
+        notes.append("встречные к росту слов: в прежнем договоре нет вызова %s или второго вызова с описанием — показать не на чем" % grown_tool)
+    else:
+        probe = copy.deepcopy(tools_old)
+        probe[other[0]]["description"] += " (дописано)"
+        if not e3p4_subset(tools_old, probe, "/tools", grown):
+            notes.append("встречный: дописывание в описании вызова %s прошло без замечания — рост слов разрешён шире названных текстов"
+                         % tools_old[other[0]].get("name"))
+        probe = copy.deepcopy(tools_old)
+        probe[mine[0]]["description"] = "(вставлено в начало) " + probe[mine[0]]["description"]
+        if not e3p4_subset(tools_old, probe, "/tools", grown):
+            notes.append("встречный: правка описания вызова %s не в конец прошла без замечания" % grown_tool)
     # встречный: договор без одного вызова — отпечаток другой (иначе равенство отпечатков ничего не доказывало бы)
     cut = e3p4_doc_copy(ctx, "c7", lambda dd: dd.__setitem__("tools", dd["tools"][:-1]))
     c2, out2, _, to2 = run_cli(ctx["exe"], ["tools", "--contract", cut, "--contours", ctx["contours"]])
@@ -3590,7 +3917,8 @@ def e3p4_c7(ctx):
     detail = "отпечаток перечня: прежний %s · новый %s · версия %s → %s · вызовов было %d, стало %d\n" % (
         fps.get("прежний"), fps.get("новый"), old_doc["contract"].get("version"), new_doc["contract"].get("version"),
         len(old_doc.get("tools", [])), len(new_doc.get("tools", [])))
-    detail += "\n".join(notes) if notes else "отпечаток перечня прежний, прежние вызовы, аргументы и поля формы ответа на месте; встречный сработал"
+    detail += "рост слов разрешён только дописыванием в конец и только текстам: %s\n" % (" · ".join(grown) or "—")
+    detail += "\n".join(notes) if notes else "отпечаток перечня прежний, прежние вызовы, аргументы и поля формы ответа на месте; встречные сработали"
     return not notes, detail
 
 
@@ -3601,7 +3929,7 @@ E3P4_CASES = [
     ("Ч4", "④: под заголовком «договор:» первая строка не начинается словом «договор»; строки режима tools прежние", e3p4_c4),
     ("Ч5", "⑤: ответ читающего инструмента без числа строк — у contour_info «нечем проверить» по всем зависимым полям, версия пустая", e3p4_c5),
     ("Ч6", "⑥: служба жива, запись установки сменилась — оба поля версии одного ответа равны между собой и новому значению", e3p4_c6),
-    ("Ч7", "⑧: договор 2.2.0 — отпечаток перечня вызовов прежний, прежние вызовы, аргументы и поля формы ответа на месте", e3p4_c7),
+    ("Ч7", "⑧: договор 2.2.1 — отпечаток перечня вызовов прежний, прежние вызовы, аргументы и поля формы ответа на месте", e3p4_c7),
 ]
 
 
@@ -3689,6 +4017,157 @@ def cases_e3p4(args, work, manifest, contract_doc, carg, v7):
         v7.add("821-" + key, failed == expected, title, "\n".join(lines))
 
 
+# ═══════════════════════════════════════ карточка 823 (доделка этапа Э3): граница общего поля версии названа словами
+
+E3P5_DIR = "e3-p5"
+E3P5_PHRASE = "целость записи установки не проверяет"     # фраза-ключ: она обязана стоять в примечании поля tooling_version и в описании вызова contour_info
+E3P5_PHRASE_HOW = "о целости записи установки говорит только manifest.tooling.version"   # вторая фраза-ключ, в тех же двух местах: КАК читать два поля версии
+E3P5_PHRASES = (E3P5_PHRASE, E3P5_PHRASE_HOW)
+E3P5_MARK_WHOLE = "в целом не принята"                     # причина поля manifest.tooling.version, когда запись установки не принята целиком
+E3P5_TOOL = "contour_info"
+
+
+def e3p5_find(doc, key, name):
+    """Первый словарь договора, у которого поле key равно name (вызов по имени, поле ответа по имени); нет такого — None."""
+    if isinstance(doc, dict):
+        if doc.get(key) == name:
+            return doc
+        for v in doc.values():
+            r = e3p5_find(v, key, name)
+            if r is not None:
+                return r
+    elif isinstance(doc, list):
+        for v in doc:
+            r = e3p5_find(v, key, name)
+            if r is not None:
+                return r
+    return None
+
+
+def e3p5_d1(ctx):
+    """Д1 (решение PROTO: граница, а не правка поведения): на записи установки, где template_files_sha заменена не-JSON, ответ contour_info —
+    исход passed; общее tooling_version равно commit из хранилища; manifest.tooling.version — значения нет, «нечем проверить», причина
+    называет «в целом не принята»."""
+    db, mp = e3p2_base(ctx, "d1")
+    commit = db_one(db, "SELECT value FROM meta WHERE key='template_commit'")        # до порчи записи: после неё свёртки приёмки не прочесть
+    e3p2_write(db, "UPDATE meta SET value=? WHERE key='template_files_sha'", ("это не JSON {", ))
+    s, t = e3p2_serve(ctx, mp)
+    notes = []
+    if not commit:
+        notes.append("в базе стенда нет template_commit: случай сличает не то")
+    if s.get("outcome") != "passed":
+        notes.append("исход %s, ждали passed" % s.get("outcome"))
+    if s.get("tooling_version") != commit:
+        notes.append("общее поле tooling_version = %r, ждали commit из хранилища %r" % (s.get("tooling_version"), commit))
+    f = e3p2_field(s, "manifest.tooling.version")
+    if f is None:
+        notes.append("manifest.tooling.version: поля в ответе нет")
+    elif f["state"] != "cannot_verify" or f["value"] is not None or E3P5_MARK_WHOLE not in (f.get("reason") or ""):
+        notes.append("manifest.tooling.version: ждали значение null, «нечем проверить» и причину со словами «%s», в ответе %s" % (E3P5_MARK_WHOLE, e3p2_show(f)))
+    detail = "исход %s · общее tooling_version %r (commit хранилища %r) · manifest.tooling.version: %s\n" % (
+        s.get("outcome"), s.get("tooling_version"), commit, e3p2_show(f))
+    detail += "\n".join(notes) if notes else "общее поле несёт commit, а «нечем проверить» отвечает поле manifest.tooling.version"
+    return not notes, detail
+
+
+def e3p5_d2(ctx):
+    """Д2: граница названа словами в ДВУХ местах договора (примечание поля ответа tooling_version и описание вызова contour_info),
+    там же сказано, КАК читать два поля версии, и справка службы по вызову contour_info печатает обе фразы."""
+    notes = []
+    doc = read_json(ctx["contract"])
+    field = e3p5_find(doc, "name", "tooling_version")
+    if field is None:
+        notes.append("в договоре нет поля ответа tooling_version")
+    else:
+        notes += ["в примечании поля tooling_version нет фразы «%s»" % p for p in E3P5_PHRASES if p not in (field.get("note") or "")]
+    tool = e3p5_find(doc, "name", E3P5_TOOL)
+    if tool is None or "description" not in tool:
+        notes.append("в договоре нет описания вызова %s" % E3P5_TOOL)
+    else:
+        notes += ["в описании вызова %s нет фразы «%s»" % (E3P5_TOOL, p) for p in E3P5_PHRASES if p not in (tool.get("description") or "")]
+    code, out, _, to = run_cli(ctx["exe"], ["help", E3P5_TOOL, "--contract", ctx["contract"]])
+    if to or code != 0:
+        notes.append("справка по вызову %s: код %s%s" % (E3P5_TOOL, code, ", не уложилась по времени" if to else ""))
+    else:
+        shown = " ".join(out.split())          # справка вправе перенести строку: фраза ищется без оглядки на переносы
+        notes += ["справка службы по вызову %s не печатает фразу «%s»" % (E3P5_TOOL, p) for p in E3P5_PHRASES if p not in shown]
+    detail = "фразы-ключи: %s\n" % " · ".join("«%s»" % p for p in E3P5_PHRASES)
+    detail += "\n".join(notes) if notes else "обе фразы есть в примечании поля tooling_version, в описании вызова %s и в справке по нему" % E3P5_TOOL
+    return not notes, detail
+
+
+E3P5_CASES = [
+    ("Д1", "запись установки не принята целиком: общее tooling_version несёт commit, а manifest.tooling.version — null, «нечем проверить», «в целом не принята»", e3p5_d1),
+    ("Д2", "граница общего поля названа словами и сказано, как читать два поля версии: фразы «%s» и «%s» — в примечании поля tooling_version, "
+           "в описании contour_info и в справке по вызову" % E3P5_PHRASES, e3p5_d2),
+]
+
+
+def e3p5_run_all(ctx):
+    results = []
+    for key, title, fn in E3P5_CASES:
+        try:
+            ok, detail = fn(ctx)
+        except LiveContourRefusal:
+            raise
+        except Exception as e:  # noqa: BLE001 — сбой разбора ответа есть провал случая, а не остановка приёмки
+            ok, detail = False, "случай не дошёл до сличения: %s: %s" % (type(e).__name__, one_line(str(e))[:200])
+        results.append((key, ok, title, detail))
+    return results
+
+
+def cases_e3p5(args, work, manifest, contract_doc, carg, v8):
+    """Раздел «Э3-П5» (карточка 823): Д1–Д2 на собранной службе, затем нарочные поломки ЛД1 и ЛД2 — копии договора без одной из двух фраз-ключей."""
+    d = os.path.join(work, E3P5_DIR)
+    if not os.path.isdir(d):
+        os.makedirs(d)
+    ctx = {"exe": args.exe, "contract": args.contract, "manifest": manifest, "carg": carg, "work": os.path.join(d, "tree"),
+           "contours": args.contours}
+    results = e3p5_run_all(ctx)
+    for key, ok, title, detail in results:
+        v8.add("823-" + key, ok, title, detail)
+    base_failed = [k for k, ok, _, _ in results if not ok]
+
+    import copy
+
+    def without(node, phrase):
+        if isinstance(node, dict):
+            return {k: without(v, phrase) for k, v in node.items()}
+        if isinstance(node, list):
+            return [without(v, phrase) for v in node]
+        if isinstance(node, str):
+            return node.replace(phrase, "(слова убраны)")
+        return node
+
+    expected = {"Д2"}
+    breaks = (("ЛД1", E3P5_PHRASE, "фраза о границе общего поля"), ("ЛД2", E3P5_PHRASE_HOW, "фраза «как читать»"))
+    for n, (tag, phrase, what) in enumerate(breaks, 1):
+        title = "нарочная поломка в КОПИИ договора: из примечания поля и из описания вызова убрана %s — падает РОВНО %s и называет её" % (
+            what, ", ".join(sorted(expected)))
+        if base_failed:
+            v8.add("823-" + tag, False, title, "СУДИТЬ НЕЧЕМ: на целом договоре не прошли случаи %s — поломка не на чем видна" % ", ".join(base_failed))
+            continue
+        broken_doc = without(copy.deepcopy(read_json(ctx["contract"])), phrase)
+        bdir = os.path.join(d, "break-contract-%d" % n)
+        if not os.path.isdir(bdir):
+            os.makedirs(bdir)
+        bpath = os.path.join(bdir, "contract-without-phrase.json")
+        write_json(bpath, broken_doc)
+        broken = e3p5_run_all(dict(ctx, contract=bpath, work=os.path.join(d, "tree-break-%d" % n)))
+        failed = set(k for k, ok, _, _ in broken if not ok)
+        # замечания случая — всё после первой строки его разбора (первая строка перечисляет обе фразы-ключа всегда)
+        remarks = "\n".join(det.split("\n", 1)[-1] for k, ok, _, det in broken if not ok and k in expected)
+        named = remarks.count("«%s»" % phrase)
+        other = sum(remarks.count("«%s»" % p) for p in E3P5_PHRASES if p != phrase)
+        lines = ["судилась копия договора: %s" % bpath.replace("\\", "/"),
+                 "не прошли после поломки: %s (ждали ровно %s)" % (", ".join(sorted(failed)) or "ни один", ", ".join(sorted(expected))),
+                 "замечаний об убранной фразе: %d (ждали 3: примечание поля, описание вызова, справка) · о другой фразе: %d (ждали 0)" % (named, other)]
+        for k, ok, _, det in broken:
+            if not ok and k in expected:
+                lines.append("  %s: %s" % (k, one_line(det)[:170]))
+        v8.add("823-" + tag, failed == expected and named == 3 and other == 0, title, "\n".join(lines))
+
+
 STALE_BUILD_WORDS = "сборка СТАРШЕ исходников: это прогон «до», а не приёмка новой службы"
 
 
@@ -3734,6 +4213,9 @@ def run_acceptance():
     ap.add_argument("--only-e3p4", action="store_true",
                     help="судить ТОЛЬКО раздел «Э3-П4» (карточка 821: поле stage, общие ключи службы в справке, ответ без числа строк, одно чтение версии); "
                          "сборку старше исходников судит как СТАРУЮ (прогон «до»); без стенда раздел не работает")
+    ap.add_argument("--only-e3p5", action="store_true",
+                    help="судить ТОЛЬКО раздел «Э3-П5» (карточка 823: граница общего поля tooling_version названа словами в договоре и в справке; запись "
+                         "установки, не принятая целиком); сборку старше исходников судит как СТАРУЮ (прогон «до»); без стенда раздел не работает")
     args = ap.parse_args()
 
     if not os.path.exists(args.exe):
@@ -3752,8 +4234,8 @@ def run_acceptance():
     print("── ЧАС СБОРКИ И ИСХОДНИКОВ")
     print("   сборка исполнимого файла ... %s" % utc(exe_time))
     print("   последняя правка исходников  %s (%s)" % (utc(src_time), src_file))
-    if exe_time < src_time and (args.only_e3p1 or args.only_e3p2 or args.only_e3p4):
-        print("ℹ️ СБОРКА СТАРШЕ ИСХОДНИКОВ, но задан ключ --only-e3p1, --only-e3p2 или --only-e3p4: раздел судит её как СТАРУЮ сборку (прогон «до»).")
+    if exe_time < src_time and (args.only_e3p1 or args.only_e3p2 or args.only_e3p4 or args.only_e3p5):
+        print("ℹ️ СБОРКА СТАРШЕ ИСХОДНИКОВ, но задан ключ --only-e3p1, --only-e3p2, --only-e3p4 или --only-e3p5: раздел судит её как СТАРУЮ сборку (прогон «до»).")
         print("   Это не приёмка новой службы: общий прогон такую сборку по-прежнему не судит, а проход раздела на ней отдаётся кодом 3, не 0.")
     elif exe_time < src_time:
         print("⏸ СБОРКА СТАРШЕ ИСХОДНИКОВ: приёмка её НЕ СУДИТ. Это не провал и не проход —")
@@ -3806,8 +4288,15 @@ def run_acceptance():
         v7.print_all()
         return section_verdict("Э3-П4", "821", v7, exe_time < src_time)
 
+    if args.only_e3p5:
+        v8 = Verdict()
+        cases_e3p5(args, work, manifest, contract_doc, CARG, v8)
+        print("── случаи карточки 823 (доделка этапа Э3: граница общего поля tooling_version названа словами · запись установки не принята целиком · два случая Д1–Д2 и две нарочные поломки ЛД1–ЛД2 в копиях договора) — ТОЛЬКО этот раздел")
+        v8.print_all()
+        return section_verdict("Э3-П5", "823", v8, exe_time < src_time)
+
     # ─────────────────────────────────────── ① перечень вызовов из ОДНОГО файла
-    code, out, err = run_mode(args.exe, args.contract, args.contours, ["contour_info", "--contour", CONTOUR_LIVE])
+    # contour_info на живом контуре здесь прежде звался, но ответ никем не читался; судит его случай 816-М8
     tools_out = subprocess.run([args.exe, "tools", "--contract", args.contract, "--contours", args.contours],
                                capture_output=True, encoding="utf-8", errors="replace", timeout=120).stdout
     printed_count = None
@@ -4152,6 +4641,10 @@ def run_acceptance():
     v7 = Verdict()
     cases_e3p4(args, work, manifest, contract_doc, CARG, v7)
 
+    # ═══════════════════════════════════════ карточка 823 (доделка этапа Э3): граница общего поля версии названа словами
+    v8 = Verdict()
+    cases_e3p5(args, work, manifest, contract_doc, CARG, v8)
+
     # ─────────────────────────────────────── вывод
     print("── ПРИЁМКА СТЕНЫ КОНТУРА GORDI · этап Э1 · карточка 779")
     print("   сборка ... %s" % args.exe)
@@ -4171,31 +4664,35 @@ def run_acceptance():
     print("── случаи карточки 781 (варианты вызова · рука тела · поиск и сжатие памяти слоями · завести карточку · слово владельца · три нарочные поломки)")
     v4.print_all()
     print("")
-    print("── случаи карточки 814 (этап Э3, предмет П1: справка из того же договора · восемь случаев С1–С8 и четыре нарочные поломки Л1–Л4)")
+    print("── случаи карточки 814 (этап Э3, предмет П1: справка из того же договора · десять случаев С1–С10 и шесть нарочных поломок Л1–Л6)")
     v5.print_all()
     print("")
-    print("── случаи карточки 816 (этап Э3, предмет П2: поля манифеста и блок «кто меня судит» · девять случаев М1–М7 и шесть нарочных поломок Л1–Л6 в коде службы)")
+    print("── случаи карточки 816 (этап Э3, предмет П2: поля манифеста и блок «кто меня судит» · десять случаев М1–М8 и семь нарочных поломок: Л1–Л6 в коде службы, Л7 — подачей другого ответа)")
     v6.print_all()
     print("")
     print("── случаи карточки 821 (этап Э3, предмет П4: поле stage · общие ключи службы в справке · ответ без числа строк · одно чтение версии · семь случаев Ч1–Ч7 и три нарочные поломки ЛЧ1–ЛЧ3 в коде службы)")
     v7.print_all()
+    print("")
+    print("── случаи карточки 823 (доделка этапа Э3: граница общего поля tooling_version названа словами · запись установки не принята целиком · два случая Д1–Д2 и две нарочные поломки ЛД1–ЛД2 в копиях договора)")
+    v8.print_all()
     print("")
     print("⚖️ ЭТИ ДВА КРИТЕРИЯ МАШИНА НЕ СУДИТ — говорю прямо, чтобы зелёное не прочлось шире:")
     print("   ⑥ полный рабочий отрезок роли через стену — доказывается работой роли (записка · память · карточка),")
     print("      а не этим файлом. Прогон приёмки отрезком НЕ является.")
     print("   ⑨ подпись приёмки ставит роль, которая службу НЕ писала. Свой прогон за чужую руку не считается.")
     print("")
-    bad = v.failed() + v2.failed() + v3.failed() + v4.failed() + v5.failed() + v6.failed() + v7.failed()
+    bad = v.failed() + v2.failed() + v3.failed() + v4.failed() + v5.failed() + v6.failed() + v7.failed() + v8.failed()
     if bad:
-        print("🔴 ПРОВАЛИЛОСЬ %d: %s (карточка 779: %d из %d прошло · карточка 787: %d из %d прошло · карточка 791: %d из %d прошло · карточка 781: %d из %d прошло · карточка 814: %d из %d прошло · карточка 816: %d из %d прошло · карточка 821: %d из %d прошло)"
+        print("🔴 ПРОВАЛИЛОСЬ %d: %s (карточка 779: %d из %d прошло · карточка 787: %d из %d прошло · карточка 791: %d из %d прошло · карточка 781: %d из %d прошло · карточка 814: %d из %d прошло · карточка 816: %d из %d прошло · карточка 821: %d из %d прошло · карточка 823: %d из %d прошло)"
               % (len(bad), " · ".join(r[0] for r in bad),
                  len(v.rows) - len(v.failed()), len(v.rows), len(v2.rows) - len(v2.failed()), len(v2.rows),
                  len(v3.rows) - len(v3.failed()), len(v3.rows), len(v4.rows) - len(v4.failed()), len(v4.rows),
-                 len(v5.rows) - len(v5.failed()), len(v5.rows), len(v6.rows) - len(v6.failed()), len(v6.rows), len(v7.rows) - len(v7.failed()), len(v7.rows)))
+                 len(v5.rows) - len(v5.failed()), len(v5.rows), len(v6.rows) - len(v6.failed()), len(v6.rows), len(v7.rows) - len(v7.failed()), len(v7.rows),
+                 len(v8.rows) - len(v8.failed()), len(v8.rows)))
         return 1
-    print("✅ ВСЕ МАШИННЫЕ КРИТЕРИИ ПРОШЛИ: карточка 779 — %d из %d · карточка 787 — %d из %d · карточка 791 — %d из %d · карточка 781 — %d из %d · карточка 814 — %d из %d · карточка 816 — %d из %d · карточка 821 — %d из %d (⑥ и ⑨ карточки 779 — за человеком)"
+    print("✅ ВСЕ МАШИННЫЕ КРИТЕРИИ ПРОШЛИ: карточка 779 — %d из %d · карточка 787 — %d из %d · карточка 791 — %d из %d · карточка 781 — %d из %d · карточка 814 — %d из %d · карточка 816 — %d из %d · карточка 821 — %d из %d · карточка 823 — %d из %d (⑥ и ⑨ карточки 779 — за человеком)"
           % (len(v.rows), len(v.rows), len(v2.rows), len(v2.rows), len(v3.rows), len(v3.rows), len(v4.rows), len(v4.rows), len(v5.rows), len(v5.rows),
-             len(v6.rows), len(v6.rows), len(v7.rows), len(v7.rows)))
+             len(v6.rows), len(v6.rows), len(v7.rows), len(v7.rows), len(v8.rows), len(v8.rows)))
     return 0
 
 
