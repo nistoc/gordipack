@@ -593,6 +593,7 @@ public sealed class ToolRunner(Contract contract, Manifest manifest, bool readOn
         // Общее поле ответа «версия тулинга» берётся ТОЛЬКО из хранилища; нечем взять — пустая строка, а не догадка.
         // Одно чтение на вызов. Правило отбора значения одно с InstallRecord.Read (InstallRecord.PickVersion): ответ contour_info
         // берёт оба поля версии из ОДНОГО чтения, а этот метод — для остальных ответов.
+        // Граница (договор 2.2.1, карточка 823): общее поле — значение строки meta.template_commit как есть; целость записи установки оно не проверяет.
         var asked = AskStorage(contour, "SELECT value FROM meta WHERE key='template_commit'", 10);
         return asked.Ok && asked.Rows.Count == 1 && asked.Rows[0].Length == 1 ? InstallRecord.PickVersion(asked.Rows[0][0]) : "";
     }
