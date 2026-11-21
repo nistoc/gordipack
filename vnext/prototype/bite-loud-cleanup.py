@@ -36,6 +36,8 @@ r"""bite-loud-cleanup.py — приёмка карточки #817: уборка 
   ЛУ4 метка «только чтение» перед удалением не снимается                   → У3
 ГРАНИЦА. Открытый файл мешает удалению только на Windows. На другой системе случаи У1 и У5 и поломки ЛУ1, ЛУ3,
 ЛУ4 ставить не на чем: они печатаются «не поставлен», исход приёмки — «принята, часть не проверена», код 2.
+Случай У8 судится только из клона пакета: в каталогах установленного контура лежат и его собственные файлы,
+перечня исключений для них здесь нет — там места молчащего удаления печатаются для сведения, случай не поставлен.
 
     python <клон пакета>/vnext/prototype/bite-loud-cleanup.py
 """
@@ -301,16 +303,16 @@ def judge_all(variant: pathlib.Path) -> dict:
 
 # ── У8: класс по разбору дерева кода ──
 
-def scan_roots() -> list:
-    """Что разбирать: клон пакета целиком либо, у контура, каталог приёмок и каталог рабочих скриптов."""
+def scan_roots():
+    """Что разбирать → (каталоги, это клон пакета?). Клон — целиком; у контура — два его каталога установки."""
     pack = HERE.parent.parent
     if HERE.parent.name == "vnext" and (pack / "scripts").is_dir():
-        return [pack]
+        return [pack], True
     roots = [HERE]
     scripts = HERE.parent / ".mezosync" / "scripts"
     if scripts.is_dir():
         roots.append(scripts)
-    return roots
+    return roots, False
 
 
 def handler_is_silent(handler: ast.ExceptHandler) -> bool:
@@ -361,8 +363,20 @@ def silent_sites(roots):
 
 
 def class_case():
-    roots = scan_roots()
+    title = "У8 класс по разбору дерева кода: молчащего удаления нет, кроме названного с причиной"
+    roots, is_pack = scan_roots()
     by_key, in_try, parsed, unparsed = silent_sites(roots)
+    if not is_pack:
+        # В каталогах контура лежат и его собственные файлы: перечня исключений для них у приёмки нет,
+        # и провал по такому файлу был бы не о пакете. Места печатаются для сведения, случай не судится.
+        found = {**by_key, **in_try}
+        print(f"   ℹ️ в каталогах контура разобрано файлов: {parsed} · мест молчащего удаления: "
+              f"{sum(len(v) for v in found.values())} в {len(found)} файлах (для сведения, не судится)")
+        for name, lines in sorted(found.items()):
+            print(f"   · {name}, строки {sorted(lines)}")
+        case(title, None, "класс судится по клону пакета (<клон>/vnext/prototype): в каталогах контура лежат "
+                          "и его собственные файлы, перечня исключений для них у приёмки нет")
+        return
     seen = {p.name for root in roots for p in root.rglob("*.py") if not (SKIP_DIRS & set(p.parts))}
     problems = []
     for title, found, allowed in (("глушение ключом", by_key, SILENT_BY_KEY),
@@ -386,8 +400,7 @@ def class_case():
     for name, lines in sorted({**by_key, **in_try}.items()):
         why = (SILENT_BY_KEY.get(name) or SILENT_IN_TRY.get(name) or (0, "ПРИЧИНА НЕ НАЗВАНА"))[1]
         print(f"   · {name}, строки {sorted(lines)}: {why}")
-    case("У8 класс по разбору дерева кода: молчащего удаления нет, кроме названного с причиной",
-         not problems, "\n".join(problems))
+    case(title, not problems, "\n".join(problems))
 
 
 def main() -> int:
