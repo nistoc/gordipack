@@ -67,6 +67,13 @@ public sealed record ToolArg(
     IReadOnlyList<string>? Enum,
     string? Selects = null);   // что выбирает значение аргумента; «contour» — контур, на котором исполняется вызов
 
+/// <summary>Общий ключ службы (не аргумент вызова): имя, вид, подсказка значения, переменная среды, описание. Всё из раздела wall_options договора.</summary>
+public sealed record WallOption(string Name, string Kind, string? Value, string? Env, string Note)
+{
+    public const string KindValue = "value";
+    public const string KindSwitch = "switch";
+}
+
 /// <summary>Как аргумент ложится в командную строку тела инструмента.</summary>
 public sealed record ArgMap(string Arg, string Form, string? Flag, string? ConstAfter);
 
@@ -138,6 +145,8 @@ public sealed class Contract
     public required IReadOnlyList<ToolArg> CommonArgs { get; init; }
     /// <summary>Имя общего аргумента, выбирающего контур. Узнаётся из пометки selects=contour в договоре, в коде имени нет.</summary>
     public required string ContourArgName { get; init; }
+    /// <summary>Общие ключи службы из раздела wall_options; нет раздела — пустой список. В отпечаток перечня вызовов не входит.</summary>
+    public IReadOnlyList<WallOption> WallOptions { get; init; } = [];
     public required string Fingerprint { get; init; }   // sha256 по СОДЕРЖИМОМУ файла договора
     public required string Path { get; init; }
 
@@ -174,6 +183,8 @@ public sealed class Contract
             throw new InvalidDataException($"в договоре {path} аргумент выбора контура «{marked[0].Name}» не обязателен (required не true): "
                                            + "исполнять вызов без контура не на чем, а угадывать контур служба не вправе");
 
+        var wallOptions = ReadWallOptions(root, path);
+
         return new Contract
         {
             Name = Str(head, "name") ?? "gordi",
@@ -184,9 +195,43 @@ public sealed class Contract
             Tools = tools,
             CommonArgs = common,
             ContourArgName = marked[0].Name,
+            WallOptions = wallOptions,
             Fingerprint = fingerprint,
             Path = System.IO.Path.GetFullPath(path),
         };
+    }
+
+    /// <summary>
+    /// Раздел wall_options читается строго: пустое имя, имя без «--», повтор имени, незнакомый kind и value у выключателя отвергаются
+    /// с названием места и причиной — иначе справка молча печатала бы кривой блок. Нет раздела — нет общих ключей (список пуст).
+    /// </summary>
+    private static List<WallOption> ReadWallOptions(JsonElement root, string path)
+    {
+        var result = new List<WallOption>();
+        if (!root.TryGetProperty("wall_options", out var section)) return result;
+        if (section.ValueKind != JsonValueKind.Object || !section.TryGetProperty("options", out var list) || list.ValueKind != JsonValueKind.Array)
+            throw new InvalidDataException($"в договоре {path} раздел wall_options без массива options");
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var index = 0;
+        foreach (var o in list.EnumerateArray())
+        {
+            var where = $"wall_options.options[{index++}]";
+            var name = Str(o, "name");
+            if (string.IsNullOrWhiteSpace(name))
+                throw new InvalidDataException($"в договоре {path} в {where} пустое имя ключа");
+            if (!name.StartsWith("--", StringComparison.Ordinal) || name.Length == 2)
+                throw new InvalidDataException($"в договоре {path} в {where} имя «{name}» не начинается с «--»");
+            if (!seen.Add(name))
+                throw new InvalidDataException($"в договоре {path} в {where} имя «{name}» повторено");
+            var kind = Str(o, "kind");
+            if (kind is not (WallOption.KindValue or WallOption.KindSwitch))
+                throw new InvalidDataException($"в договоре {path} в {where} («{name}») kind «{kind}» не из перечня ({WallOption.KindValue} | {WallOption.KindSwitch})");
+            var value = Str(o, "value");
+            if (kind == WallOption.KindSwitch && value is not null)
+                throw new InvalidDataException($"в договоре {path} в {where} у ключа-выключателя «{name}» (kind={WallOption.KindSwitch}) есть value «{value}»: значения у выключателя нет");
+            result.Add(new WallOption(name, kind, value, Str(o, "env"), Str(o, "note") ?? ""));
+        }
+        return result;
     }
 
     private static ToolDef ReadTool(JsonElement t)

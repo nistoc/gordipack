@@ -144,8 +144,15 @@ public static class Fold
 /// Запись установщика в таблице meta хранилища: commit, пакет, час записи и отпечатки файлов. Принимается ЦЕЛИКОМ либо никак:
 /// не вышло прочесть или разобрать любой её кусок — «нечем проверить» у каждого поля записи, с причиной.
 /// </summary>
-public sealed record InstallRecord(Piece Commit, Piece Package, Piece RecordedAt, Piece Hash, Piece Files)
+public sealed record InstallRecord(Piece Commit, Piece Package, Piece RecordedAt, Piece Hash, Piece Files, string Version = "")
 {
+    /// <summary>Значение общего поля версии из строки template_commit: обрезка пробелов, длина 1..80, не метка пустого значения; иначе пустая строка.</summary>
+    public static string PickVersion(string raw)
+    {
+        var one = raw.Trim();
+        return one.Length is > 0 and <= 80 && one != StorageResult.NullMark ? one : "";
+    }
+
     public static InstallRecord Read(Func<string, int, StorageResult> ask)
     {
         var small = ask("SELECT key, value FROM meta WHERE key IN ('template_commit','template_source','template_recorded_at')", 100);
@@ -167,7 +174,9 @@ public sealed record InstallRecord(Piece Commit, Piece Package, Piece RecordedAt
         if (firstFail is not null)
             all = all.Select(p => p.Reason is null ? Piece.Fail("запись установки в целом не принята — " + firstFail.Reason) : p).ToArray();
 
-        return new InstallRecord(all[0], all[1], all[2], all[3], all[4]);
+        // общее поле версии — из того же чтения, что и поля записи; не вышло прочесть commit — пустая строка, а не догадка
+        var version = small.Ok ? PickVersion(small.Rows.FirstOrDefault(r => r.Length == 2 && r[0] == "template_commit")?[1] ?? "") : "";
+        return new InstallRecord(all[0], all[1], all[2], all[3], all[4], version);
     }
 
     /// <summary>Запись meta.template_files_sha — одно значение: JSON «имя файла → отпечаток». Свёртка и число файлов — по всей записи.</summary>

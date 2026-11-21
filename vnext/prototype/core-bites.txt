@@ -41,6 +41,7 @@ bite-empty-data-reasons.py               Г3     done  0 10 0
 bite-fresh-circuit.py                    Г2     own   0 45 1
 bite-guard-all-retired-wiring.py         Г1     done  0 7 0
 bite-guard-skip.py                       Г3     done  0 31 0
+bite-guard-verify-line.py                Г2     own  0 11 0
 bite-index-coverage.py                   Г1     done  0 8 1
 bite-interview-gates.py                  Г1     own  0 17 0
 bite-lease-read-subcommands.py           Г1     done  0 8 0
@@ -78,5 +79,5 @@ bite-two-locks.py                        Г1     own  0 12 0
 bite-unreachable-addressee.py            Г1     done  0 9 0
 bite-update-tools-merge.py               Г1     own  0 39 0
 bite-update-tools-rev.py                 Г1     own  0 38 0
-bite-verify-install.py                   Г1     own  0 18 0
+bite-verify-install.py                   Г1     own  0 22 0
 bite-wake-brief.py                       Г3     done  0 7 0

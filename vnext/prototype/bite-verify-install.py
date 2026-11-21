@@ -36,14 +36,23 @@ r"""bite-verify-install.py — приёмка карточки #819: коман�
   В10 граница ЗАПИСИ случаем: установщик на стенде принимает правку контура (--accept-merge --apply),
       запись получает отпечаток версии ПАКЕТА — команда отвечает «тело изменено», код 1, и говорит
       об этой границе в выводе и в справке
+  В11 старшинство исходов (карточка #821, находка приёмки #819): второй каталог объявлен, но на диске его
+      нет, И в файле первого каталога изменён один значащий байт — «расходится», код 1, число
+      несверенных пар названо (несверенное не заслоняет найденное расхождение)
+  В12 база стенда в режиме WAL: тот же исход, файл базы до и после прогона одинаков побайтно; побочные
+      файлы -shm и -wal названы в строке случая
+  В13 --db на копию базы вне контура: строка «сверяется: база … · каталог скриптов … · второй каталог — …»
+      одна в каждом исходе и называет подставленную базу и каталоги контура как они есть
 НАРОЧНЫЕ ПОЛОМКИ (в КОПИИ команды на стенде; якорь обязан найтись ровно один раз; все случаи части В
 гоняются на копии, имена упавших сличаются с ожидаемыми)
-  Л1  сверка по именам вместо тел          → В4а, В4б, В4в, В5, В10 (причины: «байт перестал ловиться»
-                                              у В4а, В4б и В4в; «переименование стало находкой» у В5;
-                                              «принятая правка перестала выглядеть расхождением» у В10)
+  Л1  сверка по именам вместо тел          → В4а, В4б, В4в, В5, В10, В11, В12 (причины: «байт перестал
+                                              ловиться» у В4а, В4б, В4в и В11; «переименование стало находкой»
+                                              у В5; «принятая правка перестала выглядеть расхождением» у В10;
+                                              «исход в режиме WAL другой» у В12)
   Л2  «лишнее тело» не называется          → В6
   Л3  «нечем сверять» выдано за «совпало»  → В3
   Л4  тело у другой пары записи считается переименованием → В7б
+  Л5  «нечем сверять» выше «расходится»    → В11 (причина: «старшинство исходов нарушено»)
 
     python <каталог приёмок>/bite-verify-install.py
 """
@@ -86,13 +95,13 @@ def case(name, cond, detail="", show=False):
     OK, FAIL = OK + (1 if cond else 0), FAIL + (0 if cond else 1)
 
 
-ALL_NAMES = ["В1", "В2", "В3", "В4а", "В4б", "В4в", "В5", "В6", "В7", "В7б", "В8", "В9", "В10"]
-TOTAL = len(ALL_NAMES) + 4          # + Л1, Л2, Л3, Л4
+ALL_NAMES = ["В1", "В2", "В3", "В4а", "В4б", "В4в", "В5", "В6", "В7", "В7б", "В8", "В9", "В10", "В11", "В12", "В13"]
+TOTAL = len(ALL_NAMES) + 5          # + Л1, Л2, Л3, Л4, Л5
 
 if not COMMAND.is_file():
     # Предмета ещё нет: приёмка не падает трассировкой, а говорит словами, что не прошла.
     print(f"🔴 команды нет: {COMMAND} не найден — случаи {', '.join(ALL_NAMES)} и нарочные поломки "
-          f"Л1–Л3 не пройдены, испытывать нечего")
+          f"Л1–Л5 не пройдены, испытывать нечего")
     print(f"\n🔴 ИТОГ: 0 из {TOTAL}")
     sys.exit(mezo_stand.finish(1))
 
@@ -532,12 +541,130 @@ def case_b9(command):
         f"--bogus: {rc1} · --db без значения: {rc2} · --help: {rc3} · слово: {rc4} · --db=<путь>: {rc5}\n{out1}{out2}"
 
 
+SCOPE_RE = re.compile(r"^сверяется: база (.+?) · каталог скриптов (.+?) · второй каталог — (.+)$")
+
+
+def scope_lines(out: str) -> list[str]:
+    return [ln.strip() for ln in out.splitlines() if ln.strip().startswith("сверяется:")]
+
+
+def same_path(a: str, b) -> bool:
+    return os.path.normcase(str(pathlib.Path(a).resolve())) == os.path.normcase(str(pathlib.Path(b).resolve()))
+
+
+def case_b11(command):
+    """Старшинство исходов: второй каталог объявлен, но его нет (пары второго каталога не сверены), И в файле первого каталога
+    изменён один значащий байт. Исход — «расходится», код 1, число несверенных пар названо."""
+    c = build("b11", command)
+    shutil.rmtree(c.second)                                  # объявлен в файле путей, на диске его нет
+    mutate(c.scripts / "a.py", b"A = 1", b"A = 2")
+    rc, out = run(c)
+    changed = keys_of(out, "тело изменено:")
+    n_second = len(SECOND_FILES)
+    named = f"не сверено пар: {n_second}" in out
+    ok = rc == 1 and "ИТОГ: РАСХОДИТСЯ" in out and changed == ["a.py"] and named
+    tag = ""
+    if not ok:
+        tag = "старшинство исходов нарушено" if changed else "байт перестал ловиться"
+    return ok, tag, (f"код {rc} · «тело изменено»: {changed} (ждали ['a.py']) · число несверенных пар названо ({n_second}): {named}\n{out}")
+
+
+def db_header_mode(db: pathlib.Path) -> tuple:
+    head = db.read_bytes()[:20]
+    return head[18], head[19]           # 1, 1 — журнал отката; 2, 2 — режим WAL
+
+
+def case_b12(command):
+    """База стенда в режиме WAL: тот же исход, файл базы не меняется ни байтом; побочные файлы -shm и -wal названы в строке случая."""
+    c = build("b12", command)
+    con = sqlite3.connect(str(c.db))
+    mode = con.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+    con.commit()
+    con.close()
+    mutate(c.scripts / "a.py", b"A = 1", b"A = 2")
+    before = hashlib.sha256(c.db.read_bytes()).hexdigest()[:12]
+    head_before = db_header_mode(c.db)
+    rc, out = run(c)
+    after = hashlib.sha256(c.db.read_bytes()).hexdigest()[:12]
+    side = sorted(n for n in os.listdir(c.root) if n.startswith("mezosync.db") and n != "mezosync.db")
+    changed = keys_of(out, "тело изменено:")
+    expected_side = {"mezosync.db-shm", "mezosync.db-wal"}
+    ok = (mode == "wal" and head_before == (2, 2) and before == after and rc == 1 and "ИТОГ: РАСХОДИТСЯ" in out
+          and changed == ["a.py"] and set(side) <= expected_side)
+    tag = ""
+    if not ok:
+        tag = ("файл базы изменился" if before != after else
+               "стенд не в режиме WAL" if mode != "wal" or head_before != (2, 2) else
+               "лишние побочные файлы базы" if not set(side) <= expected_side else
+               "исход в режиме WAL другой")
+    return ok, tag, (f"режим {mode}, заголовок {head_before} · файл базы до {before}, после {after} · код {rc} · «тело изменено»: {changed} · "
+                     f"побочные файлы базы после прогона: {side or 'нет'}")
+
+
+def case_b13(command):
+    """--db указывает на копию базы ВНЕ контура: строка «сверяется» одна в каждом исходе и называет подставленную базу, а каталоги
+    контура — как они есть (скрипты — контура; второй каталог — по файлу путей рядом с копией, не по файлу контура)."""
+    c = build("b13", command)
+    outside = STAND / f"{PREFIX[0]}outside-b13"
+    (outside / "local").mkdir(parents=True)
+    copy_db = outside / "copy.db"
+    shutil.copy2(c.db, copy_db)
+    notes = []
+
+    def parse(out, label):
+        lines = scope_lines(out)
+        if len(lines) != 1:
+            notes.append(f"{label}: строк «сверяется:» {len(lines)}, ждали одну")
+            return None
+        m = SCOPE_RE.match(lines[0])
+        if not m:
+            notes.append(f"{label}: строка не по форме: {lines[0][:120]}")
+        return m
+
+    rc_a, out_a = run(c, "--db", str(copy_db))                  # (а) копия без файла путей: второй каталог не объявлен
+    m = parse(out_a, "копия без файла путей")
+    if m:
+        if not same_path(m.group(1), copy_db):
+            notes.append(f"(а) база в строке {m.group(1)}, ждали {copy_db}")
+        if not same_path(m.group(2), c.scripts):
+            notes.append(f"(а) каталог скриптов в строке {m.group(2)}, ждали {c.scripts}")
+        if m.group(3).strip() != "не объявлен":
+            notes.append(f"(а) второй каталог в строке «{m.group(3)[:60]}», ждали «не объявлен»")
+    if rc_a != 3:
+        notes.append(f"(а) код {rc_a}, ждали 3 (нечем сверять: второй каталог не объявлен)")
+    (outside / "local" / "paths.json").write_text(json.dumps({"prototype_install_dir": c.second.resolve().as_posix()}), encoding="utf-8")
+    rc_b, out_b = run(c, "--db", str(copy_db))                  # (б) с файлом путей рядом с копией
+    m = parse(out_b, "копия с файлом путей")
+    if m:
+        if not same_path(m.group(1), copy_db) or not same_path(m.group(2), c.scripts) or not same_path(m.group(3), c.second):
+            notes.append(f"(б) строка называет не те места: {m.group(0)[:200]}")
+    if rc_b != 0:
+        notes.append(f"(б) код {rc_b}, ждали 0")
+    con = sqlite3.connect(str(copy_db))
+    con.execute("DELETE FROM meta WHERE key='template_files_sha'")
+    con.commit()
+    con.close()
+    rc_c, out_c = run(c, "--db", str(copy_db))                  # (в) в копии записи нет: исход «нечем сверять», строка всё равно одна
+    parse(out_c, "копия без записи")
+    if rc_c != 3:
+        notes.append(f"(в) код {rc_c}, ждали 3")
+    rc_d, out_d = run(c)                                          # (г) без --db: база контура
+    m = parse(out_d, "без --db")
+    if m and not (same_path(m.group(1), c.db) and same_path(m.group(2), c.scripts) and same_path(m.group(3), c.second)):
+        notes.append(f"(г) без --db строка называет не те места: {m.group(0)[:200]}")
+    ok = not notes and rc_d == 0
+    shown = scope_lines(out_b)
+    return ok, "" if ok else "строка о том, что сверяется, не одна или называет не то", (
+        f"коды: копия без файла путей {rc_a} · с файлом путей {rc_b} · без записи {rc_c} · без --db {rc_d}\n"
+        f"строка (б): {shown[0] if shown else '—'}\n" + "\n".join(notes))
+
+
 CASE_FUNCS = {
     "В1": case_b1, "В2": case_b2, "В3": case_b3,
     "В4а": lambda cmd: case_b4(cmd, "a"), "В4б": lambda cmd: case_b4(cmd, "b"),
     "В4в": lambda cmd: case_b4(cmd, "c"),
     "В5": case_b5, "В6": case_b6, "В7": case_b7, "В7б": case_b7b, "В8": case_b8, "В9": case_b9,
-    "В10": case_b10,
+    "В10": case_b10, "В11": case_b11, "В12": case_b12, "В13": case_b13,
 }
 TITLES = {
     "В1": "① только чтение: хранилище и каталоги до и после прогона не изменены ни байтом",
@@ -553,6 +680,9 @@ TITLES = {
     "В8": "⑧ границы отпечатка случаем: окончания строк и хвост файла — «совпало»; граница в выводе и справке",
     "В9": "отказ по аргументам — код 4 словами; --help и --db=<путь> — код 0",
     "В10": "граница записи: правка, принятая установщиком (--accept-merge), — «тело изменено»; сказано в выводе и справке",
+    "В11": "старшинство исходов: второй каталог объявлен, но не найден, И изменён байт в первом — «расходится», код 1, несверенное названо",
+    "В12": "база стенда в режиме WAL: тот же исход, файл базы не изменён ни байтом, побочные файлы -shm и -wal названы",
+    "В13": "--db на копию базы вне контура: строка «сверяется» одна в каждом исходе и называет подставленную базу и каталоги контура",
 }
 
 
@@ -562,7 +692,7 @@ def run_all(command, verbose: bool):
         ok, tag, detail = CASE_FUNCS[name](command)
         res[name] = (ok, tag, detail)
         if verbose:
-            case(f"{name} {TITLES[name]}", ok, detail, show=(name in ("В1", "В2")))
+            case(f"{name} {TITLES[name]}", ok, detail, show=(name in ("В1", "В2", "В12", "В13")))
     return res
 
 
@@ -574,10 +704,11 @@ BREAKS = {
     "Л1": ("сверка по именам вместо тел: «есть файл — совпало, нет файла — находка»",
            [("        state = judge_pair(on_disk, recorded, holders)\n",
              '        state = "ok" if on_disk is not None else "gone"  # ПОЛОМКА Л1: по именам\n')],
-           {"В4а", "В4б", "В4в", "В5", "В10"},
+           {"В4а", "В4б", "В4в", "В5", "В10", "В11", "В12"},
            {"В4а": "байт перестал ловиться", "В4б": "байт перестал ловиться",
             "В4в": "байт перестал ловиться", "В5": "переименование стало находкой",
-            "В10": "принятая правка перестала выглядеть расхождением"}),
+            "В10": "принятая правка перестала выглядеть расхождением",
+            "В11": "байт перестал ловиться", "В12": "исход в режиме WAL другой"}),
     "Л2": ("«лишнее тело» не называется",
            [('    return "лишнее"\n', "    return None  # ПОЛОМКА Л2: лишнее не называется\n")],
            {"В6"}, {"В6": "лишнее тело не названо или названо иначе"}),
@@ -589,6 +720,9 @@ BREAKS = {
            [("        holders = [k for k in same_body if k not in pairs]      # переименование — только имя ВНЕ записи\n",
              "        holders = same_body  # ПОЛОМКА Л4: имя другой пары записи считается переименованием\n")],
            {"В7б"}, {"В7б": "удалённый файл выдан за переименование"}),
+    "Л5": ("«нечем сверять» поставлено выше «расходится»: при несверенных парах изменённое тело не даёт исхода «расходится»",
+           [("    if changed or gone:\n        parts = [", "    if (changed or gone) and not unverified:  # ПОЛОМКА Л5: нечем сверять выше расходится\n        parts = [")],
+           {"В11"}, {"В11": "старшинство исходов нарушено"}),
 }
 
 print("---- часть Л: нарочные поломки в копии команды ----")

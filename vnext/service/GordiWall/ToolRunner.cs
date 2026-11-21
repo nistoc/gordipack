@@ -75,10 +75,9 @@ public sealed class ToolRunner(Contract contract, Manifest manifest, bool readOn
     private readonly Manifest _manifest = manifest;
     private readonly bool _readOnly = readOnly;
 
-    // Версия тулинга спрашивается У ХРАНИЛИЩА КОНТУРА один раз за жизнь службы.
-    // Манифест её НЕ держит как истину: установщик пишет версию в таблицу meta,
-    // и второй список версий расходился бы с первым молча.
-    private readonly Dictionary<string, string> _versionCache = new(StringComparer.Ordinal);
+    // Версия тулинга спрашивается У ХРАНИЛИЩА КОНТУРА на КАЖДЫЙ вызов, в памяти службы не держится: запись установки меняется
+    // за время жизни службы, а запомненное значение расходилось бы с записью молча (карточка 821). Манифест версию как истину
+    // не держит: установщик пишет её в таблицу meta, и второй список версий расходился бы с первым.
 
     /// <summary>Имя общего аргумента «метка продолжения». Объявлен в договоре; имя нужно и коду, как имя вызова contour_info.</summary>
     public const string NextPartArg = "next_part";
@@ -232,7 +231,8 @@ public sealed class ToolRunner(Contract contract, Manifest manifest, bool readOn
         var notes = ContourReport.Notes(contour);
         var text = ContourReport.Text(_contract, _manifest, contour, _readOnly, manifestFields, judgeFields, notes);
 
-        return new Answer(Outcome.Passed, false, null, text, contour.Id, ToolingVersion(contour), null, null,
+        // оба поля версии (общее tooling_version и manifest.tooling.version) — из ОДНОГО чтения записи установки выше
+        return new Answer(Outcome.Passed, false, null, text, contour.Id, install.Version, null, null,
                           Details: ContourReport.Details(manifestFields, judgeFields, notes));
     }
 
@@ -590,19 +590,11 @@ public sealed class ToolRunner(Contract contract, Manifest manifest, bool readOn
 
     private string ToolingVersion(ContourInfo contour)
     {
-        if (_versionCache.TryGetValue(contour.Id, out var cached)) return cached;
-
-        // Общее поле ответа «версия тулинга» берётся ТОЛЬКО из хранилища; нечем взять — пустая строка, а не догадка
-        var value = "";
+        // Общее поле ответа «версия тулинга» берётся ТОЛЬКО из хранилища; нечем взять — пустая строка, а не догадка.
+        // Одно чтение на вызов. Правило отбора значения одно с InstallRecord.Read (InstallRecord.PickVersion): ответ contour_info
+        // берёт оба поля версии из ОДНОГО чтения, а этот метод — для остальных ответов.
         var asked = AskStorage(contour, "SELECT value FROM meta WHERE key='template_commit'", 10);
-        if (asked.Ok && asked.Rows.Count == 1 && asked.Rows[0].Length == 1)
-        {
-            var one = asked.Rows[0][0].Trim();
-            if (one.Length is > 0 and <= 80 && one != StorageResult.NullMark) value = one;
-        }
-
-        _versionCache[contour.Id] = value;
-        return value;
+        return asked.Ok && asked.Rows.Count == 1 && asked.Rows[0].Length == 1 ? InstallRecord.PickVersion(asked.Rows[0][0]) : "";
     }
 
     /// <summary>
