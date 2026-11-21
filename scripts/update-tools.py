@@ -213,6 +213,15 @@ def second_install_dir(db: pathlib.Path) -> tuple[pathlib.Path | None, str | Non
     return None, None
 
 
+def install_path(rel, tools: pathlib.Path, second_dir: pathlib.Path | None) -> pathlib.Path:
+    """Где файл записи лежит (или ляжет) у контура: у файла второго каталога — там, у остальных —
+    среди рабочих скриптов. Единственное место, где запись разбора превращается в путь на диске.
+    Вынесено из main() (карточка #819), чтобы команда verify-install.py брала путь тем же кодом;
+    поведение установщика прежнее. Файл второго каталога при second_dir=None — ошибка вызывающего:
+    такие записи вызывающий отсеивает раньше."""
+    return second_dir / rel.name if is_second_rel(rel) else tools / rel
+
+
 # ═══ КАТАЛОГ МЕСТНОГО И --release (карточка #679, этап Э5) ═══════════════════════════════════
 # Каталог местного (<каталог базы>/local) обновление НЕ пишет — ни --apply, ни --release.
 # Копии отданных пакету файлов поэтому лежат РЯДОМ, в <каталог базы>/released/: положи их в
@@ -970,8 +979,8 @@ def main() -> int:
 
         def dest_of(rel: pathlib.Path) -> pathlib.Path:
             """Где файл лежит (или ляжет) у контура: у файла второго каталога — там, у остальных —
-            среди рабочих скриптов. Единственное место, где запись разбора превращается в путь."""
-            return second_dir / rel.name if is_second_rel(rel) else tools / rel
+            среди рабочих скриптов. Тонкий вызов install_path() — тот же код у verify-install.py."""
+            return install_path(rel, tools, second_dir)
 
         def show_name(rel: pathlib.Path) -> str:
             """Имя файла в плане: у файла второго каталога — без служебной приставки.
