@@ -174,9 +174,11 @@ def lay_variant(stand: pathlib.Path, name: str, helper_text: str) -> pathlib.Pat
 
 
 def run_probe(variant: pathlib.Path, mode: str, target, *extra):
-    env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONDONTWRITEBYTECODE="1")
-    for name in ("TMPDIR", "TEMP", "TMP"):
-        env[name] = str(variant / "tmp")
+    # среда дочернего процесса закреплена за стендом (карточка #613): контур вызывающего ему не достаётся,
+    # временная папка — своя у каждого варианта помощника
+    tmp = str(variant / "tmp")
+    env = mezo_stand.stand_env(variant, PYTHONIOENCODING="utf-8", PYTHONDONTWRITEBYTECODE="1",
+                               TMPDIR=tmp, TEMP=tmp, TMP=tmp)
     env.pop("MEZO_KEEP_STANDS", None)
     p = subprocess.run([sys.executable, "-X", "utf8", "probe.py", mode, str(target), *extra], cwd=variant,
                        capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=120)
