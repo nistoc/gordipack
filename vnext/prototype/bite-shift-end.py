@@ -789,7 +789,7 @@ def main():
         cases_guard(st, results, guard_run)
         cases_710(st, results, guard_run)
     finally:
-        shutil.rmtree(workdir, ignore_errors=True)
+        mezo_stand.remove_tree(workdir)
 
     passed = sum(ok for _, ok in results)
     failed = [m for m, ok in results if not ok]

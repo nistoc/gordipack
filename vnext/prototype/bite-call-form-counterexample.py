@@ -41,12 +41,15 @@ TEST_ROLE = "BITECALLFORM"
 TEST_SECTION = "state"
 
 ok = True
+# Карточка #817: копии базы ложились прямо в корень временной папки (четыре файла и их журналы) и не
+# убирались никогда. Теперь у приёмки свой стенд: прошла — убран, провалилась — сохранён и назван.
+WORK = mezo_stand.new("bite-callform-")
 
 
 def run_with_snapshot(line, label):
     """Кладёт строку в тело КОПИИ базы (в свой подставной раздел памяти) и возвращает
     вывод гарда по этой копии."""
-    tmp = Path(tempfile.gettempdir()) / f"bite-callform-{label}.db"
+    tmp = WORK / f"bite-callform-{label}.db"
     mezo_stand.empty_db(LIVE, tmp)
     c = sqlite3.connect(tmp)
     c.execute("INSERT INTO phoenix (role, section, body) VALUES (?, ?, ?) "
@@ -107,4 +110,4 @@ check("⑥", leaked is None,
 
 print()
 print("✅ КАРТОЧКА #50: обе стороны проверены ПРОГОНОМ" if ok else "🔴 ПРИЁМКА КРАСНАЯ")
-sys.exit(0 if ok else 1)
+sys.exit(mezo_stand.finish(0 if ok else 1))

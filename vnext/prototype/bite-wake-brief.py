@@ -169,7 +169,7 @@ def main() -> int:
                    "без этого случая ③ мог бы зеленеть просто оттого, что ключей "
                    "не бывает вовсе — а он про РЕЖИМ, а не про механизм")
     finally:
-        shutil.rmtree(d, ignore_errors=True)
+        mezo_stand.remove_tree(d)
 
     print()
     print(f"{'✅ ОБЗОР ПРОБУЖДЕНИЯ ПРИНЯТ' if ok else '🔴 НЕ ПРИНЯТО'} — случаев {CASES}, "

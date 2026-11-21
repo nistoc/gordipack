@@ -364,7 +364,7 @@ def main() -> int:
                    code9 == 0 and body9.startswith("[основание critical: слово владельца"),
                    f"код {code9}; первая строка: {body9.splitlines()[0][:70]}", differ=True)
     finally:
-        shutil.rmtree(d, ignore_errors=True)
+        mezo_stand.remove_tree(d)
 
     print()
     print(f"{'✅ СЛОВАРЬ АДРЕСАТОВ ПРИНЯТ' if ok else '🔴 НЕ ПРИНЯТО'} — случаев {CASES},"

@@ -253,7 +253,7 @@ def main() -> int:
         if a.porcha:
             print(f"📂 стенд сохранён: {stand}")
         else:
-            shutil.rmtree(stand, ignore_errors=True)
+            mezo_stand.remove_tree(stand)
 
 
 if __name__ == "__main__":

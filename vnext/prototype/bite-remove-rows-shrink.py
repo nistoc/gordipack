@@ -596,7 +596,7 @@ def main() -> int:
                        f"код {code22}; стало {after22}", differ=True)
     finally:
         for d in cleanup_dirs:
-            shutil.rmtree(d, ignore_errors=True)
+            mezo_stand.remove_tree(d)
 
     print()
     print(f"{'✅ ПРИЁМКА ПРИНЯТА' if ok else '🔴 НЕ ПРИНЯТО'} — случаев {CASES}, различающих {DIFFER}")

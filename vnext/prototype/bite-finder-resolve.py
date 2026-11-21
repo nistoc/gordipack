@@ -73,6 +73,8 @@ import sys
 import tempfile
 import time
 
+import mezo_stand  # noqa: E402 — уборка временного каталога, которая не молчит об отказе (карточка #817)
+
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -350,7 +352,7 @@ def main() -> int:
         return 2
     failed: list = []
     unplanted: list = []
-    with tempfile.TemporaryDirectory(prefix="bite-finder-resolve-", ignore_cleanup_errors=True) as tmp:
+    with mezo_stand.temp_dir("bite-finder-resolve-") as tmp:
         work = pathlib.Path(tmp)
         # ⛔ ПЕСОЧНИЦА ВСЕГО ДЕРЕВА ПРОЦЕССОВ — до первого дочернего процесса (правило
         # deliberate-break-sandbox-env): наследуют все, и позванные со средой dict(os.environ)

@@ -119,9 +119,23 @@ mezo_stand.py — временные рабочие каталоги прове�
 имени, которым этот прогон не пользовался, не смотрится — его стенды остаются до
 janitor-stands.py. Инструмент, запущенный С КОПИИ на стенде, каждый раз имеет новый путь —
 его прогоны между собой не связываются. Обе стороны безопасные: лишний каталог.
+УБРАТЬ СЕЙЧАС И СКАЗАТЬ, ЕСЛИ НЕ ВЫШЛО (карточка #817). Приёмки, у которых уборка уже написана в finally,
+звали shutil.rmtree(path, ignore_errors=True). На Windows открытая база и файлы «только чтение» (так git
+кладёт .git/objects) удаление срывают, а отказ глушился: каталог оставался, и об этом не говорил никто
+(замер STUD 20.11: остаток у 5 приёмок из 33, у одной — копия базы в 152 МБ на каждый прогон). Теперь:
+  · remove_tree(path) убирает каталог сразу, при любом исходе прогона (у release() решение другое: оно
+    ждёт исхода и провал сохраняет). Перед удалением сборка мусора закрывает брошенные соединения,
+    «только чтение» снимается, удаление повторяется несколько раз. Убрал — ни строки, возвращает True.
+    Не убрал — ОДНА строка в вывод: путь, сколько файлов и байт осталось, первая причина отказа;
+    возвращает False. Исключений не бросает и вердикт приёмки не меняет: приёмка судит свой предмет,
+    а не уборку;
+  · temp_dir(prefix) — то же для блока with, вместо TemporaryDirectory с глушением отказов уборки.
+  Строка одна, а не три: общий прогон показывает короткий хвост вывода приёмки, и длинное
+  предупреждение вытеснило бы из него итог.
 """
 import ast
 import atexit
+import contextlib
 import datetime as dt
 import gc
 import io
@@ -141,7 +155,7 @@ from pathlib import Path
 __all__ = ["new", "release", "finish", "keep_reason", "copy_tool", "neighbours_of", "stand_env",
            "snapshot_db", "empty_db", "seed_roles", "traces", "crlf_twin", "expected_break",
            "known_prefixes", "prefixes_from_sources", "tool_dirs", "stand_size", "max_age_hours",
-           "accepted_with_skips"]
+           "accepted_with_skips", "remove_tree", "temp_dir"]
 
 _stands: list[Path] = []
 _prefixes: set[str] = set()           # начала имён, которыми этот прогон заводил стенды
@@ -168,6 +182,8 @@ TEST_BIN_ENV = "MEZO_STAND_TEST_BIN"  # приёмка: каталог вмес�
 TEST_BIN_MB_ENV = "MEZO_STAND_TEST_BIN_MB"  # приёмка: вместимость такого каталога в МБ (нет — без предела)
 _REMOVING = ".removing-"              # остаток прерванной уборки: <имя>.removing-<номер процесса>
 _swept = False                        # уборка по сроку в этом прогоне уже решена (была или не нужна)
+_REMOVE_ATTEMPTS = 4                  # попыток удаления: открытый файл Windows освобождает не мгновенно
+_REMOVE_PAUSE_S = 0.15                # пауза между попытками
 
 # Начала имён стендов вычитываются из исходников проверок — список один на механизм: отсюда его
 # берут и уборка по сроку, и janitor-stands.py (решение В2 плана Э6, записка #5832).
@@ -256,6 +272,104 @@ def release(path) -> None:
     # уборка дополнительно требует метку того же скрипта, лишнего она не тронет.
     if len(p.name) > _MKDTEMP_SUFFIX:
         _prefixes.add(p.name[:-_MKDTEMP_SUFFIX])
+
+
+def _say(line: str) -> None:
+    """Напечатать строку и не упасть на выводе, который не знает её знаков."""
+    try:
+        print(line, flush=True)
+    except Exception:                                     # noqa: BLE001
+        try:
+            print(line.encode("ascii", "backslashreplace").decode("ascii"), flush=True)
+        except Exception:                                 # noqa: BLE001
+            pass
+
+
+def _left_in(p: Path) -> tuple[int, int]:
+    """Что осталось в каталоге: (файлов, байт). За ссылки и соединения каталогов не ходит."""
+    files = size = 0
+    for top, dirs, names in os.walk(p, onerror=lambda _e: None):
+        dirs[:] = [x for x in dirs if not _is_link_path(os.path.join(top, x))]
+        for name in names:
+            files += 1
+            try:
+                size += os.lstat(os.path.join(top, name)).st_size
+            except OSError:
+                pass
+    return files, size
+
+
+def _rmtree_noting(p: Path, refusals: list) -> None:
+    """Удалить дерево, снимая «только чтение»; каждый отказ дописать в refusals и идти дальше."""
+
+    def retry(func, target, _exc):
+        try:
+            os.chmod(target, stat.S_IWRITE)
+            func(target)
+        except FileNotFoundError:
+            pass                                          # уже убрано кем-то другим — это не отказ
+        except Exception as exc:                          # noqa: BLE001 — отказ записан, удаление идёт дальше
+            refusals.append(exc)
+
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(p, onexc=retry)
+    else:
+        shutil.rmtree(p, onerror=retry)
+
+
+def remove_tree(path) -> bool:
+    """Убрать временный каталог СЕЙЧАС; не вышло — сказать об этом одной строкой в выводе.
+
+    Заменяет `shutil.rmtree(path, ignore_errors=True)` там, где каталог убирается при любом исходе
+    прогона (карточка #817). True — каталога больше нет (или не было). False — что-то осталось, и это
+    названо: путь, сколько файлов и байт, первая причина отказа.
+    Исключений не бросает и вердикт приёмки не меняет. Ссылку и соединение каталогов не трогает:
+    за ними чужое.
+    """
+    p = Path(path)
+    try:
+        if not os.path.lexists(p):
+            return True
+        if _is_link_path(str(p)):
+            _say(f"⚠️ ВРЕМЕННЫЙ КАТАЛОГ НЕ УБРАН: {p} · это ссылка или соединение каталогов — "
+                 f"за неё уборка не ходит")
+            return False
+        refusals: list = []
+        for attempt in range(_REMOVE_ATTEMPTS):
+            # соединение с базой, брошенное без close(), держит файл до сборки мусора
+            gc.collect()
+            refusals.clear()
+            _rmtree_noting(p, refusals)
+            if not os.path.lexists(p):
+                break
+            if attempt + 1 < _REMOVE_ATTEMPTS:
+                time.sleep(_REMOVE_PAUSE_S)
+        if not os.path.lexists(p):
+            return True
+        files, size = _left_in(p)
+        why = (f"{type(refusals[0]).__name__}: {refusals[0]}" if refusals
+               else "система причину не назвала")
+        _say(f"⚠️ ВРЕМЕННЫЙ КАТАЛОГ НЕ УБРАН: {p} · осталось файлов: {files}, байт: {size} · "
+             f"первая причина: {why}")
+        return False
+    except Exception as exc:                              # noqa: BLE001 — уборка не вправе уронить приёмку
+        _say(f"⚠️ ВРЕМЕННЫЙ КАТАЛОГ НЕ УБРАН: {p} · уборка споткнулась сама: "
+             f"{type(exc).__name__}: {exc}")
+        return False
+
+
+@contextlib.contextmanager
+def temp_dir(prefix: str):
+    """Временный каталог на время блока with; на выходе убирается через remove_tree().
+
+    Вместо TemporaryDirectory с глушением отказов уборки: не убрался — строка в выводе. В перечень
+    стендов прогона не входит: его судьбу решает блок, а не исход прогона. Отдаёт путь строкой.
+    """
+    made = tempfile.mkdtemp(prefix=prefix)
+    try:
+        yield made
+    finally:
+        remove_tree(made)
 
 
 def stand_env(container, **extra) -> dict:

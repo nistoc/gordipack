@@ -335,7 +335,7 @@ def run_cases(live_tool: Path, porcha) -> None:
         # не было и не будет, поломка «no-stale-note» её не касается. Различающий здесь
         # только ⑥ (см. её case() выше).
     finally:
-        shutil.rmtree(stand, ignore_errors=True)
+        mezo_stand.remove_tree(stand)
 
 
 if __name__ == "__main__":

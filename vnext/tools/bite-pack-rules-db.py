@@ -45,6 +45,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 BUILD_TOOL_PATH = HERE / "build-pack-rules-db.py"
 PACK_ROOT = HERE.parent.parent  # vnext/tools -> корень клона
+sys.path.insert(0, str(PACK_ROOT / "vnext" / "prototype"))
+import mezo_stand  # noqa: E402 — уборка временного каталога, которая не молчит об отказе (карточка #817)
 
 CASES = 0
 PASSED = 0
@@ -542,7 +544,7 @@ def main() -> int:
             print(f"ℹ️  на настоящем пакете не разобралось версий: {len(unparsed)} "
                   f"(не входит в приёмку, но названо вслух)")
     finally:
-        shutil.rmtree(tmp_root, ignore_errors=True)
+        mezo_stand.remove_tree(tmp_root)
 
     print()
     print(f"{'✅ ПРИНЯТО' if ok_all else '🔴 НЕ ПРИНЯТО'} — случаев {CASES}, прошло {PASSED}")

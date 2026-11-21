@@ -32,6 +32,8 @@ import subprocess
 import sys
 import tempfile
 
+import mezo_stand  # noqa: E402 — уборка временного каталога, которая не молчит об отказе (карточка #817)
+
 HERE = pathlib.Path(__file__).resolve().parent
 MOW_PATH = HERE / "measure-old-words.py"
 
@@ -317,7 +319,7 @@ def main() -> int:
                    f"ушло в «разобрано» по ошибке), case4.py «не разобрано» {len(c4v)} "
                    f"(осталось {len(c4)}, как и верно — поломка (в) тут не при чём)")
     finally:
-        shutil.rmtree(tmp_root, ignore_errors=True)
+        mezo_stand.remove_tree(tmp_root)
 
     print()
     print(f"{'✅ ПРИНЯТ' if ok else '🔴 НЕ ПРИНЯТО'} — случаев {CASES}, различающих {DIFFER}")

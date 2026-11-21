@@ -194,6 +194,10 @@ def main() -> int:
               f"ВЫКЛЮЧЕН, ждём провала случаев ① · ② · ③-контроль · ③-е (и ③, если у роли есть "
               f"отметки пересоздания; и ②-бис · ④ · ⑤-бис · ⑥, если у роли нет ни одной версии) — "
               f"каждый своей проверкой, не общей меткой; итог сверяет провалы с этим множеством\n")
+    # Карточка #817: соединение с копией базы не закрывалось ни разу. Последнее оставалось живым в
+    # переменной до конца main(), Windows не давала удалить открытый файл — и copy.db (≈150 МБ) оставался
+    # после каждого прогона. Теперь прежнее соединение закрывается перед новым, последнее — в finally.
+    conn = None
     try:
         # шаг схемы на копии
         r = subprocess.run([sys.executable, "-B", str(MIGR), "--db", str(db)], capture_output=True,
@@ -303,6 +307,7 @@ def main() -> int:
                                           other_section, "--file", str(seed_other), "--db", str(db)],
                                          capture_output=True, text=True, encoding="utf-8", errors="replace",
                                          env=env_other)
+            conn.close()
             conn = sqlite3.connect(str(db))
             print(f"ℹ️ засеяно в копию: роли {other_role} добавлена версия раздела {other_section!r} "
                   f"через save-phoenix.py (код {rseed_other.returncode}) — в копии не было ни одной "
@@ -329,6 +334,7 @@ def main() -> int:
 
         # свёртка своей
         code, output = run(["--role", role], env_role=role, db=db, tool=tool, stand_env=stand_env)
+        conn.close()
         conn = sqlite3.connect(str(db))
         remaining = history_snapshot(conn, role)
         remaining_ids = {r[0] for r in remaining}
@@ -371,6 +377,7 @@ def main() -> int:
                           (f"phoenix_history.{role}",)).fetchone()[0] == 1)
         # ④ возврат
         code, output = run(["--role", role, "--unfold"], env_role=role, db=db, tool=tool, stand_env=stand_env)
+        conn.close()
         conn = sqlite3.connect(str(db))
         case("④ --unfold возвращает историю знак в знак под прежними номерами, архив пуст",
              code == 0 and history_snapshot(conn, role) == history_before
@@ -378,6 +385,7 @@ def main() -> int:
              output.strip().splitlines()[-1])
         # ⑤ повторная свёртка после возврата даёт то же множество (идемпотентность правила)
         code, output = run(["--role", role], env_role=role, db=db, tool=tool, stand_env=stand_env)
+        conn.close()
         conn = sqlite3.connect(str(db))
         archived2 = {r[0] for r in conn.execute("SELECT id FROM phoenix_history_archive WHERE role=?", (role,))}
         case("⑤ повторная свёртка уносит то же множество версий", archived2 == {r[0] for r in archived})
@@ -390,6 +398,7 @@ def main() -> int:
         # ⑧ ЧИСТКА ПРИ СОХРАНЕНИИ — ПЕРЕНОС, НЕ УДАЛЕНИЕ (save-phoenix.py держит 10 + самую длинную
         #    на раздел; до 05.09 лишнее УДАЛЯЛОСЬ: из 2270 сохранений в истории оставалась 441 версия)
         # (save — уже определён выше, до посева: он нужен и посеву роли other_role, и здесь)
+        conn.close()
         conn = sqlite3.connect(str(db))
         # ⚡ КАРТОЧКА #628: в свежем контуре у роли может не быть раздела plan (а то и вовсе ни
         # одного раздела) — .fetchone()[0] на пустом результате давал TypeError. Раздел для
@@ -413,6 +422,7 @@ def main() -> int:
                 rseed = subprocess.run([sys.executable, "-B", str(save), "--role", role, "--section", section,
                                         "--file", str(seed), "--db", str(db)], capture_output=True, text=True,
                                         encoding="utf-8", errors="replace", env=env_seed)
+                conn.close()
                 conn = sqlite3.connect(str(db))
                 row = conn.execute("SELECT body FROM phoenix WHERE role=? AND section=?", (role, section)).fetchone()
                 if rseed.returncode == 0 and row is not None:
@@ -435,6 +445,7 @@ def main() -> int:
                 r = subprocess.run([sys.executable, "-B", str(save), "--role", role, "--section", section, "--file", str(f),
                                     "--db", str(db)], capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
                 codes.append(r.returncode)
+            conn.close()
             conn = sqlite3.connect(str(db))
             total1 = conn.execute("SELECT (SELECT count(*) FROM phoenix_history)+(SELECT count(*) FROM phoenix_history_archive)").fetchone()[0]
             in_history = {r[0] for r in conn.execute("SELECT id FROM phoenix_history WHERE role=? AND section=?", (role, section))}
@@ -456,7 +467,9 @@ def main() -> int:
         case("⑦ живая база не тронута приёмкой (отпечаток файла совпал)", file_fingerprint(src) == live_fp)
     finally:
         if broken_copy and broken_copy.exists(): broken_copy.unlink()
-        shutil.rmtree(tmp, ignore_errors=True)
+        if conn is not None:
+            conn.close()
+        mezo_stand.remove_tree(tmp)
     n = len(RESULTS); ok = sum(RESULTS)
     staged_n = len(NOT_STAGED)
     if a.break_name == SEED_OFF_BREAK:

@@ -60,6 +60,7 @@ import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
+import mezo_stand  # noqa: E402 — уборка временного каталога, которая не молчит об отказе (карточка #817)
 
 SCRIPTS = mezo_paths.container_root(__file__) / ".mezosync" / "scripts"
 TOOL = SCRIPTS / "backup-db.py"
@@ -176,6 +177,9 @@ def weaken_self(d: pathlib.Path, anchor: str, replacement: str, label: str) -> p
     weak_path = d / f"self-weak-{label}.py"
     weak_path.write_text(broken, encoding="utf-8")
     shutil.copy(SCRIPTS / "mezo_paths.py", d / "mezo_paths.py")
+    # карточка #817: приёмка подключает mezo_stand при импорте — копии нужен и он: без него она падает
+    # на импорте, и обратный ход судит не свой предмет, а отсутствие соседа
+    shutil.copy(mezo_stand.__file__, d / "mezo_stand.py")
     (d.parent / "local").mkdir(exist_ok=True)
     (d.parent / "local" / "paths.json").write_text(
         json.dumps({"container": str(mezo_paths.container_root(__file__))}), encoding="utf-8")
@@ -1406,7 +1410,7 @@ def main() -> int:
         case_c8c_static_readonly()
     finally:
         if made_tmp:
-            shutil.rmtree(tmp_root, ignore_errors=True)
+            mezo_stand.remove_tree(tmp_root)
 
     print()
     ok = BAD == 0 and CASES > 0

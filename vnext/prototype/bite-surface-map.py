@@ -121,7 +121,7 @@ def main() -> int:
     print()
     print(f"{'✅ КАРТА ПРИНЯТА' if OK else '🔴 НЕ ПРИНЯТА'} — случаев {CASES}")
     if OK:
-        shutil.rmtree(tmp, ignore_errors=True)
+        mezo_stand.remove_tree(tmp)
     else:
         print(f"📂 стенд сохранён: {tmp}")
     return 0 if OK else 1

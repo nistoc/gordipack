@@ -93,8 +93,9 @@ def main() -> int:
     print()
     print(f"{'✅ ПЕРЕМЕР ПРИНЯТ' if OK else '🔴 НЕ ПРИНЯТ'} — случаев {CASES}")
     if OK:
-        import shutil
-        shutil.rmtree(tmp, ignore_errors=True)
+        # карточка #817: git кладёт .git/objects «только чтение», Windows такие не удаляет — помощник
+        # снимает метку до удаления, а чего убрать не смог, называет в выводе
+        mezo_stand.remove_tree(tmp)
     else:
         print(f"📂 стенд сохранён: {tmp}")
     return 0 if OK else 1

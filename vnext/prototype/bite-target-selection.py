@@ -50,6 +50,11 @@ NEIGHBOURS_LINE = "соседние проверки — копия"
 
 CASES = 0
 DIFFERENTIATING = 0
+# Карточка #817: временная папка дочерних прогонов набора — ВНУТРИ каталога приёмки. Прогоны ②, ⑨, ⑫, ⑬
+# проваливаются нарочно, и их стенды с журналами провалов набор сохраняет для осмотра; в общей временной
+# папке они оставались после каждого прогона (замер STUD 20.11: 788 098 байт). Здесь осматривать нечего:
+# всё уходит вместе с каталогом приёмки. Заводит её main().
+CHILD_TEMP = None
 
 
 def case(title, verdict, detail, differ=False):
@@ -65,7 +70,10 @@ def run(target=None, only=ONLY):
     cmd = [sys.executable, BITE_ALL, "--only", only]
     if target:
         cmd += ["--target", target]
-    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", timeout=600)
+    env = None
+    if CHILD_TEMP:
+        env = dict(os.environ, TMP=CHILD_TEMP, TEMP=CHILD_TEMP, TMPDIR=CHILD_TEMP)
+    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", timeout=600, env=env)
     return (r.stdout or "") + (r.stderr or ""), r.returncode
 
 
@@ -121,6 +129,7 @@ def laid_stand(out):
 
 
 def main() -> int:
+    global CHILD_TEMP
     if not os.path.isdir(LIVE):
         print(f"⛔ НЕ ЗАПУСТИЛАСЬ: нет живого каталога {LIVE} — строить копии не из чего")
         return 1
@@ -129,12 +138,14 @@ def main() -> int:
     #    копии скриптов и базы, их строит сам прогон заново, осматривать нечего; стенды набора
     #    при провале приёмка убирает и так. Оставленный при провале копился бы до слова владельца.
     tmp = tempfile.mkdtemp(prefix="bite-target-sel-")
+    CHILD_TEMP = os.path.join(tmp, "t")
+    os.makedirs(CHILD_TEMP)
     try:
         ok = cases(tmp)
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        removed = mezo_stand.remove_tree(tmp)   # что осталось и почему — называет сам помощник
         print()
-        print(f"🧹 временный каталог приёмки убран: {tmp}" if not os.path.exists(tmp)
+        print(f"🧹 временный каталог приёмки убран: {tmp}" if removed
               else f"⚠️ временный каталог приёмки убрать не удалось: {tmp}")
     print(f"✅ ВЫБОР КОПИИ ПРИНЯТ — случаев {CASES}, различающих {DIFFERENTIATING}, "
           f"у каждого различающего встречный" if ok
@@ -219,7 +230,7 @@ def cases(tmp) -> bool:
                f"код {code_flat_bad}; раскладка копирует испытуемое байт в байт — сломанный "
                "write-message.py эта приёмка называет отказом мерить (код 2), не «сломано»", differ=True)
     if st_bad:
-        shutil.rmtree(st_bad, ignore_errors=True)   # сохранён набором для осмотра — здесь осматривать нечего
+        mezo_stand.remove_tree(st_bad)   # сохранён набором для осмотра — здесь осматривать нечего
 
     # ⑩ ВСТРЕЧНЫЙ к ⑧: копия, уже лежащая контуром (①), не раскладывается заново — её
     #    собственная база и раскладка и есть предмет опыта.
@@ -280,7 +291,7 @@ def cases(tmp) -> bool:
                    f": прогон {'ПРОШЁЛ — соседей в копии нет, значит, они взяты не из неё' if green_bare else 'НЕ прошёл, это видно'}",
                    differ=True)
         if st_bare:
-            shutil.rmtree(st_bare, ignore_errors=True)   # сохранён набором для осмотра — здесь осматривать нечего
+            mezo_stand.remove_tree(st_bare)   # сохранён набором для осмотра — здесь осматривать нечего
 
         # ⑬ ВСТРЕЧНЫЙ к ⑪: соседи берутся ИЗ КОПИИ, а не откуда-то ещё. Сломанный в копии сосед
         #    обязан провалить прогон — иначе стенд нашёл бы целую проверку в другом месте.
@@ -295,7 +306,7 @@ def cases(tmp) -> bool:
                    f"<копия>/vnext/prototype {'дошла' if GREEN_ONE not in out_nb_bad else 'НЕ дошла'} до испытуемого",
                    differ=True)
         if st_nb_bad:
-            shutil.rmtree(st_nb_bad, ignore_errors=True)
+            mezo_stand.remove_tree(st_nb_bad)
 
     # критерий ④ карточки #682 — разбор исходников, а не поведение набора
     ok &= tested_choice_cases()

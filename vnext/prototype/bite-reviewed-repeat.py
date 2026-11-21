@@ -140,7 +140,7 @@ def main() -> int:
                    f"слабая {n4} против настоящей {n1} — теряет именно СНЯТОЕ накопление"
                    f" (код слабой {code4})", differ=True)
     finally:
-        shutil.rmtree(d, ignore_errors=True)
+        mezo_stand.remove_tree(d)
 
     print()
     print(f"{'✅ НАКОПЛЕНИЕ ЖЕСТОВ ПРИНЯТО' if ok else '🔴 НЕ ПРИНЯТО'} — случаев {CASES},"

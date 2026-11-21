@@ -27,6 +27,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
 import mezo_target  # noqa: E402 — испытуемое через общий выбор копии (карточка #682)
+import mezo_stand  # noqa: E402 — уборка временного каталога, которая не молчит об отказе (карточка #817)
 
 # 🪤 Здесь стояли пути ЭТОЙ машины прямо в константах, и перенос в публичный образец
 # честно отказывался: обезличить исполняемую строку значит сломать инструмент у того,
@@ -292,7 +293,7 @@ def main() -> int:
         else:
             bad.append(f"⑪ правка причины отзыва у ЖИВОГО права ПРОШЛА: код {code}")
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        mezo_stand.remove_tree(tmp)
 
     print()
     for b in bad:

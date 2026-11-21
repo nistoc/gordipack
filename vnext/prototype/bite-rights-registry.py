@@ -51,6 +51,7 @@ HERE = Path(__file__).resolve().parent
 GUARD = HERE / "guard-rights-registry.py"
 sys.path.insert(0, str(HERE))
 import mezo_paths  # noqa: E402 — путь контейнера выводится, не впечатан (записка #5096 ④)
+import mezo_stand  # noqa: E402 — уборка временного каталога, которая не молчит об отказе (карточка #817)
 CONTAINER = mezo_paths.container_root(__file__)
 
 BREAKS = {
@@ -749,7 +750,7 @@ def main() -> int:
         if copy_path:
             copy_path.unlink(missing_ok=True)
         if OK and not a.break_key:
-            shutil.rmtree(tmp, ignore_errors=True)
+            mezo_stand.remove_tree(tmp)
         else:
             print(f"📂 стенд сохранён: {tmp}")
 
