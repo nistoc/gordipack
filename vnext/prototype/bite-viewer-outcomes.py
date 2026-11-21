@@ -193,7 +193,7 @@ def main() -> int:
                        f"слабая {r.returncode} против настоящей {code2} — разница и есть"
                        " доказательство, что различает именно СВЕРКА", differ=True)
     finally:
-        shutil.rmtree(work_dir, ignore_errors=True)
+        mezo_stand.remove_tree(work_dir)
 
     print()
     print(f"{'✅ ТРИ ИСХОДА ПРИНЯТЫ' if ok else '🔴 НЕ ПРИНЯТО'} — случаев {CASES},"

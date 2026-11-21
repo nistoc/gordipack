@@ -295,8 +295,8 @@ def finish_stand(stand, keep: bool) -> None:
     if keep:
         print(f"📂 контур копии сохранён для осмотра: {stand} — уберёт срок хранения стендов")
     else:
-        import shutil
-        shutil.rmtree(stand, ignore_errors=True)
+        import mezo_stand
+        mezo_stand.remove_tree(stand)   # не убрался — строка в выводе (карточка #817)
 
 
 # ═══ НАБОР ЯДРА ПО СПИСКУ: --set core (этап Э6, карточка #680) ═══

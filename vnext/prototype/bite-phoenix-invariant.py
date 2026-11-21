@@ -145,7 +145,7 @@ def main() -> int:
                    f"запись код {r.returncode} · проверка код {code3}; встречный к ② —"
                    " иначе проверка красна на всё подряд и её перестают читать",
                    differ=True)
-        shutil.rmtree(d3, ignore_errors=True)
+        mezo_stand.remove_tree(d3)
 
         # ④ РАЗДЕЛ БЕЗ ИСТОРИИ — отдельное слово, не то же, что у правки.
         d4 = pathlib.Path(tempfile.mkdtemp(prefix="bite-invariant-4-"))
@@ -161,7 +161,7 @@ def main() -> int:
                    code4 == 1 and "БЕЗ ИСТОРИИ" in output4 and PHANTOM_ROLE in output4,
                    f"код {code4}; свести с ② значило бы искать «какую версию правили»"
                    " у раздела, у которого версий не было никогда", differ=True)
-        shutil.rmtree(d4, ignore_errors=True)
+        mezo_stand.remove_tree(d4)
 
         # ⑤ БАЗА БЕЗ ТАБЛИЦЫ ИСТОРИИ — отказ мерить, не «чисто».
         d5 = pathlib.Path(tempfile.mkdtemp(prefix="bite-invariant-5-"))
@@ -175,7 +175,7 @@ def main() -> int:
                    code5 == 2 and "нечем" in output5,
                    f"код {code5}; сказать тут «инвариант держится» — выдать бессилие"
                    " за исправность", differ=True)
-        shutil.rmtree(d5, ignore_errors=True)
+        mezo_stand.remove_tree(d5)
 
         # ⑥ ОБРАТНЫЙ ХОД: ослабляем сравнение до «есть хоть какая-то версия» —
         #    случай ② обязан позеленеть у сломанной копии.
@@ -196,9 +196,9 @@ def main() -> int:
                        code6 == 0 and code2 == 1,
                        f"слабая {code6} против настоящей {code2} — разница и есть"
                        " доказательство, что ловит именно СИЛА сравнения", differ=True)
-            shutil.rmtree(d6, ignore_errors=True)
+            mezo_stand.remove_tree(d6)
     finally:
-        shutil.rmtree(d, ignore_errors=True)
+        mezo_stand.remove_tree(d)
 
     print()
     print(f"{'✅ ПРОВЕРКА ИНВАРИАНТА ПРИНЯТА' if ok else '🔴 НЕ ПРИНЯТО'} — случаев {CASES},"

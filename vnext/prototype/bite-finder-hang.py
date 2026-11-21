@@ -75,6 +75,8 @@ import sys
 import tempfile
 import time
 
+import mezo_stand  # noqa: E402 — уборка временного каталога, которая не молчит об отказе (карточка #817)
+
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -414,7 +416,7 @@ def main() -> int:
             print(f"⛔ ИСПЫТУЕМОГО НЕТ рядом: {p} — это отказ мерить, а не «чисто»")
             return 2
     failed: list = []
-    with tempfile.TemporaryDirectory(prefix="bite-finder-hang-", ignore_cleanup_errors=True) as tmp:
+    with mezo_stand.temp_dir("bite-finder-hang-") as tmp:
         work = pathlib.Path(tmp)
         # ⛔ ПЕСОЧНИЦА ВСЕГО ДЕРЕВА ПРОЦЕССОВ — до первого дочернего процесса: поломки ⑤г и ⑤д
         # расширяют удаление, и любой вызов, ушедший со средой системы, исполнил бы его в

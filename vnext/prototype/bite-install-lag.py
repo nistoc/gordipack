@@ -26,6 +26,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import mezo_stand  # noqa: E402 — уборка временного каталога, которая не молчит об отказе (карточка #817)
+
 HERE = Path(__file__).resolve().parent
 TOOL = HERE / "guard-install-lag.py"
 
@@ -149,7 +151,7 @@ def run_cases(tool=None):
               0, ["СВЕРИТЬ НЕЧЕМ"], ["ГРАНИЦА СУЖДЕНИЯ"],
               root / "c9" / "нет-такого-каталога", install, container, tool)
     finally:
-        shutil.rmtree(root, ignore_errors=True)
+        mezo_stand.remove_tree(root)
 
 
 def selftest():
@@ -217,7 +219,7 @@ def selftest():
                 print(f"   ⛔ ждали красными {expected}, получили {got_marks}")
             print("")
         finally:
-            shutil.rmtree(root, ignore_errors=True)
+            mezo_stand.remove_tree(root)
 
     print("✅ все четыре поломки валят ровно свои случаи — случаи независимы"
           if all_ok else "⛔ САМОПРОВЕРКА ПРОВАЛИЛАСЬ")

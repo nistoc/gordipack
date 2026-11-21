@@ -157,7 +157,7 @@ class Stand:
     def clear(self) -> None:
         for d in (self.pack / "vnext" / "local", self.pack / "local",
                   self.solo / "vnext" / "local", self.solo / "local"):
-            shutil.rmtree(d, ignore_errors=True)
+            mezo_stand.remove_tree(d)
 
     def premise(self) -> None:
         """Посылка: над стендом нет чужого контура — иначе отказа ① не получить вовсе."""

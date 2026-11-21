@@ -612,7 +612,7 @@ def main() -> int:
                        differ=True)
     finally:
         for d in cleanup_dirs:
-            shutil.rmtree(d, ignore_errors=True)
+            mezo_stand.remove_tree(d)
 
     print()
     print(f"{'✅ ГАРД УБЫЛИ ПРИНЯТ' if ok else '🔴 НЕ ПРИНЯТО'} — случаев {CASES},"

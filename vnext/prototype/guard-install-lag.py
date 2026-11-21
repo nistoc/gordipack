@@ -319,7 +319,12 @@ def selftest():
             ok = False
             print(f"④ ⛔ оправдание без причины НЕ названо: {no_reason}")
     finally:
-        shutil.rmtree(temp_root, ignore_errors=True)
+        # карточка #817: отказ удаления раньше глушился — каталог с двумя копиями оставался без слова
+        try:
+            shutil.rmtree(temp_root)
+        except OSError as exc:
+            print(f"⚠️ ВРЕМЕННЫЙ КАТАЛОГ НЕ УБРАН: {temp_root} · первая причина: "
+                  f"{type(exc).__name__}: {exc}")
 
     print("")
     print("✅ самопроверка прошла: поломка валит ровно своё имя, три встречных случая на месте"

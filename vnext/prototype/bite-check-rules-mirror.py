@@ -197,7 +197,7 @@ def run_cases(live_tool: Path, porcha) -> None:
              code4 == 0 and "сошл" in out4.lower() and "НЕТ В ФАЙЛЕ" not in out4 and crlf_hits4 > 0,
              f"код {code4}; стенд несёт CRLF: байтов \\r\\n {crlf_hits4} (crlf_twin)")
     finally:
-        shutil.rmtree(stand, ignore_errors=True)
+        mezo_stand.remove_tree(stand)
 
 
 if __name__ == "__main__":

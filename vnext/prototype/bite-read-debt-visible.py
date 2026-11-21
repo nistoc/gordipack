@@ -62,12 +62,16 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402 — пути машины выводятся, не впечатаны
+import mezo_stand  # noqa: E402 — уборка временного каталога, которая не молчит об отказе (карточка #817)
 
 CHECK = (mezo_paths.container_root(__file__) / ".mezosync" / "scripts"
             / "guard-write-without-read.py")
 COMMON = mezo_paths.container_root(__file__) / ".mezosync" / "scripts" / "guard-all.py"
 
 CASES = DIFFER = 0
+# Карточка #817: каждый случай строит свою базу в своём каталоге, и убирать их было некому — три каталога
+# оставались после каждого прогона. Собираем их здесь, убирает main() в конце.
+STANDS: list = []
 
 
 def case(title, verdict, detail, differ=False):
@@ -87,6 +91,7 @@ def stand(roles) -> pathlib.Path:
     роли: список (имя, минут_назад_писала, сколько_чужих_нот_не_прочла)
     """
     d = pathlib.Path(tempfile.mkdtemp(prefix="bite-read-debt-"))
+    STANDS.append(d)
     con = sqlite3.connect(d / "mezosync.db")
     con.executescript("""
         CREATE TABLE messages (id INTEGER PRIMARY KEY, writer_role TEXT, timestamp TEXT,
@@ -269,9 +274,9 @@ def main() -> int:
                    "НЕ ПРОВЕРЯЛСЯ" not in output10,
                    f"прежняя редакция напечатала: {' ¦ '.join(s.strip() for s in output10.splitlines())[:110]} "
                    "— долг восьми ролей пропадал именно здесь", differ=True)
-        shutil.rmtree(d10, ignore_errors=True)
-    for junk in (p8.parent, p9.parent):
-        shutil.rmtree(junk, ignore_errors=True)
+    # d10 убирается при обоих исходах случая ⑩: раньше при «место не найдено» он оставался
+    for junk in (d10, p8.parent, p9.parent, *STANDS):
+        mezo_stand.remove_tree(junk)
 
     print()
     print(f"{'✅ ВИДИМОСТЬ ДОЛГА ПРИНЯТА' if ok else '🔴 НЕ ПРИНЯТО'} — случаев {CASES}, "

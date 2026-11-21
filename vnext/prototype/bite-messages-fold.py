@@ -463,7 +463,7 @@ def main() -> int:
         print(f"ИТОГ: {GREENS} из {CASES} · различающих {DIFFER}")
         return 0 if GREENS == CASES else 1
     finally:
-        shutil.rmtree(stand, ignore_errors=True)
+        mezo_stand.remove_tree(stand)
 
 
 if __name__ == "__main__":

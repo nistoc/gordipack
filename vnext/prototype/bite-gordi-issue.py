@@ -397,7 +397,7 @@ def main() -> int:
         print(f"ИТОГ: {PASSED} из {CASES} · различающих {DIFFER}")
         return 0 if PASSED == CASES else 1
     finally:
-        shutil.rmtree(stand, ignore_errors=True)
+        mezo_stand.remove_tree(stand)
 
 
 if __name__ == "__main__":

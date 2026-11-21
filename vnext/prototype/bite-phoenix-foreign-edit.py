@@ -697,7 +697,7 @@ def main():
     print("═" * 92)
     st = Stand(runner, db, workdir, env)
     results = run_cases_707(st, run_cases_read(st, run_cases_705(st, run_cases(st))))
-    shutil.rmtree(workdir, ignore_errors=True)
+    mezo_stand.remove_tree(workdir)
 
     passed = sum(ok for _, ok in results)
     failed = [m.strip() for m, ok in results if not ok]

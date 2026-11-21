@@ -104,7 +104,7 @@ def стенд(вставка: str | None, расхождение: bool = False,
                            encoding="utf-8", errors="replace", timeout=300)
         return r.returncode, (r.stdout or "") + (r.stderr or "")
     finally:
-        shutil.rmtree(d, ignore_errors=True)
+        mezo_stand.remove_tree(d)
 
 
 def main() -> int:
@@ -160,7 +160,7 @@ def main() -> int:
                    код5 == 1,
                    f"код прежней редакции {код5} против {код2} у нынешней — "
                    "разница и есть доказательство починки", differ=True)
-        shutil.rmtree(сломанный.parent, ignore_errors=True)
+        mezo_stand.remove_tree(сломанный.parent)
 
     print()
     print(f"{'✅ ГРАНИЦЫ ТЕЛА ПРАВИЛА ПРИНЯТЫ' if ok else '🔴 НЕ ПРИНЯТО'} — случаев {CASES}, "

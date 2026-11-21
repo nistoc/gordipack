@@ -60,6 +60,7 @@ import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mezo_paths  # noqa: E402
+import mezo_stand  # noqa: E402 — уборка временного каталога, которая не молчит об отказе (карточка #817)
 
 SCRIPTS = mezo_paths.container_root(__file__) / ".mezosync" / "scripts"
 TOOL = SCRIPTS / "backup-db.py"
@@ -1406,7 +1407,7 @@ def main() -> int:
         case_c8c_static_readonly()
     finally:
         if made_tmp:
-            shutil.rmtree(tmp_root, ignore_errors=True)
+            mezo_stand.remove_tree(tmp_root)
 
     print()
     ok = BAD == 0 and CASES > 0

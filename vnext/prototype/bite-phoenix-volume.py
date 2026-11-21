@@ -163,7 +163,7 @@ def main() -> int:
     print(f"{'✅ ПРОВЕРКА ОБЪЁМА ПРИНЯТА' if OK else '🔴 НЕ ПРИНЯТА'} — случаев {CASES}")
     if OK:
         import shutil
-        shutil.rmtree(tmp, ignore_errors=True)
+        mezo_stand.remove_tree(tmp)
     else:
         print(f"📂 стенд сохранён: {tmp}")
     return 0 if OK else 1

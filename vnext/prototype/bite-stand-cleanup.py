@@ -40,6 +40,8 @@ import time
 import importlib.util
 from pathlib import Path
 
+import mezo_stand  # noqa: E402 — уборка временного каталога, которая не молчит об отказе (карточка #817)
+
 # ⚡ Утилита грузится С ДИСКА, а не пересказывается: копия признака в приёмке
 # сходится с продуктом в день написания и расходится с ним молча.
 _spec = importlib.util.spec_from_file_location(
@@ -90,7 +92,7 @@ def run_probe(body, env_extra=None, helper=None):
     out = (p.stdout or "") + (p.stderr or "")
     m = re.search(r"STAND=(.+)", out)
     stand = Path(m.group(1).strip()) if m else None
-    shutil.rmtree(d, ignore_errors=True)
+    mezo_stand.remove_tree(d)
     return stand, out, p.returncode
 
 
@@ -239,7 +241,7 @@ def leave_own_temp(saved):
     root, ROOT = ROOT, None
     if root is None:
         return True
-    shutil.rmtree(root, ignore_errors=True)
+    mezo_stand.remove_tree(root)
     if Path(root).exists():          # ignore_errors молчит о занятом файле — остаток называем вслух
         print(f"RED свой временный каталог приёмки НЕ УБРАН: {root}\n"
               f"    он остался у вызывающего: найди, что его держит (открытый файл, живой процесс), "
@@ -281,7 +283,7 @@ def run_cases():
          kept and printed and "прогон провалился" in out,
          f"код {rc} · каталог на месте: {kept} · путь в выводе: {printed}")
     if st and st.exists():
-        shutil.rmtree(st, ignore_errors=True)
+        mezo_stand.remove_tree(st)
 
     # (3) падение без объявления исхода — каталог СОХРАНЁН
     st, out, rc = run_probe("raise SystemExit('упало до объявления исхода')")
@@ -291,7 +293,7 @@ def run_cases():
          f"код {rc} · каталог на месте: {kept} · "
          f"причина названа: {'да' if 'не объявлен' in out else 'НЕТ'}")
     if st and st.exists():
-        shutil.rmtree(st, ignore_errors=True)
+        mezo_stand.remove_tree(st)
 
     # (4) успех, но велено сохранять — каталог СОХРАНЁН
     st, out, rc = run_probe("sys.exit(mezo_stand.finish(0))", {"MEZO_KEEP_STANDS": "1"})
@@ -300,7 +302,7 @@ def run_cases():
          kept and "MEZO_KEEP_STANDS" in out,
          f"каталог на месте: {kept}")
     if st and st.exists():
-        shutil.rmtree(st, ignore_errors=True)
+        mezo_stand.remove_tree(st)
 
     # (5) НАРОЧНАЯ ПОЛОМКА: убирать всегда => случай (2) обязан провалиться
     broken_dir = Path(tempfile.mkdtemp(prefix="probe-broken-"))
@@ -318,9 +320,9 @@ def run_cases():
          "поломанный помощник убрал каталог даже при провале => случай (2) на нём провалился бы"
          if caught else
          "ПРИЁМКА СЛЕПА: поломанный помощник ведёт себя как целый — случай (2) ничего не доказывает")
-    shutil.rmtree(broken_dir, ignore_errors=True)
+    mezo_stand.remove_tree(broken_dir)
     if st and st.exists():
-        shutil.rmtree(st, ignore_errors=True)
+        mezo_stand.remove_tree(st)
 
     # обстановка для утилиты уборки
     sandbox = Path(tempfile.mkdtemp(prefix="probe-temp-"))
@@ -408,7 +410,7 @@ def run_cases():
              f"каталогов найдено {len(dirs)} · начал имён из своего {len(from_own)}, "
              f"из всех {len(from_all)} — полнота уборки не должна держаться памятью зовущего")
     finally:
-        shutil.rmtree(synth, ignore_errors=True)
+        mezo_stand.remove_tree(synth)
 
     # (11) ВСТРЕЧНЫЙ к (10): названо ЯВНО — берём названное, а не «всё, что нашли».
     #      Иначе указание пути ничего не значило бы, и случай (9) стал бы недостижим.
@@ -419,7 +421,7 @@ def run_cases():
          "стал бы недостижим")
 
     for d in (sandbox, tools, empty_tools):
-        shutil.rmtree(d, ignore_errors=True)
+        mezo_stand.remove_tree(d)
 
     new_cases()
     skip_cases()
@@ -795,7 +797,7 @@ def new_cases():
              f"ответил дочерний процесс: {'да' if len(seen) == 4 else 'НЕТ'} · снаружи — "
              + ("; ".join(outside) if outside else "ничего"))
     finally:
-        shutil.rmtree(work, ignore_errors=True)
+        mezo_stand.remove_tree(work)
 
 
 
@@ -823,7 +825,7 @@ def skip_cases():
                                     "sys.exit(mezo_stand.finish(2))", helper=helper)
             removed = st is not None and not st.exists()
             if st is not None and st.exists():
-                shutil.rmtree(st, ignore_errors=True)
+                mezo_stand.remove_tree(st)
             return removed and "не отказ" in out and rc == 2, out
         ok24, out24 = c24(None)
         bad24, _ = c24(broken_helper(" and not _skips_confirmed()", ""))
@@ -839,7 +841,7 @@ def skip_cases():
             st, out, rc = run_probe("sys.exit(mezo_stand.finish(2))", helper=helper)
             kept = st is not None and st.exists()
             if kept:
-                shutil.rmtree(st, ignore_errors=True)
+                mezo_stand.remove_tree(st)
             return kept and "прогон отказался мерить" in out and rc == 2, out
         ok25, out25 = c25(None)
         bad25, _ = c25(broken_helper("    return _accepted_with_skips and _exit_code == 2",
@@ -856,7 +858,7 @@ def skip_cases():
                                     "sys.exit(mezo_stand.finish(1))", helper=helper)
             kept = st is not None and st.exists()
             if kept:
-                shutil.rmtree(st, ignore_errors=True)
+                mezo_stand.remove_tree(st)
             return kept and "прогон провалился" in out and rc == 1, out
         ok26, out26 = c26(None)
         bad26, _ = c26(broken_helper("_accepted_with_skips and _exit_code == 2",
@@ -867,7 +869,7 @@ def skip_cases():
              f"на целой: стенд сохранён и назван провалом · на поломке "
              f"{'провалился, как должен' if not bad26 else 'ПРОШЁЛ — приёмка слепа'}")
     finally:
-        shutil.rmtree(work, ignore_errors=True)
+        mezo_stand.remove_tree(work)
 
 
 if __name__ == "__main__":

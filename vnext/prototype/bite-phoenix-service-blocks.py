@@ -29,6 +29,7 @@
 ④–⑨ остаться зелёными. Порча, красящая ВСЁ, не доказывает, что случаи смотрят на предмет.
 """
 import argparse
+import atexit
 import hashlib
 import re
 import shutil
@@ -242,6 +243,9 @@ def main():
         sys.exit(f"⛔ ОПЫТ НЕ ПОСТАВЛЕН: инструмента нет — {tool}")
 
     workdir = tempfile.mkdtemp(prefix="bite519-")
+    # Карточка #817: отказ опыта ниже выходит через sys.exit — мимо уборки в конце main(), и пустой
+    # каталог оставался. Уборку ставим сразу, на выход процесса; чего убрать не смогла — назовёт в выводе.
+    atexit.register(mezo_stand.remove_tree, workdir)
     # ⚡ КАРТОЧКА #613: испытуемые тянутся к СТЕНДУ, а не к контуру вызывающего — иначе
     # save-phoenix.py, проверяя объявление о правке (lease.check), подхватит MEZO_CONTAINER
     # вызывающего и станет судить о живом контуре, даже работая с копией базы.
@@ -361,7 +365,7 @@ def main():
             (tool.with_name("_порча_519_save-phoenix.py")).unlink()
         except OSError:
             pass
-    shutil.rmtree(workdir, ignore_errors=True)
+    mezo_stand.remove_tree(workdir)
 
     print("─" * 92)
     summary = f"прошло {passed} · пало {failed}"
