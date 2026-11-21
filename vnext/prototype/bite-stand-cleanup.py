@@ -625,8 +625,13 @@ def new_cases():
                 out, _ = janitor(sb, tools, "--prefix", "jprobe-link-", script=script)
                 return "освободит 0.00 ГБ" in out, out
             ok, out = c20(JANITOR)
+            # отсечение соединений стоит в mezo_stand.py дважды: у размера стенда и у счёта остатка после
+            # уборки (карточка #817). Ломаем то, что у размера, — место берём вместе с заголовком его цикла
             bad, _ = c20(broken_copy(
-                work, "        dirs[:] = [x for x in dirs if not _is_link_path(os.path.join(top, x))]\n", ""))
+                work,
+                "    for top, dirs, files in os.walk(p, onerror=lambda _e: None):\n"
+                "        dirs[:] = [x for x in dirs if not _is_link_path(os.path.join(top, x))]\n",
+                "    for top, dirs, files in os.walk(p, onerror=lambda _e: None):\n"))
             line = next((s.strip() for s in out.splitlines() if "освободит" in s), "строки нет")
             case("(20) размер стенда без файлов за соединением каталогов: стенд 1 КБ, снаружи 30 МБ — "
                  "показ «освободит 0.00 ГБ»; поломка «подсчёт проходит соединение» проваливает случай",
