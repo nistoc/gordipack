@@ -188,10 +188,15 @@ public static class Program
     /// <summary>Имя аргумента как флаг командной строки: «next_part» → «--next-part» (обратное правило — в RunOnceAsync).</summary>
     private static string Flag(string argName) => "--" + argName.Replace('_', '-');
 
-    /// <summary>Первые строки договора: их печатают и tools, и справка, расходиться им не с чем.</summary>
-    private static void AppendContractLines(StringBuilder sb, Contract contract)
+    /// <summary>
+    /// Первые строки договора: их печатают и tools, и справка, расходиться им не с чем. В справке под заголовком «договор:» первая строка
+    /// начинается словом «файл» (иначе заголовок и строка повторяют друг друга); режим tools печатает прежнюю «договор …».
+    /// </summary>
+    private static void AppendContractLines(StringBuilder sb, Contract contract, bool inHelp = false)
     {
-        sb.AppendLine($"договор ................ {contract.Path}");
+        sb.AppendLine(inHelp
+            ? $"файл договора .......... {contract.Path}"
+            : $"договор ................ {contract.Path}");
         sb.AppendLine($"версия ................. {contract.Version} (этап {contract.Stage})");
         sb.AppendLine($"отпечаток договора ..... {contract.Fingerprint}");
         sb.AppendLine($"отпечаток перечня ...... {contract.ToolsFingerprint()}");
@@ -218,6 +223,21 @@ public static class Program
         return 0;
     }
 
+    /// <summary>Блок «общие ключи службы:» — ТОЛЬКО из раздела wall_options договора; нет раздела — нет блока. Строк без описания не бывает: описание из договора.</summary>
+    private static void AppendWallOptions(StringBuilder sb, Contract contract)
+    {
+        if (contract.WallOptions.Count == 0) return;
+        sb.AppendLine("общие ключи службы:");
+        foreach (var o in contract.WallOptions)
+        {
+            var head = o.Kind == WallOption.KindValue && !string.IsNullOrEmpty(o.Value) ? $"{o.Name} {o.Value}" : o.Name;
+            var env = string.IsNullOrEmpty(o.Env) ? "переменной среды нет" : $"переменная среды {o.Env}";
+            sb.AppendLine($"  {head} · {env}");
+            sb.AppendLine("      " + o.Note.ReplaceLineEndings(" "));
+        }
+        sb.AppendLine();
+    }
+
     private static string GeneralHelp(Contract contract)
     {
         var sb = new StringBuilder();
@@ -231,8 +251,9 @@ public static class Program
         foreach (var f in RunFlags)
             sb.AppendLine($"  {f.Name,-8} {f.Purpose}");
         sb.AppendLine();
+        AppendWallOptions(sb, contract);
         sb.AppendLine("договор:");
-        AppendContractLines(sb, contract);
+        AppendContractLines(sb, contract, inHelp: true);
         sb.AppendLine();
         sb.AppendLine($"вызовы ({contract.Tools.Count}): чтение или запись · имя · заголовок");
         foreach (var t in contract.Tools)

@@ -40,6 +40,11 @@ prototype_install_dir файла путей контура (просматрив
   совпало ......... 0  все пары записи сверены и равны; названо число сверенных файлов
   4 — отказ по аргументам. Если что-то не сверено, а что-то расходится, исход «расходится», и
   несверенное всё равно названо.
+
+ЧТО СВЕРЯЕТСЯ. В любом исходе, до чтения записи, печатается ОДНА строка «сверяется: база … · каталог скриптов … ·
+второй каталог — …» (второй каталог — путь, «не объявлен» или «нет (причина)»). База берётся по --db или боевая; каталог
+скриптов всегда из контура группы; второй каталог — по файлу путей рядом с базой. По копии базы вне контура строка
+показывает и копию, и каталоги контура: так видно, что сверено с чем.
 """
 from __future__ import annotations
 
@@ -62,7 +67,10 @@ RECORD_BOUNDARY = ("Граница записи: запись хранит от�
                    "(update-tools.py --accept-merge; в его плане файл помечен «ПРАВЛЕН У ТЕБЯ»), оставляет в записи "
                    "отпечаток версии пакета, с которой сводили, и здесь даёт ту же строку «тело изменено», что и "
                    "порча файла: отличить одно от другого команде нечем.")
-HELP = (__doc__ or "").rstrip() + "\n\n" + BOUNDARY + "\n" + RECORD_BOUNDARY + "\n"
+WAL_BOUNDARY = ("База в режиме WAL: читающее соединение оставляет рядом два служебных файла (-shm и -wal); сам файл базы при "
+                "этом не меняется ни байтом. Параметра immutable команда не ставит: такая база читалась бы без учёта записей, "
+                "ещё не слитых в неё.")
+HELP = (__doc__ or "").rstrip() + "\n\n" + BOUNDARY + "\n" + RECORD_BOUNDARY + "\n" + WAL_BOUNDARY + "\n"
 
 
 def nothing_to_check(reason: str) -> int:
@@ -174,7 +182,16 @@ def main(argv: list[str]) -> int:
     except SystemExit as e:         # контейнер не найден: mezo_paths отказывает текстом
         why = str(e.code).strip().splitlines()[0] if e.code else "контейнер группы не найден"
         return nothing_to_check(f"хранилище не читается: путь к нему не определён ({why})")
-    print(f"хранилище ... {db}")
+    # Что сверяется — ОДНА строка в любом исходе, до чтения записи: база — какую назвали (или боевая), каталоги — как они есть.
+    # База с --db может лежать вне контура, а каталог скриптов всегда берётся из контура: строка называет оба места, чтобы
+    # сверка по чужой копии базы не читалась как сверка своего контура.
+    second_dir, second_note = upd.second_install_dir(db)
+    if second_dir is not None and second_dir.resolve() == tools.resolve():
+        second_dir, second_note = None, "ключ второго каталога указывает на каталог рабочих скриптов"
+    elif second_dir is not None and upd.inside(second_dir, upd.local_dir_of(db)):
+        second_dir, second_note = None, "ключ второго каталога указывает внутрь каталога местного"
+    second_text = str(second_dir) if second_dir is not None else ("не объявлен" if not second_note else f"нет ({second_note})")
+    print(f"сверяется: база {db} · каталог скриптов {tools} · второй каталог — {second_text}")
 
     raw, why = read_record(db)
     if why:
@@ -183,13 +200,6 @@ def main(argv: list[str]) -> int:
     if why:
         return nothing_to_check(why)
 
-    second_dir, second_note = upd.second_install_dir(db)
-    if second_dir is not None and second_dir.resolve() == tools.resolve():
-        second_dir, second_note = None, "ключ второго каталога указывает на каталог рабочих скриптов"
-    elif second_dir is not None and upd.inside(second_dir, upd.local_dir_of(db)):
-        second_dir, second_note = None, "ключ второго каталога указывает внутрь каталога местного"
-    print(f"каталоги .... скрипты — {tools}")
-    print(f"              второй — {second_dir if second_dir is not None else 'нет (' + (second_note or 'не объявлен') + ')'}")
     second_keys = [k for k in pairs if upd.is_second_rel(pathlib.Path(k))]
     print(f"запись ...... пар {len(pairs)} (рабочие скрипты — {len(pairs) - len(second_keys)}, "
           f"второй каталог — {len(second_keys)})")

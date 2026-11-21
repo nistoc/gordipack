@@ -994,6 +994,53 @@ def main():
                   + f" · разбор: python {words_tool.as_posix()}")
         counted("память: прежние слова")
 
+    # ⑰ СВЕРКА ТЕЛ УСТАНОВЛЕННЫХ ФАЙЛОВ (карточка #821). Команда verify-install.py (карточка #819) берёт каждую пару записи
+    # установки, считает отпечаток тела файла на диске и сравнивает с записанным. Запись хранит отпечаток версии ПАКЕТА, поэтому
+    # правка контура, принятая установщиком (--accept-merge), читается командой как порча: провал проверки сразу сломал бы общий
+    # прогон соседям с такими правками. Поэтому исход печатается СТРОКОЙ, как замеры выше, а код выхода и число провалов не
+    # трогает (check(…, ok=False) здесь нет намеренно). Ни одна строка, кроме исхода «совпало», не несёт знака прохода и слов
+    # «совпало»/«прошло»: «не сверено» и «не выполнено» — не ноль и не «прошло».
+    verify_tool = tool("verify-install.py")
+    if not skipped("verify-install"):
+        v_code, v_out, v_why = None, "", ""
+        if not verify_tool.exists():
+            v_why = f"команда verify-install.py рядом не найдена ({verify_tool})"
+        else:
+            try:
+                v_run = subprocess.run([sys.executable, str(verify_tool), "--db", str(DB)],
+                                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+                v_code, v_out = v_run.returncode, (v_run.stdout or "")
+            except subprocess.TimeoutExpired:
+                v_why = "команда не ответила за 60 с"
+            except OSError as e:
+                v_why = f"команда не запустилась ({type(e).__name__})"
+        v_lines = [x.strip() for x in v_out.splitlines() if x.strip()]
+        v_tail = v_lines[-1] if v_lines else ""
+        v_renamed = [x for x in v_lines if x.startswith("имя другое, тело то же:")]
+        v_call = f"python {verify_tool.as_posix()} --db {Path(DB).as_posix()}"
+        if v_code == 0:
+            v_done = re.search(r"сверено файлов: (\d+)", v_tail)
+            if v_renamed:
+                print(f"⚠️ сверка тел: тела совпали, но {len(v_renamed)} файлов лежат под другим именем — файла под именем записи нет"
+                      f" · разбор: {v_call}")
+            elif v_done is None:
+                # код 0 без строки итога (пустой или подменённый файл команды): сверки не было, знак прохода был бы ложным
+                print(f"сверка тел НЕ ВЫПОЛНЕНА: команда вернула код 0, но строки с числом сверенных файлов в её выводе нет"
+                      f" — это не ноль · вызвать вручную: {v_call}")
+            else:
+                print(f"✅ сверка тел установленных файлов: совпало — сверено файлов: {v_done.group(1)}")
+        elif v_code == 1:
+            tail = v_tail.split("РАСХОДИТСЯ — ", 1)[-1]
+            print(f"⚠️ сверка тел: РАСХОДИТСЯ — {tail} · это не провал общего прогона: правка контура, принятая установщиком, читается так же"
+                  f" · разбор: {v_call}")
+        elif v_code == 3:
+            reason = v_tail.split("НЕЧЕМ СВЕРЯТЬ — ", 1)[-1]
+            print(f"⚠️ сверка тел: нечем сверять — {reason}")
+        else:
+            why_not = v_why or f"команда вернула код {v_code}"
+            print(f"сверка тел НЕ ВЫПОЛНЕНА: {why_not} — это не ноль · вызвать вручную: {v_call}")
+        counted("verify-install")
+
     # ⑯ ОБЪЁМ ПАМЯТИ — проверка регресса «память → запросы» (план 3 этап 7, 14.08).
     # Разовая чистка без проверки отрастает за месяц: сосуд наполняется обратно, и никто
     # не замечает. ИНФОРМАЦИОННЫЙ: объём сам по себе не грех (роль честно наживает уроки),

@@ -64,13 +64,13 @@ python -m pytest tests/test_schema.py --update-snapshots    # схема изм�
 ```bash
 cd <ws>
 python pack/scripts/init-group.py --name ci --path "<ws>/.mezosync" --domain data-platform --roles coord core stud taxo
-python .mezosync/scripts/guard-all.py                       # «ВСЕ ГАРДЫ ЗЕЛЁНЫЕ (40 проверок)»
+python .mezosync/scripts/guard-all.py                       # «ВСЕ ГАРДЫ ЗЕЛЁНЫЕ (41 проверок)»
 python .mezosync/scripts/read-phoenix.py --role COORD
 python .mezosync/scripts/rules-from-pack.py --summary --source <ws>/pack
 python pack/vnext/prototype/bite-fresh-circuit.py           # приёмка сборки с нуля, ≈40 с
 python pack/vnext/prototype/bite-core-fixture.py            # «ИТОГ: 16/16», ≈7 с
 python pack/vnext/prototype/bite-db-q.py                    # одна приёмка
-python pack/vnext/prototype/bite-all.py --set core          # 62 приёмки против «было» из core-bites.txt, ≈5 мин
+python pack/vnext/prototype/bite-all.py --set core          # 63 приёмки против «было» из core-bites.txt; ≈5 мин до этапа Э3 + ≈11 мин новой bite-guard-verify-line.py
 ```
 
 Node:

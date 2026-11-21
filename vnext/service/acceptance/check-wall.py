@@ -74,8 +74,14 @@
 копируются в рабочий каталог, заменяется одна названная строка (якорь обязан найтись ровно один раз), копия собирается заново (dotnet build -m:1,
 сеть закрыта), случаи М1–М7 идут на собранной копии, имена упавших сверяются с ожидаемыми. Ключ --only-e3p2 судит один этот раздел.
 
+Карточка 821 (договор 2.2.0, этап Э3, предмет П4) добавила раздел «Э3-П4»: поле stage договора и справка (Ч1) · общие ключи службы в справке из
+договора, две переменные среды (Ч2) · код и договор называют одни и те же общие ключи в обе стороны, кривые записи отвергает разбор (Ч3) ·
+строка под заголовком «договор:» начинается словом «файл», режим tools прежний (Ч4) · ответ читающего инструмента без числа строк (Ч5) ·
+одно чтение версии на вызов (Ч6) · договор поднят аддитивно, отпечаток перечня вызовов прежний (Ч7). Нарочные поломки ЛЧ1–ЛЧ3 делаются в коде
+службы на пересобранной копии (ЛЧ1 → ровно Ч2, ЛЧ2 → ровно Ч5, ЛЧ3 → ровно Ч6). Ключ --only-e3p4 судит один этот раздел.
+
 Исход: 0 — все машинные критерии прошли; 1 — хоть один провалился; 2 — проверять было нечем;
-3 — сборка старше исходников, судить её нельзя (пересобрать и запустить снова). С ключом --only-e3p1 или --only-e3p2 такая сборка
+3 — сборка старше исходников, судить её нельзя (пересобрать и запустить снова). С ключом --only-e3p1, --only-e3p2 или --only-e3p4 такая сборка
 судится как СТАРАЯ (прогон «до»): провал остаётся кодом 1, а проход отдаётся кодом 3, и итоговая строка называет сборку старой.
 """
 import argparse
@@ -2516,8 +2522,8 @@ def e3p2_write(db, sql, params=()):
     """Единственное место, где приёмка пишет в базу этого раздела: только в КОПИИ внутри своего рабочего каталога."""
     import sqlite3
     full = os.path.abspath(db).replace("\\", "/")
-    if "/%s/" % E3P2_DIR not in full:
-        raise RuntimeError("приёмка отказывается писать в базу вне своего каталога %s: %s" % (E3P2_DIR, db))
+    if "/%s/" % E3P2_DIR not in full and "/%s/" % E3P4_DIR not in full:
+        raise RuntimeError("приёмка отказывается писать в базу вне своего каталога %s или %s: %s" % (E3P2_DIR, E3P4_DIR, db))
     con = sqlite3.connect(db, timeout=60)
     try:
         n = con.execute(sql, params).rowcount
@@ -3187,6 +3193,502 @@ def cases_e3p2(args, work, manifest, contract_doc, carg, v6):
         v6.add("816-" + key, failed == expected, title, "\n".join(lines))
 
 
+# ═══════════════════════════════════════ карточка 821 (этап Э3, предмет П4): поле stage, общие ключи службы в справке из договора,
+#                                          ответ читающего инструмента без числа строк, одно чтение версии на вызов
+
+E3P4_DIR = "e3-p4"
+E3P4_BASE_COMMIT = "cb8a730"           # main пакета до этого предмета: от него берётся «прежний договор» (случай Ч7)
+E3P4_STAGE = "E3"                      # значение поля stage после этого предмета — РУКОЙ, из договора его не берём
+E3P4_VERSION = "2.2.0"                 # версия договора после этого предмета — РУКОЙ
+E3P4_OLD_VERSION = "2.1.0"             # версия договора в commit cb8a730
+E3P4_NAMES = ["--contract", "--contours", "--read-only", "GORDI_CONTRACT", "GORDI_CONTOURS"]   # что обязана назвать справка (Ч2)
+E3P4_BLOCK_HEADER = "общие ключи службы:"
+E3P4_MARK_NOCOUNT = "нет строки с числом строк"      # причина «нечем проверить» у ответа читающего инструмента без числа строк (Ч5)
+E3P4_COUNT_PATHS = E3P2_TOOLING_PATHS + ["judge.rules", "judge.rules_active", "judge.rules_revoked"]   # поля, зависящие от чтения (Ч5)
+
+# Нарочные поломки предмета П4: В КОДЕ СЛУЖБЫ, на копии исходников, с пересборкой. Якорь — одна строка исходника, ровно один раз.
+# Для каждой — названы случаи, которые обязаны упасть, и ТОЛЬКО они.
+E3P4_ANCHOR_NOTE = "            sb.AppendLine(\"      \" + o.Note.ReplaceLineEndings(\" \"));"
+E3P4_ANCHOR_NOCOUNT = ('            return Fail("полноту ответа проверить нечем: в выводе читающего инструмента нет строки с числом строк '
+                       '(установленная копия db-q.py старше?)");')
+E3P4_ANCHOR_VERSION_FIELD = "    private readonly Manifest _manifest = manifest;"
+E3P4_ANCHOR_VERSION_USE = "contour.Id, install.Version, null, null,"
+E3P4_BREAKS = [
+    ("ЛЧ1", "строка об общем ключе из кода, а не из договора: описание ключа --read-only напечатано литералом", "GordiWall/Program.cs",
+     [(E3P4_ANCHOR_NOTE, "            sb.AppendLine(\"      \" + (o.Name == \"--read-only\" ? @@LITERAL@@ : o.Note.ReplaceLineEndings(\" \")));")],
+     {"Ч2"}),
+    ("ЛЧ2", "число строк служба подставляет сама: при ответе без строки с числом строк берётся число разобранных строк", "GordiWall/ManifestFields.cs",
+     [(E3P4_ANCHOR_NOCOUNT, "            declared = lines.Count - 1;")],
+     {"Ч5"}),
+    ("ЛЧ3", "версия запоминается на процесс: общее поле tooling_version берётся из памяти, а не из записи этого вызова", "GordiWall/ToolRunner.cs",
+     [(E3P4_ANCHOR_VERSION_FIELD, E3P4_ANCHOR_VERSION_FIELD + "\n    private string? _frozenVersion;"),
+      (E3P4_ANCHOR_VERSION_USE, "contour.Id, _frozenVersion ??= install.Version, null, null,")],
+     {"Ч6"}),
+]
+
+
+def e3p4_ctx_dirs(ctx, tag):
+    d = os.path.join(ctx["work"], tag)
+    if not os.path.isdir(d):
+        os.makedirs(d)
+    return d
+
+
+def e3p4_help(ctx, contract_path):
+    """Общая справка службы по договору: (код, текст, не уложился ли). Манифест контуров справке не нужен."""
+    code, out, _, to = run_cli(ctx["exe"], ["help", "--contract", contract_path])
+    return code, out, to
+
+
+def e3p4_doc_copy(ctx, tag, mutate):
+    """Копия договора с правкой; отдаёт путь. Правка — функция над разобранным документом."""
+    import copy
+    doc = copy.deepcopy(read_json(ctx["contract"]))
+    mutate(doc)
+    p = os.path.join(e3p4_ctx_dirs(ctx, tag), "contract-%s.json" % tag)
+    write_json(p, doc)
+    return p
+
+
+def e3p4_stage_in_help(text):
+    """Значение из строки справки «версия … (этап …)»; нет такой строки — None."""
+    import re
+    for line in text.splitlines():
+        if line.startswith("версия"):
+            m = re.search(r"\(этап (.*)\)\s*$", line)
+            return m.group(1) if m else None
+    return None
+
+
+def e3p4_c1(ctx):
+    """Ч1 (②): поле stage договора — E3, и справка печатает ЕГО значение; встречный: копия договора с другим значением — справка другая."""
+    doc = read_json(ctx["contract"])
+    stage = doc["contract"].get("stage")
+    notes = []
+    if stage != E3P4_STAGE:
+        notes.append("в договоре stage = %r, ждали %r" % (stage, E3P4_STAGE))
+    code, out, to = e3p4_help(ctx, ctx["contract"])
+    if to or code != 0:
+        return False, "общая справка не получена: код %s, не уложилась в %d с: %s" % (code, HELP_LIMIT_S, to)
+    shown = e3p4_stage_in_help(out)
+    if shown != stage:
+        notes.append("справка печатает этап %r, в договоре %r" % (shown, stage))
+    probe = "E-проба-П4"
+    p = e3p4_doc_copy(ctx, "c1", lambda d: d["contract"].__setitem__("stage", probe))
+    c2, out2, to2 = e3p4_help(ctx, p)
+    shown2 = e3p4_stage_in_help(out2)
+    if to2 or c2 != 0 or shown2 != probe:
+        notes.append("встречный: в копии договора stage=%r, справка печатает %r (код %s)" % (probe, shown2, c2))
+    if shown2 == shown:
+        notes.append("встречный: справка по копии не отличается от справки по целому договору — случай ничего не доказывает")
+    detail = "договор: stage %r · справка: %r · копия с %r → справка %r\n" % (stage, shown, probe, shown2)
+    detail += "\n".join(notes) if notes else "значение stage из договора в строке «версия … (этап …)»; копия печатает своё"
+    return not notes, detail
+
+
+def e3p4_options(doc):
+    return ((doc.get("wall_options") or {}).get("options")) or []
+
+
+def e3p4_c2(ctx):
+    """Ч2 (③): общая справка называет три общих ключа и две переменные среды; текст берётся из договора:
+    описание, изменённое в копии договора, меняет в справке ровно одну строку."""
+    doc = read_json(ctx["contract"])
+    opts = e3p4_options(doc)
+    notes = []
+    if not opts:
+        notes.append("в договоре нет раздела wall_options с записями: справке не из чего печатать блок")
+    code, out, to = e3p4_help(ctx, ctx["contract"])
+    if to or code != 0:
+        return False, "общая справка не получена: код %s, не уложилась: %s" % (code, to)
+    block = help_section(out, E3P4_BLOCK_HEADER)
+    if block is None:
+        notes.append("в общей справке нет блока «%s»" % E3P4_BLOCK_HEADER)
+        block = []
+    body = "\n".join(block)
+    missing = [n for n in E3P4_NAMES if n not in body]
+    if block and missing:
+        notes.append("в блоке не названы: %s" % ", ".join(missing))
+    for o in opts:
+        b = arg_block(block, o["name"])
+        if b is None:
+            notes.append("у ключа %s нет строки в блоке" % o["name"])
+            continue
+        if o.get("env") and o["env"] not in b[0]:
+            notes.append("у ключа %s в строке нет переменной среды %s" % (o["name"], o["env"]))
+        if o.get("note") and squash(o["note"]) not in squash("\n".join(b)):
+            notes.append("у ключа %s нет описания из договора" % o["name"])
+    # встречный: описание КАЖДОГО ключа по очереди изменено в копии договора — в справке меняется ровно оно (у --read-only
+    # в договоре нет переменной среды, и литерал вместо текста из договора в коде прятался бы там: поломка ЛЧ1)
+    probe = "ПРОБА-П4-описание изменено в копии договора"
+    changed_lines = []
+    victims = [o["name"] for o in opts]
+    if not victims:
+        notes.append("встречный: в договоре нет ни одного ключа, менять нечего")
+    for index, victim in enumerate(victims):
+        def mutate(d, index=index):
+            d["wall_options"]["options"][index]["note"] = probe
+        p = e3p4_doc_copy(ctx, "c2-%d" % index, mutate)
+        c2, out2, to2 = e3p4_help(ctx, p)
+        block2 = help_section(out2, E3P4_BLOCK_HEADER) if not to2 and c2 == 0 else None
+        if block2 is None:
+            notes.append("встречный (%s): справка по копии договора не напечатала блок" % victim)
+            continue
+        diff = [i for i, (x, y) in enumerate(zip(block, block2)) if x != y]
+        changed_lines.append(len(diff))
+        if len(block) != len(block2) or len(diff) != 1 or block2[diff[0]].strip() != probe:
+            notes.append("встречный: после правки описания ключа %s в блоке изменилось не ровно одно описание "
+                         "(строк было %d, стало %d, изменённых %d)" % (victim, len(block), len(block2), len(diff)))
+    detail = "ключей в договоре %d · строк в блоке %d · не названо из пяти имён: %s · встречные (правка описания каждого ключа): изменено строк блока %s\n" % (
+        len(opts), len(block), ", ".join(missing) or "ничего", changed_lines or "—")
+    detail += "\n".join(notes) if notes else "все пять имён названы, описания из договора, правка описания в копии меняет ровно одну строку"
+    return not notes, detail
+
+
+def e3p4_scan_program(src_dir):
+    """Какие общие ключи и переменные среды читает код: имена в вызовах Take(args, "…"), TakeSwitch(args, "…") и GetEnvironmentVariable("GORDI_…").
+    Ищется в Program.cs; ключ режима run (--json) назван константой, не литералом, и в счёт не входит."""
+    import re
+    path = os.path.join(src_dir, "Program.cs")
+    text = io.open(path, encoding="utf-8").read()
+    keys = set(re.findall(r'\bTake(?:Switch)?\(args,\s*"(--[A-Za-z0-9-]+)"\)', text))
+    envs = set(re.findall(r'GetEnvironmentVariable\("(GORDI_[A-Z0-9_]+)"\)', text))
+    return keys, envs, text.count("\n")
+
+
+def e3p4_compare_code_contract(keys, envs, doc):
+    """Расхождение в любую сторону — список слов с именем."""
+    opts = e3p4_options(doc)
+    names = set(o.get("name") for o in opts)
+    declared_env = set(o["env"] for o in opts if o.get("env"))
+    out = []
+    out += ["читается кодом, в договоре не объявлен ключ %s" % k for k in sorted(keys - names)]
+    out += ["объявлен в договоре ключ %s, кодом не читается" % k for k in sorted(names - keys)]
+    out += ["читается кодом, в договоре не объявлена переменная среды %s" % k for k in sorted(envs - declared_env)]
+    out += ["объявлена в договоре переменная среды %s, кодом не читается" % k for k in sorted(declared_env - envs)]
+    return out
+
+
+E3P4_BAD_OPTIONS = [
+    ("пустое имя", "пустое имя", lambda o: o[0].__setitem__("name", "")),
+    ("повтор имени", "повторено", lambda o: o[1].__setitem__("name", o[0]["name"])),
+    ("незнакомый kind", "kind", lambda o: o[0].__setitem__("kind", "flag")),
+    ("value у switch", "value", lambda o: o[2].__setitem__("value", "<путь>")),
+]
+
+
+def e3p4_c3(ctx):
+    """Ч3 (решение В): код и договор называют одни и те же общие ключи и переменные среды, в обе стороны.
+    Встречные: копия договора без одной записи и копия с лишней записью; кривые записи разбор договора отвергает с причиной."""
+    import copy
+    doc = read_json(ctx["contract"])
+    keys, envs, nlines = e3p4_scan_program(ctx["src_dir"])
+    notes = []
+    if not keys or not envs:
+        notes.append("в коде не найдено ни одного ключа или переменной среды: сверять нечего")
+    base = e3p4_compare_code_contract(keys, envs, doc)
+    notes += base
+    # встречный (а): в копии договора нет одной записи — сверка называет её ключ и переменную среды
+    opts = e3p4_options(doc)
+    gone_name = "--contours"
+    d_a = copy.deepcopy(doc)
+    if d_a.get("wall_options"):
+        d_a["wall_options"]["options"] = [o for o in d_a["wall_options"]["options"] if o.get("name") != gone_name]
+    a = e3p4_compare_code_contract(keys, envs, d_a)
+    if not any(gone_name in x for x in a) or not any("GORDI_CONTOURS" in x for x in a):
+        notes.append("встречный (копия без записи %s): сверка не назвала ни ключ, ни переменную среды: %s" % (gone_name, a))
+    # встречный (б): лишняя запись — сверка называет её
+    d_b = copy.deepcopy(doc)
+    if d_b.get("wall_options") is not None:
+        d_b["wall_options"]["options"].append({"name": "--stand-extra", "kind": "switch", "env": "GORDI_STAND_EXTRA",
+                                               "note": "нарочная лишняя запись приёмки"})
+    b = e3p4_compare_code_contract(keys, envs, d_b)
+    if not any("--stand-extra" in x for x in b) or not any("GORDI_STAND_EXTRA" in x for x in b):
+        notes.append("встречный (копия с лишней записью): сверка не назвала лишний ключ и переменную среды: %s" % b)
+    # кривые записи: разбор договора отказывает, причина названа
+    refusals = []
+    for label, word, mutate in E3P4_BAD_OPTIONS:
+        d = copy.deepcopy(doc)
+        if not d.get("wall_options"):
+            notes.append("разбор «%s»: в договоре нет раздела wall_options" % label)
+            continue
+        mutate(d["wall_options"]["options"])
+        p = os.path.join(e3p4_ctx_dirs(ctx, "c3"), "contract-bad-%d.json" % len(refusals))
+        write_json(p, d)
+        rc, err = load_refusal(ctx["exe"], p, ctx["contours"])
+        refusals.append("%s: код %s" % (label, rc))
+        if rc != 4 or "договор не читается" not in err or "wall_options" not in err or word not in err:
+            notes.append("разбор «%s»: ждали код 4 и причину со словами «wall_options» и «%s», в ответе код %s: %s" % (
+                label, word, rc, one_line(err)[:150]))
+    detail = ("код читает ключи %s и переменные %s (строк в Program.cs %d)\nв договоре ключей %d · расхождений кода и договора: %d · "
+              "встречные: без записи — названо %d, с лишней записью — названо %d · кривых записей отвергнуто: %s\n" % (
+                  sorted(keys), sorted(envs), nlines, len(opts), len(base), len(a), len(b), "; ".join(refusals) or "ни одной"))
+    detail += "\n".join(notes) if notes else "код и договор называют одно и то же в обе стороны; встречные и кривые записи названы"
+    return not notes, detail
+
+
+def e3p4_c4(ctx):
+    """Ч4 (④): под заголовком «договор:» общей справки первая строка начинается не словом «договор»; режим tools заголовка не печатает,
+    его строки прежние: первая начинается словом «договор», три следующие совпадают с теми, что в справке."""
+    code, out, to = e3p4_help(ctx, ctx["contract"])
+    if to or code != 0:
+        return False, "общая справка не получена: код %s" % code
+    notes = []
+    sect = help_section(out, "договор:")
+    if not sect:
+        return False, "в общей справке нет раздела под заголовком «договор:»"
+    first = sect[0].strip().split()
+    if not first or first[0] != "файл":
+        notes.append("первая строка под заголовком «договор:» начинается словом «%s», ждали «файл»: %s" % (first[0] if first else "—", sect[0].strip()[:80]))
+    if any(l.strip().startswith("договор") for l in sect):
+        notes.append("под заголовком «договор:» есть строка, начинающаяся словом «договор»")
+    tc, tools_text, _, tto = run_cli(ctx["exe"], ["tools", "--contract", ctx["contract"], "--contours", ctx["contours"]])
+    t_lines = [l.strip() for l in tools_text.splitlines()]
+    if tto or tc != 0 or not t_lines or not t_lines[0].startswith("договор "):
+        notes.append("встречный: режим tools должен начинать вывод строкой «договор …», а начинает: %s" % (t_lines[0][:60] if t_lines else "пусто"))
+    shared = tools_contract_lines(tools_text)
+    stripped = set(l.strip() for l in sect)
+    lacking = [k for k, v in shared.items() if v not in stripped]
+    if len(shared) != 3 or lacking:
+        notes.append("встречный: строки версии и отпечатков в справке и в tools не те же: %s" % (", ".join(lacking) or "в tools их нет"))
+    detail = "первая строка раздела: %s\nпервая строка tools: %s\n" % (sect[0].strip()[:80], t_lines[0][:60] if t_lines else "пусто")
+    detail += "\n".join(notes) if notes else "под заголовком начинается словом «файл»; tools прежний; три общие строки те же"
+    return not notes, detail
+
+
+def e3p4_c5(ctx):
+    """Ч5 (⑤, решение Д): читающий инструмент отдал имена столбцов и строку значений БЕЗ строки с числом строк — у contour_info каждое
+    поле, зависящее от этого чтения, «нечем проверить» с причиной, где названо отсутствие строки с числом строк; общее поле версии — пустая строка."""
+    stub = e3p2_stub_dbq(ctx, "c5", "import sys\nsys.stdout.write('value\\nabc\\n')\n")
+    db, _ = e3p2_base(ctx, "c5")
+    mp = e3p2_manifest(ctx, "c5", storage=db, runtime=stub)
+    s, t = e3p2_serve(ctx, mp)
+    notes = []
+    if s.get("outcome") != "passed":
+        notes.append("исход %s, ждали passed" % s.get("outcome"))
+    seen = 0
+    first = ""
+    for p in E3P4_COUNT_PATHS:
+        f = e3p2_field(s, p)
+        if f is None:
+            notes.append("%s: поля в ответе нет" % p)
+            continue
+        seen += 1
+        first = first or (f.get("reason") or "")
+        if f["state"] != "cannot_verify" or f["value"] is not None or E3P4_MARK_NOCOUNT not in (f.get("reason") or ""):
+            notes.append("%s: ждали «нечем проверить» с причиной, где названо «%s», в ответе %s" % (p, E3P4_MARK_NOCOUNT, e3p2_show(f)))
+    if s.get("tooling_version") != "":
+        notes.append("общее поле tooling_version = %r, ждали пустую строку (догадка вместо «нечем взять» — нарушение)" % (s.get("tooling_version"),))
+    for p in ("manifest.contour.id", "judge.contract_version"):
+        n = e3p2_check_filled(s, p, CONTOUR_STAND if p.endswith("id") else read_json(ctx["contract"])["contract"]["version"])
+        if n:
+            notes.append(n)
+    detail = "исход %s · полей, зависящих от чтения: %d из %d · tooling_version %r · причина одного из них: «%s»\n" % (
+        s.get("outcome"), seen, len(E3P4_COUNT_PATHS), s.get("tooling_version"), one_line(first)[:130])
+    detail += "\n".join(notes) if notes else "все поля, зависящие от чтения, — «нечем проверить» с названным отсутствием строки с числом строк; версия пустая"
+    return not notes, detail
+
+
+def e3p4_c6(ctx):
+    """Ч6 (⑥, решение Е): служба жива; после смены записи установки в базе оба поля одного ответа (общее tooling_version и
+    manifest.tooling.version) равны между собой и равны новому значению; отказ того же процесса тоже называет новое значение."""
+    db, mp = e3p2_base(ctx, "c6")
+    old = e3p2_expected(db)["commit"]
+    new = "e3p4-commit-after-change-0123456789"
+    w = Wall(ctx["exe"], ctx["contract"], mp)
+    try:
+        s1, _ = w.call(E3P2_TOOL, {ctx["carg"]: CONTOUR_STAND})
+        n = e3p2_write(db, "UPDATE meta SET value=? WHERE key='template_commit'", (new,))
+        s2, _ = w.call(E3P2_TOOL, {ctx["carg"]: CONTOUR_STAND})
+        s3, _ = w.call(E3P2_TOOL, {ctx["carg"]: CONTOUR_STAND, "нет_такого_аргумента": "x"})
+    finally:
+        w.close()
+    notes = []
+    if n != 1:
+        notes.append("запись в копию базы изменила %d строк, ждали 1: случай ничего не доказывает" % n)
+    if old == new:
+        notes.append("старое и новое значение равны: случай ничего не доказывает")
+
+    def pair(s):
+        f = e3p2_field(s, "manifest.tooling.version")
+        return s.get("tooling_version"), (f or {}).get("value")
+
+    p1, p2 = pair(s1), pair(s2)
+    if p1 != (old, old):
+        notes.append("первый ответ: tooling_version и manifest.tooling.version = %r, ждали (%r, %r)" % (p1, old, old))
+    if p2 != (new, new):
+        notes.append("второй ответ того же процесса: tooling_version и manifest.tooling.version = %r, ждали (%r, %r)" % (p2, new, new))
+    if s3.get("outcome") != "refused" or s3.get("tooling_version") != new:
+        notes.append("отказ того же процесса: исход %s, tooling_version %r, ждали refused и %r" % (s3.get("outcome"), s3.get("tooling_version"), new))
+    detail = "первый ответ: %r · после смены записи второй ответ: %r · отказ: %r\n" % (p1, p2, s3.get("tooling_version"))
+    detail += "\n".join(notes) if notes else "после смены записи оба поля одного ответа равны и новые; прежнее значение не держится"
+    return not notes, detail
+
+
+def e3p4_subset(old, new, path=""):
+    """Всё, что есть в old, есть в new: словари — по ключам вглубь, списки — поэлементно по порядку (в new может быть дольше), прочее — равенство.
+    Отдаёт список мест, где не сошлось."""
+    out = []
+    if isinstance(old, dict):
+        if not isinstance(new, dict):
+            return ["%s: был объект, стало %s" % (path or "/", type(new).__name__)]
+        for k, v in old.items():
+            if k not in new:
+                out.append("%s/%s: поля больше нет" % (path, k))
+            else:
+                out += e3p4_subset(v, new[k], "%s/%s" % (path, k))
+    elif isinstance(old, list):
+        if not isinstance(new, list) or len(new) < len(old):
+            return ["%s: список стал короче или не списком" % (path or "/")]
+        for i, v in enumerate(old):
+            out += e3p4_subset(v, new[i], "%s[%d]" % (path, i))
+    elif old != new:
+        out.append("%s: было %r, стало %r" % (path, old, new))
+    return out
+
+
+def e3p4_c7(ctx):
+    """Ч7 (⑧): договор поднят аддитивно: отпечаток перечня вызовов тот же, что у договора до предмета (commit cb8a730);
+    все прежние вызовы, их аргументы и поля формы ответа на месте. Нет истории — «нечем сверить», случай не проходит."""
+    d = e3p4_ctx_dirs(ctx, "c7")
+    old_path = os.path.join(d, "contract-before.json")
+    try:
+        p = subprocess.run(["git", "show", "%s:vnext/service/contract/gordi-contract.json" % E3P4_BASE_COMMIT], cwd=SERVICE,
+                           capture_output=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return False, "НЕЧЕМ СВЕРИТЬ: git не ответил (%s)" % type(e).__name__
+    if p.returncode != 0 or not p.stdout.strip():
+        return False, "НЕЧЕМ СВЕРИТЬ: договора из commit %s нет в истории дерева (git show: код %s)" % (E3P4_BASE_COMMIT, p.returncode)
+    io.open(old_path, "wb").write(p.stdout)
+    notes = []
+    fps = {}
+    for label, path in (("прежний", old_path), ("новый", ctx["contract"])):
+        c, out, _, to = run_cli(ctx["exe"], ["tools", "--contract", path, "--contours", ctx["contours"]])
+        line = [l for l in out.splitlines() if l.startswith("отпечаток перечня")]
+        if to or c != 0 or not line:
+            notes.append("режим tools по %s договору не дал отпечаток перечня (код %s)" % (label, c))
+            continue
+        fps[label] = line[0].split()[-1]
+    if len(fps) == 2 and fps["прежний"] != fps["новый"]:
+        notes.append("отпечаток перечня изменился: было %s, стало %s" % (fps["прежний"], fps["новый"]))
+    old_doc, new_doc = read_json(old_path), read_json(ctx["contract"])
+    if old_doc["contract"].get("version") != E3P4_OLD_VERSION:
+        notes.append("в commit %s версия договора %r, ждали %r: случай сличает не то" % (E3P4_BASE_COMMIT, old_doc["contract"].get("version"), E3P4_OLD_VERSION))
+    if new_doc["contract"].get("version") != E3P4_VERSION:
+        notes.append("версия нового договора %r, ждали %r" % (new_doc["contract"].get("version"), E3P4_VERSION))
+    missing = []
+    for k in ("outcomes", "answer_shape", "common_args", "tools"):
+        missing += e3p4_subset(old_doc.get(k), new_doc.get(k), "/" + k)
+    if missing:
+        notes.append("прежнее не на месте (%d): %s" % (len(missing), "; ".join(missing[:5])))
+    # встречный: договор без одного вызова — отпечаток другой (иначе равенство отпечатков ничего не доказывало бы)
+    cut = e3p4_doc_copy(ctx, "c7", lambda dd: dd.__setitem__("tools", dd["tools"][:-1]))
+    c2, out2, _, to2 = run_cli(ctx["exe"], ["tools", "--contract", cut, "--contours", ctx["contours"]])
+    line2 = [l for l in out2.splitlines() if l.startswith("отпечаток перечня")]
+    if not line2 or (len(fps) == 2 and line2[0].split()[-1] == fps["новый"]):
+        notes.append("встречный: без одного вызова отпечаток перечня не изменился или не напечатан")
+    detail = "отпечаток перечня: прежний %s · новый %s · версия %s → %s · вызовов было %d, стало %d\n" % (
+        fps.get("прежний"), fps.get("новый"), old_doc["contract"].get("version"), new_doc["contract"].get("version"),
+        len(old_doc.get("tools", [])), len(new_doc.get("tools", [])))
+    detail += "\n".join(notes) if notes else "отпечаток перечня прежний, прежние вызовы, аргументы и поля формы ответа на месте; встречный сработал"
+    return not notes, detail
+
+
+E3P4_CASES = [
+    ("Ч1", "②: поле stage договора E3; справка печатает его значение; копия с другим значением печатает другое", e3p4_c1),
+    ("Ч2", "③: справка называет --contract, --contours, --read-only, GORDI_CONTRACT, GORDI_CONTOURS; текст из договора, правка описания меняет ровно его строку", e3p4_c2),
+    ("Ч3", "решение В: общие ключи и переменные среды в коде и в договоре — одни и те же, в обе стороны; кривые записи отвергает разбор", e3p4_c3),
+    ("Ч4", "④: под заголовком «договор:» первая строка не начинается словом «договор»; строки режима tools прежние", e3p4_c4),
+    ("Ч5", "⑤: ответ читающего инструмента без числа строк — у contour_info «нечем проверить» по всем зависимым полям, версия пустая", e3p4_c5),
+    ("Ч6", "⑥: служба жива, запись установки сменилась — оба поля версии одного ответа равны между собой и новому значению", e3p4_c6),
+    ("Ч7", "⑧: договор 2.2.0 — отпечаток перечня вызовов прежний, прежние вызовы, аргументы и поля формы ответа на месте", e3p4_c7),
+]
+
+
+def e3p4_run_all(ctx):
+    """Все случаи Ч1–Ч7 на одной сборке. Исключение внутри случая — провал со словами."""
+    results = []
+    for key, title, fn in E3P4_CASES:
+        try:
+            ok, detail = fn(ctx)
+        except LiveContourRefusal:
+            raise
+        except Exception as e:  # noqa: BLE001 — любой сбой разбора ответа старой сборки есть провал случая, а не остановка приёмки
+            ok, detail = False, "случай не дошёл до сличения: %s: %s" % (type(e).__name__, one_line(str(e))[:200])
+        results.append((key, ok, title, detail))
+    return results
+
+
+def e3p4_apply_edits(svc, rel_file, edits):
+    """Правки в копии исходников: каждая — замена одного названного места, оно обязано найтись РОВНО один раз. Отдаёт замечание или ''."""
+    target = os.path.join(svc, rel_file)
+    raw = io.open(target, encoding="utf-8", newline="").read()
+    eol = "\r\n" if "\r\n" in raw else "\n"
+    for anchor, replacement in edits:
+        found = raw.count(anchor)
+        if found != 1:
+            return "поломка не наложилась: якорь найден %d раз (нужно ровно один) в %s: %s" % (found, rel_file, anchor.strip()[:70])
+        raw = raw.replace(anchor, replacement.replace("\n", eol))
+    io.open(target, "w", encoding="utf-8", newline="").write(raw)
+    return ""
+
+
+def e3p4_literal_for_read_only(doc):
+    """C#-литерал описания ключа --read-only: тот же текст, что в договоре, — чтобы поломку ловил ТОЛЬКО встречный случай (правка описания в копии)."""
+    note = next((o["note"] for o in e3p4_options(doc) if o.get("name") == "--read-only"), "")
+    return '"' + note.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def cases_e3p4(args, work, manifest, contract_doc, carg, v7):
+    """Раздел «Э3-П4» (карточка 821): Ч1–Ч7 на собранной службе, затем ЛЧ1–ЛЧ3 — поломки В КОДЕ СЛУЖБЫ на пересобранной копии."""
+    d = os.path.join(work, E3P4_DIR)
+    if not os.path.isdir(d):
+        os.makedirs(d)
+    head = git_out(SERVICE, "rev-parse", "HEAD")
+    ctx = {"exe": args.exe, "contract": args.contract, "manifest": manifest, "carg": carg, "head": head,
+           "work": os.path.join(d, "tree"), "src_dir": os.path.join(SERVICE, "GordiWall"),
+           "example": os.path.join(SERVICE, "contour", "gordi-contours.example.json"), "contours": args.contours}
+    results = e3p4_run_all(ctx)
+    for key, ok, title, detail in results:
+        v7.add("821-" + key, ok, title, detail)
+    base_failed = [k for k, ok, _, _ in results if not ok]
+
+    for number, (key, what, rel_file, edits, expected) in enumerate(E3P4_BREAKS, 1):
+        title = "нарочная поломка В КОДЕ СЛУЖБЫ с пересборкой: %s — падают РОВНО %s" % (what, ", ".join(sorted(expected)))
+        if base_failed:
+            v7.add("821-" + key, False, title, "СУДИТЬ НЕЧЕМ: на целой службе не прошли случаи %s — поломка не на чем видна" % ", ".join(base_failed))
+            continue
+        first_anchor, first_replacement = edits[0]
+        if "@@LITERAL@@" in first_replacement:
+            first_replacement = first_replacement.replace("@@LITERAL@@", e3p4_literal_for_read_only(contract_doc))
+        svc, why = e3p2_break_copy(d, "break-%d" % number, rel_file, first_anchor, first_replacement, head)
+        if svc is None:
+            v7.add("821-" + key, False, title, why)
+            continue
+        if len(edits) > 1:
+            why = e3p4_apply_edits(svc, rel_file, edits[1:])
+            if why:
+                v7.add("821-" + key, False, title, why)
+                continue
+        code, exe, log = e3p2_build(svc, os.path.dirname(svc))
+        if code != 0 or not os.path.exists(exe):
+            tail = io.open(log, encoding="utf-8", errors="replace").read().strip().splitlines()[-6:]
+            v7.add("821-" + key, False, title, "сборка копии НЕ прошла (код %s): %s\nвывод сборки: %s" % (code, exe, " | ".join(x.strip()[:120] for x in tail)))
+            continue
+        cctx = dict(ctx, exe=exe, contract=os.path.join(svc, "contract", "gordi-contract.json"),
+                    src_dir=os.path.join(svc, "GordiWall"), example=os.path.join(svc, "contour", "gordi-contours.example.json"),
+                    work=os.path.join(os.path.dirname(svc), "run"))
+        broken = e3p4_run_all(cctx)
+        failed = set(k for k, ok, _, _ in broken if not ok)
+        lines = ["судилась ПЕРЕСОБРАННАЯ копия: %s" % exe.replace("\\", "/"),
+                 "сборка копии прошла (код 0), якорь найден ровно один раз в %s" % rel_file,
+                 "не прошли после поломки: %s (ждали ровно %s)" % (", ".join(sorted(failed)) or "ни один", ", ".join(sorted(expected)))]
+        for k, ok, _, det in broken:
+            if not ok and k in expected:
+                lines.append("  %s: %s" % (k, one_line(det)[:170]))
+        v7.add("821-" + key, failed == expected, title, "\n".join(lines))
+
+
 STALE_BUILD_WORDS = "сборка СТАРШЕ исходников: это прогон «до», а не приёмка новой службы"
 
 
@@ -3229,6 +3731,9 @@ def run_acceptance():
     ap.add_argument("--only-e3p2", action="store_true",
                     help="судить ТОЛЬКО раздел «Э3-П2» (карточка 816: поля манифеста и блок «кто меня судит» в ответе contour_info); "
                          "сборку старше исходников судит как СТАРУЮ (прогон «до»); без стенда раздел не работает")
+    ap.add_argument("--only-e3p4", action="store_true",
+                    help="судить ТОЛЬКО раздел «Э3-П4» (карточка 821: поле stage, общие ключи службы в справке, ответ без числа строк, одно чтение версии); "
+                         "сборку старше исходников судит как СТАРУЮ (прогон «до»); без стенда раздел не работает")
     args = ap.parse_args()
 
     if not os.path.exists(args.exe):
@@ -3247,8 +3752,8 @@ def run_acceptance():
     print("── ЧАС СБОРКИ И ИСХОДНИКОВ")
     print("   сборка исполнимого файла ... %s" % utc(exe_time))
     print("   последняя правка исходников  %s (%s)" % (utc(src_time), src_file))
-    if exe_time < src_time and (args.only_e3p1 or args.only_e3p2):
-        print("ℹ️ СБОРКА СТАРШЕ ИСХОДНИКОВ, но задан ключ --only-e3p1 или --only-e3p2: раздел судит её как СТАРУЮ сборку (прогон «до»).")
+    if exe_time < src_time and (args.only_e3p1 or args.only_e3p2 or args.only_e3p4):
+        print("ℹ️ СБОРКА СТАРШЕ ИСХОДНИКОВ, но задан ключ --only-e3p1, --only-e3p2 или --only-e3p4: раздел судит её как СТАРУЮ сборку (прогон «до»).")
         print("   Это не приёмка новой службы: общий прогон такую сборку по-прежнему не судит, а проход раздела на ней отдаётся кодом 3, не 0.")
     elif exe_time < src_time:
         print("⏸ СБОРКА СТАРШЕ ИСХОДНИКОВ: приёмка её НЕ СУДИТ. Это не провал и не проход —")
@@ -3293,6 +3798,13 @@ def run_acceptance():
         print("── случаи карточки 816 (этап Э3, предмет П2: шесть полей манифеста и блок «кто меня судит» полями ответа) — ТОЛЬКО этот раздел")
         v6.print_all()
         return section_verdict("Э3-П2", "816", v6, exe_time < src_time)
+
+    if args.only_e3p4:
+        v7 = Verdict()
+        cases_e3p4(args, work, manifest, contract_doc, CARG, v7)
+        print("── случаи карточки 821 (этап Э3, предмет П4: поле stage · общие ключи службы в справке · ответ без числа строк · одно чтение версии · семь случаев Ч1–Ч7 и три нарочные поломки ЛЧ1–ЛЧ3 в коде службы) — ТОЛЬКО этот раздел")
+        v7.print_all()
+        return section_verdict("Э3-П4", "821", v7, exe_time < src_time)
 
     # ─────────────────────────────────────── ① перечень вызовов из ОДНОГО файла
     code, out, err = run_mode(args.exe, args.contract, args.contours, ["contour_info", "--contour", CONTOUR_LIVE])
@@ -3636,6 +4148,10 @@ def run_acceptance():
     v6 = Verdict()
     cases_e3p2(args, work, manifest, contract_doc, CARG, v6)
 
+    # ═══════════════════════════════════════ карточка 821 (этап Э3, предмет П4): поле stage, общие ключи службы, версия одним чтением
+    v7 = Verdict()
+    cases_e3p4(args, work, manifest, contract_doc, CARG, v7)
+
     # ─────────────────────────────────────── вывод
     print("── ПРИЁМКА СТЕНЫ КОНТУРА GORDI · этап Э1 · карточка 779")
     print("   сборка ... %s" % args.exe)
@@ -3661,22 +4177,25 @@ def run_acceptance():
     print("── случаи карточки 816 (этап Э3, предмет П2: поля манифеста и блок «кто меня судит» · девять случаев М1–М7 и шесть нарочных поломок Л1–Л6 в коде службы)")
     v6.print_all()
     print("")
+    print("── случаи карточки 821 (этап Э3, предмет П4: поле stage · общие ключи службы в справке · ответ без числа строк · одно чтение версии · семь случаев Ч1–Ч7 и три нарочные поломки ЛЧ1–ЛЧ3 в коде службы)")
+    v7.print_all()
+    print("")
     print("⚖️ ЭТИ ДВА КРИТЕРИЯ МАШИНА НЕ СУДИТ — говорю прямо, чтобы зелёное не прочлось шире:")
     print("   ⑥ полный рабочий отрезок роли через стену — доказывается работой роли (записка · память · карточка),")
     print("      а не этим файлом. Прогон приёмки отрезком НЕ является.")
     print("   ⑨ подпись приёмки ставит роль, которая службу НЕ писала. Свой прогон за чужую руку не считается.")
     print("")
-    bad = v.failed() + v2.failed() + v3.failed() + v4.failed() + v5.failed() + v6.failed()
+    bad = v.failed() + v2.failed() + v3.failed() + v4.failed() + v5.failed() + v6.failed() + v7.failed()
     if bad:
-        print("🔴 ПРОВАЛИЛОСЬ %d: %s (карточка 779: %d из %d прошло · карточка 787: %d из %d прошло · карточка 791: %d из %d прошло · карточка 781: %d из %d прошло · карточка 814: %d из %d прошло · карточка 816: %d из %d прошло)"
+        print("🔴 ПРОВАЛИЛОСЬ %d: %s (карточка 779: %d из %d прошло · карточка 787: %d из %d прошло · карточка 791: %d из %d прошло · карточка 781: %d из %d прошло · карточка 814: %d из %d прошло · карточка 816: %d из %d прошло · карточка 821: %d из %d прошло)"
               % (len(bad), " · ".join(r[0] for r in bad),
                  len(v.rows) - len(v.failed()), len(v.rows), len(v2.rows) - len(v2.failed()), len(v2.rows),
                  len(v3.rows) - len(v3.failed()), len(v3.rows), len(v4.rows) - len(v4.failed()), len(v4.rows),
-                 len(v5.rows) - len(v5.failed()), len(v5.rows), len(v6.rows) - len(v6.failed()), len(v6.rows)))
+                 len(v5.rows) - len(v5.failed()), len(v5.rows), len(v6.rows) - len(v6.failed()), len(v6.rows), len(v7.rows) - len(v7.failed()), len(v7.rows)))
         return 1
-    print("✅ ВСЕ МАШИННЫЕ КРИТЕРИИ ПРОШЛИ: карточка 779 — %d из %d · карточка 787 — %d из %d · карточка 791 — %d из %d · карточка 781 — %d из %d · карточка 814 — %d из %d · карточка 816 — %d из %d (⑥ и ⑨ карточки 779 — за человеком)"
+    print("✅ ВСЕ МАШИННЫЕ КРИТЕРИИ ПРОШЛИ: карточка 779 — %d из %d · карточка 787 — %d из %d · карточка 791 — %d из %d · карточка 781 — %d из %d · карточка 814 — %d из %d · карточка 816 — %d из %d · карточка 821 — %d из %d (⑥ и ⑨ карточки 779 — за человеком)"
           % (len(v.rows), len(v.rows), len(v2.rows), len(v2.rows), len(v3.rows), len(v3.rows), len(v4.rows), len(v4.rows), len(v5.rows), len(v5.rows),
-             len(v6.rows), len(v6.rows)))
+             len(v6.rows), len(v6.rows), len(v7.rows), len(v7.rows)))
     return 0
 
 
