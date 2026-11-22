@@ -33,6 +33,13 @@ r"""bite-archive-move-records — приёмка карточки #627: пере
      предупреждение напечатано громко, код выхода --move — 0 (перенос не
      проваливается из-за долга вторичного слоя)                          РАЗЛИЧАЮЩИЙ
   контроль: живая база НЕ ТРОНУТА этим прогоном
+     судит ПО СВОИМ СЛЕДАМ ПОИМЁННО (строки под пробными ролями BITE627 и BITE627B: вопрос
+     mezo_stand.ask_traces, судится ПРИБАВКА следов), а не по числу записей phoenix_records: то меняет
+     любое сохранение памяти соседа за время прогона, а утечку «одна запись ушла, одна пришла» оно
+     не видит (карточка #804). Число записей печатается справкой, в суд не идёт.
+     Встречные на подставной базе стенда: контроль-а чужая запись случай НЕ роняет · контроль-б свой
+     след роняет и назван поимённо · контроль-в база недоступна — третий исход «НЕ ПРОВЕРЕНО»,
+     код выхода 2 · контроль-г обе пробные роли на стенде находятся (иначе вопрос к живой базе слеп)
 
 ⚖️ ПОЧЕМУ ОТДЕЛЬНЫЙ ФАЙЛ, А НЕ НОВЫЙ СЛУЧАЙ В bite-archive-move-look.py: та приёмка
 судит ДРУГОЙ слой (archive_move_look() в read-phoenix.py — согласование confirmed_at/
@@ -43,7 +50,7 @@ saved_at), и её якоря (ARCHIVE_HISTORY_BLOCK и др.) уже держа
 ⛔ Живого контура НЕ касается: save-phoenix / memory-archive / memory-records /
    find-phoenix зовутся ТОЛЬКО на КОПИЯХ базы (sqlite3 backup API из режима
    только-чтения), с явным --db на копию. Живая mezosync.db читается напрямую
-   (mode=ro) лишь для контрольного числа до/после.
+   (mode=ro) лишь для вопроса о своих следах и справочного числа записей до/после.
 
 ⚠️ Случаи ⑤ и ⑥ проверяют НАЛИЧИЕ починки карточки #627 (анкер REBUILD_CALL_LINE и
    сам приём с memory-records.py-соседом) — на версии memory-archive.py ДО этой
@@ -89,6 +96,7 @@ for _tool in (SAVE, FIND, ARCHIVE, RECORDS):
         sys.exit(f"⛔ НЕ ЗАПУСТИЛАСЬ: инструмента нет — {_tool}")
 
 ROLE = "BITE627"
+ROLE4 = "BITE627B"   # случай ④: первый перенос раздела без предшествующих записей
 SECTION = "state"
 
 OK = FAIL = 0
@@ -131,6 +139,12 @@ if LIVE_BEFORE is None:
              f"phoenix_records) — контрольное число «живая база не тронута» снять не с "
              f"чего.\n   База: {LIVE_DB}\n   Накати шаг схемы 20260904-phoenix-records.py "
              f"и повтори.")
+
+# Свои следы приёмки (карточка #804): всё, что она сеет, идёт под двумя пробными ролями. По ним контроль
+# в конце судит, не попали ли записи в живую базу; NEED — таблицы, в которые эти имена ложатся.
+MARKS = (ROLE, ROLE4)
+NEED = ("phoenix", "phoenix_history", "phoenix_archive", "phoenix_records")
+LIVE_TRACES_BEFORE = mezo_stand.ask_traces(LIVE_DB, MARKS, NEED)
 
 
 def find_env() -> dict:
@@ -266,7 +280,6 @@ case("③ find-phoenix по слову из УНЕСЁННОГО куска: к�
 dir4 = stand / "case4"
 db4 = fresh_case_db(dir4)
 env4 = stand_env(dir4)
-ROLE4 = "BITE627B"
 body4 = dir4 / "body4.md"
 body4.write_text(make_body("④"), encoding="utf-8")
 rc, out_save4 = run(SAVE, "--db", str(db4), "--role", ROLE4, "--section", SECTION,
@@ -381,10 +394,56 @@ case(f"⑥ блок ДЕЙСТВИТЕЛЬНО унесён в phoenix_archive �
      archived6 == 1)
 
 # ── КОНТРОЛЬ: живая база НЕ ТРОНУТА ЭТИМ ПРОГОНОМ ────────────────────────────
-LIVE_AFTER = live_control_state()
-case("контроль: живая база НЕ ТРОНУТА (число записей phoenix_records то же, что до прогона)",
-     LIVE_AFTER == LIVE_BEFORE,
-     f"было {LIVE_BEFORE}; стало {LIVE_AFTER}")
+# Суд ПО СВОИМ СЛЕДАМ поимённо (карточка #804). Число записей phoenix_records не судится: его меняет
+# любое сохранение памяти соседа за время прогона, а утечку без смены числа оно пропускает.
+try:
+    LIVE_AFTER = live_control_state()
+except (sqlite3.Error, OSError):
+    LIVE_AFTER = None
+UNCHECKED = 0
+CONTROL = "контроль: живая база НЕ ТРОНУТА (строк под пробными ролями приёмки в ней не прибавилось)"
+outcome, names, why = mezo_stand.traces_verdict(LIVE_TRACES_BEFORE,
+                                                mezo_stand.ask_traces(LIVE_DB, MARKS, NEED))
+said = "способ: по своим следам — " + mezo_stand.traces_words(outcome, names, why)
+if outcome == "unknown":
+    UNCHECKED += 1
+    print(f"⏳ {CONTROL}: НЕ ПРОВЕРЕНО")
+    print(f"   {said}; «следов нет» НЕ утверждается")
+else:
+    case(CONTROL, outcome == "clean",
+         f"{said}\n   справка, не суд: записей phoenix_records было {LIVE_BEFORE}; стало {LIVE_AFTER}")
 
-print(f"\n{'✅' if FAIL == 0 else '🔴'} ИТОГ: {OK} из {OK + FAIL}")
-sys.exit(mezo_stand.finish(0 if FAIL == 0 else 1))
+# контроль-а/б/в/г ВСТРЕЧНЫЕ: тот же суд на подставной базе стенда — чужая запись, свои следы по одному,
+# база недоступна; и обе пробные роли на базах случаев находятся. Схема подставной базы снята с базы
+# случая ①②③ — живая база для неё не открывается.
+judge_db = mezo_stand.empty_db(db1, stand / "judge.db")
+MEMORY = "INSERT INTO phoenix (role, section, body) VALUES (?,?,?)"
+HISTORY = ("INSERT INTO phoenix_history (role, section, body, body_chars, saved_at, actor, reason) "
+           "VALUES (?,?,'тело',4,'2026-01-01 00:00:00',?,'save')")
+MOVED = ("INSERT INTO phoenix_archive (role, section, topic, body, body_chars, moved_by) "
+         "VALUES (?,?,'предмет','тело',4,?)")
+RECORD = ("INSERT INTO phoenix_records (role, section, subject, body, body_chars, created_by) "
+          "VALUES (?,?,'предмет','тело',4,?)")
+for letter, title, ok, detail in mezo_stand.traces_counter_cases(
+        judge_db, MARKS, NEED,
+        foreign=[(MEMORY, ("OTHERROLE", SECTION, "тело соседа")),
+                 (HISTORY, ("OTHERROLE", SECTION, "OTHERROLE")),
+                 (MOVED, ("OTHERROLE", SECTION, "OTHERROLE")),
+                 (RECORD, ("OTHERROLE", SECTION, "OTHERROLE"))],
+        own=[("память", MEMORY, (ROLE, SECTION, "тело пробы"), {"phoenix.role"}),
+             ("история", HISTORY, (ROLE, SECTION, ROLE),
+              {"phoenix.role", "phoenix_history.role", "phoenix_history.actor"}),
+             ("архив", MOVED, (ROLE4, SECTION, ROLE4),
+              {"phoenix.role", "phoenix_history.role", "phoenix_history.actor",
+               "phoenix_archive.role", "phoenix_archive.moved_by"}),
+             ("запись", RECORD, (ROLE4, SECTION, ROLE4),
+              {"phoenix.role", "phoenix_history.role", "phoenix_history.actor",
+               "phoenix_archive.role", "phoenix_archive.moved_by",
+               "phoenix_records.role", "phoenix_records.created_by"})],
+        planted=(db1, db4)):
+    case(f"контроль-{letter} {title}", ok, detail)
+
+if UNCHECKED:
+    print(f"⏳ НЕ ПРОВЕРЕНО: {UNCHECKED} — база не ответила; прогон выходит кодом 2, а не «прошёл»")
+print(f"\n{'🔴' if FAIL else ('⏳' if UNCHECKED else '✅')} ИТОГ: {OK} из {OK + FAIL}")
+sys.exit(mezo_stand.finish(mezo_stand.exit_code3(FAIL, UNCHECKED)))

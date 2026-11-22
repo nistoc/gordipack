@@ -60,13 +60,20 @@ r"""bite-archive-move-look — приёмка карточки #605: «взгл�
      архивируемого блока больше некому ловить), а ①②③б③г④⑤ остаются как
      были — их ловят длина и содержимое ОСТАВШЕГОСЯ тела (③г у неё и так
      не был красным — поломка тут ничего не меняет)                      РАЗЛИЧАЮЩИЙ
-  контроль: живая база НЕ ТРОНУТА этим прогоном (ING/plan — тот же верхний
-  ряд истории до и после)
+  контроль: живая база НЕ ТРОНУТА этим прогоном
+     судит ПО СВОИМ СЛЕДАМ ПОИМЁННО (строки под пробной ролью BITE605: вопрос mezo_stand.ask_traces,
+     судится ПРИБАВКА следов), а не по верхней строке истории ING/plan: та к своему следу СЛЕПА —
+     строки BITE605, попавшие в живую базу, память ING не меняют, и случай проходил бы; а сохранение
+     плана самой ING за время прогона его роняло бы (карточка #804). Строка ING/plan печатается
+     справкой, в суд не идёт.
+     Встречные на подставной базе стенда: контроль-а чужая запись случай НЕ роняет · контроль-б свой
+     след роняет и назван поимённо · контроль-в база недоступна — третий исход «НЕ ПРОВЕРЕНО»,
+     код выхода 2 · контроль-г пробная роль на стенде находится (иначе вопрос к живой базе слеп)
 
 ⛔ Живого контура НЕ касается: read-phoenix/save-phoenix/memory-archive зовутся
    ТОЛЬКО на подставных базах случаев (схема живой без строк — mezo_stand.empty_db,
    этап Э6, карточка #680), с явным --db на неё. Живая mezosync.db читается напрямую
-   (mode=ro) лишь для контрольных чисел до/после.
+   (mode=ro) лишь для вопроса о своих следах и справочной строки ING/plan до/после.
 
     python <КОНТУР>/vnext-tools/bite-archive-move-look.py
 """
@@ -123,6 +130,12 @@ def live_ing_plan_state():
 
 
 LIVE_ING_PLAN_BEFORE = live_ing_plan_state()
+
+# Свои следы приёмки (карточка #804): всё, что она сеет, идёт под одной пробной ролью. По ней контроль
+# в конце судит, не попали ли записи в живую базу; NEED — таблицы, в которые это имя ложится.
+MARKS = (ROLE,)
+NEED = ("phoenix", "phoenix_history", "phoenix_archive")
+LIVE_TRACES_BEFORE = mezo_stand.ask_traces(LIVE_DB, MARKS, NEED)
 
 OK = FAIL = 0
 
@@ -679,16 +692,58 @@ case("⑥в поломка НЕ ТРОГАЕТ случай ⑤ (форма жи
      "СТАРШЕ текста" not in o_out5 and "унесены в архив штатным переносом" in o_out5)
 
 # ── КОНТРОЛЬ: живая база НЕ ТРОНУТА ЭТИМ ПРОГОНОМ ────────────────────────────
-top_after, live_after = live_ing_plan_state()
-case("контроль: живая база НЕ ТРОНУТА (верхняя строка истории ING/plan и её штамп те же, что до прогона)",
-     (top_after, live_after) == LIVE_ING_PLAN_BEFORE,
-     f"было {LIVE_ING_PLAN_BEFORE}; стало {(top_after, live_after)}")
+# Суд ПО СВОИМ СЛЕДАМ поимённо (карточка #804). Верхняя строка истории ING/plan не судится: к утечке
+# строк своей роли она слепа, а честное сохранение плана самой ING за время прогона её меняет.
+try:
+    ing_plan_after = live_ing_plan_state()
+except (sqlite3.Error, OSError):
+    ing_plan_after = None
+UNCHECKED = 0
+CONTROL = "контроль: живая база НЕ ТРОНУТА (строк под пробной ролью приёмки в ней не прибавилось)"
+outcome, names, why = mezo_stand.traces_verdict(LIVE_TRACES_BEFORE,
+                                                mezo_stand.ask_traces(LIVE_DB, MARKS, NEED))
+said = "способ: по своим следам — " + mezo_stand.traces_words(outcome, names, why)
+if outcome == "unknown":
+    UNCHECKED += 1
+    print(f"⏳ {CONTROL}: НЕ ПРОВЕРЕНО")
+    print(f"   {said}; «следов нет» НЕ утверждается")
+else:
+    case(CONTROL, outcome == "clean",
+         f"{said}\n   справка, не суд: верхняя строка истории ING/plan и её штамп — "
+         f"было {LIVE_ING_PLAN_BEFORE}; стало {ing_plan_after}")
 
-# Исхода «не поставлено» (код 2) с Э6 нет: его давал только случай ⑤ на живой ING/plan.
+# контроль-а/б/в/г ВСТРЕЧНЫЕ: тот же суд на подставной базе стенда — чужая запись, свои следы по одному,
+# база недоступна; и пробная роль на базе случая находится. Схема подставной базы снята с базы
+# случая ① — живая база для неё не открывается.
+judge_db = mezo_stand.empty_db(db1, stand / "judge.db")
+MEMORY = "INSERT INTO phoenix (role, section, body) VALUES (?,?,?)"
+HISTORY = ("INSERT INTO phoenix_history (role, section, body, body_chars, saved_at, actor, reason) "
+           "VALUES (?,?,'тело',4,'2026-01-01 00:00:00',?,'save')")
+MOVED = ("INSERT INTO phoenix_archive (role, section, topic, body, body_chars, moved_by) "
+         "VALUES (?,?,'предмет','тело',4,?)")
+for letter, title, ok, detail in mezo_stand.traces_counter_cases(
+        judge_db, MARKS, NEED,
+        foreign=[(MEMORY, ("ING", "plan", "план соседа после нового сохранения")),
+                 (HISTORY, ("ING", "plan", "ING")),
+                 (MOVED, ("ING", "plan", "ING"))],
+        own=[("память", MEMORY, (ROLE, SECTION, "тело пробы"), {"phoenix.role"}),
+             ("история", HISTORY, (ROLE, SECTION, ROLE),
+              {"phoenix.role", "phoenix_history.role", "phoenix_history.actor"}),
+             ("архив", MOVED, (ROLE, SECTION, ROLE),
+              {"phoenix.role", "phoenix_history.role", "phoenix_history.actor",
+               "phoenix_archive.role", "phoenix_archive.moved_by"})],
+        planted=db1):
+    case(f"контроль-{letter} {title}", ok, detail)
+
+# Исхода «не поставлено» с Э6 нет (его давал только случай ⑤ на живой ING/plan); код 2 теперь —
+# третий исход контроля «база не ответила на вопрос о следах» (карточка #804).
+if UNCHECKED:
+    print(f"⏳ НЕ ПРОВЕРЕНО: {UNCHECKED} — база не ответила; прогон выходит кодом 2, а не «прошёл»")
 if FAIL:
     print(f"\n🔴 ИТОГ: {OK} из {OK + FAIL}")
-    EXIT_CODE = 1
+elif UNCHECKED:
+    print(f"\n⏳ ИТОГ: {OK} из {OK}")
 else:
     print(f"\n✅ ИТОГ: {OK} из {OK}")
-    EXIT_CODE = 0
+EXIT_CODE = mezo_stand.exit_code3(FAIL, UNCHECKED)
 sys.exit(mezo_stand.finish(EXIT_CODE))

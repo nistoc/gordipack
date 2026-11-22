@@ -153,7 +153,8 @@ import tokenize
 from pathlib import Path
 
 __all__ = ["new", "release", "finish", "keep_reason", "copy_tool", "neighbours_of", "stand_env",
-           "snapshot_db", "empty_db", "seed_roles", "traces", "crlf_twin", "expected_break",
+           "snapshot_db", "empty_db", "seed_roles", "traces", "tail_traces", "tails_found", "marks_found", "ask_traces", "traces_verdict",
+           "traces_words", "exit_code3", "traces_counter_cases", "crlf_twin", "expected_break",
            "known_prefixes", "prefixes_from_sources", "tool_dirs", "stand_size", "max_age_hours",
            "accepted_with_skips", "remove_tree", "temp_dir"]
 
@@ -729,6 +730,235 @@ def traces(db, marks) -> dict:
     finally:
         conn.close()
     return found
+
+
+_TAIL_TRIM = " \t\r\n"
+
+
+def tail_traces(db, tails) -> dict:
+    """Сколько строк базы несут СВОЙ СЛЕД В КОНЦЕ значения: текст столбца кончается одной из строк tails.
+
+    ЗАЧЕМ (карточка #804). traces() берёт точное совпадение и не видит след, который приёмка может
+    оставить только внутри большого значения: она сохраняет память НАСТОЯЩЕЙ роли, и своё у такой
+    записи — лишь пробная строка в конце тела. Пробелы и переводы строк в конце значения в счёт не
+    идут: сохранение вправе их добавить или снять. База открыта СТРОГО НА ЧТЕНИЕ; обходятся все
+    столбцы всех обычных таблиц. Вернуть {«таблица.столбец»: число строк} — только где число не ноль.
+    """
+    tails = [t for t in dict.fromkeys(str(t).rstrip(_TAIL_TRIM) for t in tails) if t]
+    found: dict[str, int] = {}
+    if not tails:
+        return found
+    conn = sqlite3.connect(f"file:{Path(db).as_posix()}?mode=ro", uri=True)
+    try:
+        params = [x for t in tails for x in (_TAIL_TRIM, -len(t), t)]
+        for row in conn.execute("PRAGMA main.table_list").fetchall():
+            name, typ = row[1], row[2]
+            if typ != "table" or name.startswith("sqlite_"):
+                continue
+            for col in conn.execute(f"PRAGMA table_xinfo({_q(name)})").fetchall():
+                if col[6] != 0:
+                    continue
+                c = _q(col[1])
+                ends = " OR ".join(f"substr(rtrim({c}, ?), ?) = ?" for _ in tails)
+                n = conn.execute(f"SELECT count(*) FROM {_q(name)} WHERE typeof({c}) = 'text' AND ({ends})",
+                                 params).fetchone()[0]
+                if n:
+                    found[f"{name}.{col[1]}"] = n
+    finally:
+        conn.close()
+    return found
+
+
+def tails_found(db, tails) -> set:
+    """Какие из окончаний встречаются в базе хотя бы в одном столбце — пара к marks_found()."""
+    return {t for t in dict.fromkeys(str(t) for t in tails) if tail_traces(db, [t])}
+
+
+def _own_traces(db, marks, tails) -> dict:
+    """Свои следы одним словарём: точное совпадение (traces) и окончание значения (tail_traces)."""
+    found = traces(db, marks)
+    for key, n in tail_traces(db, tails).items():
+        found[key] = found.get(key, 0) + n
+    return found
+
+
+def marks_found(db, marks) -> set:
+    """Какие из меток встречаются в базе хотя бы в одном столбце — точное совпадение, один проход.
+
+    Нужна, чтобы вопрос о своих следах не ослеп молча: метка, которую приёмка перестала сеять
+    (переименовали пробную роль, сменили заголовок подсадки), в живой базе не найдётся никогда, и суд
+    «следов нет» будет проходить при любой утечке. База открывается СТРОГО НА ЧТЕНИЕ.
+    """
+    marks = list(dict.fromkeys(str(m) for m in marks))
+    seen: set = set()
+    if not marks:
+        return seen
+    conn = sqlite3.connect(f"file:{Path(db).as_posix()}?mode=ro", uri=True)
+    try:
+        inlist = ", ".join("?" * len(marks))
+        for row in conn.execute("PRAGMA main.table_list").fetchall():
+            name, typ = row[1], row[2]
+            if typ != "table" or name.startswith("sqlite_"):
+                continue
+            for col in conn.execute(f"PRAGMA table_xinfo({_q(name)})").fetchall():
+                if col[6] != 0:
+                    continue
+                seen.update(str(r[0]) for r in conn.execute(
+                    f"SELECT DISTINCT {_q(col[1])} FROM {_q(name)} WHERE {_q(col[1])} IN ({inlist})", marks))
+    finally:
+        conn.close()
+    return seen
+
+
+def ask_traces(db, marks, need, tails=()) -> tuple:
+    """Спросить базу о своих следах так, чтобы её молчание не читалось как чистота (карточка #804).
+
+    Вернуть (словарь traces(), "") либо (None, причина). need — таблицы, в которые приёмка сеет свои
+    пробные имена: нет хотя бы одной — вопрос о следах задать не на чем (пустой или чужой файл
+    ответил бы «следов нет» на что угодно), и это третий исход, а не первый. Пустой need — отказ:
+    без него пустой файл неотличим от чистой базы.
+    tails — следы, которые приёмка оставляет только в КОНЦЕ значения (tail_traces): пробная строка
+    в конце тела памяти настоящей роли. Считаются в тот же словарь, что и точные совпадения.
+    База открывается СТРОГО НА ЧТЕНИЕ. Не открылась или не ответила — (None, причина).
+    """
+    need = tuple(dict.fromkeys(str(t) for t in need))
+    if not need:
+        raise SystemExit("ERR: ask_traces: назови таблицы, в которые приёмка сеет пробные имена (need): "
+                         "без них пустой файл неотличим от чистой базы")
+    try:
+        conn = sqlite3.connect(f"file:{Path(db).as_posix()}?mode=ro", uri=True)
+        try:
+            have = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        finally:
+            conn.close()
+        lacking = [t for t in need if t not in have]
+        if lacking:
+            return None, "в базе нет таблиц: " + ", ".join(lacking)
+        return _own_traces(db, marks, tails), ""
+    except (sqlite3.Error, OSError) as e:
+        return None, f"{type(e).__name__}: {e}"[:120]
+
+
+def traces_verdict(before, after) -> tuple:
+    """Суд «база прогоном не тронута» по ПРИБАВКЕ своих следов между двумя ask_traces() — три исхода.
+
+    ("clean", [], "") — своих следов не прибавилось;
+    ("traces", ["таблица.столбец +N", …], "") — прибавились и названы поимённо;
+    ("unknown", [], причина) — хотя бы один из двух вопросов остался без ответа.
+    Прежние следы (до прогона) — чужая история и в счёт не идут. Разница состояния (размер файла,
+    время правки, отпечаток, число строк таблицы) НЕ судится: её меняет любая честная запись соседа
+    за время прогона, а настоящий свой след она может и пропустить (карточка #483, карточка #804).
+    """
+    for found, why in (before, after):
+        if found is None:
+            return "unknown", [], why
+    grown = sorted(f"{key} +{n - before[0].get(key, 0)}"
+                   for key, n in after[0].items() if n > before[0].get(key, 0))
+    return ("traces" if grown else "clean"), grown, ""
+
+
+def traces_words(outcome, names, why) -> str:
+    """Слова исхода traces_verdict() — у каждого свои, чтобы третий не читался как первый."""
+    if outcome == "clean":
+        return "своих следов в базе нет"
+    if outcome == "traces":
+        return "СЛЕДЫ ЕСТЬ: " + ", ".join(names)
+    return f"НЕ ПРОВЕРЕНО: база не ответила на вопрос о следах ({why})"
+
+
+def exit_code3(fail, unchecked) -> int:
+    """Код выхода приёмки с третьим исходом: провал — 1, часть не проверена — 2, иначе 0."""
+    return 1 if fail else (2 if unchecked else 0)
+
+
+def traces_counter_cases(judge_db, marks, need, foreign, own, planted=None, tails=(), expect=None) -> list:
+    """Встречные случаи суда по своим следам — на КОПИИ базы и теми же функциями, что судят живую.
+
+    ЗАЧЕМ (карточка #804). Случай «живая база прогоном не тронута» сам не показывает, что его суд жив:
+    на стенде соседей нет, и он проходит при любом способе. Три встречных показывают обе стороны:
+      а — запись соседа БЕЗ пробных имён случай не роняет (суд по разнице состояния тут провалился бы);
+      б — свой след роняет и назван поимённо: следы сажаются по одному, каждый шаг обязан назвать
+          ровно накопленное;
+      в — база недоступна (файла нет · файл не база · файл пуст) — третий исход «НЕ ПРОВЕРЕНО»
+          со своими словами и своим кодом выхода, а не «следов нет»;
+      г — (когда названа planted) каждое пробное имя на стенде НАХОДИТСЯ: имя, которое приёмка сеять
+          перестала, в живой базе не найдётся никогда, и случай «не тронута» проходил бы слепым.
+    judge_db — копия или подставная база (empty_db) в каталоге стенда: подсадки пишутся в неё,
+    настоящая живая база здесь не открывается вовсе. Рядом с ней кладутся три пробных файла случая «в».
+    foreign — [(sql, параметры)]: записи соседа, пробных имён в них нет.
+    own — [(подпись, sql, параметры, {«таблица.столбец», …})]: свои следы по одному; множество —
+          то, что суд обязан назвать после этого шага.
+    planted — база стенда ПОСЛЕ подсадок приёмки (копия, в которую она сеяла) либо несколько таких баз
+          (у приёмки с базой на каждый случай): по ним судится «г», имя засчитано, если есть хоть в одной.
+    tails — следы в конце значения (как у ask_traces): судятся вместе с marks во всех четырёх случаях.
+    expect — какие из marks и tails обязаны найтись на стенде в «г»; по умолчанию — все. Называется,
+          когда часть имён приёмка сеет не в каждом прогоне (посев срабатывает лишь на бедной базе).
+    Вернуть [(буква, заголовок, прошёл ли, подробность)] — строки а, б, в и, при planted, г.
+    """
+    judge_db = Path(judge_db)
+    base = ask_traces(judge_db, marks, need, tails)
+    conn = sqlite3.connect(str(judge_db))
+    try:
+        written = conn.total_changes
+        for sql, params in foreign:
+            conn.execute(sql, params)
+        conn.commit()
+        written = conn.total_changes - written
+        o_a, n_a, w_a = traces_verdict(base, ask_traces(judge_db, marks, need, tails))
+        steps = []
+        for label, sql, params, want in own:
+            conn.execute(sql, params)
+            conn.commit()
+            outcome, names, _ = traces_verdict(base, ask_traces(judge_db, marks, need, tails))
+            steps.append((label, outcome, names, set(want)))
+    finally:
+        conn.close()
+    a_ok = base[0] is not None and bool(foreign) and written >= len(foreign) and o_a == "clean"
+    bad = [label for label, outcome, names, want in steps
+           if not (outcome == "traces" and {x.split(" +")[0] for x in names} == want)]
+    b_ok = bool(steps) and not bad
+    gone = judge_db.with_name("no-such-base.db")
+    garbage = judge_db.with_name("broken-base.db")
+    garbage.write_bytes("это не база данных, а просто текст".encode("utf-8") * 8)
+    empty = judge_db.with_name("empty-base.db")
+    empty.write_bytes(b"")
+    unknown = {p.name: traces_verdict(base, ask_traces(p, marks, need, tails)) for p in (gone, garbage, empty)}
+    clean_words = traces_words("clean", [], "")
+    found_words = traces_words("traces", ["таблица.столбец +1"], "")
+    words_ok = all(r[0] == "unknown" and "НЕ ПРОВЕРЕНО" in traces_words(*r)
+                   and "нет" not in traces_words(*r).split("(")[0] for r in unknown.values())
+    codes = (exit_code3(0, 0), exit_code3(1, 0), exit_code3(0, 1))
+    c_ok = (words_ok and "НЕ ПРОВЕРЕНО" not in clean_words and "НЕ ПРОВЕРЕНО" not in found_words
+            and len(set(codes)) == 3 and codes[2] == 2)
+    last = steps[-1][2] if steps else []
+    rows = [
+        ("а", "чужая запись в «живую» базу между началом и концом прогона случай НЕ роняет", a_ok,
+         f"чужих записей: {written}; суд: {traces_words(o_a, n_a, w_a)}"),
+        ("б", "свой след в «живой» базе случай РОНЯЕТ и назван поимённо", b_ok,
+         f"шагов {len(steps)}; на последнем: {traces_words('traces', last, '')}"
+         + (f" · НЕ ТО на шагах: {bad}" if bad else "")),
+        ("в", "база недоступна — третий исход «НЕ ПРОВЕРЕНО»: свои слова и свой код, не «следов нет»", c_ok,
+         "исходы: " + ", ".join(f"{k}→{v[0]}" for k, v in unknown.items())
+         + f"; коды (следов нет / следы есть / не проверено): {codes}"),
+    ]
+    if planted is not None:
+        exact = list(dict.fromkeys(str(m) for m in marks))
+        ends = list(dict.fromkeys(str(t) for t in tails))
+        names = exact + ends if expect is None else list(dict.fromkeys(str(m) for m in expect))
+        bases = [planted] if isinstance(planted, (str, Path)) else list(planted)
+        try:
+            seen = set()
+            for one in bases:
+                seen |= marks_found(one, [m for m in names if m in exact])
+                seen |= tails_found(one, [t for t in names if t in ends])
+            lost = [m for m in names if m not in seen]
+            d_ok, d_said = bool(names) and not lost, (
+                f"пробных имён {len(names)}, найдено на стенде {len(names) - len(lost)}"
+                + (f" · НЕ НАЙДЕНЫ: {', '.join(lost)}" if lost else ""))
+        except (sqlite3.Error, OSError) as e:
+            d_ok, d_said = False, f"база стенда не ответила: {type(e).__name__}: {e}"[:160]
+        rows.append(("г", "пробные имена на стенде находятся все — вопрос к живой базе не слеп", d_ok, d_said))
+    return rows
 
 
 def crlf_twin(text: str) -> str:

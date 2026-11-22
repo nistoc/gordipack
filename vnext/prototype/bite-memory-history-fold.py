@@ -9,6 +9,27 @@ r"""ПРИЁМКА сворачивания истории версий памя
 пересоздания последняя на месте · всё унесённое — старое и ни одно из хранимых · объединение
 не изменилось · возврат даёт прежнюю таблицу знак в знак.
 
+🎯 СЛУЧАЙ ⑦ «живая база не тронута» (карточка #804) судит ПО СВОИМ СЛЕДАМ ПОИМЁННО, а не по отпечатку
+файла живой базы: отпечаток менялся от ЛЮБОЙ записи соседа за время прогона (лента, сохранение памяти
+другой роли) и проваливал случай, хотя приёмка в живую базу не писала. Своё у приёмки четырёх видов:
+  • запись журнала о свёртке истории ИМЕННО этой роли (audit_log.target = «phoenix_history.<роль>») —
+    её пишет только испытуемый инструмент; замер 21.11.2026: в журнале живой базы контура Atlas за
+    11.07–21.11 (5883 строки) таких записей ноль;
+  • версии, посеянные прямой вставкой (phoenix_history.actor = «bite-memory-history-fold»);
+  • сохранения под НАСТОЯЩЕЙ ролью (случай ⑧, посевы через save-phoenix.py): пробных имён у них нет,
+    поэтому тело каждого кончается одной пробной строкой — её и ищет вопрос (mezo_stand.tail_traces);
+  • УДАЛЕНИЯ на своей копии (архив истории роли перед опытом, отметки пересоздания в случае ⑥):
+    след удаления — убыль, судится свойством «строк роли в архиве истории и отметок пересоздания
+    в живой базе не стало МЕНЬШЕ» (соседи их только добавляют).
+Третий исход: база не ответила на вопрос — «⚪ ⑦ не проверен», код 2, «не тронута» НЕ утверждается.
+Отпечаток файла печатается справкой, в суд не идёт.
+Встречные на подставной базе стенда: ⑦-а чужая запись случай НЕ роняет · ⑦-б свой след роняет и
+назван поимённо · ⑦-в база недоступна — «НЕ ПРОВЕРЕНО», свой код · ⑦-г посеянное на копии находится
+(иначе вопрос к живой базе слеп) · ⑦-д рост архива и отметок роли суд об убыли НЕ роняет ·
+⑦-е убыль своих строк роняет и названа · ⑦-ж база недоступна — суд об убыли отвечает «не проверено».
+⚖️ Граница: настоящая свёртка истории этой же роли на живой базе за время прогона оставила бы ту же
+запись журнала — от своей она неотличима; шаг схемы на живой базе, где он уже сведён, следа не оставляет.
+
 🎯 ПОРЧА (--break rebirth): из инструмента снято хранение «последней перед пересозданием» —
 краснеют случаи ③ · ③-в · ③-г (три взгляда на ОДНО свойство: с хранимой стороны и с унесённой),
 остальные зелёные — в том числе ③-д «объединение не изменилось»: потерь ноль даже под порчей.
@@ -88,6 +109,13 @@ STALE_ARCHIVE_BREAK = "stale-archive"
 # ⚡ КАРТОЧКА #634: третий механизм порчи — не патчит инструмент, не трогает архив-снимок,
 # а выключает ПОСЕВ недостающего материала (ниже, блок «ПОСЕВ НЕДОСТАЮЩЕГО МАТЕРИАЛА» в main()).
 SEED_OFF_BREAK = "seed-off"
+# ⚡ КАРТОЧКА #804: свои следы приёмки для суда случая ⑦ — см. шапку. Пробная строка стоит ПОСЛЕДНЕЙ
+# в теле каждого сохранения, которое приёмка делает через save-phoenix.py под настоящей ролью.
+SEED_ACTOR = "bite-memory-history-fold"
+PROBE_TAIL = "<!-- проба приёмки bite-memory-history-fold, копия базы -->"
+NEED = ("phoenix", "phoenix_history", "audit_log")   # без этих таблиц вопрос о следах ответа не даёт
+GUARDED = ("phoenix_history_archive", "role_rebirths")   # из них приёмка УДАЛЯЕТ на своей копии
+SOWN = []  # какие свои имена приёмка в этом прогоне на самом деле посеяла — их ждёт случай ⑦-г
 RESULTS = []
 NOT_STAGED = []  # карточка #634: случаи, которые честно не поставить (без выдуманных отметок)
 # ⚡ КАРТОЧКА #641 ④ (заметка COORD, записка #5282): под порчей seed-off итог печатал «✅ так и надо»
@@ -157,6 +185,47 @@ def history_snapshot(conn, role):
                         (role,)).fetchall()
 
 
+def own_rows(db, role):
+    """Сколько у роли строк в таблицах, из которых приёмка УДАЛЯЕТ на своей копии (GUARDED).
+
+    Вернуть ({таблица: число}, "") либо (None, причина), если база не ответила. Таблицы, которой
+    в базе нет, — ноль строк: шаг схемы приёмка сводит на копии, в живой базе его может ещё не быть.
+    База открывается СТРОГО НА ЧТЕНИЕ; без таблицы phoenix_history ответ не даётся — пустой файл
+    иначе неотличим от базы, из которой всё удалено.
+    """
+    try:
+        conn = sqlite3.connect(f"file:{pathlib.Path(db).as_posix()}?mode=ro", uri=True)
+        try:
+            tables = {x[0] for x in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if "phoenix_history" not in tables:
+                return None, "в базе нет таблицы phoenix_history"
+            return {t: (conn.execute(f"SELECT count(*) FROM {t} WHERE role=?", (role,)).fetchone()[0]
+                        if t in tables else 0) for t in GUARDED}, ""
+        finally:
+            conn.close()
+    except (sqlite3.Error, OSError) as exc:
+        return None, f"{type(exc).__name__}: {exc}"[:160]
+
+
+def shrunk_verdict(before, after):
+    """Суд об убыли своих строк: ("clean" | "gone" | "unknown", что убыло, причина)."""
+    if before[0] is None:
+        return "unknown", [], "до прогона: " + before[1]
+    if after[0] is None:
+        return "unknown", [], "после прогона: " + after[1]
+    gone = [f"{t}: было {before[0][t]}, стало {after[0].get(t, 0)}"
+            for t in sorted(before[0]) if after[0].get(t, 0) < before[0][t]]
+    return ("gone" if gone else "clean"), gone, ""
+
+
+def shrunk_words(outcome, gone, why):
+    if outcome == "unknown":
+        return f"НЕ ПРОВЕРЕНО — база не ответила ({why})"
+    if outcome == "gone":
+        return "строки роли УБЫЛИ — " + "; ".join(gone)
+    return "строк роли не убыло"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", default=None, help="база-образец; по умолчанию живая (копируется)")
@@ -173,6 +242,12 @@ def main() -> int:
     # средой СТЕНДА, не средой вызывающего — иначе MEZO_CONTAINER вызывающего доедет до них.
     stand_env = mezo_stand.stand_env(tmp)
     live_fp = file_fingerprint(src)
+    # ⚡ КАРТОЧКА #804: вопрос о своих следах и о своих строках — ДО первого действия приёмки.
+    fold_target = f"phoenix_history.{role}"
+    own_marks = (fold_target, SEED_ACTOR)
+    own_tails = (PROBE_TAIL,)
+    live_traces_before = mezo_stand.ask_traces(src, own_marks, NEED, own_tails)
+    live_rows_before = own_rows(src, role)
     tool = TOOL; broken_copy = None
     save = mezo_target.script("save-phoenix.py")  # нужен и посеву (ниже), и случаю ⑧
     seed_enabled = a.break_name != SEED_OFF_BREAK
@@ -266,11 +341,12 @@ def main() -> int:
                     f"обеих отметок, но новее X1: становится «последней перед КАЖДОЙ отметкой».\n"
             conn.execute("INSERT INTO phoenix_history(role, section, body, body_chars, saved_at, actor, "
                         "reason, prev_chars) VALUES (?,?,?,?,?,?,?,?)",
-                        (role, section, body1, len(body1), x1_at, "bite-memory-history-fold", "seed", None))
+                        (role, section, body1, len(body1), x1_at, SEED_ACTOR, "seed", None))
             conn.execute("INSERT INTO phoenix_history(role, section, body, body_chars, saved_at, actor, "
                         "reason, prev_chars) VALUES (?,?,?,?,?,?,?,?)",
-                        (role, section, body2, len(body2), x2_at, "bite-memory-history-fold", "seed", None))
+                        (role, section, body2, len(body2), x2_at, SEED_ACTOR, "seed", None))
             conn.commit()
+            SOWN.append(SEED_ACTOR)
             print(f"ℹ️ засеяно в копию: роли {role} добавлены 2 версии раздела {section!r} прямой "
                   f"вставкой — X1 {x1_at}, X2 {x2_at} (обе старше порога {threshold} и всех отметок "
                   f"пересоздания); в копии не хватало материала для случаев ①/③-контроль/③-е"
@@ -301,7 +377,7 @@ def main() -> int:
             seed_other = tmp / f"seed-{other_role}.md"
             seed_other.write_text(f"# {other_role}\n\nсемя случая ② (карточка #634): роли нужна хоть "
                                   f"одна версия истории, чтобы приёмка дошла до проверки «только "
-                                  f"свою» — дата не важна.\n", encoding="utf-8")
+                                  f"свою» — дата не важна.\n\n{PROBE_TAIL}\n", encoding="utf-8")
             env_other = dict(stand_env); env_other["MEZO_ROLE"] = other_role
             rseed_other = subprocess.run([sys.executable, "-B", str(save), "--role", other_role, "--section",
                                           other_section, "--file", str(seed_other), "--db", str(db)],
@@ -309,6 +385,8 @@ def main() -> int:
                                          env=env_other)
             conn.close()
             conn = sqlite3.connect(str(db))
+            if rseed_other.returncode == 0:
+                SOWN.append(PROBE_TAIL)
             print(f"ℹ️ засеяно в копию: роли {other_role} добавлена версия раздела {other_section!r} "
                   f"через save-phoenix.py (код {rseed_other.returncode}) — в копии не было ни одной "
                   f"версии этой роли для случая ②")
@@ -342,6 +420,8 @@ def main() -> int:
                            (role,)).fetchall()
         case(f"③-контроль свёртка прошла кодом 0 и что-то унесла ({len(archived)} версий)", code == 0 and len(archived) > 0,
              output.strip().splitlines()[-2] if len(output.strip().splitlines()) > 1 else output)
+        if code == 0 and archived:
+            SOWN.append(fold_target)  # инструмент унёс версии ⇒ его запись журнала обязана быть на копии
         # свойства ОСТАВШЕГОСЯ — другое определение предмета
         young = [r for r in history_before if r[2] >= threshold]
         case("③-а каждая версия моложе 7 суток на месте", all(r[0] in remaining_ids for r in young), f"молодых {len(young)}")
@@ -416,7 +496,8 @@ def main() -> int:
                 print(f"ℹ️ ⑧: у роли {role} в копии базы нет раздела plan — веду случай на разделе {section!r}")
             else:
                 seed = tmp / "seed-8.md"
-                seed.write_text(f"# {role}\n\nсемя случая ⑧: у роли в копии базы не было ни одного раздела.\n",
+                seed.write_text(f"# {role}\n\nсемя случая ⑧: у роли в копии базы не было ни одного раздела."
+                                f"\n\n{PROBE_TAIL}\n",
                                 encoding="utf-8")
                 env_seed = dict(stand_env); env_seed["MEZO_ROLE"] = role
                 rseed = subprocess.run([sys.executable, "-B", str(save), "--role", role, "--section", section,
@@ -427,6 +508,7 @@ def main() -> int:
                 row = conn.execute("SELECT body FROM phoenix WHERE role=? AND section=?", (role, section)).fetchone()
                 if rseed.returncode == 0 and row is not None:
                     body = row[0]
+                    SOWN.append(PROBE_TAIL)
                     print(f"ℹ️ ⑧: у роли {role} в копии базы не было ни одного раздела — засеян {section!r} "
                           f"первым сохранением (код {rseed.returncode})")
                 else:
@@ -441,10 +523,12 @@ def main() -> int:
             # ⚡ КАРТОЧКА #613: та же среда стенда, что у run() — не os.environ вызывающего.
             env = dict(stand_env); env["MEZO_ROLE"] = role
             for i in range(13):
-                f.write_text(body + f"\n\n<!-- проба приёмки {i}, копия базы -->", encoding="utf-8")
+                f.write_text(body + f"\n\n<!-- проба приёмки {i} -->\n{PROBE_TAIL}", encoding="utf-8")
                 r = subprocess.run([sys.executable, "-B", str(save), "--role", role, "--section", section, "--file", str(f),
                                     "--db", str(db)], capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
                 codes.append(r.returncode)
+            if any(k == 0 for k in codes):
+                SOWN.append(PROBE_TAIL)
             conn.close()
             conn = sqlite3.connect(str(db))
             total1 = conn.execute("SELECT (SELECT count(*) FROM phoenix_history)+(SELECT count(*) FROM phoenix_history_archive)").fetchone()[0]
@@ -464,7 +548,99 @@ def main() -> int:
             case("⑧ 13 сохранений раздела: в истории ровно 10 последних + самая длинная, лишнее ПЕРЕНЕСЕНО, потерь ноль",
                  all(k == 0 for k in codes) and in_history == expected and total1 == total0 + 13 and from_save > 0,
                  f"раздел {section!r} · коды {set(codes)} · в истории {len(in_history)} (ждали {len(expected)}) · всего было {total0} стало {total1} · перенесено save-phoenix {from_save}")
-        case("⑦ живая база не тронута приёмкой (отпечаток файла совпал)", file_fingerprint(src) == live_fp)
+        # ⑦ ЖИВАЯ БАЗА НЕ ТРОНУТА — суд по своим следам поимённо и по убыли своих строк (карточка #804);
+        #    отпечаток файла — справкой: он меняется от любой записи соседа за время прогона.
+        title7 = "⑦ живая база не тронута приёмкой (своих следов в ней не прибавилось, строк роли не убыло)"
+        t_out, t_names, t_why = mezo_stand.traces_verdict(
+            live_traces_before, mezo_stand.ask_traces(src, own_marks, NEED, own_tails))
+        s_out, s_gone, s_why = shrunk_verdict(live_rows_before, own_rows(src, role))
+        try:
+            same_file = "совпал" if file_fingerprint(src) == live_fp else "изменился (в базу писали за время прогона)"
+        except OSError as exc:
+            same_file = f"не снят ({type(exc).__name__})"
+        said7 = (f"способ: по своим следам — {mezo_stand.traces_words(t_out, t_names, t_why)}; "
+                 f"по убыли — {shrunk_words(s_out, s_gone, s_why)}\n"
+                 f"   справка, не суд: отпечаток файла живой базы {same_file}")
+        if t_out == "traces" or s_out == "gone":
+            case(title7, False, said7)
+        elif "unknown" in (t_out, s_out):
+            print(f"⚪ ⑦ не проверен: база не ответила на вопрос приёмки — «не тронута» НЕ утверждается\n   {said7}")
+            NOT_STAGED.append("⑦")
+        else:
+            case(title7, True, said7)
+
+        # ⑦-а…г ВСТРЕЧНЫЕ суда по следам: те же функции на подставной базе стенда (схема копии, строк
+        # нет) — живая база для них не открывается. ⑦-г судит по копии, в которую приёмка сеяла.
+        judge_db = mezo_stand.empty_db(db, tmp / "judge.db")
+        save_rule = "save-phoenix: сверх 10 последних и самой длинной"
+        memory_sql = "INSERT INTO phoenix (role, section, body) VALUES (?,?,?)"
+        history_sql = ("INSERT INTO phoenix_history (role, section, body, body_chars, saved_at, actor, reason) "
+                       "VALUES (?,?,?,?,'2026-01-01 00:00:00',?,?)")
+        moved_sql = ("INSERT INTO phoenix_history_archive (role, section, body, body_chars, saved_at, actor, "
+                     "reason, moved_by, rule) VALUES (?,?,?,?,'2026-01-01 00:00:00',?,'save',?,?)")
+        journal_sql = "INSERT INTO audit_log (actor_role, action, target, diff_md) VALUES (?,?,?,?)"
+        rebirth_sql = "INSERT INTO role_rebirths (role, at, source, noted_by) VALUES (?,?,'transcript:проба','проба')"
+        probe_body = "тело пробы\n\n" + PROBE_TAIL + "\n"
+        counter = mezo_stand.traces_counter_cases(
+            judge_db, own_marks, NEED,
+            foreign=[(memory_sql, (role, "plan", "план роли после её обычного сохранения")),
+                     (history_sql, (role, "plan", "тело", 4, role, "save")),
+                     (moved_sql, (role, "plan", "тело", 4, role, role, save_rule)),
+                     (journal_sql, (other_role, "fold_history", f"phoenix_history.{other_role}", "свёртка соседа")),
+                     (journal_sql, (role, "save", f"phoenix.{role}.plan", "обычное сохранение роли"))],
+            own=[("запись журнала о свёртке", journal_sql, (role, "fold_history", fold_target, "проба"),
+                  {"audit_log.target"}),
+                 ("версия, посеянная прямой вставкой", history_sql, (role, "plan", "тело", 4, SEED_ACTOR, "seed"),
+                  {"audit_log.target", "phoenix_history.actor"}),
+                 ("сохранение с пробной строкой в конце", history_sql,
+                  (role, "plan", probe_body, len(probe_body), role, "save"),
+                  {"audit_log.target", "phoenix_history.actor", "phoenix_history.body"}),
+                 ("память с пробной строкой в конце", memory_sql, (other_role, "plan", probe_body),
+                  {"audit_log.target", "phoenix_history.actor", "phoenix_history.body", "phoenix.body"})],
+            planted=(db if SOWN else None), tails=own_tails, expect=SOWN)
+        for letter, title, ok, detail in counter:
+            case(f"⑦-{letter} {title}", ok, detail)
+        if not SOWN:
+            print("⚪ ⑦-г не поставлен: в этом прогоне приёмка ничего своего на копию не посеяла — "
+                  "проверять, находятся ли пробные имена, не на чем")
+            NOT_STAGED.append("⑦-г")
+
+        # ⑦-д/е/ж ВСТРЕЧНЫЕ суда об убыли — на той же подставной базе.
+        judge = sqlite3.connect(str(judge_db))
+        try:
+            for i in range(3):
+                judge.execute(moved_sql, (role, "plan", f"тело {i}", 6, role, role, save_rule))
+            for at in ("2026-07-16 00:00:00", "2026-09-01 00:00:00"):
+                judge.execute(rebirth_sql, (role, at))
+            judge.execute(moved_sql, (other_role, "plan", "тело соседа", 11, other_role, other_role, save_rule))
+            judge.commit()
+            rows0 = own_rows(judge_db, role)
+            # сосед: архив роли вырос, отметка прибавилась, у ДРУГОЙ роли строка архива исчезла
+            judge.execute(moved_sql, (role, "plan", "тело новое", 10, role, role, save_rule))
+            judge.execute(rebirth_sql, (role, "2026-11-01 00:00:00"))
+            judge.execute("DELETE FROM phoenix_history_archive WHERE role=?", (other_role,))
+            judge.commit()
+            grown = shrunk_verdict(rows0, own_rows(judge_db, role))
+            judge.execute("DELETE FROM phoenix_history_archive WHERE role=?", (role,))
+            judge.commit()
+            lost_archive = shrunk_verdict(rows0, own_rows(judge_db, role))
+            judge.execute("DELETE FROM role_rebirths WHERE role=?", (role,))
+            judge.commit()
+            lost_both = shrunk_verdict(rows0, own_rows(judge_db, role))
+        finally:
+            judge.close()
+        case("⑦-д рост архива и отметок роли и убыль строк ДРУГОЙ роли суд об убыли НЕ роняют",
+             rows0[0] is not None and grown[0] == "clean", f"было {rows0[0]}; суд: {shrunk_words(*grown)}")
+        case("⑦-е убыль своих строк суд РОНЯЕТ и называет таблицу и числа",
+             lost_archive[0] == "gone" and [g.split(":")[0] for g in lost_archive[1]] == ["phoenix_history_archive"]
+             and lost_both[0] == "gone" and [g.split(":")[0] for g in lost_both[1]] == list(GUARDED),
+             shrunk_words(*lost_both))
+        unknown_rows = {p.name: shrunk_verdict(rows0, own_rows(p, role))
+                        for p in (judge_db.with_name("no-such-base.db"), judge_db.with_name("broken-base.db"),
+                                  judge_db.with_name("empty-base.db"))}
+        case("⑦-ж база недоступна — суд об убыли отвечает «НЕ ПРОВЕРЕНО», а не «не убыло»",
+             all(v[0] == "unknown" and "НЕ ПРОВЕРЕНО" in shrunk_words(*v) for v in unknown_rows.values()),
+             "исходы: " + ", ".join(f"{k}→{v[0]}" for k, v in unknown_rows.items()))
     finally:
         if broken_copy and broken_copy.exists(): broken_copy.unlink()
         if conn is not None:

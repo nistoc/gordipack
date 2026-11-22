@@ -13,7 +13,12 @@ bite-rule-expiry.py — приёмка захода 2.3: наступление 
   ⑥ немашинное условие, правило не трогали дольше порога → 🟡 «перечитай рукой»
   ⑦ отозванное правило с наступившим условием → НЕ судится (история)
   ⑧ ОБРАТНЫЙ ХОД: ветка карточек отключена в копии → ① гаснет
-  ⑨ контроль: живая база прогоном не изменилась
+  ⑨ контроль: живая база прогоном не изменилась. Суд — ПО СВОИМ СЛЕДАМ ПОИМЁННО (роль ZZE и семь
+     ключей правил zzexp-*: вопрос mezo_stand.ask_traces, судится ПРИБАВКА следов), а не по размеру
+     и времени правки файла: те меняет любая честная запись соседей за время прогона (карточка #804).
+     Встречные на подставной базе стенда: ⑨-а чужая запись случай НЕ роняет · ⑨-б свой след
+     роняет и назван поимённо · ⑨-в база недоступна — третий исход «НЕ ПРОВЕРЕНО», код выхода 2 ·
+     ⑨-г все пробные имена на стенде находятся (иначе вопрос к живой базе слеп)
 """
 import importlib.util
 import shutil
@@ -51,8 +56,16 @@ def load(path, name):
 mod = load(GUARD, "gre_live")
 stand = mezo_stand.new("rule-expiry-")
 db = stand / "mezosync.db"
-live_before = (LIVE_DB.stat().st_size, LIVE_DB.stat().st_mtime_ns)
+# Свои следы приёмки (карточка #804): роль подсаженных карточек и ключи подсаженных правил. По ним ⑨
+# судит, не попали ли записи в живую базу; таблицы NEED — куда эти имена сеются.
+MARKS = ("ZZE", "zzexp-card-closed", "zzexp-card-open", "zzexp-deadline-past", "zzexp-deadline-future",
+         "zzexp-origin-date", "zzexp-stale-hand", "zzexp-revoked")
+NEED = ("backlog", "rules")
+live_before = mezo_stand.ask_traces(LIVE_DB, MARKS, NEED)
 mezo_stand.snapshot_db(LIVE_DB, db)
+# Подставная база для встречных ⑨-а/б/в: схема копии без строк, снята из стенда — живая база
+# второй раз не открывается.
+judge_db = mezo_stand.empty_db(db, stand / "judge.db")
 
 con = sqlite3.connect(str(db))
 cur = con.execute("INSERT INTO backlog (role, title, body_md, status, priority, tags, "
@@ -125,8 +138,33 @@ conn.close()
 case("⑧ обратный ход: ветка карточек снята → ① гаснет",
      "zzexp-card-closed" not in {k for k, _ in red2})
 
-live_after = (LIVE_DB.stat().st_size, LIVE_DB.stat().st_mtime_ns)
-case("⑨ живая база прогоном не изменилась", live_before == live_after)
+# ⑨ живая база прогоном не изменилась — суд ПО СВОИМ СЛЕДАМ поимённо (карточка #804). Разница состояния
+# файла не судится: чужая честная запись за время прогона её меняет, а свой след она может и пропустить.
+UNCHECKED = 0
+outcome, names, why = mezo_stand.traces_verdict(live_before, mezo_stand.ask_traces(LIVE_DB, MARKS, NEED))
+said = "способ: по своим следам — " + mezo_stand.traces_words(outcome, names, why)
+if outcome == "unknown":
+    UNCHECKED += 1
+    print("⏳ ⑨ живая база прогоном не изменилась: НЕ ПРОВЕРЕНО")
+    print(f"   {said}; «следов нет» НЕ утверждается")
+else:
+    case("⑨ живая база прогоном не изменилась", outcome == "clean", said)
 
+# ⑨-а/б/в/г ВСТРЕЧНЫЕ: тот же суд на подставной базе стенда — чужая запись, свои следы по одному, база
+# недоступна; и пробные имена на самом стенде находятся все.
+CARD = ("INSERT INTO backlog (role, title, body_md, status, priority, tags, created_by, done_when) "
+        "VALUES (?,?,'т','open','normal','[]',?,'к')")
+RULE = "INSERT INTO rules (rule_key, body, status, expiry_kind, expiry_cond) VALUES (?,'тело','active','until_event',?)"
+for letter, title, ok, detail in mezo_stand.traces_counter_cases(
+        judge_db, MARKS, NEED,
+        foreign=[(CARD, ("OTHERROLE", "чужая карточка о другом", "OTHERROLE")),
+                 (RULE, ("other-rule-of-a-neighbour", "чужое условие"))],
+        own=[("карточка", CARD, ("ZZE", "пробная", "PROTO"), {"backlog.role"}),
+             ("правило", RULE, ("zzexp-card-closed", "условие пробы"), {"backlog.role", "rules.rule_key"})],
+        planted=db):
+    case(f"⑨-{letter} {title}", ok, detail)
+
+if UNCHECKED:
+    print(f"⏳ НЕ ПРОВЕРЕНО: {UNCHECKED} — база не ответила; прогон выходит кодом 2, а не «прошёл»")
 print(f"\nИТОГ: {OK}/{OK + FAIL}")
-raise SystemExit(mezo_stand.finish(0 if FAIL == 0 else 1))
+raise SystemExit(mezo_stand.finish(mezo_stand.exit_code3(FAIL, UNCHECKED)))
