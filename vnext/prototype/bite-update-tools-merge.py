@@ -50,13 +50,23 @@ local.paths и указывает на НАСТОЯЩИЙ клон пакета 
 этой приёмки, — защита на случай, если PACKAGE когда-нибудь снова укажет мимо. Это
 СОЗНАТЕЛЬНОЕ отличие от bite-update-tools-rev.py (та приёмка пакет только читает).
 
-Два контроля внизу файла, независимых:
+Контроли внизу файла:
   · «клон приёмки не тронут ВЫЗОВАМИ update-tools.py» — HEAD/status/diff СВОЕГО клона
     сравниваются ДО первого вызова update-tools.py (после того, как приёмка сама закончила
-    готовить историю) и ПОСЛЕ всех вызовов;
-  · «образец не тронут» — HEAD и `git status --porcelain` у САМОГО template_root снимаются
-    ДО любого действия приёмки (до клонирования тоже) и сравниваются в самом конце: образец
-    не должен измениться НИ ОДНИМ байтом за весь прогон, включая собственное клонирование.
+    готовить историю) и ПОСЛЕ всех вызовов. Суд разницей состояния здесь законен: клон свой,
+    лежит в своём временном каталоге, соседей у него нет по построению;
+  · «образец не тронут» и «meta живого контура не тронута» — суд ПО СВОИМ СЛЕДАМ поимённо
+    (карточка #804), а не по разнице состояния. Образец в живом контуре — общий клон пакета:
+    HEAD и status в нём двигает любой честный commit соседа, а meta пишет установка
+    инструментов. Свои следы прогона: в образце — commit под адресом автора с номером прогона
+    и файл scripts/merge-*.py с меткой прогона; в meta — путь своего стенда, версии пакета из
+    своего клона и отпечатки своих файлов. Состояние «до и после» печатается справкой.
+    У каждого из двух контролей четыре встречных на СВОЕЙ подставке: -а чужая запись случай
+    НЕ роняет · -б свой след роняет и назван поимённо · -в предмет недоступен — третий исход
+    «НЕ ПРОВЕРЕНО», код выхода 2 · -г свои следы на стенде находятся (вопрос не слеп).
+Нарочная поломка «суд по разнице состояния» — ключом, прежний суд возвращается ПОВЕРХ нового:
+    --break state-template   ПРОГНОЗ: проваливается ровно «образец-а», остальные проходят
+    --break state-meta       ПРОГНОЗ: проваливается ровно «meta-а», остальные проходят
 
 ⚖️ ОБРАЗЕЦ БЕЗ ИСТОРИИ (карточка #667). Контур, собранный из ВЫГРУЗКИ пакета (архив без
 .git), держит образец обычным каталогом — клонировать нечего, и прежде приёмка падала
@@ -64,8 +74,9 @@ local.paths и указывает на НАСТОЯЩИЙ клон пакета 
 это «СЛОМАНО»). Но ни один случай не стои́т на истории САМОГО образца: всю историю, на
 которой мерятся ①–⑦, приёмка коммитит сама. Поэтому у выгрузки свой клон собирается иначе —
 `git init` во временном каталоге и файлы образца ОДНИМ коммитом, — а случаи те же. Контроль
-«образец не тронут» у выгрузки сравнивает отпечаток всех её файлов (HEAD и status у
-каталога без git пусты всегда — сравнение было бы пустым).
+«образец не тронут» у выгрузки ищет свои следы файлами с меткой прогона (коммитов у каталога
+без git нет); справкой печатается отпечаток всех её файлов (HEAD и status у каталога без git
+пусты всегда — сравнение их было бы пустым).
 
 ⚖️ КОНТУРЫ ЗДЕСЬ — ЛЁГКИЕ, НЕ ЧЕРЕЗ init-group.py: каждому случаю нужны только meta
 (table) + один файл в scripts/, а не работающая группа с ролями/лентой/бэклогом. Полный
@@ -98,6 +109,30 @@ import mezo_stand  # noqa: E402 — из папки приёмки, не исп�
 if not hasattr(mezo_stand, "stand_env"):
     sys.exit(f"⛔ НЕ ЗАПУСТИЛАСЬ: в {mezo_stand.__file__} нет stand_env — помощник в папке "
              "приёмки старше неё; возьми оба файла из одной версии пакета")
+
+# Нарочная поломка «суд по разнице состояния» (карточка #804): ключ возвращает одному из двух
+# контролей прежний суд ПОВЕРХ суда по своим следам. Иных аргументов у приёмки нет.
+BREAKS = {"state-template": "образец-а", "state-meta": "meta-а"}
+BREAK = None
+if sys.argv[1:]:
+    if len(sys.argv) == 3 and sys.argv[1] == "--break" and sys.argv[2] in BREAKS:
+        BREAK = sys.argv[2]
+        print(f"⚖️ НАРОЧНАЯ ПОЛОМКА «{BREAK}»: суд по разнице состояния возвращён. ПРОГНОЗ: "
+              f"проваливается ровно встречный случай «{BREAKS[BREAK]}», остальные проходят")
+    else:
+        print("⛔ НЕ ЗАПУСТИЛАСЬ: аргументы не разобраны. Допустимо: без аргументов либо "
+              "--break state-template | --break state-meta")
+        sys.exit(2)
+
+# Свои следы этого прогона (карточка #804). Номер прогона стоит в адресе автора каждого коммита
+# приёмки и в первой строке каждого её файла; по нему она узнаёт СВОЁ в образце и в meta и не
+# путает его ни с честной записью соседа, ни с другим прогоном этой же приёмки.
+RUN_ID = os.urandom(4).hex()
+OWN_NAME, OWN_EMAIL = "bite609", f"bite609-{RUN_ID}@local"
+RUN_NONCE = f"# bite609 прогон {RUN_ID}\n".encode("utf-8")
+OWN_COMMITS: list[str] = []          # версии (12 знаков), созданные приёмкой в своём клоне
+OWN_FINGERPRINTS: set[str] = set()   # отпечатки текстов, которые она коммитит
+CIRCUIT_DBS: list[Path] = []         # базы лёгких контуров стенда
 
 
 def template_is_repository(root) -> bool:
@@ -137,11 +172,68 @@ def template_state(root) -> tuple[str, str]:
            g("status", "--porcelain").decode("utf-8", "replace").strip())
 
 
+def template_traces(root) -> tuple:
+    """Свои следы ЭТОГО прогона в образце (или в каталоге, где их ищут): (словарь, "") либо
+    (None, причина).
+
+    След — то, что могла оставить только эта приёмка (карточка #804):
+      · commit под адресом автора с номером прогона — по всем веткам и по журналу движений;
+      · файл scripts/merge-*.py с меткой прогона в тексте (у образца-выгрузки без git — только это).
+    Чужой commit, чужая правка и даже чужой файл с тем же именем сюда не попадают: номера прогона
+    в них нет. Каталога нет или git не ответил — None и причина; «следов нет» при этом НЕ
+    утверждается. Читает только, ничего не пишет.
+    """
+    root = Path(root)
+    if not root.is_dir():
+        return None, f"каталога «{root.name}» нет"
+    found: dict[str, int] = {}
+    try:
+        for p in sorted((root / "scripts").glob("merge-*.py")):
+            if p.is_file() and RUN_NONCE.strip() in p.read_bytes():
+                found[f"файл scripts/{p.name} с меткой прогона"] = 1
+    except OSError as e:
+        return None, f"{type(e).__name__}: {e}"[:120]
+    if template_is_repository(root):
+        r = subprocess.run(["git", "-C", str(root), "log", "--all", "--reflog", "--fixed-strings",
+                            f"--author={OWN_EMAIL}", "--format=%H %s"],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace")
+        if r.returncode != 0:
+            return None, "git log не ответил: " + (r.stderr or "").strip()[:100]
+        for line in r.stdout.splitlines():
+            if line.strip():
+                found[f"commit {line[:12]} «{line[41:].strip()}»"] = 1
+    return found, ""
+
+
+def template_verdict(root, traces_before, state_before) -> tuple:
+    """Суд «образец этим прогоном не тронут» — по своим следам, три исхода
+    (mezo_stand.traces_verdict). Под нарочной поломкой «state-template» поверх него возвращается
+    прежний суд: состояние каталога изменилось — значит «тронут», чьей бы рукой оно ни менялось."""
+    outcome, names, why = mezo_stand.traces_verdict(traces_before, template_traces(root))
+    if BREAK == "state-template" and outcome == "clean" and template_state(root) != state_before:
+        return "traces", ["состояние каталога изменилось — прежний суд, нарочная поломка"], ""
+    return outcome, names, why
+
+
+def trace_words(outcome, names, why, where, silent) -> str:
+    """Слова трёх исходов суда по своим следам — у каждого свои, чтобы третий не читался как первый."""
+    if outcome == "clean":
+        return f"своих следов в {where} нет"
+    if outcome == "traces":
+        return "СЛЕДЫ ЕСТЬ: " + ", ".join(names)
+    return f"НЕ ПРОВЕРЕНО: {silent} на вопрос о своих следах ({why})"
+
+
+TEMPLATE_WORDS = ("образце", "образец не ответил")
+META_WORDS = ("meta", "база не ответила")
+
+
 # ⛔ ВТОРОЙ ВОЗВРАТ (карточка #609): снимок берётся ДО ЛЮБОГО действия этой приёмки — раньше
 # собственного клонирования тоже. Сравнение — в самом конце файла (контроль «образец не тронут»).
 TEMPLATE_ROOT = mezo_paths.template_root(__file__)
 TEMPLATE_IS_REPOSITORY = template_is_repository(TEMPLATE_ROOT)
-TEMPLATE_BEFORE = template_state(TEMPLATE_ROOT)
+TEMPLATE_BEFORE = template_state(TEMPLATE_ROOT)             # справка, не суд (карточка #804)
+TEMPLATE_TRACES_BEFORE = template_traces(TEMPLATE_ROOT)      # суд: свои следы до первого действия
 
 STAND = mezo_stand.new("bite-609-merge-")
 
@@ -163,13 +255,15 @@ else:
     # при этом только читается (копирование), как и при `git clone`.
     shutil.copytree(TEMPLATE_ROOT, PACKAGE, ignore=shutil.ignore_patterns(".git", "__pycache__"))
     for _step in (["init", "-q"], ["add", "-A"],
-                  ["-c", "user.name=bite609", "-c", "user.email=bite609@local",
+                  ["-c", f"user.name={OWN_NAME}", "-c", f"user.email={OWN_EMAIL}",
                    "commit", "-q", "-m", "bite609: файлы образца-выгрузки одним коммитом"]):
         _r = subprocess.run(["git", "-C", str(PACKAGE), *_step], capture_output=True, text=True)
         if _r.returncode != 0:
             sys.exit(f"⛔ НЕ ЗАПУСТИЛАСЬ: свой репозиторий из образца-выгрузки ({TEMPLATE_ROOT}) "
                      f"в стенде ({PACKAGE}) не собрался на «git {' '.join(_step[:2])}»: "
                      f"{_r.stderr.strip()[:300]}")
+    OWN_COMMITS.append(subprocess.run(["git", "-C", str(PACKAGE), "rev-parse", "HEAD"],
+                                      capture_output=True, text=True).stdout.strip()[:12])
     print(f"⚖️ образец — выгрузка без истории git ({TEMPLATE_ROOT}): свой репозиторий собран "
           "из его файлов одним коммитом; историю, на которой стоят случаи, приёмка коммитит "
           "сама, как и в клоне")
@@ -177,6 +271,7 @@ else:
 RFP_TOOL_PATH = PACKAGE / "scripts" / "rules-from-pack.py"   # копируем, только если есть — не обязателен этим случаям
 
 OK = FAIL = 0
+FAILED: list[str] = []    # проваленные случаи поимённо — сверка прогноза нарочной поломки
 
 
 def case(name, cond, detail=""):
@@ -185,6 +280,8 @@ def case(name, cond, detail=""):
     if detail:
         print(f"   {detail}")
     OK, FAIL = OK + (1 if cond else 0), FAIL + (0 if cond else 1)
+    if not cond:
+        FAILED.append(name)
 
 
 def digest(data: bytes) -> str:
@@ -206,14 +303,66 @@ def pack_state() -> tuple[str, str, str]:
             hashlib.sha256(g("diff", "HEAD", "--binary")).hexdigest()[:12])
 
 
-def live_meta() -> dict:
-    c = sqlite3.connect(f"file:{mezo_paths.live_db().as_posix()}?mode=ro", uri=True)
-    m = dict(c.execute("SELECT key, value FROM meta"))
-    c.close()
-    return m
+LIVE_DB = mezo_paths.live_db()
 
 
-LIVE_META_BEFORE = live_meta()
+def read_meta(db):
+    """Таблица meta базы словарём — справка для контроля, не суд. База не ответила — None."""
+    try:
+        c = sqlite3.connect(f"file:{Path(db).as_posix()}?mode=ro", uri=True)
+        try:
+            return dict(c.execute("SELECT key, value FROM meta"))
+        finally:
+            c.close()
+    except (sqlite3.Error, OSError):
+        return None
+
+
+def own_meta_marks() -> tuple:
+    """Что несёт СВОЁ в meta, пиши испытуемый не в ту базу: так выглядят его записи об источнике."""
+    return (("путь своего стенда", [STAND.name]),
+            ("своя версия пакета", list(OWN_COMMITS)),
+            ("отпечаток своего файла", sorted(OWN_FINGERPRINTS)))
+
+
+def meta_traces(db) -> tuple:
+    """Свои следы ЭТОГО прогона в таблице meta базы: (словарь, "") либо (None, причина).
+
+    След — значение meta, внутри которого стоит своё (карточка #804): путь своего стенда (им
+    записан источник), версия пакета из своего клона, отпечаток своего файла. Ищется ВХОЖДЕНИЕМ
+    во все значения: отпечатки лежат внутри одного большого значения, точным совпадением их не
+    взять. Запись соседа (установка инструментов меняет версию и отпечатки) сюда не попадает —
+    своего в ней нет. База не открылась или таблицы meta в ней нет — None и причина.
+    Открывает базу СТРОГО НА ЧТЕНИЕ.
+    """
+    try:
+        c = sqlite3.connect(f"file:{Path(db).as_posix()}?mode=ro", uri=True)
+        try:
+            rows = c.execute("SELECT key, value FROM meta").fetchall()
+        finally:
+            c.close()
+    except (sqlite3.Error, OSError) as e:
+        return None, f"{type(e).__name__}: {e}"[:120]
+    found: dict[str, int] = {}
+    for key, value in rows:
+        text = str(value or "")
+        for kind, marks in own_meta_marks():
+            for mark in marks:
+                if mark and mark in text:
+                    found[f"meta.{key} ← {kind} {mark}"] = 1
+    return found, ""
+
+
+def meta_verdict(db, traces_before, meta_before) -> tuple:
+    """Суд «meta этим прогоном не тронута» — по своим следам, три исхода. Под нарочной поломкой
+    «state-meta» поверх него возвращается прежний суд: изменился хоть один ключ — значит «тронута»."""
+    outcome, names, why = mezo_stand.traces_verdict(traces_before, meta_traces(db))
+    if BREAK == "state-meta" and outcome == "clean" and read_meta(db) != meta_before:
+        return "traces", ["ключи meta изменились — прежний суд, нарочная поломка"], ""
+    return outcome, names, why
+
+
+LIVE_META_BEFORE = read_meta(LIVE_DB)      # справка, не суд (карточка #804)
 
 
 def add_pack_commit(rel: str, content: bytes, message: str) -> str:
@@ -234,9 +383,12 @@ def add_pack_commit(rel: str, content: bytes, message: str) -> str:
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_bytes(content)
     git("add", rel)
-    git("-c", "user.name=bite609", "-c", "user.email=bite609@local",
+    git("-c", f"user.name={OWN_NAME}", "-c", f"user.email={OWN_EMAIL}",
        "commit", "-q", "-m", message)
-    return git("rev-parse", "HEAD").stdout.strip()[:12]
+    made = git("rev-parse", "HEAD").stdout.strip()[:12]
+    OWN_COMMITS.append(made)                 # свои следы прогона (карточка #804)
+    OWN_FINGERPRINTS.add(digest(content))
+    return made
 
 
 def make_light_circuit(name: str, seed: dict[str, bytes], fingerprints: dict[str, str],
@@ -263,6 +415,7 @@ def make_light_circuit(name: str, seed: dict[str, bytes], fingerprints: dict[str
         conn.execute("INSERT INTO meta (key, value) VALUES (?, ?)", (k, v))
     conn.commit()
     conn.close()
+    CIRCUIT_DBS.append(db)
     return root, scripts, db
 
 
@@ -294,7 +447,8 @@ def meta_of(db: Path) -> dict:
 # о постоянном каталоге. Без неё `git add` не видел бы изменения, и коммит честно
 # отказывал «нечего коммитить», а не тихо создавался. Метка — ОДНА на весь прогон,
 # в начале каждого файла-образца: относительные различия L1/L2/L3 внутри запуска не меняет.
-RUN_NONCE = f"# bite609 прогон {os.urandom(4).hex()}\n".encode("utf-8")
+# Сама метка RUN_NONCE задана выше, рядом с номером прогона RUN_ID: по ней же приёмка узнаёт
+# свои следы в образце (карточка #804).
 L1, L2, L3 = RUN_NONCE + b"line1 original\n", b"line2 shared\n", b"line3 original\n"
 
 # ① / ② — merge-A.py: опора (L1,L2,L3), пакет потом меняет ТОЛЬКО L3 (непересекающиеся правки)
@@ -432,6 +586,9 @@ OWN_L = RUN_NONCE + b"line1 EDITED BY CIRCUIT (case L)\n" + L2 + L3   # файл
 FP_L = digest(OPORA_L)
 
 PACK_READY_STATE = pack_state()   # с этой точки update-tools.py САМ пакет больше не меняет
+# Свои версии и отпечатки известны все, испытуемый ещё не звался ни разу: вопрос о своих следах
+# в meta живого контура — «до» (карточка #804).
+LIVE_TRACES_BEFORE = meta_traces(LIVE_DB)
 
 
 # ═══ ① у «✋» — печатается «менял после опоры: да — коммиты …» / «не менял» (встречный) ════
@@ -874,6 +1031,8 @@ print()
 print(f"{'✅' if FAIL == 0 else '🔴'} ИТОГ: {OK} из {OK + FAIL}")
 
 print("---- контроль: клон приёмки (PACKAGE, СВОЙ временный клон) не тронут ВЫЗОВАМИ update-tools.py ----")
+# Суд разницей состояния здесь законен и остаётся (карточка #804): клон свой, лежит в своём
+# временном каталоге, пишет в него только эта приёмка — соседей нет по построению.
 pack_after = pack_state()
 case("контроль: клон приёмки тот же, что был ПОСЛЕ подготовки истории приёмкой (сам "
     "update-tools.py в него ни разу не написал: git log/show/rev-parse — только чтение)",
@@ -881,27 +1040,231 @@ case("контроль: клон приёмки тот же, что был ПО�
     f"после подготовки: {PACK_READY_STATE[0][:12]} · разница {PACK_READY_STATE[2]}\n"
     f"   сейчас:         {pack_after[0][:12]} · разница {pack_after[2]}")
 
+UNCHECKED = 0
+
+
+def control(name, outcome, said, reference):
+    """Контроль с тремя исходами: прошёл · провален · НЕ ПРОВЕРЕНО — свой знак и свой счёт."""
+    global UNCHECKED
+    if outcome == "unknown":
+        UNCHECKED += 1
+        print(f"⏳ {name}: НЕ ПРОВЕРЕНО")
+        print(f"   {said}; «следов нет» НЕ утверждается\n   {reference}")
+    else:
+        case(name, outcome == "clean", f"{said}\n   {reference}")
+
+
+def state_words(state) -> str:
+    if state is None:
+        return "снять не удалось"
+    if TEMPLATE_IS_REPOSITORY:
+        lines = len(state[1].splitlines())
+        return f"HEAD {state[0][:12]} · status: " + (f"строк {lines}" if lines else "пусто")
+    return f"{state[0]} · {state[1]}"
+
+
+def method_words(broken: bool) -> str:
+    return ("способ: по своим следам, поверх — прежний суд по разнице состояния (нарочная поломка) — "
+            if broken else "способ: по своим следам — ")
+
+
 print("---- контроль (ВТОРОЙ ВОЗВРАТ, карточка #609): ОБРАЗЕЦ (template_root) не тронут ----")
-TEMPLATE_AFTER = template_state(TEMPLATE_ROOT)
-case("контроль: образец (template_root) не изменился НИ БАЙТОМ за весь прогон — ни своим "
-    "клонированием, ни коммитами приёмки, ни вызовами update-tools.py ("
-    + ("HEAD и status --porcelain сняты ДО первого действия и сравнены сейчас"
-       if TEMPLATE_IS_REPOSITORY else
-       "отпечаток всех файлов выгрузки снят ДО первого действия и сравнён сейчас")
-    + ")",
-    TEMPLATE_AFTER == TEMPLATE_BEFORE,
-    (f"было:  HEAD {TEMPLATE_BEFORE[0][:12]} · status «{TEMPLATE_BEFORE[1] or 'пусто'}»\n"
-     f"   стало: HEAD {TEMPLATE_AFTER[0][:12]} · status «{TEMPLATE_AFTER[1] or 'пусто'}»")
-    if TEMPLATE_IS_REPOSITORY else
-    (f"было:  {TEMPLATE_BEFORE[0]} · {TEMPLATE_BEFORE[1]}\n"
-     f"   стало: {TEMPLATE_AFTER[0]} · {TEMPLATE_AFTER[1]}"))
+# Суд ПО СВОИМ СЛЕДАМ (карточка #804), а не по разнице состояния: образец в живом контуре — общий
+# клон пакета, HEAD и status в нём двигает любой честный commit соседа, а свой commit на боковой
+# ветке они не покажут вовсе. HEAD и status (у выгрузки — отпечаток файлов) печатаются справкой.
+try:
+    TEMPLATE_AFTER = template_state(TEMPLATE_ROOT)
+except OSError:
+    TEMPLATE_AFTER = None
+outcome, names, why = template_verdict(TEMPLATE_ROOT, TEMPLATE_TRACES_BEFORE, TEMPLATE_BEFORE)
+control("контроль: образец (template_root) этим прогоном не тронут — ни своим клонированием, ни "
+        "коммитами приёмки, ни вызовами update-tools.py (суд по своим следам: commit под адресом "
+        "автора с номером прогона, файл с меткой прогона)",
+        outcome,
+        method_words(BREAK == "state-template") + trace_words(outcome, names, why, *TEMPLATE_WORDS),
+        "справка, не суд: состояние образца "
+        + ("совпало" if TEMPLATE_AFTER == TEMPLATE_BEFORE
+           else "ИЗМЕНИЛОСЬ (так бывает и от честного commit соседа)")
+        + f" — было {state_words(TEMPLATE_BEFORE)}; стало {state_words(TEMPLATE_AFTER)}")
 
-live_after = live_meta()
-changed = sorted(k for k in set(LIVE_META_BEFORE) | set(live_after)
-                 if LIVE_META_BEFORE.get(k) != live_after.get(k))
-case("контроль: meta ЖИВОГО контура не изменилась (сравнение по ключам, не по отпечатку "
-    "всего файла базы — его меняют записки других ролей)",
-    not changed, "изменились ключи: " + (", ".join(changed) or "нет"))
+print("---- встречные случаи суда по своим следам в образце (карточка #804): свой каталог-подставка ----")
+NEIGHBOUR = ("-c", "user.name=neighbour", "-c", "user.email=neighbour@local")
+OWN_ID = ("-c", f"user.name={OWN_NAME}", "-c", f"user.email={OWN_EMAIL}")
+judge = STAND / "judge-template"
+(judge / "scripts").mkdir(parents=True)
+git("init", "-q", cwd=judge)
+(judge / "scripts" / "tool.py").write_bytes(b"print('tool')\n")
+git("add", "-A", cwd=judge)
+git(*NEIGHBOUR, "commit", "-q", "-m", "neighbour: first", cwd=judge)
+j_traces, j_state = template_traces(judge), template_state(judge)
 
-print(f"\n{'✅' if FAIL == 0 else '🔴'} ИТОГ (с контролем): {OK} из {OK + FAIL}")
-sys.exit(mezo_stand.finish(0 if FAIL == 0 else 1))
+# образец-а: сосед коммитит, правит рабочую копию и кладёт СВОЙ файл с именем, как у приёмки
+(judge / "scripts" / "tool.py").write_bytes(b"print('tool, edited by a neighbour')\n")
+git("add", "-A", cwd=judge)
+git(*NEIGHBOUR, "commit", "-q", "-m", "neighbour: second", cwd=judge)
+(judge / "scripts" / "merge-A.py").write_bytes(b"# a neighbour's file, same name, no run mark\n")
+outcome, names, why = template_verdict(judge, j_traces, j_state)
+j_moved = template_state(judge) != j_state
+case("образец-а ВСТРЕЧНЫЙ: чужой commit и чужая правка образца за время прогона случай НЕ роняют",
+     outcome == "clean" and j_moved,
+     f"сосед: commit, правка файла и свой файл scripts/merge-A.py без метки прогона; состояние "
+     f"каталога изменилось: {'да' if j_moved else 'НЕТ'}; суд: "
+     + trace_words(outcome, names, why, *TEMPLATE_WORDS))
+
+# образец-б: свои следы по одному; каждый шаг обязан назвать ровно накопленное
+j_steps = []
+(judge / "scripts" / "merge-B.py").write_bytes(RUN_NONCE + b"line of the acceptance\n")
+j_steps.append(("файл с меткой прогона в рабочей копии", template_verdict(judge, j_traces, j_state), 1, 0))
+git("add", "scripts/merge-B.py", cwd=judge)
+git(*OWN_ID, "commit", "-q", "-m", "bite609: свой commit в образце", cwd=judge)
+j_steps.append(("commit под своим адресом", template_verdict(judge, j_traces, j_state), 1, 1))
+side_state = template_state(judge)
+side_tree = git("rev-parse", "HEAD^{tree}", cwd=judge).stdout.strip()
+side_commit = git(*OWN_ID, "commit-tree", side_tree, "-p", "HEAD", "-m",
+                  "bite609: свой commit на боковой ветке", cwd=judge).stdout.strip()
+git("update-ref", "refs/heads/side", side_commit, cwd=judge)
+j_steps.append(("commit на боковой ветке", template_verdict(judge, j_traces, j_state), 1, 2))
+side_same = template_state(judge) == side_state
+j_bad = [label for label, (o, n, _), files, commits in j_steps
+         if not (o == "traces" and sum(x.startswith("файл ") for x in n) == files
+                 and sum(x.startswith("commit ") for x in n) == commits)]
+case("образец-б ВСТРЕЧНЫЙ: свой след в образце случай РОНЯЕТ и назван поимённо",
+     not j_bad and side_same,
+     f"шагов {len(j_steps)}; на последнем: {trace_words(*j_steps[-1][1], *TEMPLATE_WORDS)}"
+     + (f" · НЕ ТО на шагах: {j_bad}" if j_bad else "")
+     + f"\n   третий след — commit на боковой ветке: HEAD и status при нём "
+       f"{'те же, суд по разнице состояния его не увидел бы' if side_same else 'ИЗМЕНИЛИСЬ'}")
+
+# образец-в: каталога нет — третий исход, свои слова и свой код выхода
+gone = STAND / "no-such-template"
+g_verdict = template_verdict(gone, template_traces(gone), None)
+g_words = trace_words(*g_verdict, *TEMPLATE_WORDS)
+codes = (mezo_stand.exit_code3(0, 0), mezo_stand.exit_code3(1, 0), mezo_stand.exit_code3(0, 1))
+case("образец-в ВСТРЕЧНЫЙ: образец недоступен — третий исход «НЕ ПРОВЕРЕНО»: свои слова и свой код, "
+     "не «следов нет»",
+     g_verdict[0] == "unknown" and "НЕ ПРОВЕРЕНО" in g_words and "следов в" not in g_words
+     and "НЕ ПРОВЕРЕНО" not in trace_words("clean", [], "", *TEMPLATE_WORDS)
+     and len(set(codes)) == 3 and codes[2] == 2,
+     f"суд: {g_words}; коды (следов нет / следы есть / не проверено): {codes}")
+
+# образец-г: свои следы в СВОЁМ клоне находятся — вопрос к образцу не слеп
+own_found = template_traces(PACKAGE)[0]
+lost = [h for h in OWN_COMMITS if not any(name.startswith(f"commit {h} ") for name in (own_found or {}))]
+files_found = sum(name.startswith("файл ") for name in (own_found or {}))
+case("образец-г ВСТРЕЧНЫЙ: свои следы в своём клоне находятся все — вопрос к образцу не слеп",
+     own_found is not None and bool(OWN_COMMITS) and not lost and files_found > 0,
+     f"своих коммитов {len(OWN_COMMITS)}, найдено {len(OWN_COMMITS) - len(lost)}; файлов с меткой "
+     f"прогона {files_found}" + (f" · НЕ НАЙДЕНЫ: {', '.join(lost)}" if lost else ""))
+
+print("---- контроль: meta ЖИВОГО контура не тронута ----")
+# Суд ПО СВОИМ СЛЕДАМ (карточка #804), а не по разнице ключей: meta живого контура пишет установка
+# и обновление инструментов — честная запись соседа за время прогона меняла ключи и роняла случай.
+live_after = read_meta(LIVE_DB)
+if LIVE_META_BEFORE is None or live_after is None:
+    meta_reference = "справка, не суд: сравнить meta по ключам не удалось — база не ответила"
+else:
+    changed = sorted(k for k in set(LIVE_META_BEFORE) | set(live_after)
+                     if LIVE_META_BEFORE.get(k) != live_after.get(k))
+    meta_reference = ("справка, не суд: по ключам meta " + (
+        "не изменилась" if not changed else
+        "ИЗМЕНИЛАСЬ — " + ", ".join(changed) + " (так бывает и от честной установки инструментов)"))
+outcome, names, why = meta_verdict(LIVE_DB, LIVE_TRACES_BEFORE, LIVE_META_BEFORE)
+control("контроль: meta ЖИВОГО контура этим прогоном не тронута (суд по своим следам: путь своего "
+        "стенда, свои версии пакета и отпечатки своих файлов в значениях meta)",
+        outcome,
+        method_words(BREAK == "state-meta") + trace_words(outcome, names, why, *META_WORDS),
+        meta_reference)
+
+print("---- встречные случаи суда по своим следам в meta (карточка #804): своя база-подставка ----")
+SET_META = ("INSERT INTO meta (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+judge_db = STAND / "judge-meta.db"
+jc = sqlite3.connect(str(judge_db))
+jc.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+for k, v in (("template_source", "каталог пакета соседа"), ("template_commit", "0123456789ab"),
+             ("template_files_sha", json.dumps({"tool.py": "aaaaaaaaaaaa"}))):
+    jc.execute(SET_META, (k, v))
+jc.commit()
+m_traces, m_state = meta_traces(judge_db), read_meta(judge_db)
+
+# meta-а: сосед ставит инструменты — меняются версия пакета и отпечатки
+jc.execute(SET_META, ("template_commit", "ba9876543210"))
+jc.execute(SET_META, ("template_files_sha",
+                      json.dumps({"tool.py": "bbbbbbbbbbbb", "new.py": "cccccccccccc"})))
+jc.commit()
+outcome, names, why = meta_verdict(judge_db, m_traces, m_state)
+m_moved = read_meta(judge_db) != m_state
+case("meta-а ВСТРЕЧНЫЙ: чужая запись в meta за время прогона (установка инструментов соседом) "
+     "случай НЕ роняет",
+     outcome == "clean" and m_moved,
+     f"сосед сменил версию пакета и отпечатки; ключи изменились: {'да' if m_moved else 'НЕТ'}; суд: "
+     + trace_words(outcome, names, why, *META_WORDS))
+
+# meta-б: свои следы по одному; каждый шаг обязан назвать ровно накопленные ключи
+m_steps = []
+jc.execute(SET_META, ("template_source", str(PACKAGE)))
+jc.commit()
+m_steps.append(("источник — путь своего клона", meta_verdict(judge_db, m_traces, m_state),
+                {"template_source"}))
+jc.execute(SET_META, ("template_commit", OWN_COMMITS[-1]))
+jc.commit()
+m_steps.append(("версия пакета из своего клона", meta_verdict(judge_db, m_traces, m_state),
+                {"template_source", "template_commit"}))
+jc.execute(SET_META, ("template_files_sha",
+                      json.dumps({"tool.py": "bbbbbbbbbbbb", "merge-C.py": sorted(OWN_FINGERPRINTS)[0]})))
+jc.commit()
+m_steps.append(("отпечаток своего файла внутри большого значения",
+                meta_verdict(judge_db, m_traces, m_state),
+                {"template_source", "template_commit", "template_files_sha"}))
+jc.close()
+m_bad = [label for label, (o, n, _), want in m_steps
+         if not (o == "traces" and {x.split(" ← ")[0].removeprefix("meta.") for x in n} == want)]
+case("meta-б ВСТРЕЧНЫЙ: свой след в meta случай РОНЯЕТ и назван поимённо",
+     not m_bad,
+     f"шагов {len(m_steps)}; на последнем: {trace_words(*m_steps[-1][1], *META_WORDS)}"
+     + (f" · НЕ ТО на шагах: {m_bad}" if m_bad else ""))
+
+# meta-в: база недоступна — файла нет · файл не база · в базе нет таблицы meta
+gone_db, junk_db, bare_db = STAND / "no-such-meta.db", STAND / "junk-meta.db", STAND / "bare-meta.db"
+junk_db.write_bytes("это не база данных, а просто текст".encode("utf-8") * 8)
+sqlite3.connect(str(bare_db)).close()
+blind = {p.name: meta_verdict(p, meta_traces(p), None) for p in (gone_db, junk_db, bare_db)}
+blind_words = [trace_words(*r, *META_WORDS) for r in blind.values()]
+case("meta-в ВСТРЕЧНЫЙ: база недоступна — третий исход «НЕ ПРОВЕРЕНО»: свои слова и свой код, "
+     "не «следов нет»",
+     all(r[0] == "unknown" for r in blind.values())
+     and all("НЕ ПРОВЕРЕНО" in w and "следов в" not in w for w in blind_words)
+     and "НЕ ПРОВЕРЕНО" not in trace_words("clean", [], "", *META_WORDS)
+     and len(set(codes)) == 3 and codes[2] == 2,
+     "исходы: " + ", ".join(f"{k}→{v[0]}" for k, v in blind.items())
+     + f"; коды (следов нет / следы есть / не проверено): {codes}")
+
+# meta-г: свои метки в meta контуров стенда находятся — вопрос к живой meta не слеп
+kinds = [kind for kind, _ in own_meta_marks()]
+seen_kinds = set()
+for one in CIRCUIT_DBS:
+    for name in (meta_traces(one)[0] or {}):
+        seen_kinds.update(kind for kind in kinds if f" ← {kind} " in name)
+lost_kinds = [kind for kind in kinds if kind not in seen_kinds]
+case("meta-г ВСТРЕЧНЫЙ: свои метки в meta контуров стенда находятся все — вопрос к живой meta не слеп",
+     bool(CIRCUIT_DBS) and not lost_kinds,
+     f"видов меток {len(kinds)}, найдено на стенде {len(kinds) - len(lost_kinds)} "
+     f"(контуров стенда {len(CIRCUIT_DBS)})"
+     + (f" · НЕ НАЙДЕНЫ: {', '.join(lost_kinds)}" if lost_kinds else ""))
+
+if BREAK:
+    confirmed = len(FAILED) == 1 and FAILED[0].startswith(BREAKS[BREAK] + " ")
+    print(f"⚖️ прогноз нарочной поломки «{BREAK}» "
+          + ("ПОДТВЕРДИЛСЯ: провален ровно встречный случай «" + BREAKS[BREAK] + "»" if confirmed
+             else f"НЕ подтвердился: провалено случаев {len(FAILED)}"))
+    if confirmed:
+        mezo_stand.expected_break()
+if UNCHECKED:
+    print(f"⏳ НЕ ПРОВЕРЕНО: {UNCHECKED} — на вопрос о своих следах ответа не было; прогон выходит "
+          "кодом 2, а не «прошёл»")
+print(f"\n{'🔴' if FAIL else ('⏳' if UNCHECKED else '✅')} ИТОГ (с контролем): {OK} из {OK + FAIL}")
+if not FAIL and UNCHECKED:
+    # Случаи приняты, не проверен только контроль: в стенде разбирать нечего, а в нём лежит
+    # целый клон пакета — объявляем пропуск, чтобы стенд не хранился как отказ мерить (карточка #729).
+    mezo_stand.accepted_with_skips()
+sys.exit(mezo_stand.finish(mezo_stand.exit_code3(FAIL, UNCHECKED)))

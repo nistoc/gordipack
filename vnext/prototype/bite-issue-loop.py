@@ -16,6 +16,14 @@ bite-issue-loop.py — приёмка П⑤ пула: канал проблем 
   ⑧ закрытие карточки с тегом «gordi-issue #N» → напоминание «закрой и issue»
   ⑨ ОБРАТНЫЙ ХОД: ворота разделов сняты в копии → ② проходит молча (краснеет)
   ⑩ close без слов → отказ; ⑪ живая база не тронута
+     ⑪ судит ПО СВОИМ СЛЕДАМ ПОИМЁННО (заголовок и тег подсаженной карточки, примечание к смене её
+     статуса: вопрос mezo_stand.ask_traces, судится ПРИБАВКА следов), а не по размеру и времени правки
+     файла: те меняет любая честная запись соседей за время прогона (карточка #804). Примечание — пробное
+     имя нарочно: смена статуса идёт по НОМЕРУ карточки из копии, и уйди она мимо --db, в живой базе
+     сменился бы статус чужой карточки с тем же номером — событие об этом несёт только примечание.
+     Встречные на подставной базе стенда: ⑪-а чужая запись случай НЕ роняет · ⑪-б свой след роняет
+     и назван поимённо · ⑪-в база недоступна — третий исход «НЕ ПРОВЕРЕНО», код выхода 2 ·
+     ⑪-г все пробные имена на стенде находятся (иначе вопрос к живой базе слеп)
 """
 import json
 import shutil
@@ -60,8 +68,16 @@ def run(script, *args):
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 
+# Свои следы приёмки (карточка #804): заголовок и тег подсаженной карточки и примечание, с которым ⑧
+# меняет её статус. По ним ⑪ судит, не попали ли записи в живую базу; NEED — куда эти имена сеются.
+PROBE_TITLE = "починка по заявке"
+PROBE_TAGS = '["gordi-issue #77"]'
+PROBE_NOTE = "проба приёмки bite-issue-loop: сделано"
+MARKS = (PROBE_TITLE, PROBE_TAGS, PROBE_NOTE)
+NEED = ("backlog", "backlog_events")
+# Первый вопрос — до стенда и до копии: база контура не читается вовсе — «НЕ ПРОВЕРЕНО», код 2.
+live_before = mezo_stand.first_traces(LIVE_DB, MARKS, NEED)
 stand = mezo_stand.new("issue-loop-")
-live_before = (LIVE_DB.stat().st_size, LIVE_DB.stat().st_mtime_ns)
 # было: GI = SCRIPTS / "gordi-issue.py" — рядом со «своим» live_scripts(), не через
 # MEZO_SCRIPTS_ROOT (карточка #659): образец прочих приёмок набора берёт ИСПЫТУЕМОЕ
 # через mezo_target.script(), оставляя live_scripts()/live_db() соседям и снимку базы.
@@ -71,6 +87,9 @@ GI = mezo_target.script("gordi-issue.py")
 db = stand / ".mezosync" / "mezosync.db"
 db.parent.mkdir()
 mezo_stand.snapshot_db(LIVE_DB, db)
+# Подставная база для встречных ⑪-а/б/в: схема копии без строк, снята из стенда — живая база
+# второй раз не открывается.
+judge_db = mezo_stand.empty_db(db, stand / "judge.db")
 
 good = stand / "good.md"
 good.write_text("## ЗАМЕР\nотказ дословно: «нет пути»\n## КЛАСС\nмолчащий отказ\n"
@@ -108,9 +127,9 @@ case("④ писатель не координатор → отказ (кана�
 
 # ⑤⑥ poll на фикстуре + копии базы (снята выше, до ①)
 con = sqlite3.connect(str(db))
-con.execute("INSERT INTO backlog (role, title, body_md, status, priority, tags, created_by, "
-            "done_when) VALUES ('PROTO','починка по заявке','тело','open','normal',"
-            "'[\"gordi-issue #77\"]','PROTO','критерий')")
+CARD = ("INSERT INTO backlog (role, title, body_md, status, priority, tags, created_by, done_when) "
+        "VALUES (?,?,'тело','open','normal',?,?,'критерий')")
+con.execute(CARD, ("PROTO", PROBE_TITLE, PROBE_TAGS, "PROTO"))
 con.commit()
 con.close()
 # ГРУППА F, карточка #659: было — АБСОЛЮТНЫЕ календарные даты («2026-08-10», «2026-08-27»).
@@ -154,7 +173,7 @@ con = sqlite3.connect(str(db))
 bid = con.execute("SELECT id FROM backlog WHERE tags LIKE '%gordi-issue #77%'").fetchone()[0]
 con.close()
 rc, out8 = run(SCRIPTS / "backlog.py", "--db", str(db), "status", str(bid), "done",
-               "--actor", "PROTO", "--note", "сделано")
+               "--actor", "PROTO", "--note", PROBE_NOTE)
 case("⑧ done карточки с тегом → напоминание «закрой и issue»",
      rc == 0 and "gordi-issue #77" in out8 and "close" in out8)
 
@@ -182,8 +201,35 @@ case("⑨ обратный ход: проверка разделов снята 
 rc, outA = run(GI, "close", "--role", "COORD", "--number", "55", "--dry-run")
 case("⑩ close без слов → отказ", rc != 0 and "БЕЗ слов" in outA)
 
-live_after = (LIVE_DB.stat().st_size, LIVE_DB.stat().st_mtime_ns)
-case("⑪ живая база прогоном не изменилась", live_before == live_after)
+# ⑪ живая база прогоном не изменилась — суд ПО СВОИМ СЛЕДАМ поимённо (карточка #804). Разница состояния
+# файла не судится: чужая честная запись за время прогона её меняет, а свой след она может и пропустить.
+UNCHECKED = 0
+outcome, names, why = mezo_stand.traces_verdict(live_before, mezo_stand.ask_traces(LIVE_DB, MARKS, NEED))
+said = "способ: по своим следам — " + mezo_stand.traces_words(outcome, names, why)
+if outcome == "unknown":
+    UNCHECKED += 1
+    print("⏳ ⑪ живая база прогоном не изменилась: НЕ ПРОВЕРЕНО")
+    print(f"   {said}; «следов нет» НЕ утверждается")
+else:
+    case("⑪ живая база прогоном не изменилась", outcome == "clean", said)
 
+# ⑪-а/б/в/г ВСТРЕЧНЫЕ: тот же суд на подставной базе стенда — чужая запись, свои следы по одному, база
+# недоступна; и пробные имена на самом стенде находятся все.
+EVENT = ("INSERT INTO backlog_events (backlog_id, at, actor_role, event_type, body_md) "
+         "VALUES (?,'2026-01-01 00:00:00',?,'status',?)")
+for letter, title, ok, detail in mezo_stand.traces_counter_cases(
+        judge_db, MARKS, NEED,
+        foreign=[(CARD, ("OTHERROLE", "чужая карточка о другом", '["other-tag"]', "OTHERROLE")),
+                 (EVENT, (1, "OTHERROLE", "сделано"))],
+        own=[("заголовок", CARD, ("PROTO", PROBE_TITLE, "[]", "PROTO"), {"backlog.title"}),
+             ("тег", CARD, ("PROTO", "другой заголовок", PROBE_TAGS, "PROTO"),
+              {"backlog.title", "backlog.tags"}),
+             ("примечание", EVENT, (1, "PROTO", PROBE_NOTE),
+              {"backlog.title", "backlog.tags", "backlog_events.body_md"})],
+        planted=db):
+    case(f"⑪-{letter} {title}", ok, detail)
+
+if UNCHECKED:
+    print(f"⏳ НЕ ПРОВЕРЕНО: {UNCHECKED} — база не ответила; прогон выходит кодом 2, а не «прошёл»")
 print(f"\nИТОГ: {OK}/{OK + FAIL}")
-raise SystemExit(mezo_stand.finish(0 if FAIL == 0 else 1))
+raise SystemExit(mezo_stand.finish(mezo_stand.exit_code3(FAIL, UNCHECKED)))
