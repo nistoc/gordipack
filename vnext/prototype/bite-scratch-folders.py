@@ -63,6 +63,29 @@ r"""ПРИЁМКА scratch-folders.py — правило «черновые па
   ㉒ проверка прихода в корзину (та же функция судит настоящую корзину): выросли и
      предметы, и место → пришла; не выросло число предметов или место → «мимо корзины»
 
+  ДВЕ РАСКЛАДКИ ЧЕРНОВЫХ ПАПОК (карточка #807; случаи и ожидания поломок записаны
+  2026-11-22 ~19:50 UTC, до первого прогона). Случаи ㉓ ㉔ ㉕ идут СО СВОИМ TEMP: корень
+  MEZO_SCRATCH_ROOT инструменту не называется, TEMP/TMP/TMPDIR указывают в песочницу, и
+  корень <TEMP>\claude он берёт сам — тем же путём, каким берёт его у живой роли.
+  ㉓ только прежняя папка (каталог по пути контура) → найдена одна, названа «прежняя
+     раскладка» с путём, слова «СУММА» нет; встречный — папка ЧУЖОГО номера чата в том же
+     каталоге в замер не попала
+  ㉔ только новая папка (каталог из 16 шестнадцатеричных знаков, каталога прежней раскладки
+     нет вовсе) → найдена, названа «новая раскладка» с путём, строка --brief её меряет, а
+     не пишет «папки нет»; встречный — папка чужого номера чата в том же каталоге не попала
+  ㉕ обе папки → каждая названа своей строкой с путём, счёт подпапок и файлов корня — по
+     обеим, итог — «СУММА по 2 папкам чата» (и в замере, и в строке --brief), размер итога
+     равен сумме; встречный — папки чужого номера чата в ОБОИХ каталогах не засчитаны
+  ㉖ --apply со словом владельца при обеих папках → «убрать» уехала в подменный каталог и
+     из прежней, и из новой раскладки; папка чужого чата в том же каталоге на месте
+  ㉗ --contour: чат живой роли и чат из истории адресов найдены в каталоге из 16 знаков
+     (каталога прежней раскладки нет — это не отказ); чат, которого база не знает, в
+     строки не попал и назван числом; каталог из 16 знаков без чатов контура не тронут
+  ㉘ папка этого же чата в каталоге с ДРУГИМ именем → названа «раскладка инструменту
+     неизвестна», не мерена, при --apply на месте
+  ㉙ каталог из 16 знаков сам ссылка на другое место → назван, не мерен, цель ссылки при
+     --apply цела (ссылку создать не вышло — «не проверено», без подделки)
+
 НАРОЧНЫЕ ПОЛОМКИ (--break <имя>) — словарь BREAKS, ожидаемые провалы каждой записаны ДО
 прогона в BREAK_FAILS; прогон с --break печатает ожидание до случаев и сверяет с фактом
 после. Строка ИТОГ считает покрытие случаев поломками из того же словаря.
@@ -274,10 +297,14 @@ BREAKS = {
         "+ old_copies(root_files, now)",
         "+ 0",
         "копии базы в корне папки не входят в итог"),
+    # 🩹 22.11.2026 (карточка #807): папка теперь ищется по номеру чата в нескольких каталогах,
+    # и прежняя подмена («вернуть путь сразу») под новый поиск не ложится. Поломка снимает
+    # сверку вида номера; вторая сверка — «внутри своего каталога» — отказывает другими
+    # словами, и случай ⑱ это различает.
     "folder-unchecked": (
         "    if not UUID_RE.fullmatch(tid):",
-        '    return contour / tid / "scratchpad", None\n    if not UUID_RE.fullmatch(tid):',
-        "номер чата из базы не сверяется с видом номера, ссылки на месте папки не ловятся"),
+        "    if False:",
+        "номер чата из базы не сверяется с видом номера"),
     "links-followed": (
         '        return entry.is_symlink() or bool(getattr(entry, "is_junction", lambda: False)())',
         "        return False",
@@ -298,6 +325,31 @@ BREAKS = {
         "    items0, size0 = before",
         "    return None\n    items0, size0 = before",
         "приход в корзину не проверяется: «мимо корзины» не замечается"),
+    # ── две раскладки (карточка #807) ──
+    "old-layout-only": (
+        "        known = is_old or bool(HEX16_RE.fullmatch(name))",
+        "        known = is_old",
+        "«искать только по прежнему имени каталога»: папка в каталоге из 16 знаков не находится"),
+    "measure-first-only": (
+        "    measured = [(f, *measure_folder(f.folder, index, now)) for f in found]",
+        "    measured = [(f, *measure_folder(f.folder, index, now)) for f in found[:1]]",
+        "меряется только первая из найденных папок чата: итог — не сумма"),
+    "contour-new-layout-blind": (
+        "        if link or not HEX16_RE.fullmatch(top_name):",
+        "        if True:",
+        "сводка контура не смотрит каталоги из 16 знаков"),
+    "unknown-layout-silent": (
+        "            if folder.is_dir():\n                skipped.append(",
+        "            if False:\n                skipped.append(",
+        "папка чата в каталоге неизвестной раскладки или в каталоге-ссылке не называется"),
+    "link-top-followed": (
+        "        if not known or (link and not is_old):",
+        "        if not known:",
+        "каталог из 16 знаков, сам ссылка на другое место, меряется и убирается как обычный"),
+    "sum-claimed-for-one": (
+        '    if len(found) > 1:\n        print(f"   итог — СУММА по',
+        '    if True:\n        print(f"   итог — СУММА по',
+        "слово «СУММА» печатается и при единственной папке: читается так, будто их несколько"),
 }
 
 # 📋 СПИСОК ПРОВАЛОВ КАЖДОЙ ПОЛОМКИ — ЗАПИСАН ДО ПРОГОНА (2026-10-03 ~00:20 UTC, до первого
@@ -321,13 +373,13 @@ BREAK_FAILS = {
     "utf16-ignored": "⑤",
     "apply-without-word": "⑥",
     "owner-word-no-time": "⑥",
-    "trash-skipped": "⑤⑦⑧⑭⑲",
+    "trash-skipped": "⑤⑦⑧⑭⑲㉖",
     "foreign-role": "⑧⑬",
     "unknown-chat-proceeds": "⑧",
     "copy-by-name": "①②⑨⑰",
     "header-only": "⑨",
     "brief-multiline": "⑩",
-    "closed-chat-claimed": "⑪",
+    "closed-chat-claimed": "⑪㉗",
     "note-ref-unread": "⑫",
     "prefix-match": "⑫",
     "note-window-2": "⑫",
@@ -336,7 +388,7 @@ BREAK_FAILS = {
     "env-stop-continues": "⑮",
     "busy-not-probed": "⑮",
     "hardlinks-twice": "⑯",
-    "small-size-in-gb": "⑯",
+    "small-size-in-gb": "⑯㉕",
     "root-copies-dropped": "⑰",
     "folder-unchecked": "⑱",
     "links-followed": "⑲",
@@ -344,6 +396,20 @@ BREAK_FAILS = {
     "ref-errors-apply-proceeds": "㉑",
     "apply-any-db": "㉑",
     "arrival-unchecked": "㉒",
+    # 📋 22.11.2026 ~19:50 UTC, ДО первого прогона случаев ㉓–㉙ (карточка #807). Три прежние
+    # записи выше дополнены тем же ходом и тоже до прогона: «trash-skipped» + ㉖ (перенос по
+    # двум раскладкам — тот же перенос), «closed-chat-claimed» + ㉗ (закрытый чат в каталоге
+    # из 16 знаков), «small-size-in-gb» + ㉕ (сумма сверяется по размеру в МБ).
+    # «old-layout-only» — поломка из критерия карточки: роняет «только новую» (㉔) и «обе»
+    # (㉕); ㉖ — то же дерево «обе», только с переносом, поэтому падает вместе с ними.
+    "old-layout-only": "㉔㉕㉖",
+    "measure-first-only": "㉕㉖",
+    "contour-new-layout-blind": "㉗",
+    "unknown-layout-silent": "㉘㉙",
+    "link-top-followed": "㉙",
+    # записана 22.11.2026 ~19:51 UTC, после первого чистого прогона (он показал, что ㉓ не
+    # покрыт ни одной поломкой) и ДО первого прогона с поломками
+    "sum-claimed-for-one": "㉓㉔",
 }
 
 
@@ -487,10 +553,14 @@ def inside(path, base) -> bool:
 
 
 def run_tool(tool: Path, stand: Path, scr_root: Path, trash: Path, *args,
-             role=None, session=None, extra=None):
+             role=None, session=None, extra=None, own_temp=None):
     """Позвать КОПИЮ инструмента со средой стенда. MEZO_TRASH_DIR ставится ВСЕГДА — даже
     там, где ждём отказа: под нарочной поломкой отказ может не случиться, и тогда уборка
-    обязана уехать в подменный каталог, а не в корзину Windows."""
+    обязана уехать в подменный каталог, а не в корзину Windows.
+
+    own_temp — СВОЙ TEMP вместо подставного корня: MEZO_SCRATCH_ROOT инструменту не
+    называется, а TEMP/TMP/TMPDIR указывают в песочницу, и корень <TEMP>\\claude он берёт
+    сам. Только для замера: подмену корзины инструмент принимает лишь с MEZO_SCRATCH_ROOT."""
     env = mezo_stand.stand_env(stand, PYTHONIOENCODING="utf-8",
                                MEZO_SCRATCH_ROOT=str(scr_root), MEZO_TRASH_DIR=str(trash))
     for name in ("MEZO_ROLE", SESSION_ENV, "MEZO_SCRATCH_THRESHOLD_GB", "MEZO_TRASH_CAPACITY_MB"):
@@ -501,7 +571,14 @@ def run_tool(tool: Path, stand: Path, scr_root: Path, trash: Path, *args,
         env[SESSION_ENV] = session
     if extra:
         env.update(extra)
-    for what in ("MEZO_SCRATCH_ROOT", "MEZO_TRASH_DIR", "MEZO_CONTAINER"):
+    checked = ["MEZO_SCRATCH_ROOT", "MEZO_TRASH_DIR", "MEZO_CONTAINER"]
+    if own_temp is not None:
+        env.pop("MEZO_SCRATCH_ROOT", None)
+        Path(own_temp).mkdir(parents=True, exist_ok=True)
+        for name in ("TEMP", "TMP", "TMPDIR"):
+            env[name] = str(own_temp)
+        checked = ["TEMP", "TMP", "TMPDIR", "MEZO_TRASH_DIR", "MEZO_CONTAINER"]
+    for what in checked:
         if not inside(env[what], SANDBOX):
             raise SystemExit(f"⛔ НЕ ПРОВЕРЕНО: {what}={env[what]} вне песочницы {SANDBOX} — "
                              f"инструмент не позван")
@@ -602,6 +679,21 @@ def main() -> int:
         def scratch(tag, chat=tid, cont=contour):
             return root(tag) / cont / chat / "scratchpad"
 
+        # две раскладки (карточка #807): каталог новой — 16 шестнадцатеричных знаков; у случаев
+        # со своим TEMP корень черновых папок — <TEMP>\claude, как у живой роли
+        hex_a = (token + "0123456789abcdef")[:16]
+        hex_b = (token + "fedcba9876543210")[:16]
+        tid_stranger = f"{token}bb-1111-4222-8333-000000000009"     # в базе такого чата нет
+
+        def temp(tag):
+            return SANDBOX / f"e{tag}"
+
+        def old_scratch(tag, chat=tid):
+            return temp(tag) / "claude" / contour / chat / "scratchpad"
+
+        def new_scratch(tag, chat=tid, top=hex_a):
+            return temp(tag) / "claude" / top / chat / "scratchpad"
+
         # 🩹 03.10.2026 (повторная приёмка карточки #657): деревья приёмки лежат ВНУТРИ имени каталога
         # контура, а оно строится из пути песочницы — длина путей растёт как УДВОЕННАЯ глубина
         # %TEMP%. В глубоком %TEMP% (песочница помощника, 143 знака) инструмент честно отказывал
@@ -609,7 +701,8 @@ def main() -> int:
         # Замер 2026-10-03 ~02:40 UTC: при TEMP в 39 знаков самый длинный путь (кроме ⑤) — 203,
         # это файл в глубине подпапки случая ④. ⇒ слишком глубокий %TEMP% — «не проверено»
         # кодом 2 до всякой работы, а не провал случаев.
-        deepest = scratch(4) / n("deep4") / "run1" / "log.txt"
+        deepest = max((scratch(4) / n("deep4") / "run1" / "log.txt",
+                       old_scratch(25, tid_other) / n("xo") / "data.bin"), key=lambda p: u16(str(p)))
         if u16(str(deepest)) >= 260:
             print(f"⚪ НЕ ПРОВЕРЕНО: временный каталог слишком глубок — самый длинный путь приёмки "
                   f"вышел бы {u16(str(deepest))} знаков (от 260 инструмент честно отказывает), "
@@ -1115,6 +1208,149 @@ def main() -> int:
              came is None and no_item is not None and no_size is not None,
              f"выросло всё: {came!r} (ждём None) · предметов столько же: {no_item!r} · место выросло "
              f"на 10 байт из 4096: {no_size!r}")
+
+        # ── ㉓ только прежняя папка (свой TEMP) ──
+        folder(old_scratch(23), n("o"), size=MIB)
+        folder(old_scratch(23, tid_other), n("x"), size=2 * MIB)        # чужой номер чата рядом
+        code, out, _t = run_tool(tool, stand, temp(23) / "claude", trash(23), "--role", role,
+                                 own_temp=temp(23))
+        c_b, o_b, _t = run_tool(tool, stand, temp(23) / "claude", trash(23), "--role", role,
+                                "--brief", own_temp=temp(23))
+        named = f"📂 прежняя раскладка: {old_scratch(23)}" in out
+        alone = "новая раскладка" not in out and "СУММА" not in out and "подпапок: 1 ·" in out
+        own = bool(sub_line(out, n("o"))) and not sub_line(out, n("x"))
+        ok_b = c_b == 0 and "прежняя раскладка" in o_b and "папки нет" not in o_b
+        case("㉓ только прежняя папка, свой TEMP → найдена одна, названа «прежняя раскладка» с "
+             "путём, слова «СУММА» нет; папка чужого номера чата в том же каталоге не попала",
+             code == 0 and named and alone and own and ok_b,
+             f"код {code} · названа с путём: {named} · одна, без «СУММА»: {alone} · своя подпапка "
+             f"есть, чужой нет: {own} · строка --brief: код {c_b}, {ok_b}")
+
+        # ── ㉔ только новая папка (свой TEMP; каталога прежней раскладки нет вовсе) ──
+        folder(new_scratch(24), n("w"), size=3 * MIB)
+        folder(new_scratch(24, tid_other), n("x"), size=2 * MIB)
+        code, out, _t = run_tool(tool, stand, temp(24) / "claude", trash(24), "--role", role,
+                                 own_temp=temp(24))
+        c_b, o_b, _t = run_tool(tool, stand, temp(24) / "claude", trash(24), "--role", role,
+                                "--brief", own_temp=temp(24))
+        named = f"📂 новая раскладка: {new_scratch(24)}" in out
+        alone = "прежняя раскладка:" not in out and "СУММА" not in out and "подпапок: 1 ·" in out
+        own = bool(sub_line(out, n("w"))) and not sub_line(out, n("x"))
+        ok_b = c_b == 0 and "новая раскладка" in o_b and "папки нет" not in o_b
+        case("㉔ только новая папка (каталог из 16 знаков), свой TEMP → найдена, названа «новая "
+             "раскладка» с путём, строка --brief её меряет; папка чужого номера чата не попала",
+             code == 0 and named and alone and own and ok_b,
+             f"код {code} · названа с путём: {named} · одна, без «СУММА»: {alone} · своя подпапка "
+             f"есть, чужой нет: {own} · строка --brief: код {c_b}, {ok_b} («{o_b.strip()[:90]}…»)")
+
+        # ── ㉕ обе папки (свой TEMP) ──
+        folder(old_scratch(25), n("o"), size=MIB)
+        (old_scratch(25) / "root-a.txt").write_text("a", encoding="utf-8")
+        folder(new_scratch(25), n("w"), size=3 * MIB)
+        folder(new_scratch(25), n("v"), size=MIB)
+        for name in ("root-b.txt", "root-c.txt"):
+            (new_scratch(25) / name).write_text("b", encoding="utf-8")
+        folder(old_scratch(25, tid_other), n("xo"), size=7 * MIB)       # чужой номер чата —
+        folder(new_scratch(25, tid_other), n("xn"), size=7 * MIB)       # в ОБОИХ каталогах
+        code, out, _t = run_tool(tool, stand, temp(25) / "claude", trash(25), "--role", role,
+                                 own_temp=temp(25))
+        c_b, o_b, _t = run_tool(tool, stand, temp(25) / "claude", trash(25), "--role", role,
+                                "--brief", own_temp=temp(25))
+        both = (f"📂 прежняя раскладка: {old_scratch(25)}" in out
+                and f"📂 новая раскладка: {new_scratch(25)}" in out)
+        counts = "подпапок: 3 · файлов в корне: 3 " in out
+        parts = ("── прежняя раскладка: 1.0 МБ · подпапок: 1 · файлов в корне: 1 ·" in out
+                 and "── новая раскладка: 4.0 МБ · подпапок: 2 · файлов в корне: 2 ·" in out)
+        total = "ИТОГ: всего 5.0 МБ" in out and "итог — СУММА по 2 папкам чата" in out
+        foreign_out = not sub_line(out, n("xo")) and not sub_line(out, n("xn"))
+        ok_b = c_b == 0 and "≈5.0 МБ" in o_b and "СУММА по 2 папкам чата" in o_b
+        case("㉕ обе папки, свой TEMP → каждая названа своей строкой с путём, счёт и размер — "
+             "по обеим, итог — «СУММА по 2 папкам чата» (замер и строка --brief); папки чужого "
+             "номера чата в обоих каталогах не засчитаны",
+             code == 0 and both and counts and parts and total and foreign_out and ok_b,
+             f"код {code} · обе названы с путём: {both} · подпапок 3 и файлов корня 3: {counts} · "
+             f"строки по папкам 1.0 и 4.0 МБ: {parts} · итог 5.0 МБ и «СУММА»: {total} · чужие "
+             f"(по 7 МБ) не засчитаны: {foreign_out} · строка --brief: код {c_b}, {ok_b}")
+
+        # ── ㉖ --apply при обеих папках (подставной корень, каталог вместо корзины) ──
+        old26 = root(26) / contour / tid / "scratchpad"
+        new26 = root(26) / hex_a / tid / "scratchpad"
+        folder(old26, n("ro"))
+        folder(new26, n("rn"))
+        other26 = folder(root(26) / hex_a / tid_other / "scratchpad", n("xk"))
+        code, out, _t = run_tool(tool, stand, root(26), trash(26), "--role", role, "--apply",
+                                 "--owner-word", word, role=role)
+        moved_o = (trash(26) / n("ro")).is_dir() and not (old26 / n("ro")).exists()
+        moved_n = (trash(26) / n("rn")).is_dir() and not (new26 / n("rn")).exists()
+        case("㉖ --apply при обеих папках → «убрать» уехала в подменный каталог и из прежней, "
+             "и из новой раскладки; папка чужого чата в том же каталоге на месте",
+             code == 0 and moved_o and moved_n and other26.is_dir() and "перенесено 2 папок" in out,
+             f"код {code} · из прежней уехала: {moved_o} · из новой уехала: {moved_n} · чужая на "
+             f"месте: {other26.is_dir()} · «перенесено 2 папок»: {'перенесено 2 папок' in out}")
+
+        # ── ㉗ --contour: каталог из 16 знаков ──
+        folder(root(27) / hex_a / tid / "scratchpad", n("l"))
+        folder(root(27) / hex_a / tid_closed / "scratchpad", n("h"))
+        folder(root(27) / hex_a / tid_stranger / "scratchpad", n("s"))  # базе не известен
+        folder(root(27) / hex_b / tid_stranger / "scratchpad", n("t"))  # каталог без чатов контура
+        code, out, _t = run_tool(tool, stand, root(27), trash(27), "--contour")
+        line_live = next((x for x in out.splitlines() if f" {tid} " in x), "")
+        line_closed = next((x for x in out.splitlines() if tid_closed in x), "")
+        ok_live = "новая раскладка" in line_live and f"роль {role}" in line_live
+        ok_closed = "закрытый чат, роли нет" in line_closed and "ACCPAST" in line_closed
+        ok_rest = (tid_stranger not in out and hex_b not in out and "база не знает: 1 —" in out
+                   and "ИТОГ: папок 2" in out and "каталога нет" in out)
+        case("㉗ --contour: чат живой роли и чат из истории адресов найдены в каталоге из 16 "
+             "знаков (каталога прежней раскладки нет — не отказ); чат, которого база не знает, "
+             "в строки не попал и назван числом",
+             code == 0 and ok_live and ok_closed and ok_rest,
+             f"код {code} · строка живого: «{line_live.strip()}» · строка закрытого: "
+             f"«{line_closed.strip()}» · неизвестный чат не в строках, назван числом 1, итог по "
+             f"двум папкам, «каталога нет» сказано: {ok_rest}")
+
+        # ── ㉘ папка чата в каталоге с другим именем ──
+        folder(root(28) / contour / tid / "scratchpad", n("k"), seconds_ago=600)
+        alien_top = root(28) / f"other-{token}"
+        alien = folder(alien_top / tid / "scratchpad", n("u"), size=2 * MIB)
+        before = fingerprint(alien_top)
+        c_b, o_b, _t = run_tool(tool, stand, root(28), trash(28), "--role", role, "--brief")
+        code, out, _t = run_tool(tool, stand, root(28), trash(28), "--role", role, "--apply",
+                                 "--owner-word", word, role=role)
+        after = fingerprint(alien_top)
+        named = (f"other-{token} (раскладка инструменту неизвестна)" in out
+                 and "не мерена и не убирается" in out)
+        ok_b = c_b == 0 and f"other-{token} (раскладка инструменту неизвестна)" in o_b
+        case("㉘ папка этого же чата в каталоге с другим именем → названа «раскладка инструменту "
+             "неизвестна» (замер и строка --brief), не мерена, при --apply на месте",
+             code == 0 and named and ok_b and not sub_line(out, n("u")) and alien.is_dir()
+             and before == after,
+             f"код {code} · названа: {named} · в строке --brief: {ok_b} · подпапки в замере нет: "
+             f"{not sub_line(out, n('u'))} · отпечаток каталога: "
+             f"{'равен' if before == after else 'ИЗМЕНИЛСЯ — ' + fp_diff(before, after)}")
+
+        # ── ㉙ каталог из 16 знаков сам ссылка ──
+        junction_ok = True
+        target29 = SANDBOX / f"j29-{token}"
+        try:
+            folder(root(29) / contour / tid / "scratchpad", n("k"), seconds_ago=600)
+            victim29 = folder(target29 / tid / "scratchpad", n("j"), size=2 * MIB)
+            make_junction(target29, root(29) / hex_a)
+        except (OSError, ImportError, AttributeError) as e:
+            junction_ok = False
+            unmeasured("㉙ каталог из 16 знаков сам ссылка → назван, не мерен",
+                       f"ссылку-junction создать не вышло ({e}) — случай не подделывается")
+        if junction_ok:
+            before = fingerprint(target29)
+            code, out, _t = run_tool(tool, stand, root(29), trash(29), "--role", role, "--apply",
+                                     "--owner-word", word, role=role)
+            after = fingerprint(target29)
+            named = f"{hex_a} (каталог — ссылка на другое место)" in out
+            case("㉙ каталог из 16 знаков сам ссылка на другое место → назван, не мерен, цель "
+                 "ссылки при --apply цела",
+                 code == 0 and named and not sub_line(out, n("j")) and victim29.is_dir()
+                 and before == after,
+                 f"код {code} · назван: {named} · подпапки в замере нет: {not sub_line(out, n('j'))} "
+                 f"· отпечаток цели: {'равен' if before == after else 'ИЗМЕНИЛСЯ — ' + fp_diff(before, after)}")
 
         # ═══ ИТОГ: счёт случаев и покрытие поломками — из словаря, а не числом в тексте ═══
         covered = set().union(*(set(v) for v in BREAK_FAILS.values()))

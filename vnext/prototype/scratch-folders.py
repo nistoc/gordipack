@@ -11,17 +11,28 @@ scratch-folders.py — черновая папка роли: замер кажд
 корзину Windows; корзину очищает только владелец; чужую черновую папку роль не трогает.
 Правило исключения из rule8-destructive НЕ делает: уборка — разрушающее действие.
 
-ЧТО ТАКОЕ ЧЕРНОВАЯ ПАПКА РОЛИ.
-  %TEMP%\claude\<каталог контура>\<transcript_id живого чата роли>\scratchpad
+ЧТО ТАКОЕ ЧЕРНОВАЯ ПАПКА РОЛИ. Папка scratchpad живого чата роли под корнем %TEMP%\claude.
+  Приложение раскладывало её двумя способами, и у одного номера чата бывают ОБЕ папки:
+    прежняя раскладка   %TEMP%\claude\<каталог контура>\<номер чата>\scratchpad
+    новая раскладка     %TEMP%\claude\<16 шестнадцатеричных знаков>\<номер чата>\scratchpad
   · <каталог контура> — путь контейнера, где КАЖДЫЙ знак, кроме латинских букв и цифр,
-    заменён на «-»: <КОНТУР> → C--guts--atlas. Так называет каталоги само приложение
-    (сверено чтением %TEMP%\claude 2026-10-02 ~23:30 UTC: «C:\Users\n.temnikov» →
-    «C--Users-n-temnikov»; в именах всех 42 каталогов там нет знаков, кроме латинских
-    букв, цифр и «-»).
-  · transcript_id — из role_sessions базы контура (одна строка на роль). Обязан иметь вид
-    номера чата (8-4-4-4-12 шестнадцатеричных знаков), а папка — лежать ВНУТРИ каталога
-    контура, и ни каталог чата, ни scratchpad не могут быть ссылкой: иначе отказ кодом 2
-    (запись «..\x» в базе или ссылка увели бы уборку за пределы контура).
+    заменён на «-»: <КОНТУР> → C--guts--atlas. Так называло каталоги само приложение
+    (сверено чтением %TEMP%\claude 2026-10-02 ~23:30 UTC).
+  · каталог из 16 шестнадцатеричных знаков — сверено чтением %TEMP%\claude 2026-11-22
+    ~19:50 UTC (карточка #807): таких каталогов у эталона 29, старейший создан 2026-11-04;
+    у семи ролей из десяти папки чата лежат по ОБЕИМ раскладкам, у трёх — только по
+    прежней. Живой чат пишет в новую, прежняя папка того же чата лежит рядом и больше не
+    растёт. ПРАВИЛО, ПО КОТОРОМУ ПРИЛОЖЕНИЕ СТРОИТ ЭТИ 16 ЗНАКОВ, НЕ
+    ВЫЯСНЕНО — и инструменту оно не нужно: папка ищется по НОМЕРУ ЧАТА в каталоге прежней
+    раскладки и в каждом каталоге из 16 знаков. Нашлось несколько — меряются ВСЕ, каждая
+    названа своей строкой с путём, итог роли — СУММА, и об этом сказано в выводе.
+  · номер чата (transcript_id) — из role_sessions базы контура (одна строка на роль). Обязан
+    иметь вид номера чата (8-4-4-4-12 шестнадцатеричных знаков), а папка — лежать ВНУТРИ
+    своего каталога первого уровня, и ни каталог чата, ни scratchpad не могут быть ссылкой:
+    иначе отказ кодом 2 (запись «..\x» в базе или ссылка увели бы уборку за пределы корня).
+  · папка этого же чата в каталоге с ДРУГИМ именем (раскладка, которой инструмент не знает)
+    или в каталоге-ссылке не меряется и не убирается, но НАЗЫВАЕТСЯ строкой: следующая
+    раскладка не должна снова стать молчащим нулём.
 
 РЕЖИМЫ.
   (по умолчанию)   ЗАМЕР своей папки — ничего не меняет. По каждой подпапке верхнего
@@ -31,12 +42,17 @@ scratch-folders.py — черновая папка роли: замер кажд
                    подпапки с решением «убрать» — В КОРЗИНУ. Только своя папка, только живая
                    база контура (без --db или --db, равный живой). Код 0 — всё убрано; 1 —
                    были отказы или уборку остановил отказ среды.
-  --contour        сводка по ВСЕМ папкам контура (для COORD, раз в неделю): размер, чья
+  --contour        сводка по папкам контура (для COORD, раз в неделю): размер, чья
                    (роль по transcript_id или «закрытый чат, роли нет»), старые копии базы.
-                   Только замер; --apply с ним НЕ поддерживается. Роли не прочитались —
-                   код 2 «не проверено», а не «все чаты закрытые».
+                   Каталог прежней раскладки — ВСЕ чаты. Каталоги из 16 знаков — только
+                   чаты, которые знает база контура (живые роли и история адресов): чей
+                   каталог из 16 знаков, по имени не узнать, и чужие чаты в сводку не идут.
+                   Сколько рядом с чатами контура лежит папок чатов, которых база не знает,
+                   названо числом — они не мерены. Только замер; --apply с ним НЕ
+                   поддерживается. Роли не прочитались — код 2 «не проверено», а не «все
+                   чаты закрытые».
   --brief          одна строка для общего прогона проверок. Код 0 ВСЕГДА — это замер, а не
-                   провал. Обход только своей папки и не дольше BRIEF_BUDGET_S секунд.
+                   провал. Обход только своих папок и не дольше BRIEF_BUDGET_S секунд на все.
 
 РАЗМЕР. «На диске» — каждый файл один раз по (st_dev, st_ino): жёсткая ссылка с другим
   именем места не занимает (замер проверки 2026-10-02 ~23:47 UTC: в папке PROTO 132 214
@@ -173,6 +189,11 @@ SCRATCH_WORD = re.compile(r"scratchpad", re.IGNORECASE)
 REF_TOKEN = re.compile(r"(?<![\w.\-\\/])[\w.\-]+")
 PLAIN_NAME = re.compile(r"[\w.\-]+")
 UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
+HEX16_RE = re.compile(r"[0-9a-f]{16}", re.IGNORECASE)   # имя каталога новой раскладки
+OLD_LAYOUT = "прежняя раскладка"   # %TEMP%\claude\<каталог контура>\<номер чата>\scratchpad
+NEW_LAYOUT = "новая раскладка"     # %TEMP%\claude\<16 шестнадцатеричных знаков>\<номер чата>\scratchpad
+UNKNOWN_LAYOUT = "раскладка инструменту неизвестна"
+LINKED_TOP = "каталог — ссылка на другое место"
 OWNER_WORD_TIME = re.compile(r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?\s*UTC")
 POLICY_KEY = r"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer"
 
@@ -219,6 +240,27 @@ def disk_size(scans) -> int:
     for s in scans:
         multi.update(s.multi)
     return sum(s.single for s in scans) + sum(multi.values())
+
+
+def merged(scans) -> TreeScan:
+    """Сумма нескольких обходов — папки одного чата по разным раскладкам. Файл с несколькими
+    именами считается один раз и между папками; копии базы держатся по пути или номеру
+    файла, поэтому одноимённые файлы разных папок друг друга не затирают."""
+    total = TreeScan()
+    for s in scans:
+        total.size += s.size
+        total.single += s.single
+        total.multi.update(s.multi)
+        total.files += s.files
+        total.last_edit = max(total.last_edit, s.last_edit)
+        total.copies.update(s.copies)
+        total.root_copies.update(s.root_copies)
+        if s.longest > total.longest:
+            total.longest, total.longest_path = s.longest, s.longest_path
+        total.denied.extend(s.denied)
+        total.unreadable.extend(s.unreadable)
+        total.truncated = total.truncated or s.truncated
+    return total
 
 
 def gb(size: int) -> str:
@@ -427,21 +469,85 @@ def transcript_of(con, role: str):
     return row[0].strip(), None
 
 
-def own_folder(contour: Path, tid: str):
-    """→ (черновая папка, None) или (None, причина отказа). Папка обязана лежать ВНУТРИ
-    каталога контура: номер чата из базы — данные, а не путь."""
-    if not UUID_RE.fullmatch(tid):
-        return None, f"номер чата в role_sessions не похож на номер чата: «{tid}»"
-    chat = contour / tid
-    folder = chat / "scratchpad"
-    for p in (chat, folder):
-        if is_link_path(p):
-            return None, f"{p} — ссылка на другое место; по ссылке не меряю и не убираю"
+@dataclass
+class Found:
+    """Одна черновая папка чата: по какой раскладке и в каком каталоге первого уровня."""
+    layout: str
+    top: Path
+    folder: Path
+
+
+def top_level_dirs(root: Path):
+    """Каталоги первого уровня корня черновых папок → [(имя, путь, ссылка ли)], по имени.
+    Корень не читается — пусто: есть ли корень вообще, вызывающий проверяет сам."""
     try:
-        folder.resolve().relative_to(contour.resolve())
-    except (ValueError, OSError):
-        return None, f"папка {folder} выходит за пределы каталога контура {contour}"
-    return folder, None
+        with os.scandir(root) as it:
+            entries = sorted(it, key=lambda e: e.name.lower())
+    except OSError:
+        return []
+    out = []
+    for entry in entries:
+        path = Path(entry.path)
+        link = is_link_path(path)
+        try:
+            if not link and not entry.is_dir(follow_symlinks=False):
+                continue
+        except OSError:
+            continue
+        out.append((entry.name, path, link))
+    return out
+
+
+def own_folders(root: Path, old_name: str, tid: str):
+    """→ (папки [Found], не мерено [(каталог, причина)], None) или (None, None, причина отказа).
+
+    Папка чата ищется по НОМЕРУ ЧАТА в каталогах первого уровня корня: в каталоге прежней
+    раскладки (имя из пути контура) и в каждом каталоге новой (16 шестнадцатеричных
+    знаков). Правило построения этих 16 знаков не нужно: номер чата у обеих раскладок один.
+    Номер чата из базы — данные, а не путь: вид номера сверяется, каталог чата и scratchpad
+    не могут быть ссылкой, папка обязана лежать ВНУТРИ своего каталога первого уровня.
+    Каталог с другим именем и каталог-ссылка, где папка этого чата есть, не меряются и не
+    убираются — они возвращаются вторым списком, чтобы вызывающий их НАЗВАЛ."""
+    if not UUID_RE.fullmatch(tid):
+        return None, None, f"номер чата в role_sessions не похож на номер чата: «{tid}»"
+    found, skipped = [], []
+    old_key = os.path.normcase(old_name)
+    for name, top, link in top_level_dirs(root):
+        chat = top / tid
+        folder = chat / "scratchpad"
+        is_old = os.path.normcase(name) == old_key
+        known = is_old or bool(HEX16_RE.fullmatch(name))
+        if not known or (link and not is_old):
+            if folder.is_dir():
+                skipped.append((name, LINKED_TOP if link else UNKNOWN_LAYOUT))
+            continue
+        if not os.path.lexists(chat):
+            continue
+        for p in (chat, folder):
+            if is_link_path(p):
+                return None, None, f"{p} — ссылка на другое место; по ссылке не меряю и не убираю"
+        if not folder.is_dir():
+            continue
+        try:
+            folder.resolve().relative_to(top.resolve())
+        except (ValueError, OSError):
+            return None, None, f"папка {folder} выходит за пределы своего каталога {top}"
+        found.append(Found(OLD_LAYOUT if is_old else NEW_LAYOUT, top, folder))
+    found.sort(key=lambda f: (f.layout != OLD_LAYOUT, f.top.name.lower()))
+    return found, skipped, None
+
+
+def searched_words(root: Path, old_name: str) -> str:
+    return (f"искал по номеру чата в {root}: каталог прежней раскладки {old_name} и каталоги "
+            f"новой — из 16 шестнадцатеричных знаков")
+
+
+def skipped_words(skipped) -> str:
+    """Папки этого чата, которые НЕ мерены, — одной фразой; пусто, если таких нет."""
+    if not skipped:
+        return ""
+    return ("папка этого чата есть ещё в " + ", ".join(f"{name} ({why})" for name, why in skipped)
+            + " — не мерена и не убирается")
 
 
 def load_reference_texts(con):
@@ -904,19 +1010,36 @@ def brief_line(args) -> str:
         con.close()
     if not tid:
         return f"ℹ️ черновая папка {role}: {why} — замер не сделан"
-    folder, why = own_folder(scratch_root() / contour_dir_name(container_path()), tid)
-    if folder is None:
+    root, old_name = scratch_root(), contour_dir_name(container_path())
+    found, skipped, why = own_folders(root, old_name, tid)
+    if found is None:
         return f"ℹ️ черновая папка {role}: {why} — замер не сделан"
-    if not folder.is_dir():
-        return f"ℹ️ черновая папка {role}: папки нет ({folder}) — убирать нечего"
+    unmeasured = skipped_words(skipped)
+    if not found:
+        return (f"ℹ️ черновая папка {role}: папки нет ({searched_words(root, old_name)}) — "
+                f"убирать нечего" + (f" · {unmeasured}" if unmeasured else ""))
     now = time.time()
-    scan = scan_tree(folder, deadline=time.monotonic() + BRIEF_BUDGET_S, exact=False)
+    # время обхода делится между папками: каждой — равная доля ОСТАТКА, так что вторая не
+    # остаётся без замера оттого, что первая велика, а недобранное первой достаётся второй
+    t_end = time.monotonic() + BRIEF_BUDGET_S
+    scans = []
+    for i, f in enumerate(found):
+        share = max(0.0, t_end - time.monotonic()) / (len(found) - i)
+        scans.append(scan_tree(f.folder, deadline=time.monotonic() + share, exact=False))
+    scan = merged(scans)
     old = old_copies(scan, now)
     root_old = old_root_copies(scan, now)
     more = "не меньше " if scan.truncated else ""
-    parts = [f"черновая папка {role}: {more}{size_words(scan.size, scan.disk, approx=True)}",
-             f"копий базы старше {OLD_COPY_DAYS} суток: {more}{old}"
-             + (f", из них в корне папки {root_old} (их этот инструмент не убирает)" if root_old else "")]
+    parts = [f"черновая папка {role}: {more}{size_words(scan.size, scan.disk, approx=True)}"]
+    if len(found) > 1:
+        parts.append(f"СУММА по {len(found)} папкам чата: " + " + ".join(
+            f"{f.layout} {size_words(s.size, s.disk, approx=True)}" for f, s in zip(found, scans)))
+    else:
+        parts.append(found[0].layout)
+    parts.append(f"копий базы старше {OLD_COPY_DAYS} суток: {more}{old}"
+                 + (f", из них в корне папки {root_old} (их этот инструмент не убирает)" if root_old else ""))
+    if unmeasured:
+        parts.append(unmeasured)
     alarm = False
     if scan.disk > threshold_bytes():
         parts.append(f"пора убрать: {more}≈{gb(scan.disk)} ({threshold_words()})")
@@ -926,7 +1049,7 @@ def brief_line(args) -> str:
         alarm = True
     if scan.truncated:
         parts.append(f"замер оборван через {BRIEF_BUDGET_S:.0f} с — папка велика")
-    if alarm or scan.truncated:
+    if alarm or scan.truncated or unmeasured:
         parts.append(f"разбор и уборка по слову владельца: python {SELF.as_posix()} --role {role}")
     mark = "⚠️" if alarm else "ℹ️"
     return mark + " " + " · ".join(parts)
@@ -945,31 +1068,65 @@ def run_contour(args) -> int:
         print(f"⚪ не проверено: роли не читаются ({roles_err}) — без них каждый чат вышел бы "
               f"«закрытым», и сводка звала бы убирать папки живых ролей. Сводка не печатается.")
         return 2
-    contour = scratch_root() / contour_dir_name(container_path())
-    if not contour.is_dir():
-        print(f"⛔ каталога контура нет: {contour} — корень (MEZO_SCRATCH_ROOT) или имя контура неверны")
+    root, old_name = scratch_root(), contour_dir_name(container_path())
+    if not root.is_dir():
+        print(f"⛔ корня черновых папок нет: {root} — его даёт TEMP или MEZO_SCRATCH_ROOT: "
+              f"приложение здесь папок ещё не создавало, либо путь неверен")
         return 2
+    contour = root / old_name
     now = time.time()
-    rows, empty, links = [], 0, []
-    for d in sorted(contour.iterdir(), key=lambda p: p.name.lower()):
-        sp = d / "scratchpad"
-        if is_link_path(d) or is_link_path(sp):
-            links.append(d.name)
-            continue
+    rows, links = [], []
+    empty = 0
+
+    def take(chat_dir: Path, layout: str) -> None:
+        nonlocal empty
+        sp = chat_dir / "scratchpad"
+        if is_link_path(chat_dir) or is_link_path(sp):
+            links.append(f"{chat_dir.parent.name}\\{chat_dir.name}")
+            return
         if not sp.is_dir():
-            continue
+            return
         scan = scan_tree(sp, exact=False)
         if scan.size == 0 and not scan.files and not scan.denied and not scan.unreadable:
             empty += 1
+            return
+        rows.append((scan, chat_dir.name, owners.get(chat_dir.name.lower()), layout))
+
+    # прежняя раскладка: каталог назван по пути контура — в нём ВСЕ чаты контура
+    if contour.is_dir():
+        for d in sorted(contour.iterdir(), key=lambda p: p.name.lower()):
+            take(d, OLD_LAYOUT)
+    # новая раскладка: чей каталог из 16 знаков, по имени не узнать — берём только чаты,
+    # которые знает база контура, а папки остальных чатов рядом с ними называем числом
+    known_ids = {k for k in list(owners) + list(history) if UUID_RE.fullmatch(k)}
+    new_tops, strangers = [], 0
+    for top_name, top, link in top_level_dirs(root):
+        if link or not HEX16_RE.fullmatch(top_name):
             continue
-        role = owners.get(d.name.lower())
-        rows.append((scan, d.name, role))
+        try:
+            with os.scandir(top) as it:
+                chats = sorted((e.name for e in it), key=str.lower)
+        except OSError:
+            continue
+        ours = [c for c in chats if c.lower() in known_ids]
+        if not ours:
+            continue
+        new_tops.append(top_name)
+        for c in ours:
+            take(top / c, NEW_LAYOUT)
+        strangers += sum(1 for c in chats if c.lower() not in known_ids
+                         and (top / c / "scratchpad").is_dir())
     print(f"🗂 СВОДКА ЧЕРНОВЫХ ПАПОК КОНТУРА — только замер, ничего не меняет")
-    print(f"   каталог контура: {contour}")
+    print(f"   корень: {root}")
+    print(f"   {OLD_LAYOUT} — каталог {old_name}: "
+          + ("все чаты" if contour.is_dir() else "каталога нет"))
+    print(f"   {NEW_LAYOUT} — каталоги из 16 шестнадцатеричных знаков: только чаты, которые знает "
+          f"база контура (живые роли и история адресов); найдены в: "
+          f"{', '.join(new_tops) if new_tops else 'нигде'}")
     print(f"   размеры ≈: жёсткие ссылки сверены у файлов от {DEDUPE_MIN / MB:g} МБ")
     live, closed = [], []
     old_total = 0
-    for scan, name, role in sorted(rows, key=lambda r: -r[0].disk):
+    for scan, name, role, layout in sorted(rows, key=lambda r: -r[0].disk):
         old = old_copies(scan, now)
         owner = f"роль {role} (живой чат)" if role else CLOSED_CHAT
         if not role and history.get(name.lower()):
@@ -979,12 +1136,16 @@ def run_contour(args) -> int:
             notes.append(f"есть путь длиннее 260 знаков ({scan.longest})")
         if scan.denied:
             notes.append(f"нет доступа: {len(scan.denied)}")
-        print(f"  {size_words(scan.size, scan.disk, approx=True):>10} · {name} · {owner} · копий базы "
-              f"старше {OLD_COPY_DAYS} суток: {old}" + (" · " + " · ".join(notes) if notes else ""))
+        print(f"  {size_words(scan.size, scan.disk, approx=True):>10} · {name} · {layout} · {owner} · "
+              f"копий базы старше {OLD_COPY_DAYS} суток: {old}"
+              + (" · " + " · ".join(notes) if notes else ""))
         old_total += old
         (live if role else closed).append(scan)
     if links:
         print(f"   не мерены — каталог чата или scratchpad сами ссылка на другое место: {', '.join(links)}")
+    if new_tops:
+        print(f"   в каталогах новой раскладки рядом с чатами контура лежит папок чатов, которых "
+              f"база не знает: {strangers} — не мерены: чьи они, по имени каталога не узнать")
     print(f"ИТОГ: папок {len(rows)} · всего ≈{gb(disk_size(live + closed))} · у живых чатов ролей "
           f"≈{gb(disk_size(live))} · у закрытых чатов ≈{gb(disk_size(closed))} · копий базы старше "
           f"{OLD_COPY_DAYS} суток: {old_total} · пустых папок не перечислено: {empty} · замер "
@@ -1029,17 +1190,29 @@ def run_folder(args) -> int:
     finally:
         con.close()
 
-    contour = scratch_root() / contour_dir_name(container_path())
-    folder, why = own_folder(contour, tid)
-    if folder is None:
+    root, old_name = scratch_root(), contour_dir_name(container_path())
+    found, skipped, why = own_folders(root, old_name, tid)
+    if found is None:
         print(f"⛔ черновая папка роли {role}: {why}. Ничего не тронуто.")
         return 2
-    print(f"🗂 черновая папка роли {role} (роль — {source}): {folder}")
+    if len(found) == 1:
+        head = str(found[0].folder)
+    elif found:
+        head = f"папок {len(found)} — меряю каждую, итог — СУММА"
+    else:
+        head = "папки нет"
+    print(f"🗂 черновая папка роли {role} (роль — {source}): {head}")
     print(f"   номер живого чата (transcript_id из role_sessions): {tid}")
-    if not contour.is_dir():
-        print(f"⛔ каталога контура нет: {contour} — корень (MEZO_SCRATCH_ROOT) или имя контура неверны")
+    if not root.is_dir():
+        print(f"⛔ корня черновых папок нет: {root} — его даёт TEMP или MEZO_SCRATCH_ROOT: "
+              f"приложение здесь папок ещё не создавало, либо путь неверен")
         return 2
-    if not folder.is_dir():
+    for f in found:
+        print(f"   📂 {f.layout}: {f.folder}")
+    if skipped:
+        print(f"ℹ️ {skipped_words(skipped)}")
+    if not found:
+        print(f"   {searched_words(root, old_name)}")
         print("   папки нет — убирать нечего (чат ещё ничего не клал в черновую папку)")
         return 0
     if ref_errors:
@@ -1049,9 +1222,12 @@ def run_folder(args) -> int:
             return 2
 
     now = time.time()
-    names = [e.name for e in os.scandir(folder)]
+    names = sorted({e.name for f in found for e in os.scandir(f.folder)})
     index = reference_index(texts, names)
-    reports, root_files = measure_folder(folder, index, now)
+    # каждая папка меряется отдельно; дальше всё — по ВСЕМ папкам чата вместе
+    measured = [(f, *measure_folder(f.folder, index, now)) for f in found]
+    reports = [r for _f, reps, _rf in measured for r in reps]
+    root_files = merged([rf for _f, _reps, rf in measured])
 
     cards = {n for k, n, _t in texts if k == "card"}
     notes = sum(1 for k, _n, _t in texts if k == "note")
@@ -1073,13 +1249,23 @@ def run_folder(args) -> int:
         print("   это ЗАМЕР — ничего не меняет; уборка только по слову владельца в этом чате: "
               "--apply --owner-word \"<дословно и час UTC>\"")
     print("")
-    for r in sorted(reports, key=lambda x: (-x.scan.disk, x.name.lower())):
-        print_report(r, now)
+    parts_words = []
+    for f, reps, rf in measured:
+        own = [r.scan for r in reps] + [rf]
+        own_words = size_words(sum(s.size for s in own), disk_size(own))
+        parts_words.append(f"{f.layout} {own_words}")
+        if len(found) > 1:
+            print(f"  ── {f.layout}: {own_words} · подпапок: {len(reps)} · файлов в корне: "
+                  f"{rf.files} · {f.folder}")
+        for r in sorted(reps, key=lambda x: (-x.scan.disk, x.name.lower())):
+            print_report(r, now)
     print("")
     print(f"ИТОГ: всего {size_words(total_names, total_disk)} · к уборке "
           f"{size_words(sum(s.size for s in rm), disk_size(rm))} · копий базы старше "
           f"{OLD_COPY_DAYS} суток: {old_total}"
           + (f" (из них в корне папки {root_old} — их этот инструмент не убирает)" if root_old else ""))
+    if len(found) > 1:
+        print(f"   итог — СУММА по {len(found)} папкам чата: " + " + ".join(parts_words))
     print(f"   {threshold_words()} · копия базы старше {OLD_COPY_DAYS} суток — второй порог")
     if root_files.root_copies:
         print(f"   в корне папки копий базы: {len(root_files.root_copies)}, из них старше "
@@ -1102,11 +1288,16 @@ def run_folder(args) -> int:
                   "вопрос с числами (что убираю · сколько ГБ · что оставляю)")
         print(f"   замер {time.monotonic() - t0:.1f} с")
         return 0
-    return apply_cleanup(args, reports, folder, now)
+    return apply_cleanup(args, reports, [f.folder for f in found], now)
 
 
-def apply_cleanup(args, reports, folder: Path, now: float) -> int:
-    trash, why = choose_trash(folder)
+def apply_cleanup(args, reports, folders, now: float) -> int:
+    drives = sorted({f.drive.lower() for f in folders})
+    if len(drives) > 1:
+        print(f"⛔ УБОРКА НЕ НАЧАТА: папки чата лежат на разных томах ({', '.join(drives)}) — "
+              f"корзина у каждого тома своя, и место одной сверкой не проверить. Ничего не тронуто.")
+        return 2
+    trash, why = choose_trash(folders[0])
     if trash is None:
         print(f"⛔ УБОРКА НЕ НАЧАТА: {why}. Ничего не тронуто.")
         return 2
