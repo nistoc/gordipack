@@ -21,6 +21,12 @@ skipped · только-у-вас), опора по meta и по истории 
 поломка) — подсказка на gordi-issue.py берёт путь от СВОЕГО расположения, не впечатанный
 <КОНТУР>: из контура-песочницы вне этого пути подсказка раньше вела в пустоту.
 
+ГРАНИЦА ПУТИ В СЛУЧАЕ ㊻ (карточка #825, 2026-11-22): путь контура в выводе испытуемого
+судится с границей (за ним конец строки, разделитель каталогов или кавычка), а не вхождением
+строки. Раньше временная папка прогона, лежащая РЯДОМ с контуром под именем, которое
+начинается с имени контура («…/s817-t» при контуре «…/s817»), давала ложный провал ㊻:
+путь песочницы содержал путь контура как строку. Встречный случай и поломка (У) — там же.
+
 ПОВТОРНАЯ ПРИЁМКА Н1, ЗАМЕЧАНИЯ COORD (карточка #608, 2026-09-14, возврат PROTO 10:08
 UTC): ㊼/поломка — --show на «изменено с обеих сторон» печатает текст пакета и ваш текст
 ОДИН раз, а не дважды (блок трёх текстов теперь говорит только про опору, тексты — выше
@@ -126,7 +132,29 @@ print(f"⚖️ испытуется: {mezo_target.label()}")
 # в пакет отклоняет (заглушка в проверяемом значении сломала бы случай у потребителя), а у
 # чужого контура он и проверял бы не то — чужой корень, а не свой.
 OWN_ROOT = str(mezo_paths.container_root()).replace("\\", "/")
-OWN_ROOT_BS = OWN_ROOT.replace("/", "\\")
+
+
+def root_shown(text: str, root: str, boundary: bool = True) -> bool:
+    """Показан ли в тексте путь контура root — в обоих написаниях разделителя каталогов.
+
+    С границей (так судят случаи): путь засчитан, только если за ним конец строки, разделитель
+    каталогов или кавычка, — то есть это сам корень или путь ВНУТРИ него. Каталог-сосед, чьё имя
+    начинается с имени контура («…/s817-t» рядом с «…/s817»), содержит путь контура как строку,
+    а корнем контура не является: по карточке #825 временная папка рядом с контуром давала ложный
+    провал случая ㊻. Без границы (boundary=False) — прежнее вхождение строки; оставлено только
+    для поломки (У).
+    ⚖️ Пробел границей НЕ считается: имя соседа может продолжаться и пробелом («…/atlas copy»), а
+    впечатанный путь, ради которого случай ㊻ заведён, — путь ФАЙЛА внутри контура, за корнем у него
+    стоит разделитель."""
+    fwd = root.replace("\\", "/")
+    for form in (fwd, fwd.replace("/", "\\")):
+        if not boundary:
+            if form in text:
+                return True
+        elif re.search(re.escape(form) + r"""(?=$|[\r/\\"'«»`])""", text, flags=re.MULTILINE):
+            return True
+    return False
+
 
 # ВОЗВРАТ COORD (карточка #614, ветка «а», 2026-09-14 17:58 UTC): адрес в meta ЕСТЬ, но не
 # читается — отказ обязан нести готовую команду словами ПРО ПРАВИЛА (что делает роль ЭТОГО
@@ -2131,7 +2159,8 @@ def main() -> int:
         env=mezo_stand.stand_env(root), capture_output=True, text=True, encoding="utf-8")
     letter_textW = letterW.read_text(encoding="utf-8") if letterW.exists() else ""
     out_and_letterW = rcW.stdout + letter_textW
-    has_hardcoded = OWN_ROOT in out_and_letterW or OWN_ROOT_BS in out_and_letterW
+    # карточка #825: путь судится с границей, не вхождением строки — см. root_shown
+    has_hardcoded = root_shown(out_and_letterW, OWN_ROOT)
     # ⚖️ Path.resolve() внутри испытуемого может развернуть короткое имя каталога (8.3,
     # напр. ИМЯ~1 в пути временного каталога) в длинное — сравниваем с РЕЗОЛВНУТЫМ путём песочницы, а не с
     # его сырым написанием, иначе случай ложно краснеет от несовпадения написаний ОДНОГО
@@ -2162,10 +2191,46 @@ def main() -> int:
         [sys.executable, str(tool_broken), "--db", str(retX_db), "--source", str(retX_pack),
          "--propose", retX_key, "--why", "проверка пути В2 поломка", "--out", str(letterX)],
         env=mezo_stand.stand_env(root), capture_output=True, text=True, encoding="utf-8")
-    has_hardcoded_x = OWN_ROOT in rcX.stdout or OWN_ROOT_BS in rcX.stdout
+    has_hardcoded_x = root_shown(rcX.stdout, OWN_ROOT)
     ok &= case("㊻ ПОЛОМКА (И) «путь впечатан» красит ровно ㊻: корень этого контура снова в выводе",
               rcX.returncode == 0 and has_hardcoded_x,
               f"код {rcX.returncode}; впечатанный путь в выводе: {has_hardcoded_x}")
+
+    # ── ㊻ ВСТРЕЧНЫЙ (карточка #825): песочница РЯДОМ с контуром, и её путь начинается с пути
+    # контура как строка — так выходит, когда временная папка прогона названа по имени контура
+    # («…/s817-t» при контуре «…/s817»). Настоящий корень этого контура приёмка соседями
+    # обставлять не вправе (она пишет только в свой временный каталог), поэтому «контур» здесь
+    # подставной: каталог near/k825, а песочница лежит в его соседе near/k825-t. Судит ТА ЖЕ
+    # функция root_shown, что и случай ㊻, — на настоящем выводе испытуемого.
+    near_own_dir = root / "near" / "k825"
+    near_own_dir.mkdir(parents=True)
+    near_own = str(near_own_dir.resolve()).replace("\\", "/")
+    neighbour = root / "near" / "k825-t" / "elsewhere"
+    tool_near = build_sandboxed_tool(neighbour)
+    retN_db, retN_pack, retN_key = build_retired_fixture(root / "propose-near", mod.text_sha)
+    letterN = root / "propose-near" / "letter.md"
+    rcN = subprocess.run(
+        [sys.executable, str(tool_near), "--db", str(retN_db), "--source", str(retN_pack),
+         "--propose", retN_key, "--why", "проверка границы пути", "--out", str(letterN)],
+        env=mezo_stand.stand_env(root), capture_output=True, text=True, encoding="utf-8")
+    letter_textN = letterN.read_text(encoding="utf-8") if letterN.exists() else ""
+    out_and_letterN = rcN.stdout + letter_textN
+    neighbour_shown = str(neighbour.resolve()) in rcN.stdout
+    starts_with_own = str(neighbour.resolve()).replace("\\", "/").startswith(near_own)
+    found_as_path = root_shown(out_and_letterN, near_own)
+    ok &= case("㊻ встречный: песочница рядом с контуром, её путь начинается с пути контура как "
+              "строка — корень контура в выводе не найден",
+              rcN.returncode == 0 and neighbour_shown and starts_with_own and not found_as_path,
+              f"код {rcN.returncode}; путь песочницы в выводе: {neighbour_shown}; он начинается с "
+              f"пути контура: {starts_with_own}; путь контура найден как путь: {found_as_path}")
+
+    # ── ㊻ ПОЛОМКА (У): граница убрана — путь контура снова ищется вхождением строки ──────
+    found_as_substring = root_shown(out_and_letterN, near_own, boundary=False)
+    ok &= case("㊻ ПОЛОМКА (У) «граница убрана» валит ровно встречный: путь соседа читается как "
+              "корень контура",
+              found_as_substring,
+              f"без границы путь контура в том же выводе найден: {found_as_substring} (ждём True — "
+              f"встречный случай под поломкой провалился бы)")
 
     # ═══ ㊼ КАРТОЧКА #608, ПОВТОРНАЯ ПРИЁМКА Н1, ЗАМЕЧАНИЕ COORD (3): --show на
     # «изменено с обеих сторон» печатает текст пакета РОВНО ОДИН раз — раньше печатал

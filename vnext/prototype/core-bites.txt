@@ -67,7 +67,7 @@ bite-review-queue.py                     Г1     own  0 7 0
 bite-reviewed-repeat.py                  Г1     done  0 5 0
 bite-reviewer-named.py                   Г1     done  0 10 0
 bite-rights-amend.py                     Г1     own  0 12 0
-bite-rules-from-pack.py                  Г1     done  0 111 0
+bite-rules-from-pack.py                  Г1     done  0 113 0
 bite-save-actor.py                       Г1     done  0 6 0
 bite-save-alongside.py                   Г1     own   0 8 0
 bite-save-phoenix-dryrun-lease.py        Г1     done  0 7 0
