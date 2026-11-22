@@ -47,7 +47,7 @@ bite-interview-gates.py                  Г1     own  0 17 0
 bite-lease-read-subcommands.py           Г1     done  0 8 0
 bite-lease-release-tells-waiters.py      Г1     done  0 15 0
 bite-local-dir.py                        Г1     done  0 67 0
-bite-loud-cleanup.py                     Г1     own  0 13 0
+bite-loud-cleanup.py                     Г1     own  0 17 0
 bite-memory-records.py                   Г3     done  0 23 0
 bite-memory-search.py                    Г4     done  0 11 0
 bite-memory-volume.py                    Г1     done  0 46 5

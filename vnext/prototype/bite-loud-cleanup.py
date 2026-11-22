@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 r"""bite-loud-cleanup.py — приёмка карточки #817: уборка временного каталога приёмки не молчит об отказе.
+С карточки #826 она же судит два свойства самой уборки: сборку мусора перед удалением и повтор попытки.
 
 ЗАЧЕМ. Приёмки убирали свой временный каталог вызовом shutil.rmtree(path, ignore_errors=True). На Windows
 открытый файл и файл «только чтение» удаление срывают, а отказ глушился: каталог оставался, и ни вывод, ни код
@@ -9,7 +10,7 @@ r"""bite-loud-cleanup.py — приёмка карточки #817: уборка 
 вердикт приёмки при этом не меняет.
 
 ЧТО ИСПЫТЫВАЕТСЯ. Файл mezo_stand.py, лежащий рядом с этой приёмкой, — в ДОЧЕРНЕМ процессе и на КОПИИ: каждый
-вариант (целый помощник и четыре нарочные поломки) кладётся в свой каталог стенда вместе с подставным скриптом.
+вариант (целый помощник и шесть нарочных поломок) кладётся в свой каталог стенда вместе с подставным скриптом.
 Скрипт печатает, какой файл помощника он подключил; не копия — случай не засчитывается. Живой контур и живая база
 не читаются и не пишутся, вся работа идёт внутри стенда приёмки.
 
@@ -29,13 +30,27 @@ r"""bite-loud-cleanup.py — приёмка карточки #817: уборка 
      и TemporaryDirectory с ignore_cleanup_errors=True; нет rmtree внутри try, чьи обработчики ничего не печатают
      и не бросают дальше. Исключения — только названные поимённо, с числом мест и причиной (перечни ниже);
      названное исключение, которого в коде уже нет или стало другое число мест, — тоже провал
+  У9 сборка мусора перед удалением (карточка #826): в подставном скрипте сборка мусора выключена, соединение
+     с базой брошено без close() в цикле ссылок и держит файл; уборка сама собирает мусор — True, каталога нет,
+     строки нет
+  У10 повтор попытки (карточка #826): файл каталога держит открытым ДРУГОЙ процесс и отпускает сам через долю
+     секунды — сборка мусора тут не поможет; первая попытка удаления срывается, уборка повторяет — True, каталога
+     нет, строки нет, и уборка заняла не меньше половины паузы между попытками (заняла меньше — первой попытке
+     никто не мешал, и случаю было не на что смотреть)
 НАРОЧНЫЕ ПОЛОМКИ (в КОПИИ mezo_stand.py на стенде; образец обязан найтись ровно один раз)
   ЛУ1 уборка снова молчит об остатке (строка убрана)                       → У1
-  ЛУ2 строка печатается и тогда, когда каталог убран                       → У2, У3, У6
+  ЛУ2 строка печатается и тогда, когда каталог убран                       → У2, У3, У6, У9, У10
   ЛУ3 отказ уборки бросается наружу и роняет приёмку                       → У1, У5
   ЛУ4 метка «только чтение» перед удалением не снимается                   → У3
-ГРАНИЦА. Открытый файл мешает удалению только на Windows. На другой системе случаи У1 и У5 и поломки ЛУ1, ЛУ3,
-ЛУ4 ставить не на чем: они печатаются «не поставлен», исход приёмки — «принята, часть не проверена», код 2.
+  ЛУ5 сборки мусора перед удалением нет                                    → У9
+  ЛУ6 повторов нет: попытка удаления одна                                  → У10
+ГРАНИЦА. Открытый файл мешает удалению только на Windows. На другой системе случаи У1, У5, У9, У10 и поломки ЛУ1,
+ЛУ3–ЛУ6 ставить не на чем: они печатаются «не поставлен», исход приёмки — «принята, часть не проверена», код 2;
+поломка ЛУ2 там судится по тем своим случаям, которые поставлены.
+Случай У10 зависит от времени. Чужой процесс держит файл ПОЛОВИНУ окна повторов целого помощника (окно — число
+попыток без одной, умноженное на паузу; при 4 попытках и паузе 0,15 с это 0,45 с, файл держится 0,225 с): запас
+по половине окна и до первой попытки, и после последней. Числа печатаются строкой перед случаем. Машина, на
+которой процесс стоит дольше этого запаса, даст ложный провал У10 или ЛУ6 — повтори прогон прежде, чем чинить.
 Случай У8 судится только из клона пакета: в каталогах установленного контура лежат и его собственные файлы,
 перечня исключений для них здесь нет — там места молчащего удаления печатаются для сведения, случай не поставлен.
 
@@ -83,8 +98,34 @@ import mezo_stand
 print("HELPER=" + os.path.abspath(mezo_stand.__file__))
 mode, target = sys.argv[1], sys.argv[2]
 held = None
+child = None
 if mode in ("held", "verdict"):
     held = open(os.path.join(target, "held.bin"), "ab")     # открыт до конца процесса
+if mode == "cycle":
+    # соединение с базой брошено без close() в цикле ссылок, сборка мусора выключена: файл базы держится,
+    # пока мусор не соберёт сама уборка
+    import gc
+    import sqlite3
+    gc.disable()
+
+    class Holder:
+        pass
+
+    h = Holder()
+    h.me = h
+    h.conn = sqlite3.connect(os.path.join(target, "c.db"))
+    h.conn.execute("create table t(x)")
+    h.conn.commit()
+    del h
+if mode == "late":
+    # файл держит ДРУГОЙ процесс и отпускает сам через sys.argv[3] секунд: сборка мусора здесь не поможет
+    import subprocess
+    child = subprocess.Popen(
+        [sys.executable, "-c",
+         "import sys,time; h=open(sys.argv[1],'ab'); print('HELD', flush=True); "
+         "time.sleep(float(sys.argv[2])); h.close()",
+         os.path.join(target, "late.bin"), sys.argv[3]], stdout=subprocess.PIPE, text=True)
+    print("CHILD=" + child.stdout.readline().strip())
 if mode == "verdict":
     code = int(sys.argv[3])
     try:
@@ -100,9 +141,22 @@ if mode == "with":
         target = made
     print("RET=None")
 else:
-    print("RET=" + str(mezo_stand.remove_tree(target)))
+    import time
+    began = time.perf_counter()
+    ret = mezo_stand.remove_tree(target)
+    print("TOOK=%.3f" % (time.perf_counter() - began))
+    print("RET=" + str(ret))
+if child is not None:
+    child.wait()                                            # чужой процесс не остаётся после пробы
 print("EXISTS=" + str(os.path.lexists(target)))
 '''
+
+# Случай У10 (повтор попытки) зависит от времени: чужой процесс держит файл половину окна повторов ЦЕЛОГО помощника.
+# Числа берутся у помощника, лежащего рядом с приёмкой: поломка в копии на стенде их не меняет.
+ATTEMPTS = getattr(mezo_stand, "_REMOVE_ATTEMPTS", 0)
+PAUSE_S = getattr(mezo_stand, "_REMOVE_PAUSE_S", 0.0)
+RETRY_WINDOW_S = max(ATTEMPTS - 1, 0) * PAUSE_S
+HOLD_S = round(RETRY_WINDOW_S / 2, 3)
 
 LEFT_LINE = ('        _say(f"⚠️ ВРЕМЕННЫЙ КАТАЛОГ НЕ УБРАН: {p} · осталось файлов: {files}, байт: {size} · "\n'
              '             f"первая причина: {why}")\n'
@@ -110,7 +164,7 @@ LEFT_LINE = ('        _say(f"⚠️ ВРЕМЕННЫЙ КАТАЛОГ НЕ УБ�
 BREAKS = {
     "ЛУ1": ("уборка снова молчит об остатке", {"У1"}, True,
             [(LEFT_LINE, "        return False  # ПОЛОМКА ЛУ1: об остатке ни слова\n")]),
-    "ЛУ2": ("строка печатается и тогда, когда каталог убран", {"У2", "У3", "У6"}, False,
+    "ЛУ2": ("строка печатается и тогда, когда каталог убран", {"У2", "У3", "У6", "У9", "У10"}, False,
             [("        if not os.path.lexists(p):\n            return True\n        files, size = _left_in(p)\n",
               "        if not os.path.lexists(p):\n"
               '            _say(f"⚠️ ВРЕМЕННЫЙ КАТАЛОГ НЕ УБРАН: {p} · ПОЛОМКА ЛУ2")\n'
@@ -125,6 +179,12 @@ BREAKS = {
               "        except FileNotFoundError:\n",
               "        try:\n            func(target)                                  # ПОЛОМКА ЛУ4\n"
               "        except FileNotFoundError:\n")]),
+    "ЛУ5": ("сборки мусора перед удалением нет", {"У9"}, True,
+            [("            gc.collect()\n            refusals.clear()\n",
+              "            refusals.clear()                              # ПОЛОМКА ЛУ5: мусор не собран\n")]),
+    "ЛУ6": ("повторов нет: попытка удаления одна", {"У10"}, True,
+            [("        for attempt in range(_REMOVE_ATTEMPTS):\n",
+              "        for attempt in range(1):                          # ПОЛОМКА ЛУ6: одна попытка\n")]),
 }
 TITLES = {
     "У1": "занятый файл ⇒ сообщение есть: одна строка с путём, числом файлов и байт и причиной",
@@ -134,8 +194,27 @@ TITLES = {
     "У5": "вердикт не подменён: свой итог и свой код выхода (0 и 1) при неубранном каталоге",
     "У6": "блок with: внутри блока каталог есть, после блока нет, строки нет",
     "У7": "ссылка или соединение каталогов не тронуты, файл за ней цел",
+    "У9": "сборка мусора перед удалением: соединение с базой, брошенное в цикле ссылок, каталог не держит",
+    "У10": "повтор попытки: файл, который чужой процесс отпускает через долю секунды, каталог не держит",
 }
 ORDER = ["У1", "У2", "У3", "У4", "У5", "У6", "У7"]
+ORDER_AFTER_CLASS = ["У9", "У10"]        # печатаются после У8: номера случаев идут по порядку
+
+
+def in_order(names) -> list:
+    """Имена случаев по номеру: У2 раньше У10."""
+    return sorted(names, key=lambda n: int(n[1:]))
+
+
+def took_of(out: str):
+    """Сколько секунд заняла уборка в подставном скрипте; None — строки TOOK= в выводе нет."""
+    for s in out.splitlines():
+        if s.startswith("TOOK="):
+            try:
+                return float(s[5:])
+            except ValueError:
+                return None
+    return None
 
 
 def case(name, verdict, detail=""):
@@ -300,6 +379,34 @@ def judge_all(variant: pathlib.Path) -> dict:
                          + tail_of(out))
         finally:
             drop_link(link)
+
+    # У9 — сборка мусора перед удалением (карточка #826)
+    if not WINDOWS:
+        res["У9"] = (None, "открытый файл мешает удалению только на Windows")
+    else:
+        d = make_dir(work / "cycle", {"a.txt": b"x"})
+        out, code, own = run_probe(variant, "cycle", d)
+        res["У9"] = (own and code == 0 and "RET=True" in out and "EXISTS=False" in out and MARK not in out
+                     and "Traceback" not in out and not d.exists(),
+                     (not_copy + "\n" if not own else "") + f"код {code}\n" + tail_of(out))
+
+    # У10 — повтор попытки при занятом файле (карточка #826)
+    if not WINDOWS:
+        res["У10"] = (None, "открытый файл мешает удалению только на Windows")
+    elif HOLD_S <= 0:
+        res["У10"] = (False, "в помощнике рядом с приёмкой нет чисел _REMOVE_ATTEMPTS и _REMOVE_PAUSE_S или повторов "
+                             "в них нет — на сколько держать файл, узнать не по чему; помощник менялся, правь приёмку")
+    else:
+        d = make_dir(work / "late", {"free.txt": b"y", "late.bin": b"12345"})
+        out, code, own = run_probe(variant, "late", d, str(HOLD_S))
+        took = took_of(out)
+        refused_first = took is not None and took >= PAUSE_S / 2
+        ok = (own and code == 0 and "CHILD=HELD" in out and "RET=True" in out and "EXISTS=False" in out
+              and MARK not in out and "Traceback" not in out and not d.exists() and refused_first)
+        note = "" if refused_first else (
+            f"уборка заняла {took} с — меньше половины паузы ({PAUSE_S / 2:g} с): первой попытке никто не мешал, "
+            f"чужой процесс отпустил файл раньше; повтори прогон\n")
+        res["У10"] = (ok, (not_copy + "\n" if not own else "") + note + f"код {code}\n" + tail_of(out))
     return res
 
 
@@ -381,16 +488,18 @@ def class_case():
         return
     seen = {p.name for root in roots for p in root.rglob("*.py") if not (SKIP_DIRS & set(p.parts))}
     problems = []
-    for title, found, allowed in (("глушение ключом", by_key, SILENT_BY_KEY),
-                                  ("rmtree в молчащем try", in_try, SILENT_IN_TRY)):
+    # вид молчащего удаления — в своей переменной: прежде цикл затирал title, и строка случая У8 печаталась
+    # под именем «rmtree в молчащем try» (найдено по карточке #826)
+    for kind, found, allowed in (("глушение ключом", by_key, SILENT_BY_KEY),
+                                 ("rmtree в молчащем try", in_try, SILENT_IN_TRY)):
         for name, lines in sorted(found.items()):
             if name not in allowed:
-                problems.append(f"{title}: {name}, строки {sorted(lines)} — не названо с причиной")
+                problems.append(f"{kind}: {name}, строки {sorted(lines)} — не названо с причиной")
             elif len(lines) != allowed[name][0]:
-                problems.append(f"{title}: {name} — мест {len(lines)}, а названо {allowed[name][0]}")
+                problems.append(f"{kind}: {name} — мест {len(lines)}, а названо {allowed[name][0]}")
         for name, (count, _why) in sorted(allowed.items()):
             if name in seen and name not in found:
-                problems.append(f"{title}: {name} назван исключением ({count} мест), а в коде таких мест уже нет — "
+                problems.append(f"{kind}: {name} назван исключением ({count} мест), а в коде таких мест уже нет — "
                                 f"убери из перечня")
     if unparsed:
         problems.append(f"не разобрано файлов: {len(unparsed)} — {', '.join(unparsed[:8])}")
@@ -407,7 +516,7 @@ def class_case():
 
 def main() -> int:
     print("=" * 100)
-    print("ПРИЁМКА: уборка временного каталога приёмки не молчит об отказе — карточка #817")
+    print("ПРИЁМКА: уборка временного каталога приёмки не молчит об отказе — карточка #817, карточка #826")
     print(f"⚖️ испытуется: {HELPER}")
     print("=" * 100)
     if not hasattr(mezo_stand, "remove_tree") or not hasattr(mezo_stand, "temp_dir"):
@@ -421,9 +530,16 @@ def main() -> int:
         verdict, detail = base[name]
         case(f"{name} {TITLES[name]}", verdict, detail)
     class_case()
+    if WINDOWS:
+        print(f"   У10 зависит от времени: попыток {ATTEMPTS}, пауза {PAUSE_S:g} с ⇒ окно повторов "
+              f"{RETRY_WINDOW_S:g} с · чужой процесс держит файл {HOLD_S:g} с · запас {HOLD_S:g} с до первой "
+              f"попытки и {RETRY_WINDOW_S - HOLD_S:g} с после последней")
+    for name in ORDER_AFTER_CLASS:
+        verdict, detail = base[name]
+        case(f"{name} {TITLES[name]}", verdict, detail)
 
     for tag, (what, targets, windows_only, pairs) in BREAKS.items():
-        title = f"{tag} ПОЛОМКА «{what}» валит ровно {', '.join(sorted(targets))}"
+        title = f"{tag} ПОЛОМКА «{what}» валит ровно {', '.join(in_order(targets))}"
         if windows_only and not WINDOWS:
             case(title, None, "её случаи ставятся только на Windows")
             continue
@@ -438,10 +554,12 @@ def main() -> int:
             continue
         got = judge_all(lay_variant(stand, tag.lower().replace("лу", "break"), broken))
         fell = {n for n, (verdict, _d) in got.items() if verdict is False}
-        case(title, fell == targets, f"упали: {sorted(fell) or 'ни один'} · ждали: {sorted(targets)}\n"
-             + "\n".join(f"{n}: {got[n][1]}" for n in sorted(fell ^ targets) if n in got))
+        # случай, который на этой системе не поставлен, упасть не может: ждём только поставленные
+        want = targets & {n for n, (verdict, _d) in got.items() if verdict is not None}
+        case(title, fell == want, f"упали: {in_order(fell) or 'ни один'} · ждали: {in_order(want)}\n"
+             + "\n".join(f"{n}: {got[n][1]}" for n in in_order(fell ^ want) if n in got))
 
-    total = len(ORDER) + 1 + len(BREAKS)
+    total = len(ORDER) + 1 + len(ORDER_AFTER_CLASS) + len(BREAKS)
     print()
     if FAIL:
         print(f"🔴 ИТОГ: прошло {OK} из {total} · не прошло {FAIL} · не поставлено {SKIP}")
