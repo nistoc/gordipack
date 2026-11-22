@@ -130,6 +130,17 @@ def exit_code(fail, unchecked):
     return 1 if fail else (2 if unchecked else 0)
 
 
+# Первое обращение к базе контура — до стенда и до копии (карточка #804): база не читается вовсе
+# (файла нет · файл не база · в файле нет ни одной таблицы) — третий исход своим кодом 2, ни один
+# случай не судится. Без этой проверки пустой файл на месте базы давал трассировку «no such table»
+# и код 1 (замер 22.11.2026): библиотека открывает его как базу без таблиц, и копия снималась.
+blind = mezo_stand.base_unreadable(LIVE_DB)
+if blind:
+    print(f"⏳ НЕ ПРОВЕРЕНО: база контура недоступна с начала прогона ({blind})")
+    print(f"   база: {LIVE_DB}")
+    print("   стенд снять не с чего, ни один случай не судился; прогон выходит кодом 2, а не «прошёл»")
+    raise SystemExit(mezo_stand.finish(2))
+
 stand = mezo_stand.new("pool-step0-")
 db = stand / "mezosync.db"
 mezo_stand.snapshot_db(LIVE_DB, db)

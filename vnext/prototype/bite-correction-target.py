@@ -330,11 +330,14 @@ def main():
         print("⚠️ ПРОГОН С НАРОЧНОЙ ПОЛОМКОЙ «" + break_kind + "» — красное ОЖИДАЕТСЯ\n")
 
     # Живая база недоступна — читать нечего: третий исход своим кодом выхода, а не разбор ошибки
-    # (карточка #804).
+    # (карточка #804). Пустой файл библиотека открывает как базу без таблиц — он недоступен так же,
+    # как файл-не-база: до правки по возврату приёмки на нём была трассировка «нет таблицы», код 1.
     try:
         live_before = file_state(LIVE_DB)
         con = open_feed(LIVE_DB)
-        con.execute("SELECT count(*) FROM sqlite_master").fetchone()
+        if not con.execute("SELECT count(*) FROM sqlite_master").fetchone()[0]:
+            con.close()
+            raise sqlite3.DatabaseError("в файле нет ни одной таблицы: он пуст либо это база без схемы")
     except (OSError, sqlite3.Error) as e:
         print("⚪ НЕ ПРОВЕРЕНО: живая база недоступна (" + type(e).__name__ + ": " + str(e) + ") — "
               "читать нечего, ни один случай не судился; код выхода 2, а не «прошла»")

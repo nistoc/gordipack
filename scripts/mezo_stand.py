@@ -154,6 +154,7 @@ from pathlib import Path
 
 __all__ = ["new", "release", "finish", "keep_reason", "copy_tool", "neighbours_of", "stand_env",
            "snapshot_db", "empty_db", "seed_roles", "traces", "tail_traces", "tails_found", "marks_found", "ask_traces", "traces_verdict",
+           "base_unreadable", "first_traces",
            "traces_words", "exit_code3", "traces_counter_cases", "crlf_twin", "expected_break",
            "known_prefixes", "prefixes_from_sources", "tool_dirs", "stand_size", "max_age_hours",
            "accepted_with_skips", "remove_tree", "temp_dir"]
@@ -463,6 +464,42 @@ def copy_tool(tool, dest) -> Path:
     return copied
 
 
+def _refuse_source(func: str, src, dst, why: str) -> None:
+    """Отказ «источник копии не читается» — словами об ИСТОЧНИКЕ и кодом 2. Возврата из неё нет.
+
+    ЗАЧЕМ (карточка #804, находка STUD при повторной приёмке). Ошибку чтения источника snapshot_db()
+    печатала как беду ЦЕЛИ («цель существует, но не открывается как база») и советовала убрать копию
+    во временной папке, когда не читалась база контура; empty_db() на том же падала трассировкой.
+    Оба выхода шли кодом 1, и общий прогон приёмок читал их как «сломано».
+    Источник не читается — копию снять не с чего, мерить не на чем. Это отказ мерить, а не провал:
+    код 2, тот же, что у mezo_paths.live_db_for_check(), когда базы нет вовсе.
+    """
+    print(f"⛔ НЕ ЗАПУСТИЛАСЬ: {func}: ИСТОЧНИК не открывается как база SQLite: {src}")
+    print(f"     {why}")
+    print(f"     Копия не снята, цель не тронута: {dst}")
+    print("     Искать и чинить надо источник, а не копию. Это ОТКАЗ мерить, а не провал: код 2.")
+    raise SystemExit(finish(2))
+
+
+def _open_source(func: str, src: Path, dst: Path) -> sqlite3.Connection:
+    """Открыть источник копии СТРОГО НА ЧТЕНИЕ и убедиться, что он отвечает как база.
+
+    Библиотека открывает файл лениво: «не база» всплывает только на первом запросе, а у snapshot_db()
+    первым запросом было само копирование — и его отказ неотличим от отказа цели. Поэтому источник
+    спрашивается ОТДЕЛЬНО и ДО того, как открыта цель: перечень его объектов. Не открылся или не
+    ответил — отказ об источнике (_refuse_source); цель при этом не создаётся и не открывается.
+    """
+    conn = None
+    try:
+        conn = sqlite3.connect(f"file:{src.as_posix()}?mode=ro", uri=True)
+        conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
+    except sqlite3.Error as e:
+        if conn is not None:
+            conn.close()
+        _refuse_source(func, src, dst, f"{type(e).__name__}: {e}")
+    return conn
+
+
 def snapshot_db(src, dst) -> Path:
     """Согласованная копия БД РЕЗЕРВНЫМ КОПИРОВАНИЕМ библиотеки sqlite3, не копированием файла.
 
@@ -513,10 +550,15 @@ def snapshot_db(src, dst) -> Path:
     КАК ФАЙЛЫ — backup() переносит их содержимое ВНУТРЬ целевого основного файла;
     не проверяет заранее, база ли цель, — просто пробует снять снимок и честно
     называет причину, если не вышло.
+
+    ⚖️ ИСТОЧНИК — ОТДЕЛЬНЫЙ ОТКАЗ (карточка #804, находка STUD): источник спрашивается до того,
+    как открыта цель (_open_source). Не открылся или не ответил как база — отказ называет ИСТОЧНИК
+    и выходит кодом 2 («мерить не на чем»), цель не создаётся. До правки это печаталось отказом
+    о цели с советом убрать копию, хотя не читалась база контура.
     """
     src = Path(src)
     dst = Path(dst)
-    src_conn = sqlite3.connect(f"file:{src.as_posix()}?mode=ro", uri=True)
+    src_conn = _open_source("snapshot_db", src, dst)
     dst_conn = sqlite3.connect(str(dst))
     try:
         try:
@@ -526,7 +568,8 @@ def snapshot_db(src, dst) -> Path:
             raise SystemExit(
                 f"ERR: snapshot_db: цель существует, но не открывается как база SQLite: {dst}\n"
                 f"     {e}\n"
-                f"     Файл НЕ ТРОНУТ. Если он не нужен — убери его сам и повтори."
+                f"     Файл НЕ ТРОНУТ. Если он не нужен — убери его сам и повтори.\n"
+                f"     Источник перед этим открылся и ответил как база: {src}"
             )
     finally:
         src_conn.close()
@@ -575,11 +618,13 @@ def empty_db(src, dst, keep=()) -> Path:
     как «не то имя».
     ⚖️ Чего не делает: не сажает строки за приёмку (роли — seed_roles(), остальное — её код);
     не проверяет, хватит ли приёмке пустой базы, — это показывает её прогон.
+    ⚖️ Источник не открылся или не ответил как база — отказ об ИСТОЧНИКЕ кодом 2, как у
+    snapshot_db() (карточка #804): до правки здесь была трассировка библиотеки с кодом 1.
     """
     src = Path(src)
     dst = Path(dst)
     keep = tuple(dict.fromkeys(str(t) for t in keep))
-    src_conn = sqlite3.connect(f"file:{src.as_posix()}?mode=ro", uri=True)
+    src_conn = _open_source("empty_db", src, dst)
     mem = sqlite3.connect(":memory:")
     dst_conn = None
     try:
@@ -638,7 +683,8 @@ def empty_db(src, dst, keep=()) -> Path:
             raise SystemExit(
                 f"ERR: empty_db: цель существует, но не открывается как база SQLite: {dst}\n"
                 f"     {e}\n"
-                f"     Файл НЕ ТРОНУТ. Если он не нужен — убери его сам и повтори."
+                f"     Файл НЕ ТРОНУТ. Если он не нужен — убери его сам и повтори.\n"
+                f"     Источник перед этим открылся и ответил как база: {src}"
             )
         mode = str(pragmas["journal_mode"]).lower()
         if mode in ("wal", "delete", "truncate", "persist"):   # memory и off у файла не ставим
@@ -839,6 +885,54 @@ def ask_traces(db, marks, need, tails=()) -> tuple:
         return None, f"{type(e).__name__}: {e}"[:120]
 
 
+def base_unreadable(db) -> str:
+    """Почему база не читается ВОВСЕ — либо пустая строка (читается).
+
+    Читается: открылась строго на чтение и назвала хотя бы один свой объект. Причина словами —
+    когда файла нет, файл не база SQLite, либо в нём нет ни одного объекта: пустой файл (0 байт)
+    библиотека открывает как базу без таблиц, такой оставляет подключение к несуществующему пути.
+    ⚖️ Есть ли в базе таблицы, нужные приёмке, здесь НЕ спрашивается — это вопрос ask_traces().
+    """
+    db = Path(db)
+    try:
+        if not db.is_file():
+            return "файла нет"
+        conn = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
+        try:
+            objects = conn.execute("SELECT count(*) FROM sqlite_master").fetchone()[0]
+        finally:
+            conn.close()
+    except (sqlite3.Error, OSError) as e:
+        return f"{type(e).__name__}: {e}"[:160]
+    return "" if objects else "в файле нет ни одной таблицы: он пуст либо это база без схемы"
+
+
+def first_traces(db, marks, need, tails=()) -> tuple:
+    """Первый вопрос о своих следах — ДО стенда и до любого другого чтения базы контура (карточка #804).
+
+    ЗАЧЕМ (находка STUD при повторной приёмке). Третий исход «НЕ ПРОВЕРЕНО» наступал, только когда
+    база переставала отвечать на ВТОРОМ вопросе о следах. Не ответила на первый — приёмка шла дальше,
+    к снятию копии или к своему чтению базы, и выходила кодом 1: отказом помощника о копии либо
+    трассировкой библиотеки. Общий прогон приёмок читал это как «сломано», а не как «отказ мерить».
+    ЧТО ДЕЛАЕТ. База читается — ответ тот же, что у ask_traces(): (словарь, "") либо (None, причина),
+    и приёмка идёт дальше. Не читается вовсе (base_unreadable: файла нет · файл не база · в файле
+    нет ни одной таблицы) — стенд снять не с чего и судить нечем: строка «НЕ ПРОВЕРЕНО» с причиной
+    и путём базы, код выхода 2. Возврата в этом случае нет.
+    ⚖️ Граница: база читается, но в ней нет таблиц из need, — НЕ этот случай. Тогда отвечает
+    ask_traces(), и что делать дальше, решает приёмка: у части из них на это свой отказ.
+    Звать ПЕРВЫМ обращением приёмки к базе контура и до mezo_stand.new(): при коде 2 стенд
+    сохраняется, а пустой стенд разбирать незачем.
+    """
+    why = base_unreadable(db)
+    if why:
+        print(f"⏳ НЕ ПРОВЕРЕНО: база контура недоступна с начала прогона ({why})")
+        print(f"   база: {db}")
+        print("   стенд снять не с чего, ни один случай не судился; прогон выходит кодом 2, "
+              "а не «прошёл» и не «провален»")
+        raise SystemExit(finish(2))
+    return ask_traces(db, marks, need, tails)
+
+
 def traces_verdict(before, after) -> tuple:
     """Суд «база прогоном не тронута» по ПРИБАВКЕ своих следов между двумя ask_traces() — три исхода.
 
@@ -928,8 +1022,12 @@ def traces_counter_cases(judge_db, marks, need, foreign, own, planted=None, tail
     words_ok = all(r[0] == "unknown" and "НЕ ПРОВЕРЕНО" in traces_words(*r)
                    and "нет" not in traces_words(*r).split("(")[0] for r in unknown.values())
     codes = (exit_code3(0, 0), exit_code3(1, 0), exit_code3(0, 1))
+    # Тот же признак, по которому first_traces() выходит кодом 2 ДО стенда: все три пробных файла
+    # названы нечитаемыми, а подставная база — читаемой (иначе ранний выход слеп либо срабатывает всегда).
+    blind = {p.name: base_unreadable(p) for p in (gone, garbage, empty)}
+    judge_reads = not base_unreadable(judge_db)
     c_ok = (words_ok and "НЕ ПРОВЕРЕНО" not in clean_words and "НЕ ПРОВЕРЕНО" not in found_words
-            and len(set(codes)) == 3 and codes[2] == 2)
+            and len(set(codes)) == 3 and codes[2] == 2 and all(blind.values()) and judge_reads)
     last = steps[-1][2] if steps else []
     rows = [
         ("а", "чужая запись в «живую» базу между началом и концом прогона случай НЕ роняет", a_ok,
@@ -939,7 +1037,9 @@ def traces_counter_cases(judge_db, marks, need, foreign, own, planted=None, tail
          + (f" · НЕ ТО на шагах: {bad}" if bad else "")),
         ("в", "база недоступна — третий исход «НЕ ПРОВЕРЕНО»: свои слова и свой код, не «следов нет»", c_ok,
          "исходы: " + ", ".join(f"{k}→{v[0]}" for k, v in unknown.items())
-         + f"; коды (следов нет / следы есть / не проверено): {codes}"),
+         + f"; коды (следов нет / следы есть / не проверено): {codes}"
+         + f"; с начала прогона названы нечитаемыми: {sum(1 for v in blind.values() if v)} из {len(blind)}"
+         + f", подставная база читается: {'да' if judge_reads else 'НЕТ'}"),
     ]
     if planted is not None:
         exact = list(dict.fromkeys(str(m) for m in marks))

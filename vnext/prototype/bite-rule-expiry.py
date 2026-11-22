@@ -53,15 +53,16 @@ def load(path, name):
     return mod
 
 
-mod = load(GUARD, "gre_live")
-stand = mezo_stand.new("rule-expiry-")
-db = stand / "mezosync.db"
 # Свои следы приёмки (карточка #804): роль подсаженных карточек и ключи подсаженных правил. По ним ⑨
 # судит, не попали ли записи в живую базу; таблицы NEED — куда эти имена сеются.
 MARKS = ("ZZE", "zzexp-card-closed", "zzexp-card-open", "zzexp-deadline-past", "zzexp-deadline-future",
          "zzexp-origin-date", "zzexp-stale-hand", "zzexp-revoked")
 NEED = ("backlog", "rules")
-live_before = mezo_stand.ask_traces(LIVE_DB, MARKS, NEED)
+# Первый вопрос — до стенда и до копии: база контура не читается вовсе — «НЕ ПРОВЕРЕНО», код 2.
+live_before = mezo_stand.first_traces(LIVE_DB, MARKS, NEED)
+mod = load(GUARD, "gre_live")
+stand = mezo_stand.new("rule-expiry-")
+db = stand / "mezosync.db"
 mezo_stand.snapshot_db(LIVE_DB, db)
 # Подставная база для встречных ⑨-а/б/в: схема копии без строк, снята из стенда — живая база
 # второй раз не открывается.

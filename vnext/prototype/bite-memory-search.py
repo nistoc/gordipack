@@ -986,7 +986,8 @@ def main() -> int:
     print("=" * 92)
 
     # Вопрос о своих следах задаётся живой базе ДО всего остального и повторяется после случаев.
-    traces_before = mezo_stand.ask_traces(LIVE_DB, MARKS, NEED, TAILS)
+    # База не читается вовсе — «НЕ ПРОВЕРЕНО», код 2: подставную базу стенда снять не с чего.
+    traces_before = mezo_stand.first_traces(LIVE_DB, MARKS, NEED, TAILS)
     reference_before = live_db_reference()
 
     stand = mezo_stand.new("bite-memory-search-")

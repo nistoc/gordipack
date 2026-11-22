@@ -68,7 +68,6 @@ def run(script, *args):
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 
-stand = mezo_stand.new("issue-loop-")
 # Свои следы приёмки (карточка #804): заголовок и тег подсаженной карточки и примечание, с которым ⑧
 # меняет её статус. По ним ⑪ судит, не попали ли записи в живую базу; NEED — куда эти имена сеются.
 PROBE_TITLE = "починка по заявке"
@@ -76,7 +75,9 @@ PROBE_TAGS = '["gordi-issue #77"]'
 PROBE_NOTE = "проба приёмки bite-issue-loop: сделано"
 MARKS = (PROBE_TITLE, PROBE_TAGS, PROBE_NOTE)
 NEED = ("backlog", "backlog_events")
-live_before = mezo_stand.ask_traces(LIVE_DB, MARKS, NEED)
+# Первый вопрос — до стенда и до копии: база контура не читается вовсе — «НЕ ПРОВЕРЕНО», код 2.
+live_before = mezo_stand.first_traces(LIVE_DB, MARKS, NEED)
+stand = mezo_stand.new("issue-loop-")
 # было: GI = SCRIPTS / "gordi-issue.py" — рядом со «своим» live_scripts(), не через
 # MEZO_SCRIPTS_ROOT (карточка #659): образец прочих приёмок набора берёт ИСПЫТУЕМОЕ
 # через mezo_target.script(), оставляя live_scripts()/live_db() соседям и снимку базы.

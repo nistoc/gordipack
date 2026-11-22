@@ -312,7 +312,8 @@ def main():
     break_kind = a.break_kind
 
     # Живая база: вопрос о своих следах и список версий журнала — оба только на чтение (карточка #804).
-    traces_before = mezo_stand.ask_traces(LIVE_DB, MARKS, NEED)
+    # Вопрос о следах — первое обращение к базе: не читается вовсе — «НЕ ПРОВЕРЕНО», код 2.
+    traces_before = mezo_stand.first_traces(LIVE_DB, MARKS, NEED)
     journal_before = journal_versions(LIVE_DB)
     milestones_before = {milestone_name: fingerprint(SCRIPTS / "migrations" / milestone_name) for milestone_name in (MILESTONE_V4, MILESTONE_V5)}
 

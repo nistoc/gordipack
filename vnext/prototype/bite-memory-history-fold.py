@@ -235,6 +235,13 @@ def main() -> int:
     a = ap.parse_args()
     role = a.role.upper()
     src = pathlib.Path(a.db) if a.db else mezo_paths.live_db()
+    # ⚡ КАРТОЧКА #804: вопрос о своих следах и о своих строках — ДО первого действия приёмки, в том
+    # числе до каталога опыта и до копии: база не читается вовсе — «НЕ ПРОВЕРЕНО», код 2.
+    fold_target = f"phoenix_history.{role}"
+    own_marks = (fold_target, SEED_ACTOR)
+    own_tails = (PROBE_TAIL,)
+    live_traces_before = mezo_stand.first_traces(src, own_marks, NEED, own_tails)
+    live_rows_before = own_rows(src, role)
     tmp = pathlib.Path(tempfile.mkdtemp(prefix="bite-fold-"))
     db = tmp / "copy.db"
     mezo_stand.snapshot_db(src, db)  # карточка #505/#624: согласованная копия, не shutil.copyfile
@@ -242,12 +249,6 @@ def main() -> int:
     # средой СТЕНДА, не средой вызывающего — иначе MEZO_CONTAINER вызывающего доедет до них.
     stand_env = mezo_stand.stand_env(tmp)
     live_fp = file_fingerprint(src)
-    # ⚡ КАРТОЧКА #804: вопрос о своих следах и о своих строках — ДО первого действия приёмки.
-    fold_target = f"phoenix_history.{role}"
-    own_marks = (fold_target, SEED_ACTOR)
-    own_tails = (PROBE_TAIL,)
-    live_traces_before = mezo_stand.ask_traces(src, own_marks, NEED, own_tails)
-    live_rows_before = own_rows(src, role)
     tool = TOOL; broken_copy = None
     save = mezo_target.script("save-phoenix.py")  # нужен и посеву (ниже), и случаю ⑧
     seed_enabled = a.break_name != SEED_OFF_BREAK

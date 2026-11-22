@@ -133,18 +133,19 @@ def live_control_state():
         con.close()
 
 
+# Свои следы приёмки (карточка #804): всё, что она сеет, идёт под двумя пробными ролями. По ним контроль
+# в конце судит, не попали ли записи в живую базу; NEED — таблицы, в которые эти имена ложатся.
+# Вопрос — первое обращение к базе контура: не читается вовсе — «НЕ ПРОВЕРЕНО», код 2, до любого чтения.
+MARKS = (ROLE, ROLE4)
+NEED = ("phoenix", "phoenix_history", "phoenix_archive", "phoenix_records")
+LIVE_TRACES_BEFORE = mezo_stand.first_traces(LIVE_DB, MARKS, NEED)
+
 LIVE_BEFORE = live_control_state()
 if LIVE_BEFORE is None:
     sys.exit(f"⛔ НЕ ЗАПУСТИЛАСЬ: в живой базе этого контура нет слоя записей (таблицы "
              f"phoenix_records) — контрольное число «живая база не тронута» снять не с "
              f"чего.\n   База: {LIVE_DB}\n   Накати шаг схемы 20260904-phoenix-records.py "
              f"и повтори.")
-
-# Свои следы приёмки (карточка #804): всё, что она сеет, идёт под двумя пробными ролями. По ним контроль
-# в конце судит, не попали ли записи в живую базу; NEED — таблицы, в которые эти имена ложатся.
-MARKS = (ROLE, ROLE4)
-NEED = ("phoenix", "phoenix_history", "phoenix_archive", "phoenix_records")
-LIVE_TRACES_BEFORE = mezo_stand.ask_traces(LIVE_DB, MARKS, NEED)
 
 
 def find_env() -> dict:

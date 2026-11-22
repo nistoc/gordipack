@@ -129,13 +129,14 @@ def live_ing_plan_state():
         con.close()
 
 
-LIVE_ING_PLAN_BEFORE = live_ing_plan_state()
-
 # Свои следы приёмки (карточка #804): всё, что она сеет, идёт под одной пробной ролью. По ней контроль
 # в конце судит, не попали ли записи в живую базу; NEED — таблицы, в которые это имя ложится.
+# Вопрос — первое обращение к базе контура: не читается вовсе — «НЕ ПРОВЕРЕНО», код 2, до любого чтения.
 MARKS = (ROLE,)
 NEED = ("phoenix", "phoenix_history", "phoenix_archive")
-LIVE_TRACES_BEFORE = mezo_stand.ask_traces(LIVE_DB, MARKS, NEED)
+LIVE_TRACES_BEFORE = mezo_stand.first_traces(LIVE_DB, MARKS, NEED)
+
+LIVE_ING_PLAN_BEFORE = live_ing_plan_state()
 
 OK = FAIL = 0
 
