@@ -29,14 +29,23 @@
     приёмке: поле section в наборе measurements/memory-search-coord-10.json угадано
     составителем набора и у части запросов неверно; case в) может передавать --section,
     её предмет — конкретный раздел).
+  · «контроль» судит только РОСТ своих следов в живой базе. Запись без единого своего имени
+    ему не видна: поиск зовётся с --actor PROTO, и строка о показанной подсказке легла бы под
+    именем настоящей роли — её не видел и прежний счёт записей phoenix_records. Пропажу строк
+    из живой базы «контроль» тоже не судит.
 
 ⛔ ЖИВАЯ БАЗА (<КОНТУР>/.mezosync/mezosync.db) НЕ ИЗМЕНЯЕТСЯ НИ ОДНИМ ИЗ СЛУЧАЕВ:
 все прогоны — на подставной базе (схема живой без строк — mezo_stand.empty_db, этап Э6,
-карточка #680) во временном рабочем каталоге. Отпечаток живой базы (число записей
-памяти, максимальный id ленты) снимается ДО и ПОСЛЕ всего прогона и печатается в итоге.
+карточка #680) во временном рабочем каталоге. Судит это случай «контроль» — ПО СВОИМ
+СЛЕДАМ (карточка #804): живую базу до и после прогона спрашивают, сколько в ней строк
+со следами этой приёмки (MARKS и TAILS ниже), и провал — только если их ПРИБАВИЛОСЬ.
+Число записей phoenix_records и максимальный id ленты печатаются строкой «справка, не суд».
+До карточки #804 число записей СУДИЛО, и прогон проваливался от чужой честной работы:
+с карточки #525 сохранение памяти ЛЮБОЙ роли пересобирает её записи поиска, и за время
+прогона их число в живой базе меняется без единой записи этой приёмки.
 
-═══ СЛУЧАИ (10, жанр приёмки: случай(имя, ок, слово), итог «✅ принято N из N» либо
-     «🔴 красных K из N», код возврата 0/1) ═══
+═══ СЛУЧАИ (15: десять о поиске и хуке, пять о живой базе; жанр приёмки: случай(имя, ок,
+     слово), итог «✅ принято N из N» либо «🔴 красных K из N», код возврата 0/1/2) ═══
   ① три запроса критерия («права», «остановка смены», «будильник») на роли COORD
      возвращают код 0, записи с id, строку «ОТВЕТ: N записей · M знаков · T с».
   ② словоформа «права на отправку кода» → громкая строка повтора по началу слова
@@ -71,6 +80,18 @@
      memory-records.py --собрать после этого сходится знак в знак; повторное
      сохранение ТЕМ ЖЕ телом (ветка «СОДЕРЖИМОЕ НЕ ИЗМЕНИЛОСЬ») строку «🧩» НЕ
      печатает — хук зовётся только когда тело действительно записано заново.
+  контроль) живая база прогоном не тронута: своих следов в ней не прибавилось. Три исхода:
+     следов нет — случай прошёл; следы есть — провал, столбцы названы поимённо; база на вопрос
+     о следах не ответила — «не проверено» (⚪), код возврата 2, «следов нет» не утверждается.
+  контроль-а/б/в/г) встречные случаи этого суда — на подставной базе judge.db в рабочем
+     каталоге (mezo_stand.traces_counter_cases), живая в них не открывается:
+     а — запись соседа без следов приёмки случай не роняет: в том числе запись поиска чужой
+         роли (от неё падал прежний счёт) и память COORD, где посаженная строка стоит НЕ в конце;
+     б — свой след роняет и назван поимённо, шаг за шагом: пробные роли в четырёх таблицах,
+         посаженная память COORD и строка случая д) под именем настоящей роли;
+     в — недоступная база (файла нет · файл не база · файл пуст) даёт третий исход со своими
+         словами и своим кодом;
+     г — все имена из MARKS и TAILS находятся на стенде после прогона: вопрос к живой базе не слеп.
 
 ═══ ПОДСТАВНАЯ БАЗА (этап Э6, карточка #680) ═══
 База — схема живой без строк (mezo_stand.empty_db); все данные приёмка сажает сама,
@@ -124,6 +145,9 @@ acceptance-isolated-from-live): 0 — все проверенные случаи
   проверки другой копии инструментов). На нарочные поломки не влияет: у каждой из
   них своя копия строится ОТ ЖИВОГО инструмента намеренно — иначе поломка судила бы
   чужую, уже подменённую копию, а не тот код, который реально стоит в контуре.
+  Поломка САМОГО СУДА живой базы ключом --break не ставится: суд живёт в помощнике
+  mezo_stand.py. Вернуть в его копию суд по разнице состояния файла (три правки — в документе
+  выпуска UPGRADE-2026-11-22-own-traces-judge.md, раздел 4) — проваливается РОВНО «контроль-а».
 
 Запуск:
     python <КОНТУР>/vnext-tools/bite-memory-search.py
@@ -242,6 +266,19 @@ BITEMEM_BODY = (
     "должно.\n"
 )
 
+# ═══ СВОИ СЛЕДЫ ПРИЁМКИ (карточка #804) — по ним случай «контроль» судит живую базу ═══
+# Точным совпадением значения столбца — имена пробных ролей: ни у одной настоящей роли их нет.
+MARKS = (NO_RECORDS_ROLE, BITEMEM_ROLE)
+# По ОКОНЧАНИЮ значения — то, что приёмка пишет под именем НАСТОЯЩЕЙ роли и чего по имени не видно:
+# память COORD (seed_coord зовёт save-phoenix.py --role COORD --actor COORD) — последняя строка
+# каждого посаженного раздела; строка случая д) — на случай, когда он идёт по разделу роли PROTO.
+CASE_D_LINE = "Строка смены: приёмка карточки #525, случай д, перемерена рабочим каталогом приёмки."
+COORD_TAILS = tuple(body.rstrip("\n").rsplit("\n", 1)[-1] for body in COORD_FIXTURE.values())
+TAILS = COORD_TAILS + (CASE_D_LINE,)
+# Таблицы, в которые приёмка сеет: нет хотя бы одной — вопрос о следах задать не на чем (третий исход).
+NEED = ("phoenix", "phoenix_history", "phoenix_archive", "phoenix_records")
+CONTROL = "контроль: живая база прогоном не тронута (своих следов в ней не прибавилось)"
+
 results: list[tuple[str, bool]] = []
 skipped: list[tuple[str, str]] = []
 
@@ -307,11 +344,15 @@ def build_broken_find_phoenix(sandbox_name: str, anchor: str, replacement: str) 
     return broken, env
 
 
+# Вызов занимает ДВЕ строки с выпуска Э2 (карточка #781: добавлен слой). Прежний якорь в одну
+# строку с тех пор не находился, и ключ case-fold отказывал «ПРИЁМКА НЕ СОСТОЯЛАСЬ» — громко, но
+# случай г) оставался без своей поломки. Поправлено возвратом карточки #804.
 CASE_FOLD_ANCHOR = (
-    "    rows = _fetch_records(conn, role, match_query, args.section, args.revoked, args.limit)\n"
+    "    rows = _fetch_records(conn, role, match_query, args.section, args.revoked, args.limit,\n"
+    "                          args.layer)\n"
 )
 CASE_FOLD_REPLACEMENT = (
-    "    rows = _fetch_records(conn, role, match_query, args.section, args.revoked, args.limit)\n"
+    CASE_FOLD_ANCHOR +
     "    rows = [r for r in rows if all(t in (r[2] + r[8]) for t in tokens)]"
     "  # ПОЛОМКА case-fold: регистр запроса сравнивается буквально, без сворачивания\n"
 )
@@ -796,8 +837,7 @@ def case_d(save_tool: Path, db: Path, env: dict | None = None) -> bool:
         return case_result(name, False,
                            "нет раздела state ни у PROTO, ни у подставной роли стенда "
                            "BITEMEM — опыт не поставлен")
-    body = row[0] + ("\n\nСтрока смены: приёмка карточки #525, случай д, "
-                     "перемерена рабочим каталогом приёмки.\n")
+    body = row[0] + "\n\n" + CASE_D_LINE + "\n"
     stand = mezo_stand.new("bite-memory-search-save-")
     file1, file2 = stand / "body1.md", stand / "body2.md"
     file1.write_text(body, encoding="utf-8")
@@ -828,14 +868,92 @@ def case_d(save_tool: Path, db: Path, env: dict | None = None) -> bool:
                        f"«🧩» {'напечатана — ОШИБКА' if second_hook else 'не напечатана — верно'}")
 
 
-# ═══ ОТПЕЧАТОК ЖИВОЙ БАЗЫ (ДО/ПОСЛЕ, БЕЗ ЕДИНОЙ ЗАПИСИ) ═══════════════════════════
+# ═══ ЖИВАЯ БАЗА ПРОГОНОМ НЕ ТРОНУТА — СУД ПО СВОИМ СЛЕДАМ (карточка #804) ════════════
 
-def live_db_fingerprint() -> tuple[int, int | None]:
-    conn = sqlite3.connect(f"file:{LIVE_DB.as_posix()}?mode=ro", uri=True)
-    records = conn.execute("SELECT COUNT(*) FROM phoenix_records").fetchone()[0]
-    max_msg = conn.execute("SELECT MAX(id) FROM messages").fetchone()[0]
-    conn.close()
-    return records, max_msg
+def live_db_reference() -> tuple[int | None, int | None]:
+    """Справка, не суд: число записей поиска и последний номер ленты живой базы (только чтение).
+
+    Оба числа меняет любая роль контура за время прогона: сохранение памяти пересобирает записи
+    поиска, лента общая. Судить по ним нельзя. Не прочлись — (None, None), прогон не падает.
+    """
+    try:
+        conn = sqlite3.connect(f"file:{LIVE_DB.as_posix()}?mode=ro", uri=True)
+        try:
+            records = conn.execute("SELECT COUNT(*) FROM phoenix_records").fetchone()[0]
+            max_msg = conn.execute("SELECT MAX(id) FROM messages").fetchone()[0]
+        finally:
+            conn.close()
+        return records, max_msg
+    except (sqlite3.Error, OSError):
+        return None, None
+
+
+# Подсадки встречных случаев — в подставную базу judge.db, не в живую.
+MEMORY_SQL = "INSERT INTO phoenix (role, section, body) VALUES (?,?,?)"
+HISTORY_SQL = ("INSERT INTO phoenix_history (role, section, body, body_chars, saved_at, actor, reason) "
+               "VALUES (?,?,?,?,'2026-01-01 00:00:00',?,'save')")
+MOVED_SQL = ("INSERT INTO phoenix_archive (role, section, topic, body, body_chars, moved_by) "
+             "VALUES (?,?,'предмет','тело',4,?)")
+RECORD_SQL = ("INSERT INTO phoenix_records (role, section, subject, body, body_chars, created_by) "
+              "VALUES (?,?,'предмет','тело',4,?)")
+
+
+def history_row(role: str, section: str, body: str) -> tuple:
+    """Параметры HISTORY_SQL: сохранение раздела рукой самой роли."""
+    return role, section, body, len(body), role
+
+
+def control_cases(db: Path, stand: Path, traces_before: tuple, reference_before: tuple) -> None:
+    """Случай «контроль» и встречные «контроль-а/б/в/г» — после всех случаев о поиске и хуке.
+
+    traces_before — ответ mezo_stand.ask_traces() живой базы ДО прогона; здесь тот же вопрос
+    задаётся ПОСЛЕ. Встречные идут на подставной базе judge.db в рабочем каталоге.
+    """
+    traces_after = mezo_stand.ask_traces(LIVE_DB, MARKS, NEED, TAILS)
+    reference_after = live_db_reference()
+    outcome, names, why = mezo_stand.traces_verdict(traces_before, traces_after)
+    said = "способ: по своим следам — " + mezo_stand.traces_words(outcome, names, why)
+    if outcome == "unknown":
+        case_skip(CONTROL, f"{said}; «следов нет» НЕ утверждается")
+    else:
+        case_result(CONTROL, outcome == "clean",
+                    f"{said}\n"
+                    f"справка, не суд: записей phoenix_records было {reference_before[0]}, "
+                    f"стало {reference_after[0]}; max(messages.id) {reference_before[1]}→"
+                    f"{reference_after[1]} — оба числа меняет любая роль контура")
+
+    judge_db = mezo_stand.empty_db(db, stand / "judge.db")
+    # Сосед: посаженная строка стоит в теле НЕ последней — так выглядела бы настоящая память COORD,
+    # в которой эта фраза есть; суд по окончанию значения её не берёт.
+    middle = COORD_TAILS[0] + "\nНиже — строка самой роли: посаженная строка стоит не в конце.\n"
+    own, want = [], set()
+    for label, sql, params, adds in (
+            ("память роли без записей", MEMORY_SQL, (NO_RECORDS_ROLE, "state", "тело пробы"),
+             {"phoenix.role"}),
+            ("история пробной роли", HISTORY_SQL, history_row(BITEMEM_ROLE, BITEMEM_SECTION, "тело"),
+             {"phoenix_history.role", "phoenix_history.actor"}),
+            ("архив пробной роли", MOVED_SQL, (BITEMEM_ROLE, BITEMEM_SECTION, BITEMEM_ROLE),
+             {"phoenix_archive.role", "phoenix_archive.moved_by"}),
+            ("запись поиска пробной роли", RECORD_SQL, (BITEMEM_ROLE, BITEMEM_SECTION, BITEMEM_ROLE),
+             {"phoenix_records.role", "phoenix_records.created_by"}),
+            ("посаженная память COORD", MEMORY_SQL,
+             ("COORD", "launcher", "## остановка смены\n" + COORD_TAILS[-1] + "\n"),
+             {"phoenix.body"}),
+            ("строка случая д) под ролью PROTO", HISTORY_SQL,
+             history_row("PROTO", "state", "тело раздела\n\n" + CASE_D_LINE + "\n"),
+             {"phoenix_history.body"})):
+        want = want | adds
+        own.append((label, sql, params, set(want)))
+    for letter, title, ok, detail in mezo_stand.traces_counter_cases(
+            judge_db, MARKS, NEED,
+            foreign=[(MEMORY_SQL, ("OTHERROLE", "state", "тело соседа")),
+                     (HISTORY_SQL, history_row("OTHERROLE", "state", "тело")),
+                     (MOVED_SQL, ("OTHERROLE", "state", "OTHERROLE")),
+                     (RECORD_SQL, ("OTHERROLE", "state", "OTHERROLE")),
+                     (MEMORY_SQL, ("COORD", "identity", middle)),
+                     (HISTORY_SQL, history_row("COORD", "identity", middle))],
+            own=own, planted=db, tails=TAILS):
+        case_result(f"контроль-{letter} {title}", ok, detail)
 
 
 def main() -> int:
@@ -864,10 +982,12 @@ def main() -> int:
     print("=" * 92)
     print("ПРИЁМКА КАРТОЧКИ #525 — поиск по памяти вместо чтения раздела целиком"
          + (f" · НАРОЧНАЯ ПОЛОМКА: {args.break_kind}" if args.break_kind != "none" else ""))
-    print("живая база (только чтение: схема и отпечаток): " + str(LIVE_DB))
+    print("живая база (только чтение: схема и вопрос о своих следах): " + str(LIVE_DB))
     print("=" * 92)
 
-    before_records, before_max_msg = live_db_fingerprint()
+    # Вопрос о своих следах задаётся живой базе ДО всего остального и повторяется после случаев.
+    traces_before = mezo_stand.ask_traces(LIVE_DB, MARKS, NEED, TAILS)
+    reference_before = live_db_reference()
 
     stand = mezo_stand.new("bite-memory-search-")
     db = stand / "stand.db"
@@ -911,28 +1031,19 @@ def main() -> int:
     case_g(find_tool_for_g, db, coord_reason, env=env_for_g)
     case_d(save_tool_for_d, db, env=env_for_d)
 
-    after_records, after_max_msg = live_db_fingerprint()
-    # ⚖️ ДВА ЧИСЛА — И СУДЯТ ПО-РАЗНОМУ. phoenix_records — предмет ЭТОЙ приёмки: если он
-    # сдвинулся, значит писала ОНА (все её случаи адресуются к копии, но отпечаток снят
-    # для проверки, что ни один по ошибке не забыл --db). max(messages.id) — ЧУЖОЙ след:
-    # лента живая, её пишут девять ролей одновременно, и рост номера за минуты прогона —
-    # обычное дело чужой работы, а не улика против этой приёмки (проверено: #5003 живой
-    # базы на этом прогоне оказалась запиской роли ING, время внутри — её, не моё).
-    # Гасить прогон по чужому счётчику значило бы получать случайное красное почти
-    # в каждом запуске — родня классу «проверка спрашивает не тем адресом, каким ходит
-    # человек»: адрес спрашивал не тот предмет.
-    records_untouched = before_records == after_records
-    msg_note = "не менялся" if before_max_msg == after_max_msg else "менялся — чужая рука (лента общая)"
+    # ⚖️ Живую базу судят СВОИ СЛЕДЫ, а не разница её состояния (карточка #804). Прежде здесь
+    # сличалось число записей phoenix_records до и после — с доводом «сдвинулось, значит писала
+    # приёмка». Довод неверен с карточки #525: записи поиска пересобирает сохранение памяти
+    # ЛЮБОЙ роли, и прогон проваливался от чужой честной работы (замер STUD 22.11.2026: 25
+    # сохранений памяти за сутки при прогоне 9–18 с ⇒ ложный провал в 0,26–0,52 % прогонов).
+    # max(messages.id) не судил и прежде: лента общая. Оба числа остались строкой «справка, не суд».
+    control_cases(db, stand, traces_before, reference_before)
 
     print("")
     print("=" * 92)
     failed = [name for name, ok in results if not ok]
     print(f"РАЗЛИЧАЮЩИХ СЛУЧАЕВ {len(results)}"
          + (f" · пропущено {len(skipped)}" if skipped else ""))
-    print(f"живая база: phoenix_records {before_records}→{after_records} "
-         f"({'не тронута' if records_untouched else '🔴 ИЗМЕНИЛАСЬ — предмет этой приёмки, отказ'}); "
-         f"max(messages.id) {before_max_msg}→{after_max_msg} — {msg_note}, справочно, "
-         f"на вердикт не влияет")
     if failed:
         print(f"🔴 красных {len(failed)} из {len(results)}: {' · '.join(failed)}")
         code = 1
@@ -948,8 +1059,6 @@ def main() -> int:
     else:
         print(f"✅ принято {len(results)} из {len(results)}")
         code = 0
-    if not records_untouched:
-        code = 1
     print("=" * 92)
 
     mezo_stand.release(stand)
