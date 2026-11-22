@@ -29,7 +29,15 @@ bite-correction-target.py — приёмка карточки #520: гашени
      (правило counter-case-own-definition: второй прогон на том же материале встречным
      не является). Пять выдуманных строк, каждая проверяет свою грань
   ⑤ ПЕРЕЧИСЛЕНИЕ: «#A и #B» — второй номер наследует роль первого, в обе стороны
-  ⑥ контроль: живая база не открывалась на запись (размер и час записи ДО и ПОСЛЕ)
+  ⑥ контроль: живая база не открывалась на запись. Суд — ПО СВОЕМУ СОЕДИНЕНИЮ (карточка #804):
+     приёмка ничего не сеет, пробных имён у неё нет, а всё её обращение к живой базе идёт через одно
+     соединение. Судится оно само: база отказывает ему в записи (проба «DELETE … WHERE 0» — ни одной
+     строки; соединению «только чтение» отказ приходит до захвата права записи) и через него не
+     изменено ни строки. Размер и час записи файла печатаются справкой, а не судят: их меняет любая
+     честная запись соседей за время прогона, а при журнале WAL своя запись их может и не изменить.
+     Встречные на СВОЕЙ подставной базе: ⑥-а чужая запись случай НЕ роняет · ⑥-б своя запись через
+     соединение роняет и названа числом строк · ⑥-в база недоступна — третий исход «не проверено»,
+     код выхода 2
 
 КОНТРОЛЬНАЯ ПАРА — приёмка обязана краснеть на больном. ПРОГНОЗЫ НАЗВАНЫ ДО ПРОГОНА:
     --break target   вызов различителя выключен ⇒ гашение снова «по словам»
@@ -42,6 +50,8 @@ bite-correction-target.py — приёмка карточки #520: гашени
                      его ловит правило тире СПРАВА, а не связка слева
     --break tire     правило «номер-подлежащее + характеристика через тире» снято
                      ПРОГНОЗ: красные ① ③; ② ④ ⑤ ⑥ зелены. Красит РОВНО #2388
+    --break state    суд ⑥ возвращён к разнице состояния файла (размер и час записи до и после)
+                     ПРОГНОЗ: проваливается РОВНО ⑥-а — чужая запись меняет файл; остальные проходят
 
 ⚖️ ГРАНИЦА, НАЗВАННАЯ ВСЛУХ (критерий @PROTO: «три носителя — мало для закона»).
    НЕ ПРОВЕРЕНО и признаётся долгом:
@@ -78,11 +88,13 @@ import argparse
 import importlib.util
 import sqlite3
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mention          # noqa: E402
 import mezo_paths       # noqa: E402
+import mezo_stand       # noqa: E402 — уборка временного каталога и код выхода с третьим исходом
 
 LIVE_DB = Path(str(mezo_paths.live_db()))
 
@@ -131,6 +143,131 @@ def case(name, ok, detail):
 def case_skip(name, reason):
     SKIPPED.append((name, reason))
     print("⚪ " + name + "\n     пропущен: не проверено: " + reason)
+
+
+def open_feed(path, mode="ro"):
+    """Единственное место, где приёмка открывает базу. Живую — только на чтение; «rw» берёт один
+    встречный случай ⑥-б, и только для СВОЕЙ подставной базы."""
+    return sqlite3.connect("file:" + str(path) + "?mode=" + mode, uri=True)
+
+
+def file_state(path):
+    """Размер и час записи файла — прежний признак случая ⑥. Теперь справка и нарочная поломка «state»."""
+    st = Path(path).stat()
+    return st.st_size, st.st_mtime_ns
+
+
+# Проба записи: ни одной строки не трогает. Соединению «только чтение» база отказывает в ней ещё до
+# захвата права записи; соединение на запись берёт это право и тут же отдаёт его откатом.
+WRITE_PROBE = "DELETE FROM messages WHERE 0"
+
+
+def own_writes(con):
+    """Суд случая ⑥ по СВОЕМУ соединению (карточка #804) → (исход, слова).
+
+    «clean»   — база отказала соединению в записи, и через него не изменено ни строки;
+    «traces»  — свой след: соединение приняло пробу записи либо через него уже писали — число
+                изменённых строк названо;
+    «unknown» — спросить не удалось; «следов нет» при этом НЕ утверждается.
+    Чужие записи в ту же базу на исход не влияют: счёт строк и право записи у каждого соединения свои.
+    """
+    try:
+        changed, pending = con.total_changes, con.in_transaction
+    except sqlite3.Error as e:
+        return "unknown", "соединение не отвечает (" + str(e) + ")"
+    if pending:
+        return "traces", ("через соединение приёмки идёт незавершённая запись; изменено через него строк: "
+                          + str(changed))
+    try:
+        con.execute(WRITE_PROBE)
+    except sqlite3.Error as e:
+        refused = (getattr(e, "sqlite_errorname", "") == "SQLITE_READONLY"
+                   or "readonly" in str(e).lower())
+        try:
+            con.rollback()
+        except sqlite3.Error:
+            pass
+        if not refused:
+            return "unknown", "проба записи не дала ответа (" + str(e) + ")"
+        if changed:
+            return "traces", ("изменено через него строк: " + str(changed)
+                              + " (сейчас база в записи отказывает)")
+        return "clean", "база отказала соединению в записи («" + str(e) + "»), изменено через него строк: 0"
+    con.rollback()
+    return "traces", ("соединение открыто НА ЗАПИСЬ: база приняла пробу записи (ни одной строки, откат); "
+                      "изменено через него строк: " + str(changed))
+
+
+def untouched(con, path, before, break_kind=None):
+    """Суд случая ⑥ и его встречных. Нарочная поломка «state» возвращает прежний суд — разницу
+    состояния файла «до и после»; его проваливает любая чужая запись."""
+    if break_kind != "state":
+        return own_writes(con)
+    try:
+        after = file_state(path)
+    except OSError as e:
+        return "unknown", "файл базы недоступен (" + type(e).__name__ + ")"
+    if before is None:
+        return "unknown", "состояние «до» не снято"
+    if before == after:
+        return "clean", "поломка «state»: размер и час записи файла совпали"
+    return "traces", "поломка «state»: размер и час записи файла ИЗМЕНИЛИСЬ"
+
+
+def counter_cases(break_kind):
+    """⑥-а/б/в — тот же суд на СВОЕЙ подставной базе: чужая запись, своя запись, база недоступна.
+    База живёт во временном каталоге прогона; живая база здесь не открывается вовсе."""
+    tmp = Path(tempfile.mkdtemp(prefix="bite-correction-target-"))
+    side = tmp / "judge.db"
+    opened = []
+    try:
+        neighbour = sqlite3.connect(str(side))
+        opened.append(neighbour)
+        neighbour.execute("CREATE TABLE messages (id INTEGER PRIMARY KEY, body_md TEXT)")
+        neighbour.execute("INSERT INTO messages (body_md) VALUES ('первая записка подставной базы')")
+        neighbour.commit()
+
+        # ⑥-а: соединение приёмки «только чтение» открыто, сосед в это время пишет в ту же базу
+        before = file_state(side)
+        ro = open_feed(side)
+        opened.append(ro)
+        rows_before = ro.execute("SELECT count(*) FROM messages").fetchone()[0]
+        neighbour.execute("INSERT INTO messages (body_md) VALUES (?)",
+                          ("чужая записка за время прогона " * 600,))
+        neighbour.commit()
+        rows_after = ro.execute("SELECT count(*) FROM messages").fetchone()[0]
+        outcome, said = untouched(ro, side, before, break_kind)
+        ro.close()
+        case("⑥-а ВСТРЕЧНЫЙ: чужая запись за время прогона случай НЕ роняет",
+             outcome == "clean" and rows_after == rows_before + 1,
+             "сосед дописал записку: соединение приёмки видит строк " + str(rows_before) + " → "
+             + str(rows_after) + " · суд: " + said)
+
+        # ⑥-б: так выглядела бы утечка — то же открытие, но на запись, и одна своя строка через него
+        before = file_state(side)
+        rw = open_feed(side, mode="rw")
+        opened.append(rw)
+        rw.execute("INSERT INTO messages (body_md) VALUES (?)", ("своя записка через соединение " * 600,))
+        rw.commit()
+        outcome, said = untouched(rw, side, before, break_kind)
+        rw.close()
+        named = break_kind == "state" or "строк: 1" in said
+        case("⑥-б ВСТРЕЧНЫЙ: своя запись через соединение роняет и названа числом строк",
+             outcome == "traces" and named, "суд: " + said)
+
+        # ⑥-в: база недоступна — соединение закрыто, файла нет: третий исход и свой код выхода
+        outcome, said = untouched(ro, tmp / "absent.db", None, break_kind)
+        case("⑥-в ВСТРЕЧНЫЙ: база недоступна — «не проверено» и код выхода 2, а не «следов нет»",
+             outcome == "unknown" and mezo_stand.exit_code3(0, 1) == 2 and mezo_stand.exit_code3(1, 1) == 1,
+             "суд: " + said + " · код выхода при одном непроверенном случае: "
+             + str(mezo_stand.exit_code3(0, 1)))
+    finally:
+        for con in opened:
+            try:
+                con.close()
+            except sqlite3.Error:
+                pass
+        mezo_stand.remove_tree(tmp)
 
 
 def feed_source(con, break_kind=None):
@@ -186,14 +323,25 @@ def classify_role(line, n, break_kind):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--break", dest="break_kind", choices=["target", "svyazka", "tire", "source"],
+    ap.add_argument("--break", dest="break_kind", choices=["target", "svyazka", "tire", "source", "state"],
                     help="нарочная поломка: приёмка ОБЯЗАНА покраснеть")
     break_kind = ap.parse_args().break_kind
     if break_kind:
         print("⚠️ ПРОГОН С НАРОЧНОЙ ПОЛОМКОЙ «" + break_kind + "» — красное ОЖИДАЕТСЯ\n")
 
-    live_before = (LIVE_DB.stat().st_size, LIVE_DB.stat().st_mtime_ns)
-    con = sqlite3.connect("file:" + str(LIVE_DB) + "?mode=ro", uri=True)
+    # Живая база недоступна — читать нечего: третий исход своим кодом выхода, а не разбор ошибки
+    # (карточка #804). Пустой файл библиотека открывает как базу без таблиц — он недоступен так же,
+    # как файл-не-база: до правки по возврату приёмки на нём была трассировка «нет таблицы», код 1.
+    try:
+        live_before = file_state(LIVE_DB)
+        con = open_feed(LIVE_DB)
+        if not con.execute("SELECT count(*) FROM sqlite_master").fetchone()[0]:
+            con.close()
+            raise sqlite3.DatabaseError("в файле нет ни одной таблицы: он пуст либо это база без схемы")
+    except (OSError, sqlite3.Error) as e:
+        print("⚪ НЕ ПРОВЕРЕНО: живая база недоступна (" + type(e).__name__ + ": " + str(e) + ") — "
+              "читать нечего, ни один случай не судился; код выхода 2, а не «прошла»")
+        return 2
     source = feed_source(con, break_kind)
     reasons, gpt = reasons_from_feed(con, source)
     newest = con.execute("SELECT COALESCE(MAX(id), 0) FROM " + source).fetchone()[0]
@@ -323,11 +471,24 @@ def main():
              + (" · НЕ видно: " + ", ".join("#" + str(n) for n in unseen[:8])
                 + (" и ещё " + str(len(unseen) - 8) if len(unseen) > 8 else "") if unseen else ""))
 
+    # ── ⑥ контроль — суд ПО СВОЕМУ СОЕДИНЕНИЮ (карточка #804), а не по размеру и часу записи файла:
+    #    те меняет любая честная запись соседей за время прогона, а свою запись могут и пропустить.
+    outcome, said = untouched(con, LIVE_DB, live_before, break_kind)
     con.close()
-    live_after = (LIVE_DB.stat().st_size, LIVE_DB.stat().st_mtime_ns)
-    case("⑥ контроль: живая база не открывалась на запись",
-         live_before == live_after,
-         "размер и час записи " + ("совпали" if live_before == live_after else "ИЗМЕНИЛИСЬ"))
+    try:
+        reference = ("совпали" if file_state(LIVE_DB) == live_before
+                     else "изменились (так бывает и от честной записи соседей)")
+    except OSError as e:
+        reference = "снять не удалось (" + type(e).__name__ + ")"
+    method = "по разнице состояния файла" if break_kind == "state" else "по своему соединению"
+    if outcome == "unknown":
+        case_skip("⑥ контроль: живая база не открывалась на запись", said)
+    else:
+        case("⑥ контроль: живая база не открывалась на запись", outcome == "clean",
+             "способ: " + method + " — " + said + " · справка, не суд: размер и час записи файла "
+             + reference)
+    # ── ⑥-а/б/в встречные: тот же суд на своей подставной базе
+    counter_cases(break_kind)
 
     print("=" * 96)
     print("ИТОГ: " + str(OK) + " из " + str(OK + FAIL)
@@ -340,9 +501,7 @@ def main():
     print("⚖️ НЕ ПРОВЕРЕНО (долг назван, а не проглядён): формы «#N: неверно» и «см. #N — …» "
           "без носителя и предлога · жертва в СОСЕДНЕЙ строке · иные языки · один номер "
           "дважды в разных ролях в одной строке")
-    if FAIL != 0:
-        return 1
-    return 2 if SKIPPED else 0
+    return mezo_stand.exit_code3(FAIL, len(SKIPPED))
 
 
 if __name__ == "__main__":

@@ -41,9 +41,22 @@ bite-milestone-step-set.py — приёмка карточки #509: веха-р
      ожидается 8 (семь шагов + двойник), и красен РОВНО двойник 20260821-tool-leases.py —
      файл-шаг в окне без записи под своим именем. Это не смягчение, а тот же принцип,
      что у ⑦: ожидаемое строится ИЗ КАТАЛОГА, и двойник — не исключение из него
-  ⑩ контроль: живая база и живые файлы вех не изменились (размер и содержимое сверены
-     ДО и ПОСЛЕ; первая редакция моей прошлой приёмки судила живую базу и краснела
-     от честной работы коллег — карточка #483)
+  ⑩ контроль: живая база и живые файлы вех не изменились. Живая база судится ПО СВОЕМУ
+     (карточка #804), а не по размеру и отпечатку файла — те меняет любая честная запись
+     соседей за время прогона:
+       · подсадка (версия и примечание строки журнала шагов из случая ⑥) — своими следами
+         поимённо: вопрос mezo_stand.ask_traces, судится ПРИБАВКА следов;
+       · удаления (версии, которые стенды сняли у себя) метки не несут — судятся свойством,
+         которого соседи не нарушают: каждая такая версия, бывшая в живом журнале до прогона,
+         в нём на месте (строк журнала шагов соседи не удаляют).
+     Отпечатки двух файлов вех оставлены как были — не чиню, потому что это файлы каталога
+     испытуемых инструментов, а не база: роли в него не пишут, его меняет только установка
+     инструментов (замер 21.11.2026: оба файла в живом каталоге контура Atlas не менялись
+     с 07.09.2026).
+     Встречные на подставной базе стенда: ⑩-а чужая запись случай НЕ роняет · ⑩-б свой след
+     роняет и назван поимённо · ⑩-в база недоступна — третий исход «не проверено», код 2 ·
+     ⑩-г оба пробных имени на стенде находятся · ⑩-д новый шаг соседа суд об удалениях НЕ
+     роняет · ⑩-е пропавшая версия роняет и названа · ⑩-ж журнал недоступен — третий исход
 
 ⚖️ СПИСОК ШАГОВ ДЛЯ ③ БЕРЁТСЯ ИЗ ЖИВОГО ЖУРНАЛА (только чтение), а не снимком: снимок из
    девяти имён (31.08) протух через четверо суток — три шага 04.09 легли ПОСЛЕ него, хвост
@@ -52,17 +65,20 @@ bite-milestone-step-set.py — приёмка карточки #509: веха-р
 
 КОНТРОЛЬНАЯ ПАРА — приёмка обязана краснеть на больном:
     --break slug   голова имени снова «6–8 цифр» ⇒ хвосты 008-/009- не сводятся
-                   ПРОГНОЗ: 11 из 12, красный РОВНО ④ (три ложных пропажи из одиннадцати)
+                   ПРОГНОЗ: 18 из 19, красный РОВНО ④ (три ложных пропажи из одиннадцати);
+                   до карточки #804 — 11 из 12: семь встречных случая ⑩ поломка не задевает
     --break guard  вызов сверки набора выключен ⇒ дырка в середине снова не видна
-                   ПРОГНОЗ: 3 из 12; зелёными остаются РОВНО ③ ⑨ ⑩ — то есть встречный
-                   на прежнюю защиту, «при отказе ничего не пишет» и контроль живого.
+                   ПРОГНОЗ: 10 из 19; зелёными остаются РОВНО ③ ⑨ ⑩ и семь встречных ⑩ — то
+                   есть встречный на прежнюю защиту, «при отказе ничего не пишет» и контроль
+                   живого (до карточки #804 — 3 из 12).
                    🩸 Первый мой прогноз здесь был «6 из 10, красные ② ⑤ ⑥ ⑧» и он НЕВЕРЕН:
                    я считала только случаи, ждущие ОТКАЗА, и забыла, что ① ④ ⑦ сверяют
                    ЧИСЛО ожидаемых шагов, а выключенная сверка отвечает нулём на всё.
                    Пересчитан ДО прогона и оставлен здесь надгробием: прогноз, который
                    подгоняют ПОСЛЕ, не проверяет ничего
     --break twin   двойники хвоста снова НЕ ожидаются (прежнее поведение) ⇒ дырка под
-                   двойником снова невидима. ПРОГНОЗ: 10 из 12, красные РОВНО ⑪ ⑫
+                   двойником снова невидима. ПРОГНОЗ: 17 из 19, красные РОВНО ⑪ ⑫
+                   (до карточки #804 — 10 из 12)
                    (прогноз назван ДО прогона 04.09 22:16 UTC, сошёлся первым же прогоном)
                    🩸 А чистый прогон первым разом дал 10 из 12 — ⑪⑫ красные ПРИ ВЕРНОМ
                    поведении вехи: условие искало слово «исключены», а новая честная строка
@@ -88,8 +104,11 @@ import mezo_target  # noqa: E402 — испытуемое через общий 
 
 SCRIPTS = mezo_target.scripts_root()
 LIVE_DB = mezo_paths.live_db()
-sys.path.insert(0, str(SCRIPTS))
+# mezo_stand — из каталога самой приёмки, той же версии пакета (карточка #804: суд по своим следам
+# есть только с неё; каталог scripts живого контура до установки выпуска — прежней). До этой правки —
+# из SCRIPTS: тогда приёмка брала у помощника только то, что в обеих копиях одинаково.
 import mezo_stand  # noqa: E402
+sys.path.insert(0, str(SCRIPTS))
 
 MILESTONE_V4 = "20260810-milestone-v4.py"
 MILESTONE_V5 = "20260828-milestone-v5.py"
@@ -104,6 +123,15 @@ TWIN_INTACT = "expected[f[:-3]] = f"
 TWIN_BROKEN = "pass  # ⟨порча twin: двойник не ожидается⟩"
 STEP_REAL = "20260816-tool-leases.py"
 STEP_TWIN = "20260821-tool-leases.py"
+
+# Свои следы приёмки (карточка #804): версия и примечание строки журнала шагов, которую случай ⑥
+# подсаживает на стенд. По ним ⑩ судит, не попала ли подсадка в живую базу; NEED — куда они сеются.
+SEED_VERSION = "20260826-nothing-on-disk"
+SEED_NOTE = "подсадка приёмки #509"
+MARKS = (SEED_VERSION, SEED_NOTE)
+NEED = ("schema_migrations",)
+# Версии, которые стенды сняли у себя (удаление метки не несёт): по ним ⑩ судит «в живом журнале на месте».
+REMOVED: set = set()
 
 OK = FAIL = 0
 SKIPPED: list[tuple[str, str]] = []
@@ -125,6 +153,38 @@ def case_skip(name, reason):
 
 def fingerprint(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()[:16]
+
+
+def journal_versions(db):
+    """Версии журнала шагов базы — только чтение. Вернуть (множество, "") либо (None, причина)."""
+    try:
+        c = sqlite3.connect("file:" + Path(db).as_posix() + "?mode=ro", uri=True)
+        try:
+            return {v for (v,) in c.execute("SELECT version FROM schema_migrations")}, ""
+        finally:
+            c.close()
+    except (sqlite3.Error, OSError) as e:
+        return None, (type(e).__name__ + ": " + str(e))[:120]
+
+
+def removed_verdict(before, after, removed):
+    """Суд об удалениях ПО СВОЕМУ: каждая версия, которую стенды сняли у себя и которая была в журнале
+    до прогона, после прогона в нём на месте. Три исхода: ("clean", [], "") · ("gone", [версии], "") ·
+    ("unknown", [], причина). Новые строки журнала не судятся: их пишут и соседи."""
+    for found, why in (before, after):
+        if found is None:
+            return "unknown", [], why
+    gone = sorted(v for v in removed if v in before[0] and v not in after[0])
+    return ("gone" if gone else "clean"), gone, ""
+
+
+def removed_words(outcome, names, why):
+    """Слова исхода removed_verdict() — у каждого свои, чтобы третий не читался как первый."""
+    if outcome == "clean":
+        return "все на месте"
+    if outcome == "gone":
+        return "ИСЧЕЗЛИ: " + ", ".join(names)
+    return "НЕ ПРОВЕРЕНО: журнал не ответил (" + why + ")"
 
 
 def line_with(output, word, otherwise="строки нет"):
@@ -174,9 +234,10 @@ def sandbox(label, remove_versions=(), remove_steps=(), remove_files=(), seed=()
     # не по своей причине. Поздние — по ДАТЕ ФАЙЛА вехи в живом каталоге шагов.
     for v in list(remove_versions) + list(remove_steps) + later_milestones(remove_versions):
         c.execute("DELETE FROM schema_migrations WHERE version=?", (v,))
+        REMOVED.add(v)
     for v in seed:
         c.execute("INSERT INTO schema_migrations(version, applied_at, note) VALUES(?,?,?)",
-                  (v, "2026-08-26 00:00:00", "подсадка приёмки #509"))
+                  (v, "2026-08-26 00:00:00", SEED_NOTE))
     c.commit()
     c.close()
     return root, db_path, scripts_dir / "migrations"
@@ -250,7 +311,10 @@ def main():
     a = ap.parse_args()
     break_kind = a.break_kind
 
-    live_before = (LIVE_DB.stat().st_size, fingerprint(LIVE_DB))
+    # Живая база: вопрос о своих следах и список версий журнала — оба только на чтение (карточка #804).
+    # Вопрос о следах — первое обращение к базе: не читается вовсе — «НЕ ПРОВЕРЕНО», код 2.
+    traces_before = mezo_stand.first_traces(LIVE_DB, MARKS, NEED)
+    journal_before = journal_versions(LIVE_DB)
     milestones_before = {milestone_name: fingerprint(SCRIPTS / "migrations" / milestone_name) for milestone_name in (MILESTONE_V4, MILESTONE_V5)}
 
     print("=" * 78)
@@ -317,6 +381,7 @@ def main():
     # сжатой истории целиком. v4_reason — надёжная примета ОБОИХ: нет вехи v4 ⇔ журнал
     # начат позже самого раннего из используемых здесь окон.
     code5 = output5 = None
+    db_f = None
     if v4_reason is None:
         _, _, migrations_dir = sandbox("m509-d", remove_versions=["v4", "v5"], break_kind=break_kind)
         code4, output4 = run(migrations_dir, MILESTONE_V4)
@@ -333,11 +398,11 @@ def main():
                "код " + str(code5) + " · имя в тексте: " + str("20260808-role-rights.py" in output5))
 
         # ⑥ запись без файла — замечание, не отказ
-        _, _, migrations_dir = sandbox("m509-f", remove_versions=["v5"],
-                           seed=["20260826-nothing-on-disk"], break_kind=break_kind)
+        _, db_f, migrations_dir = sandbox("m509-f", remove_versions=["v5"],
+                           seed=[SEED_VERSION], break_kind=break_kind)
         code6, output6 = run(migrations_dir, MILESTONE_V5)
         case("⑥ запись в журнале БЕЗ файла — ЗАМЕЧАНИЕ, не отказ",
-               code6 == 0 and "20260826-nothing-on-disk" in output6
+               code6 == 0 and SEED_VERSION in output6
                and "файла в каталоге нет" in output6,
                "код " + str(code6) + " · замечание напечатано: "
                + str("файла в каталоге нет" in output6))
@@ -410,13 +475,66 @@ def main():
         case_skip("⑫ ВСТРЕЧНЫЙ: двойник при целой записи — «файла нет» НЕ печатается, ожидается 8, "
                "красен РОВНО двойник", v4_reason)
 
-    # ⑩ контроль: живое не тронуто
-    live_after = (LIVE_DB.stat().st_size, fingerprint(LIVE_DB))
+    # ⑩ контроль: живое не тронуто — живая база судится ПО СВОЕМУ (карточка #804): подсадка — своими
+    # следами поимённо, удаления — «снятая у себя версия в живом журнале на месте». Размер и отпечаток
+    # файла базы не судятся: их меняет любая честная запись соседа за время прогона.
     milestones_after = {milestone_name: fingerprint(SCRIPTS / "migrations" / milestone_name) for milestone_name in (MILESTONE_V4, MILESTONE_V5)}
-    case("⑩ контроль: живая база и живые вехи не изменились",
-           live_before == live_after and milestones_before == milestones_after,
-           "база " + ("цела" if live_before == live_after else "ИЗМЕНИЛАСЬ")
-           + " · вехи " + ("целы" if milestones_before == milestones_after else "ИЗМЕНИЛИСЬ"))
+    files_same = milestones_before == milestones_after
+    o_t, names_t, why_t = mezo_stand.traces_verdict(traces_before, mezo_stand.ask_traces(LIVE_DB, MARKS, NEED))
+    o_r, gone_r, why_r = removed_verdict(journal_before, journal_versions(LIVE_DB), REMOVED)
+    said = ("база — способ: по своим следам — " + mezo_stand.traces_words(o_t, names_t, why_t)
+            + " · снятые на стендах версии (" + str(len(REMOVED)) + ") в живом журнале: "
+            + removed_words(o_r, gone_r, why_r)
+            + " · вехи " + ("целы" if files_same else "ИЗМЕНИЛИСЬ"))
+    title10 = "⑩ контроль: живая база и живые вехи не изменились"
+    if o_t == "traces" or o_r == "gone" or not files_same:
+        case(title10, False, said)
+    elif "unknown" in (o_t, o_r):
+        case_skip(title10, said + "; «не тронута» НЕ утверждается")
+    else:
+        case(title10, True, said)
+
+    # ⑩-а/б/в/г ВСТРЕЧНЫЕ к суду по следам: тот же суд на подставной базе своего стенда — чужая запись,
+    # свои следы по одному, база недоступна; и оба пробных имени на стенде случая ⑥ находятся.
+    judge_db = mezo_stand.empty_db(LIVE_DB, mezo_stand.new("m509-judge") / "judge.db")
+    step = "INSERT INTO schema_migrations(version, applied_at, note) VALUES(?,?,?)"
+    for letter, title, ok, detail in mezo_stand.traces_counter_cases(
+            judge_db, MARKS, NEED,
+            foreign=[(step, ("20991231-neighbour-step", "2026-01-01 00:00:00", "шаг соседа"))],
+            own=[("версия", step, (SEED_VERSION, "2026-08-26 00:00:00", "примечание без пробного имени"),
+                  {"schema_migrations.version"}),
+                 ("примечание", step, ("20991231-other-version", "2026-08-26 00:00:00", SEED_NOTE),
+                  {"schema_migrations.version", "schema_migrations.note"})],
+            planted=db_f):
+        case("⑩-" + letter + " " + title, ok, detail)
+    if db_f is None:
+        case_skip("⑩-г пробные имена на стенде находятся все — вопрос к живой базе не слеп", v4_reason)
+
+    # ⑩-д/е/ж ВСТРЕЧНЫЕ к суду об удалениях — на той же подставной базе (её журнал шагов скопирован
+    # с живого): новый шаг соседа, пропавшая версия, журнал недоступен.
+    judge_before = journal_versions(judge_db)
+    sample = sorted(judge_before[0] or ())[:2]
+    c = sqlite3.connect(str(judge_db))
+    c.execute(step, ("20991231-second-neighbour-step", "2026-01-01 00:00:00", "шаг соседа"))
+    c.commit()
+    with_neighbour = removed_verdict(judge_before, journal_versions(judge_db), sample)
+    for v in sample[:1]:
+        c.execute("DELETE FROM schema_migrations WHERE version=?", (v,))
+    c.commit()
+    c.close()
+    with_gone = removed_verdict(judge_before, journal_versions(judge_db), sample)
+    blind = {name: removed_verdict(judge_before, journal_versions(judge_db.with_name(name)), sample)
+             for name in ("no-such-base.db", "broken-base.db", "empty-base.db")}
+    case("⑩-д суд об удалениях: новый шаг соседа в «живом» журнале случай НЕ роняет",
+           len(sample) == 2 and with_neighbour[0] == "clean",
+           "версий в выборке " + str(len(sample)) + "; суд: " + removed_words(*with_neighbour))
+    case("⑩-е суд об удалениях: снятая у себя версия, пропавшая из «живого» журнала, случай РОНЯЕТ и названа",
+           len(sample) == 2 and with_gone[0] == "gone" and with_gone[1] == sample[:1],
+           "суд: " + removed_words(*with_gone))
+    case("⑩-ж суд об удалениях: журнал недоступен — третий исход «НЕ ПРОВЕРЕНО», не «все на месте»",
+           all(r[0] == "unknown" and "НЕ ПРОВЕРЕНО" in removed_words(*r) for r in blind.values())
+           and "НЕ ПРОВЕРЕНО" not in removed_words("clean", [], ""),
+           "исходы: " + ", ".join(k + "→" + v[0] for k, v in blind.items()))
 
     print("=" * 78)
     print("ИТОГ: " + str(OK) + " из " + str(OK + FAIL)
