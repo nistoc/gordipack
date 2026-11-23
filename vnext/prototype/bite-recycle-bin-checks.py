@@ -5,14 +5,20 @@ bite-recycle-bin-checks.py — приёмка карточки #831: помощ�
 с путём от 260 знаков внутри.
 
 Предмет. До правки move() засчитывал перенос, если SHFileOperationW вернул 0 и каталога нет на месте.
-Опыт карточки #831 (23.11.2026): каталог с самым длинным путём 259 знаков UTF-16 уходит в Корзину, с 260
-и 300 знаков Windows стирает его насовсем, вызов возвращает 0, помощник отвечает «перенесено 1». Правка:
-перенос идёт через _move_checked. До переноса — отказ на пути от 260 знаков и на нечитаемых записях
-Корзины; после — сверка с новой записью $I Корзины по прежнему пути каталога.
+Опыт карточки #831 (23.11.2026) на дереве из вложенных каталогов (так строит make_tree ниже): с самым
+длинным путём 259 знаков UTF-16 каталог уходит в Корзину, с 260 и 300 знаков Windows стирает его насовсем,
+вызов возвращает 0, помощник отвечает «перенесено 1». Граница измерена для этой формы дерева, а не для
+любой: дерево, где путь 275 знаков у ФАЙЛА прямо в каталоге (путь каталога 188 знаков), Windows в Корзину
+взяла (замер COORD 23.11, карточка #832). Отказ помощника от 260 знаков для такой формы строже, чем нужно,
+но ошибается в безопасную сторону: лишний отказ, а не потеря каталога. Правка: перенос идёт через
+_move_checked. До переноса — отказ на пути от 260 знаков и на нечитаемых записях Корзины; после — сверка
+с новой записью $I Корзины по прежнему пути каталога.
 
 Случаи. ①–⑤ — на подставном томе: каталог с $Recycle.Bin внутри и подставной перенос. ⑥ — настоящий
-_windows_bin.
-  ①  после переноса в Корзине новая запись $I (формат 2) с прежним путём — засчитан
+_windows_bin, у которого подменён только сам перенос (SHFileOperationW — счётчик вызовов, ничего не
+удаляет и не переносит).
+  ①  после переноса в Корзине новая запись $I (формат 2) с прежним путём — засчитан; тут же испытан
+     счётчик ⑥: на подставном томе он видит ровно эту одну запись
   ①б то же, когда каталог назван коротким именем 8.3, а запись несёт полное (так пишет Windows) — засчитан;
      на томе без коротких имён случай не различает и назван непроверенным
   ②  самый длинный путь внутри — 260 знаков: отказ ДО переноса, перенос не звался, каталог на месте,
@@ -20,11 +26,15 @@ _windows_bin.
   ②б встречный: 259 знаков — до переноса дошло
   ③  каталог исчез, а новой записи нет — «УДАЛЕНО МИМО КОРЗИНЫ», не засчитан; второй каталог тем же
      помощником не тронут (перенос остановлен)
+  ③б каталог исчез, новая запись $I есть, но её прежний путь ЧУЖОЙ (соседний каталог) — «УДАЛЕНО МИМО
+     КОРЗИНЫ», не засчитан; второй не тронут. Без него сверку прежнего пути не судил ни один случай:
+     поломка «путь не сравнивается» (К1 COORD, здесь П9) проходила все остальные
   ④  новая запись незнакомого формата — «приход в Корзину не проверен», не засчитан; второй не тронут
   ⑤  записи Корзины не читаются до переноса — отказ, перенос не звался, каталог на месте
   ⑥  уборка стендов по сроку (_sweep_aged) через настоящий _windows_bin, без своих правок: старый стенд
      с путём 260 знаков внутри — отказ, стенд на месте под прежним именем, в строке уборки
-     «не перенесено: 1». Только на Windows
+     «не перенесено: 1», перенос Windows не звался ни разу, и в настоящей Корзине тома не появилось
+     ни одной записи с путём внутри каталога приёмки. Только на Windows
 
 Нарочные поломки — в копиях помощника; у каждой записан набор случаев, которые она обязана провалить:
   П1  запись $I разбирается со смещения 24 вместо 28 ......... ① ①б
@@ -33,17 +43,21 @@ _windows_bin.
   П3  предел 259 знаков вместо 260 ........................... ②б
   П4  исчезнувший без новых записей засчитан ................. ③
   П5  незнакомая запись читается как «записи нет» ............ ④
-  П6  остановка после потери не действует .................... ③ ④
+  П6  остановка после потери не действует .................... ③ ③б ④
   П7  нечитаемые записи Корзины читаются как «записей нет» ... ⑤
   П8  _windows_bin переносит мимо _move_checked, как до правки ⑥
+  П9  прежний путь новой записи не сравнивается (К1 COORD) ... ③б
 Поломка, которая провалила не ровно свой набор, — провал приёмки: значит, случаи слепы или задевают чужое.
 Случай, не проверенный на этой машине, из набора поломки вычитается и называется.
 
 Безопасность. Всё живёт в своём каталоге приёмки (mezo_stand.new). ⑥ идёт потомком со своими TEMP, TMP,
-TMPDIR, HOME, USERPROFILE внутри этого каталога и без MEZO_STAND_TEST_BIN; настоящая Корзина в ⑥ только
-читается (настройки, занятость, записи), в неё ничего не ложится: на целом помощнике перенос не зовётся
-(отказ до него), а на поломке П8 Windows получает каталог приёмки с путём от 260 знаков и стирает его
-насовсем, мимо Корзины, — это и есть доказательство поломки.
+TMPDIR, HOME, USERPROFILE внутри этого каталога и без MEZO_STAND_TEST_BIN. В потомке SHFileOperationW
+подменён счётчиком: настоящая Корзина в ⑥ только читается (настройки, занятость, записи), а перенос не
+доходит до Windows ни на целом помощнике, ни под любой поломкой. Поломку П8 видно по счётчику: перенос
+позвали. До правки (карточка #832) П8 звала настоящий перенос, и Windows положила каталог приёмки в
+настоящую Корзину владельца (полный прогон набора ядра 23.11, 344 байта) — дерево ⑥ оказалось той формы, которую
+Корзина берёт. Контроль: после каждого прогона ⑥ считаются новые записи настоящей Корзины тома с прежним
+путём внутри каталога ⑥; их обязано быть 0, итог по всем прогонам печатается последней строкой.
 
     python bite-recycle-bin-checks.py
 Коды: 0 — всё прошло · 1 — провал · 2 — провалов нет, но часть случаев не проверена (не Windows, нет
@@ -65,7 +79,8 @@ HERE = Path(__file__).resolve().parent
 HELPER = HERE / "mezo_stand.py"
 SID = "S-1-5-21-831"                       # каталог записей подставного тома
 HOUR = 3600
-CASES = ("①", "①б", "②", "②б", "③", "④", "⑤", "⑥")
+CASES = ("①", "①б", "②", "②б", "③", "③б", "④", "⑤", "⑥")
+SAME_LINE = "            if any(o is not None and os.path.normcase(o.rstrip(\"\\\\/\")) in forms for o in originals):\n"
 
 BREAKS = [
     # (метка, что сломано, место в помощнике, замена, набор провалов)
@@ -79,13 +94,13 @@ BREAKS = [
     ("П3", "предел 259 знаков вместо 260",
      "LONG_PATH = 260   #", "LONG_PATH = 259   #", {"②б"}),
     ("П4", "исчезнувший без новых записей засчитан",
-     "            if any(o is not None and os.path.normcase(o.rstrip(\"\\\\/\")) in forms for o in originals):\n",
+     SAME_LINE,
      "            if not originals or any(o is not None and os.path.normcase(o.rstrip(\"\\\\/\")) in forms "
      "for o in originals):\n", {"③"}),
     ("П5", "незнакомая запись читается как «записи нет»",
      "            if None in originals:\n", "            if False:\n", {"④"}),
     ("П6", "остановка после потери не действует",
-     "        if state.get(\"stop\"):\n", "        if False:\n", {"③", "④"}),
+     "        if state.get(\"stop\"):\n", "        if False:\n", {"③", "③б", "④"}),
     ("П7", "нечитаемые записи Корзины читаются как «записей нет»",
      "        return None, f\"записи Корзины не читаются: {root} ({type(e).__name__})\"\n",
      "        return found, None\n", {"⑤"}),
@@ -95,16 +110,41 @@ BREAKS = [
      "            delete_one(os.path.abspath(p))\n"
      "        return sum(1 for p in paths if not os.path.lexists(p)), [p for p in paths if os.path.lexists(p)]\n",
      {"⑥"}),
+    ("П9", "прежний путь новой записи не сравнивается (К1 COORD)",
+     SAME_LINE,
+     "            if any(o is not None for o in originals):\n", {"③б"}),
 ]
 
+# Потомок ⑥: настоящий _windows_bin, но SHFileOperationW — счётчик. Перенос до Windows не доходит ни на
+# целом помощнике (он отказывает раньше), ни под поломкой П8 — её видно по числу вызовов.
 CHILD = (
-    "import importlib.util, sys\n"
+    "import ctypes, importlib.util, sys\n"
+    "calls = []\n"
+    "class _Op:\n"
+    "    argtypes = None\n"
+    "    restype = None\n"
+    "    def __call__(self, *args):\n"
+    "        calls.append(1)\n"
+    "        return 0\n"
+    "class _Shell:\n"
+    "    def __init__(self, real):\n"
+    "        self._real = real\n"
+    "        self.SHFileOperationW = _Op()\n"
+    "    def __getattr__(self, name):\n"
+    "        return getattr(self._real, name)\n"
+    "_real_dll = ctypes.WinDLL\n"
+    "def _dll(name, *args, **kwargs):\n"
+    "    real = _real_dll(name, *args, **kwargs)\n"
+    "    return _Shell(real) if str(name).lower().startswith('shell32') else real\n"
+    "ctypes.WinDLL = _dll\n"
     "spec = importlib.util.spec_from_file_location('mezo_stand', sys.argv[1])\n"
     "m = importlib.util.module_from_spec(spec)\n"
     "sys.modules['mezo_stand'] = m\n"
     "spec.loader.exec_module(m)\n"
     "m._sweep_aged()\n"
+    "print(f'🧪 перенос Windows звался: {len(calls)}')\n"
 )
+IN_REAL_BIN = []   # по прогону ⑥: записей настоящей Корзины с путём внутри каталога ⑥
 
 ROOT: Path | None = None
 _seq = [0]
@@ -184,8 +224,10 @@ class Fake:
         k = len(self.calls)
         owner = self.vol / "$Recycle.Bin" / SID
         original = os.path.realpath(full)                 # Windows пишет полную запись пути
+        if self.how == "foreign":                         # запись есть, но о соседнем каталоге
+            original = os.path.join(os.path.dirname(original), "other-" + os.path.basename(original))
         os.rename(ext(full), ext(owner / f"$R{k:05d}"))
-        version = 2 if self.how == "bin" else 9
+        version = 9 if self.how == "unknown" else 2
         (owner / f"$I{k:05d}").write_bytes(record_bytes(original, version))
 
 
@@ -216,8 +258,12 @@ def c1(m):
     make_tree(top)
     fake = Fake(vol, "bin")
     moved, left, out = run_move(m, [top], fake, vol, {})
-    ok = moved == 1 and not left and not os.path.lexists(top) and len(fake.calls) == 1
-    return ok, f"перенесено {moved}, не перенесено {len(left)} · вывод: {out.strip() or 'пусто'}"
+    # счётчик ⑥ испытан здесь: на подставном томе ровно одна запись с путём внутри каталога приёмки —
+    # иначе его 0 в ⑥ значил бы «не умеет считать», а не «ничего не легло»
+    counted = own_in_real_bin(str(vol), str(ROOT))
+    ok = moved == 1 and not left and not os.path.lexists(top) and len(fake.calls) == 1 and counted == 1
+    return ok, (f"перенесено {moved}, не перенесено {len(left)} · счётчик записей из каталога приёмки на "
+                f"подставном томе: {counted} · вывод: {out.strip() or 'пусто'}")
 
 
 def c1b(m):
@@ -274,6 +320,40 @@ def c3(m):
                 f"второй: перенос звался {len(fake2.calls)} раз, на месте: {'да' if kept else 'НЕТ'}")
 
 
+def c3b(m):
+    vol = volume()
+    first, second = fresh("c3ba"), fresh("c3bb")
+    make_tree(first)
+    make_tree(second)
+    state: dict = {}
+    fake1 = Fake(vol, "foreign")
+    m1, l1, out1 = run_move(m, [first], fake1, vol, state)
+    fake2 = Fake(vol, "bin")
+    m2, l2, out2 = run_move(m, [second], fake2, vol, state)
+    kept = os.path.lexists(second)
+    gone = not os.path.lexists(first) and len(fake1.calls) == 1    # перенос был, каталог ушёл
+    ok = (gone and m1 == 0 and len(l1) == 1 and "УДАЛЕНО МИМО КОРЗИНЫ" in out1
+          and m2 == 0 and len(l2) == 1 and not fake2.calls and kept and "остановлен" in out2)
+    drop(second)
+    return ok, (f"первый: перенесено {m1}, строка «мимо»: {'есть' if 'УДАЛЕНО МИМО КОРЗИНЫ' in out1 else 'НЕТ'} "
+                f"(запись Корзины о соседнем каталоге) · второй: перенос звался {len(fake2.calls)} раз, "
+                f"на месте: {'да' if kept else 'НЕТ'}")
+
+
+def own_in_real_bin(volume_root: str, inside: str) -> int | None:
+    """Записей настоящей Корзины тома с прежним путём внутри каталога inside; None — записи не читаются."""
+    records, why = mezo_stand._bin_records(volume_root)
+    if why is not None:
+        return None
+    prefix = os.path.normcase(inside.rstrip("\\/")) + os.sep
+    n = 0
+    for r in records:
+        o = mezo_stand._bin_original(r)
+        if o is not None and os.path.normcase(o).startswith(prefix):
+            n += 1
+    return n
+
+
 def c4(m):
     vol = volume()
     first, second = fresh("c4a"), fresh("c4b")
@@ -326,14 +406,20 @@ def c6(helper: Path):
         env[name] = str(tmp)
     for name in ("HOME", "USERPROFILE"):
         env[name] = str(home)
+    vroot = os.path.splitdrive(os.path.realpath(base))[0] + "\\"
     p = subprocess.run([sys.executable, "-X", "utf8", "-c", CHILD, str(helper)], env=env, capture_output=True,
                        text=True, encoding="utf-8", timeout=300)
     out = p.stdout
     line = next((s.strip() for s in out.splitlines() if s.startswith("🧺")), "строки уборки нет")
+    calls = next((s.strip() for s in out.splitlines() if s.startswith("🧪")), "строки счётчика нет")
     on_place = os.path.lexists(ext(stand))
-    ok = (p.returncode == 0 and on_place and "каталог не тронут" in out and "не перенесено: 1" in line)
+    in_bin = own_in_real_bin(vroot, os.path.realpath(base))
+    IN_REAL_BIN.append(in_bin)
+    ok = (p.returncode == 0 and on_place and "каталог не тронут" in out and "не перенесено: 1" in line
+          and calls == "🧪 перенос Windows звался: 0" and in_bin == 0)
     drop(base)
-    detail = f"стенд на месте: {'да' if on_place else 'НЕТ'} · {line}"
+    detail = (f"стенд на месте: {'да' if on_place else 'НЕТ'} · {line} · {calls} · в настоящей Корзине "
+              f"записей из каталога ⑥: {'не прочитано' if in_bin is None else in_bin}")
     if p.returncode != 0:
         detail += f" · код потомка {p.returncode}: {(p.stderr or '').strip()[-300:]}"
     return ok, detail
@@ -341,7 +427,8 @@ def c6(helper: Path):
 
 def run_all(m, helper: Path) -> dict:
     results = {}
-    for number, fn in (("①", c1), ("①б", c1b), ("②", c2), ("②б", c2b), ("③", c3), ("④", c4), ("⑤", c5)):
+    for number, fn in (("①", c1), ("①б", c1b), ("②", c2), ("②б", c2b), ("③", c3), ("③б", c3b), ("④", c4),
+                       ("⑤", c5)):
         try:
             results[number] = fn(m)
         except Exception as e:  # noqa: BLE001 — упавший случай есть провал, а не падение приёмки
@@ -406,12 +493,18 @@ def main() -> int:
                 if (n in fell) != (n in want):
                     print(f"      {n}: {got[n][1]}", flush=True)
 
-    code = 1 if failed or blind else (2 if skipped else 0)
+    measured = [n for n in IN_REAL_BIN if n is not None]
+    touched = sum(measured)
+    unread = len(IN_REAL_BIN) - len(measured)
+    code = 1 if failed or blind or touched else (2 if skipped else 0)
     if code == 2:
         mezo_stand.accepted_with_skips()
     print(f"\nИТОГ: случаев прошло {sum(1 for n in CASES if intact[n][0])} из {len(CASES)} · провалено: "
           f"{' '.join(failed) or 'нет'} · не проверено: {' '.join(skipped) or 'нет'} · поломок поймано "
           f"{len(BREAKS) - len(blind)} из {len(BREAKS)}" + (f" · слепы: {' '.join(blind)}" if blind else ""))
+    if IN_REAL_BIN:
+        print(f"Настоящая Корзина: прогонов ⑥ {len(IN_REAL_BIN)} (целый помощник и каждая поломка) · записей с путём "
+              f"внутри каталога приёмки: {touched}" + (f" · записи не прочитаны в {unread}" if unread else ""))
     return code
 
 
