@@ -26,7 +26,7 @@ _windows_bin, у которого подменён только сам пере�
   ②б встречный: 259 знаков — до переноса дошло
   ③  каталог исчез, а новой записи нет — «УДАЛЕНО МИМО КОРЗИНЫ», не засчитан; второй каталог тем же
      помощником не тронут (перенос остановлен)
-  ③б каталог исчез, новые записи $I есть, но все три ЧУЖИЕ: сосед в том же родителе, путь с общим началом
+  ③б каталог ушёл мимо Корзины, новые пары $R/$I есть, но все три ЧУЖИЕ: сосед в том же родителе, путь с общим началом
      («<путь>-other» — так бывает у «<имя>.removing-<номер>» уборки по сроку) и тёзка в другом родителе —
      «УДАЛЕНО МИМО КОРЗИНЫ», не засчитан; второй не тронут. Без него сверку прежнего пути не судил ни один
      случай: поломки «путь не сравнивается», «по началу», «только имя» (К1, К3, К4 COORD; здесь П9–П11)
@@ -54,7 +54,8 @@ _windows_bin, у которого подменён только сам пере�
 Поломка, которая провалила не ровно свой набор, — провал приёмки: значит, случаи слепы или задевают чужое.
 Подставная Корзина берёт номер записи по первому свободному месту в каталоге записей тома: под поломками
 П6 и П9 случаи ③б и ④ проваливаются своей проверкой («второй не тронут»), а не падением подставного
-переноса на занятом имени (Н1 COORD, карточка #832). Поломка, свои случаи которой провалились падением
+переноса на занятом имени (Н1 COORD, карточка #832). Пара $R/$I носит один номер, как у Windows, и случаи
+①, ③б, ④ требуют, чтобы у каждой записи подставной Корзины была пара (Н4 COORD). Поломка, свои случаи которой провалились падением
 («случай упал»), а не проверкой, считается непойманной: её поймал бы любой сбой подставного тома.
 Случай, не проверенный на этой машине, из набора поломки вычитается и называется.
 
@@ -239,21 +240,25 @@ class Fake:
             return
         owner = self.vol / "$Recycle.Bin" / SID
         original = os.path.realpath(full)                 # Windows пишет полную запись пути
-        originals = [original]
-        if self.how == "foreign":                         # записи есть, но ни одна не о нём
+        version = 9 if self.how == "unknown" else 2
+        # Номер пары — первый свободный в каталоге записей тома, а не счёт вызовов этого Fake: в ③б и ④ на
+        # одном томе работают два Fake, и под поломкой второй брал занятое $R00001 — случай падал, не дойдя
+        # до своей проверки (Н1 COORD, карточка #832). Пара $R/$I носит ОДИН номер, как у Windows (Н4 COORD)
+        if self.how == "foreign":
+            # каталог ушёл мимо Корзины, а в Корзину тем временем легли три чужие пары — ни одна не о нём
             parent, name = os.path.dirname(original), os.path.basename(original)
-            originals = [os.path.join(parent, "other-" + name),      # сосед в том же родителе (П9)
-                         original + "-other",                         # общее начало пути (П10, К3 COORD)
-                         os.path.join(parent + "-elsewhere", name)]   # тёзка в другом родителе (П11, К4 COORD)
-        # Номер — первый свободный в каталоге записей тома, а не счёт вызовов этого Fake: в ③б и ④ на одном
-        # томе работают два Fake, и под поломкой второй брал занятое $R00001 — случай падал, не дойдя до
-        # своей проверки (Н1 COORD, карточка #832)
+            others = [os.path.join(parent, "other-" + name),      # сосед в том же родителе (П9)
+                      original + "-other",                         # общее начало пути (П10, К3 COORD)
+                      os.path.join(parent + "-elsewhere", name)]   # тёзка в другом родителе (П11, К4 COORD)
+            mezo_stand.remove_tree(ext(full))
+            for o in others:
+                k = self._free(owner)
+                (owner / f"$R{k:05d}").mkdir()
+                (owner / f"$I{k:05d}").write_bytes(record_bytes(o, version))
+            return
         k = self._free(owner)
         os.rename(ext(full), ext(owner / f"$R{k:05d}"))
-        version = 9 if self.how == "unknown" else 2
-        for o in originals:
-            k = self._free(owner)
-            (owner / f"$I{k:05d}").write_bytes(record_bytes(o, version))
+        (owner / f"$I{k:05d}").write_bytes(record_bytes(original, version))
 
     @staticmethod
     def _free(owner: Path) -> int:
@@ -261,6 +266,24 @@ class Fake:
         while (owner / f"$I{k:05d}").exists() or (owner / f"$R{k:05d}").exists():
             k += 1
         return k
+
+
+def unpaired(vol: Path) -> list:
+    """Записи подставной Корзины без пары с тем же номером: «$I00002 без $R», «$R00001 без $I»."""
+    owner = vol / "$Recycle.Bin" / SID
+    names = {p.name for p in owner.iterdir()}
+    lone = []
+    for n in sorted(names):
+        if n[:2] in ("$I", "$R"):
+            twin = ("$R" if n[:2] == "$I" else "$I") + n[2:]
+            if twin not in names:
+                lone.append(f"{n} без {twin[:2]}")
+    return lone
+
+
+def pairs_word(vol: Path) -> str:
+    lone = unpaired(vol)
+    return "пары $R/$I целы" if not lone else "без пары: " + ", ".join(lone)
 
 
 def run_move(m, paths, fake: Fake, vol: Path, state: dict):
@@ -293,9 +316,10 @@ def c1(m):
     # счётчик ⑥ испытан здесь: на подставном томе ровно одна запись с путём внутри каталога приёмки —
     # иначе его 0 в ⑥ значил бы «не умеет считать», а не «ничего не легло»
     counted = own_in_real_bin(str(vol), str(ROOT))
-    ok = moved == 1 and not left and not os.path.lexists(top) and len(fake.calls) == 1 and counted == 1
+    ok = (moved == 1 and not left and not os.path.lexists(top) and len(fake.calls) == 1 and counted == 1
+          and not unpaired(vol))
     return ok, (f"перенесено {moved}, не перенесено {len(left)} · счётчик записей из каталога приёмки на "
-                f"подставном томе: {counted} · вывод: {out.strip() or 'пусто'}")
+                f"подставном томе: {counted} · {pairs_word(vol)} · вывод: {out.strip() or 'пусто'}")
 
 
 def c1b(m):
@@ -365,10 +389,11 @@ def c3b(m):
     kept = os.path.lexists(second)
     gone = not os.path.lexists(first) and len(fake1.calls) == 1    # перенос был, каталог ушёл
     ok = (gone and m1 == 0 and len(l1) == 1 and "УДАЛЕНО МИМО КОРЗИНЫ" in out1
-          and m2 == 0 and len(l2) == 1 and not fake2.calls and kept and "остановлен" in out2)
+          and m2 == 0 and len(l2) == 1 and not fake2.calls and kept and "остановлен" in out2
+          and not unpaired(vol))
     drop(second)
     return ok, (f"первый: перенесено {m1}, строка «мимо»: {'есть' if 'УДАЛЕНО МИМО КОРЗИНЫ' in out1 else 'НЕТ'} "
-                f"(три чужие записи Корзины) · второй: перенос звался {len(fake2.calls)} раз, "
+                f"(три чужие пары Корзины, {pairs_word(vol)}) · второй: перенос звался {len(fake2.calls)} раз, "
                 f"на месте: {'да' if kept else 'НЕТ'}")
 
 
@@ -397,10 +422,10 @@ def c4(m):
     m2, l2, out2 = run_move(m, [second], fake2, vol, state)
     kept = os.path.lexists(second)
     ok = (m1 == 0 and len(l1) == 1 and "приход в Корзину не проверен" in out1 and "МИМО" not in out1
-          and m2 == 0 and not fake2.calls and kept)
+          and m2 == 0 and not fake2.calls and kept and not unpaired(vol))
     drop(second)
     return ok, (f"первый: перенесено {m1} · вывод: {out1.strip()[:160] or 'пусто'} · "
-                f"второй: перенос звался {len(fake2.calls)} раз")
+                f"второй: перенос звался {len(fake2.calls)} раз · {pairs_word(vol)}")
 
 
 def c5(m):
