@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 r"""ПРИЁМКА СЛОЁВ ПАМЯТИ: сжатие по слоям, поиск по трём слоям, сверка версии и часа файла —
-карточка #781, этап Э2 (критерии ② ③ ④ ⑥).
+карточка #781, этап Э2 (критерии ② ③ ④ ⑥); порядок ухода при сжатии — карточка #796.
 
 ЗАЧЕМ. Прежде слой записи памяти не был записан нигде, и «унести старое» значило вырезать
 текст рукой. Теперь у записи есть поле слоя (hot · warm · permanent), а работа вокруг него
@@ -24,8 +24,12 @@ vnext/prototype того же дерева) — остальные катало�
 
 Случаи (РАЗЛИЧАЮЩИЙ — обязан ответить ИНАЧЕ на поломанном инструменте; КОНТРОЛЬ — не даёт
 ложной тревоги и не прячет поломку):
-  ④-1 … ④-12  сжатие слоя hot (память записей роли); ④-12 — без --section называет разделы
-               с текстом и без записей
+  ④-1 … ④-16  сжатие слоя hot (память записей роли); ④-12 — без --section называет разделы
+               с текстом и без записей; ④-13 — свежие записи не уходят, пока есть старше, запись
+               без часа уходит раньше них; ④-14 — два раздела с противоположным направлением
+               времени, в обоих первым уходит старое; ④-15 — свежие сами больше порога: уходят все
+               несвежие, свежие остаются, код 3; ④-16 — запись без часа, появившаяся в слое сегодня,
+               свежая
   ⑥-1 … ⑥-6    поиск по трём слоям одним вызовом; ⑥-6 — запрос из трёх слов, которые вместе
                не встречаются (ступень частичного совпадения), с --layer warm
   ②-1, ②-2     запись раздела с устаревшей и со свежей ожидаемой версией
@@ -38,6 +42,13 @@ vnext/prototype того же дерева) — остальные катало�
   П4 сжатие печатает, но не пишет .... не проходит ④-1; проходит ⑥-1
   П5 у ступени частичного совпадения
      снят отбор по слою .............. не проходит ⑥-6; проходят ⑥-1, ②-1
+  П6 свежих записей нет вовсе ........ не проходит ④-13; проходят ④-14, ④-10, ④-1
+  П7 порядок ухода не видит, куда
+     идёт время в разделе ............ не проходит ④-14; проходят ④-13, ④-10, ④-1
+  П8 свежие уходят последними,
+     а не никогда .................... не проходит ④-15; проходят ④-13, ④-16, ④-1
+  П9 свежесть записи без часа по
+     появлению не судится ............ не проходит ④-16; проходят ④-15, ④-13, ④-1
 
 Зовут так:
     MEZO_SCRIPTS_ROOT=<дерево>/scripts MEZO_LIVE_DB=<живая база, схема> \
@@ -86,6 +97,22 @@ BREAKS = {
            "    if layer:\n        where_clauses.append(\"pr.layer = ?\")\n        params.append(layer)\n"
            "    params.append(cap)",
            "    params.append(cap)"),
+    # карточка #796: свежих записей нет вовсе — ни по часу, ни по появлению
+    "П6": ("memory-records.py",
+           "def is_fresh(row, edge):\n",
+           "def is_fresh(row, edge):\n    return False\n\n\ndef _was_is_fresh(row, edge):\n"),
+    # карточка #796: при равном часе всегда уходит нижняя, куда бы ни шло время в разделе
+    "П7": ("memory-records.py",
+           "    step = 1 if direction == \"свежее снизу\" else -1",
+           "    step = -1"),
+    # карточка #796: свежие уходят последними, а не никогда (первая редакция этой карточки)
+    "П8": ("memory-records.py",
+           "        movable = order if fresh else order[:-1]",
+           "        movable = (order + [(r, \"свежая\") for r in fresh])[:-1]"),
+    # карточка #796: свежесть записи без часа по её появлению в слое не судится
+    "П9": ("memory-records.py",
+           "    seen = _day(row[6])\n    return bool(seen and seen >= edge)",
+           "    return False"),
 }
 
 print(f"⚖️ испытуется: {mezo_target.label()}")
@@ -194,8 +221,10 @@ def filler(size, head):
 
 
 def rec(size=2000, head="## Запись", **kw):
+    # created_at — когда запись появилась в слое; None — давно (400 дней назад). Запись без часа,
+    # появившаяся за последние сутки, свежая, и сжатие её не уносит (карточка #796)
     r = {"body": filler(size, head), "subject": "разное", "happened_at": None,
-         "alive": "active", "layer": "hot", "moved_at": None, "moved_by": None}
+         "alive": "active", "layer": "hot", "moved_at": None, "moved_by": None, "created_at": None}
     r.update(kw)
     return r
 
@@ -210,9 +239,10 @@ def plant(db, section, recs):
         c.execute("INSERT INTO phoenix (role, section, body) VALUES (?,?,?)", (ROLE, section, whole))
         for n, r in enumerate(recs, 1):
             cols = ["role", "section", "subject", "body", "body_chars", "happened_at", "alive",
-                    "ord", "origin_chars", "created_by"]
+                    "ord", "origin_chars", "created_by", "created_at"]
             vals = [ROLE, section, r["subject"], r["body"], len(r["body"]), r["happened_at"],
-                    r["alive"], n, len(whole), "стенд приёмки"]
+                    r["alive"], n, len(whole), "стенд приёмки",
+                    r["created_at"] or f"{days_ago(400)} 00:00:00"]
             if has_layer:
                 cols += ["layer", "layer_moved_at", "layer_moved_by"]
                 vals += [r["layer"], r["moved_at"], r["moved_by"]]
@@ -453,16 +483,126 @@ def case_4_10(T):
     recs[3]["happened_at"] = "2026-12-01"
     for n, day in ((2, "2026-03-01"), (7, "2026-01-01"), (9, "2026-02-01")):   # №2 №7 №9 датированы
         recs[n - 1]["happened_at"] = day
-    # без часа: №1 №3 №5 №6 №8 №10 — первым из них уходит большее место (№10)
+    # без часа: №1 №3 №5 №6 №8 №10 — час берут у ближайшей записи с часом (карточка #796):
+    # №5 и №6 — у №7 (01-01), №8 и №10 — у №9 (02-01; №8 стоит между №7 и №9 — берётся свежая),
+    # №1 и №3 — у №2 (03-01). Время в разделе идёт «свежее сверху»: при равном часе раньше нижняя
     db = new_db("layered")
     ids = plant(db, "state", recs)
     code, out = call(T.t["records"], db, "--section", "state", "--сжать")
-    expected = [ids[3], ids[6], ids[8], ids[1], ids[9]]
+    expected = [ids[3], ids[6], ids[5], ids[4], ids[9]]
     got = printed_moves(out)
     ok = code == 0 and got == expected
     names = lambda lst: [ids.index(i) + 1 for i in lst]
     return ok, (f"порядок ухода по номерам записей: напечатано {names(got)} (ждали {names(expected)}: "
-                f"снятая №4 · датированные от старшей №7, №9, №2 · без часа с нижней №10) · код {code}")
+                f"снятая №4 · час 01-01: №7 и без часа рядом с ней №6, №5 · затем 02-01: №10) · код {code}")
+
+
+def utc_today():
+    import datetime
+    return datetime.datetime.now(datetime.timezone.utc).date()
+
+
+def days_ago(n):
+    import datetime
+    return (utc_today() - datetime.timedelta(days=n)).isoformat()
+
+
+def case_4_13(T):
+    limit = volume_limit()
+    size = limit // 2
+    # 10 записей по size знаков: уходят ровно 8 (остаток 2·size ≤ порога, 3·size — больше).
+    # Время идёт «свежее сверху». С часом: №2 и №3 — сегодня, №4 — 30 дней назад, №6 — 60, №9 — 90;
+    # без часа — №1 (сосед №2, сегодня), №5, №7, №8, №10
+    days = {2: 0, 3: 0, 4: 30, 6: 60, 9: 90}
+    recs = [rec(size, f"## Свежесть {n}", happened_at=days_ago(days[n]) if n in days else None)
+            for n in range(1, 11)]
+    db = new_db("layered")
+    ids = plant(db, "state", recs)
+    code, out = call(T.t["records"], db, "--section", "state", "--сжать")
+    got = printed_moves(out)
+    expected = [ids[n - 1] for n in (10, 9, 8, 7, 6, 5, 4, 1)]
+    names = lambda lst: [ids.index(i) + 1 for i in lst]
+    gone_fresh = sorted(names([i for i in got if i in (ids[1], ids[2])]))
+    said_dir = "время в разделе — свежее сверху" in out
+    ok = code == 0 and got == expected and not gone_fresh and said_dir
+    return ok, (f"свежие не уходят, пока есть старше: напечатано {names(got)} (ждали {names(expected)}: от старших; без "
+                f"часа — по соседней записи с часом; №1 без часа уходит раньше свежих №2 и №3) · свежих "
+                f"унесено: {gone_fresh or 'ни одной'} · строка «свежее сверху» напечатана: "
+                f"{'да' if said_dir else 'НЕТ'} · код {code}")
+
+
+def case_4_14(T):
+    limit = volume_limit()
+    size = limit // 5
+    # два раздела по 10 записей, в каждом уходят ровно 5. «plan» — свежее снизу: с часом №1 (90 дней
+    # назад), №4 (60), №6 (30), №9 (вчера), №10 (сегодня); «state» — то же зеркально, свежее сверху
+    below = {1: 90, 4: 60, 6: 30, 9: 1, 10: 0}
+    above = {11 - n: d for n, d in below.items()}
+    db = new_db("layered")
+    planted = {}
+    for sect, days in (("plan", below), ("state", above)):
+        recs = [rec(size, f"## {sect} {n}", happened_at=days_ago(days[n]) if n in days else None)
+                for n in range(1, 11)]
+        planted[sect] = plant(db, sect, recs)
+    code, out = call(T.t["records"], db, "--сжать")
+    moved = printed_moves(out)
+    want = {"plan": [1, 2, 3, 4, 5], "state": [10, 9, 8, 7, 6]}
+    ok, parts = code == 0, []
+    for sect in ("plan", "state"):
+        ids = planted[sect]
+        got = [ids.index(i) + 1 for i in moved if i in ids]
+        ok = ok and got == want[sect]
+        parts.append(f"{sect}: напечатано {got} (ждали {want[sect]})")
+    both = "время в разделе — свежее снизу" in out and "время в разделе — свежее сверху" in out
+    ok = ok and both
+    return ok, (" · ".join(parts) + f" · оба направления напечатаны: {'да' if both else 'НЕТ'} · код {code}")
+
+
+def case_4_15(T):
+    limit = volume_limit()
+    big, small = limit * 3 // 5, limit // 5
+    # свежие сами больше порога (так у COORD 23.11: одна свежая запись state — 45 226 знаков).
+    # С часом: №1 — сегодня, №2 — вчера (оба по big), №3 — 30 дней назад, №5 — 60; без часа и давние
+    # по появлению — №4, №6. Уйти обязаны все четыре несвежие и ни одна свежая: код 3
+    days = {1: 0, 2: 1, 3: 30, 5: 60}
+    recs = [rec(big if n <= 2 else small, f"## Свежие больше порога {n}",
+                happened_at=days_ago(days[n]) if n in days else None) for n in range(1, 7)]
+    db = new_db("layered")
+    ids = plant(db, "state", recs)
+    code, out = call(T.t["records"], db, "--section", "state", "--сжать")
+    got = printed_moves(out)
+    names = lambda lst: [ids.index(i) + 1 for i in lst]
+    expected = [ids[n - 1] for n in (6, 5, 4, 3)]
+    gone_fresh = sorted(names([i for i in got if i in (ids[0], ids[1])]))
+    hot = [i for i, v in layer_rows(db).items() if v[0] == "hot"]
+    said_rest = "в слое остались только свежие записи — 2" in out
+    ok = code == 3 and got == expected and not gone_fresh and sorted(hot) == sorted(ids[:2]) and said_rest
+    return ok, (f"свежие сами больше порога: напечатано {names(got)} (ждали {names(expected)}: все несвежие, "
+                f"от старших) · свежих унесено: {gone_fresh or 'ни одной'} · в hot остались "
+                f"{sorted(names(hot))} (ждали [1, 2]) · сказано «остались только свежие записи — 2»: "
+                f"{'да' if said_rest else 'НЕТ'} · код {code} (ждали 3)")
+
+
+def case_4_16(T):
+    limit = volume_limit()
+    size = limit // 2
+    # свежесть записи без часа — по появлению в слое. №1 — с часом 60 дней назад; №2 и №3 без часа,
+    # появились 30 дней назад; №4 без часа, появилась сегодня — свежая. Уходят ровно две: №3, №2
+    seen = {2: f"{days_ago(30)} 12:00:00", 3: f"{days_ago(30)} 12:00:00", 4: f"{days_ago(0)} 00:00:00"}
+    recs = [rec(size, f"## Появление {n}", happened_at=days_ago(60) if n == 1 else None,
+                created_at=seen.get(n)) for n in range(1, 5)]
+    db = new_db("layered")
+    ids = plant(db, "state", recs)
+    code, out = call(T.t["records"], db, "--section", "state", "--сжать")
+    got = printed_moves(out)
+    names = lambda lst: [ids.index(i) + 1 for i in lst]
+    expected = [ids[2], ids[1]]
+    gone_new = ids[3] in got
+    counted = f"свежих с {days_ago(1)}: 1," in out
+    ok = code == 0 and got == expected and not gone_new and counted
+    return ok, (f"запись без часа, появившаяся сегодня: напечатано {names(got)} (ждали {names(expected)}) · "
+                f"№4 унесена: {'ДА' if gone_new else 'нет'} · в строке порядка ухода свежих 1: "
+                f"{'да' if counted else 'НЕТ'} · код {code}")
 
 
 def case_4_11(T):
@@ -722,6 +862,10 @@ CASES = [
     ("④-10", "РАЗЛ.", case_4_10, "порядок ухода"),
     ("④-11", "КОНТР.", case_4_11, "пересборка без правки текста"),
     ("④-12", "РАЗЛ.", case_4_12, "разделы без записей названы"),
+    ("④-13", "РАЗЛ.", case_4_13, "свежие записи не уходят, пока есть старше"),
+    ("④-14", "РАЗЛ.", case_4_14, "два раздела с противоположным направлением времени"),
+    ("④-15", "РАЗЛ.", case_4_15, "свежие сами больше порога — не уходят вовсе"),
+    ("④-16", "РАЗЛ.", case_4_16, "запись без часа, появившаяся сегодня, свежая"),
     ("⑥-1", "РАЗЛ.", case_6_1, "три слоя одним вызовом"),
     ("⑥-2", "РАЗЛ.", case_6_2, "ПРАВО и право"),
     ("⑥-3", "РАЗЛ.", case_6_3, "карточка #462"),
@@ -782,7 +926,11 @@ try:
     # (поломка → какой инструмент подменён; случай, который обязан не пройти; те, что обязаны пройти)
     PLAN = {"П1": ("②-1", ["③-1", "④-1", "⑥-1"]), "П2": ("③-1", ["②-1"]),
             "П3": ("⑥-1", ["②-1"]), "П4": ("④-1", ["⑥-1"]),
-            "П5": ("⑥-6", ["⑥-1", "②-1"])}
+            "П5": ("⑥-6", ["⑥-1", "②-1"]),
+            "П6": ("④-13", ["④-14", "④-10", "④-1"]),
+            "П7": ("④-14", ["④-13", "④-10", "④-1"]),
+            "П8": ("④-15", ["④-13", "④-16", "④-1"]),
+            "П9": ("④-16", ["④-15", "④-13", "④-1"])}
     for label, (tool_name, anchor, replacement) in BREAKS.items():
         src = next(p for p in TOOLS.values() if p.name == tool_name)
         bdir = STAND / f"broken-{label}"
@@ -865,11 +1013,13 @@ try:
         for f in failures:
             print(f"   · {f}")
     else:
-        print("✅ ВСЕ СЛУЧАИ ПРОШЛИ — сжатие пишет то, что печатает, поиск видит три слоя, защита "
-              "записи раздела держит, каждая поломка валит ровно свой случай.")
+        print("✅ ВСЕ СЛУЧАИ ПРОШЛИ — сжатие пишет то, что печатает, свежие записи не уносит, "
+              "поиск видит три слоя, защита записи раздела держит, каждая поломка валит ровно свой случай.")
     print("⛔ Чего приёмка НЕ доказывает: она не гонит инструменты на живой базе и на её объёме "
           "(порог и слои судятся на посаженных записях); не судит, КАКИЕ записи роль захочет унести "
-          "(порядок ухода проверен по номерам, а не по смыслу); не проверяет поиск на записях из слов "
+          "(порядок ухода проверен по номерам, а не по смыслу; час соседней записи на настоящей памяти "
+          "ролей, день появления записей, переживших пересборку, и границу «вчера» у полуночи UTC она "
+          "не судит — это прогон на копиях памяти, карточка #796, пункт ③); не проверяет поиск на записях из слов "
           "с «ё» и на словах, написанных иным корнем; причину переноса (--why) в базе не хранит и "
           "потому не проверяет.")
     sys.exit(mezo_stand.finish(1 if failures else 0))
