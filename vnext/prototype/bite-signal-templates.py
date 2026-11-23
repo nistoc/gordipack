@@ -112,9 +112,15 @@ def call_tool(tool: pathlib.Path, db: pathlib.Path, *args, extra_env=None):
     базы. Случаи ①–⑱ судят печатника в мире «хранилища нет» — ровно по прежнему правилу
     24 ч — и не зависят от того, какие сессии открыты на машине прогона. Случаи ⑲–㉕
     подают своё подложное хранилище через extra_env.
+
+    ⚖️ ТЕКУЩАЯ СЕССИЯ И КОПИЯ ПРИЛОЖЕНИЯ ВЫЗЫВАЮЩЕГО тоже глушатся (карточка #833, тем же доводом,
+    что mezo_stand.stand_env): по CLAUDE_CODE_HOST_SESSION_ID печатник сверяет, СВОЁ ли хранилище,
+    и подложное, где этой сессии нет, объявлял бы чужим — приёмка проходила бы только из терминала.
     """
     full_env = dict(os.environ)
     full_env.pop("MEZO_CONTAINER", None)
+    full_env.pop("CLAUDE_CODE_HOST_SESSION_ID", None)
+    full_env.pop("CLAUDE_CODE_EXECPATH", None)
     full_env["MEZO_SESSION_STORE"] = str(pathlib.Path(db).parent / "no-session-store")
     if extra_env:
         full_env.update(extra_env)

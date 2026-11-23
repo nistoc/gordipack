@@ -40,6 +40,9 @@
 #                до него было 0 50 0 и 11 поломок). С каталогом инструментов контура (так зовёт набор,
 #                --target live) раскладывает его копию деревом на стенде; набор на нём — «совпало». ⚠️ В этом
 #                режиме установленные инструменты памяти (vnext-tools) не испытываются: «совпало» о них молчит.
+#   карточка #833 . добавлена bite-session-store-choice.py (issue 34 пакета): своё ли хранилище сессий
+#                приложения читают проверка ролей, записка и запись адреса. «Было» 0 23 0 — 16 случаев,
+#                6 нарочных поломок и строка итога; подробности печатаются без знаков вердикта.
 bite-actor-role-hint.py                  Г1     own  0 30 0
 bite-addressee-dictionary.py             Г2     done  0 12 0
 bite-addressee-field.py                  Г1     done  0 10 0
@@ -108,6 +111,7 @@ bite-rules-from-pack.py                  Г1     done  0 113 0
 bite-save-actor.py                       Г1     done  0 6 0
 bite-save-alongside.py                   Г1     own   0 8 0
 bite-save-phoenix-dryrun-lease.py        Г1     done  0 7 0
+bite-session-store-choice.py             Г1     done  0 23 0
 bite-set-rule-revoke.py                  Г1     done  0 28 0
 bite-shown-count.py                      Г1     done  0 9 1
 bite-sleeping-addressee.py               Г1     done  0 11 0

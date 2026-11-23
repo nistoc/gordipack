@@ -690,6 +690,10 @@ def unreachable_addressees(conn, names_list, writer_role):
     store = mezo_sessions.read_store()
     if not store.found:
         return None, f"хранилища сессий приложения нет ({store.path})"
+    if store.foreign:
+        # Контрольное слово (issue 34 пакета, карточка #833): в прочитанном хранилище нет даже
+        # ТЕКУЩЕЙ сессии — «не найдена» у каждого адресата было бы ложью о живых чатах.
+        return None, mezo_sessions.foreign_words(store)
     try:
         recorded = dict(conn.execute(
             f"SELECT role, session_id FROM role_sessions WHERE role IN "
