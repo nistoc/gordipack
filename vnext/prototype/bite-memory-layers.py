@@ -23,7 +23,9 @@ r"""ПРИЁМКА СЛОЁВ ПАМЯТИ: сжатие по слоям, пои
 Какую копию испытываем: переменная MEZO_SCRIPTS_ROOT (каталог scripts дерева ИЛИ
 vnext/prototype того же дерева) — остальные каталоги выводятся от него. Либо каталог инструментов
 контура (.mezosync/scripts) — так зовёт общий прогон набора ядра; тогда инструменты памяти берутся
-из каталога самой приёмки (карточка #815). Не вышло — код 2 и название нужного каталога.
+из каталога самой приёмки (карточка #815). ⚠️ Следствие: установленные в контуре инструменты памяти
+(vnext-tools) в этом режиме НЕ испытываются, и строка набора об их редакции ничего не говорит.
+Не вышло — код 2 и название нужного каталога.
 
 Исходы: 0 — все случаи прошли · 1 — есть не прошедшие · 2 — не запустилась (нет стенда,
 не найден якорь поломки, инструмент не стартовал).
@@ -39,7 +41,8 @@ vnext/prototype того же дерева) — остальные катало�
   ⑥-1 … ⑥-6    поиск по трём слоям одним вызовом; ⑥-6 — запрос из трёх слов, которые вместе
                не встречаются (ступень частичного совпадения), с --layer warm
   ⑦-1          подставные базы: «без слоя» на деле без полей, указателя и записи журнала шага,
-               «со слоем» — со всеми (карточка #815)
+               «со слоем» — со всеми (карточка #815); и с «без слоя» снято ТОЛЬКО заведённое шагом —
+               сличением со схемой источника: журнал, объекты схемы и поля те же минус заведённое шагом
   ②-1, ②-2     запись раздела с устаревшей и со свежей ожидаемой версией
   ③-1, ③-2     файл старше последней записи раздела и свежий файл
 Поломки строит сама приёмка заменой текста в КОПИИ инструмента; якорь обязан найтись РОВНО
@@ -63,6 +66,12 @@ vnext/prototype того же дерева) — остальные катало�
      оставляет поле layer ............ не проходят ⑦-1, ④-8, ⑥-5 (все, кто судит на базе без слоя);
                                        проходят ④-1, ⑥-1. Это поломка САМОЙ приёмки, а не копии
                                        инструмента: база «без слоя» подменяется на время прогона
+  П12 построитель снимает записи
+     журнала ВСЕХ шагов .............. не проходит ⑦-1; проходят ④-8, ⑥-5, ④-1, ⑥-1
+  П13 построитель снимает лишний
+     указатель ....................... не проходит ⑦-1; проходят ④-1, ⑥-1
+  П14 построитель снимает лишнее поле  не проходит ⑦-1; проходят ④-1, ⑥-1
+     П12…П14 — тоже поломки самой приёмки, по одной на каждую часть сличения с источником
 
 Зовут так:
     MEZO_SCRIPTS_ROOT=<дерево>/scripts MEZO_LIVE_DB=<живая база, схема> \
@@ -270,6 +279,7 @@ def build_templates():
     mezo_stand.empty_db(live, plain)
     mezo_stand.seed_roles(plain, [ROLE])
     SOURCE.update(zip(("cols", "index", "journal"), layer_objects(plain, STEP)))
+    SOURCE["shape"] = schema_shape(plain)    # с чем случай ⑦-1 сличает базу «без слоя»
     try:
         strip_layer(plain, STEP)
     except sqlite3.Error as e:
@@ -317,6 +327,50 @@ def strip_layer(db, step, keep=()):
         if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'").fetchone():
             c.execute("DELETE FROM schema_migrations WHERE version=?", (step["VERSION"],))
         c.commit()
+
+
+def schema_shape(db):
+    """Вид схемы для сличения с источником: записи журнала шагов, объекты схемы (вид, имя), поля всех таблиц.
+
+    Множествами, а не списками: порядок полей после снятия и наведения шага может стать другим, а судим
+    мы состав — что снято и что осталось (замечание Н1 приёмки COORD по карточке #815).
+    """
+    with contextlib.closing(sqlite3.connect(str(db))) as c:
+        objects = set(c.execute("SELECT type, name FROM sqlite_master"))
+        fields = set()
+        for kind, name in objects:
+            if kind == "table":
+                fields |= {(name, r[1]) for r in c.execute(f'PRAGMA table_info("{name}")')}
+        journal = set()
+        if ("table", "schema_migrations") in objects:
+            journal = {r[0] for r in c.execute("SELECT version FROM schema_migrations")}
+    return {"journal": journal, "objects": objects, "fields": fields}
+
+
+def expected_plain():
+    """Какой обязана быть база «без слоя»: схема источника минус заведённое шагом — и ничего сверх того."""
+    src = SOURCE["shape"]
+    return {"journal": src["journal"] - {STEP["VERSION"]},
+            "objects": src["objects"] - {("index", STEP["INDEX"])},
+            "fields": src["fields"] - {(STEP["TABLE"], col) for col in STEP["COLUMNS"]}}
+
+
+SHAPE_PARTS = (("journal", "записей журнала", str),
+               ("objects", "объектов схемы", lambda x: f"{x[0]} {x[1]}"),
+               ("fields", "полей", lambda x: f"{x[0]}.{x[1]}"))
+
+
+def shape_diff(got, want):
+    """Расхождения базы с ожидаемым видом словами: что снято сверх шага и что осталось или прибавилось."""
+    out = []
+    for key, word, show in SHAPE_PARTS:
+        for items, verb in ((want[key] - got[key], "снято сверх шага"),
+                            (got[key] - want[key], "осталось или прибавилось")):
+            if items:
+                names = sorted(show(x) for x in items)
+                more = f" и ещё {len(names) - 3}" if len(names) > 3 else ""
+                out.append(f"{verb} {word} {len(names)}: {', '.join(names[:3])}{more}")
+    return out
 
 
 def source_said():
@@ -988,16 +1042,129 @@ def case_3_2(T):
 
 
 def case_7_1(T):
-    """Карточка #815, пункт ②: база «без слоя» на деле без слоя — ЗАПРОСОМ к её схеме, а не верой в построитель."""
-    p_cols, p_index, p_journal = layer_objects(new_db("plain"), STEP)
+    """Карточка #815, пункт ②: база «без слоя» на деле без слоя — ЗАПРОСОМ к её схеме, а не верой в построитель.
+
+    И снято ТОЛЬКО заведённое шагом: база сличается со схемой источника — журнал, объекты схемы и поля
+    те же, что у источника, минус заведённое шагом (замечание Н1 приёмки COORD: прежде случай не видел
+    построителя, снявшего записи журнала всех шагов, — её поломка К2 прошла с кодом 0).
+    """
+    plain = new_db("plain")
+    p_cols, p_index, p_journal = layer_objects(plain, STEP)
     l_cols, l_index, l_journal = layer_objects(new_db("layered"), STEP)
+    diff = shape_diff(schema_shape(plain), expected_plain())
     n = len(STEP["COLUMNS"])
-    ok = not p_cols and not p_index and not p_journal and tuple(l_cols) == STEP["COLUMNS"] and l_index and l_journal
+    ok = not p_cols and not p_index and not p_journal and tuple(l_cols) == STEP["COLUMNS"] and l_index and \
+        l_journal and not diff
     return ok, (f"база «без слоя»: полей шага {len(p_cols)} из {n} (ждали 0)"
                 f"{' — ' + ', '.join(p_cols) if p_cols else ''} · указатель {'ЕСТЬ' if p_index else 'нет'} · "
-                f"запись журнала шага {'ЕСТЬ' if p_journal else 'нет'} · база «со слоем»: полей {len(l_cols)} из {n}, "
+                f"запись журнала шага {'ЕСТЬ' if p_journal else 'нет'} · сличение с источником: "
+                f"{'; '.join(diff) if diff else 'снято ровно заведённое шагом, прочее как в источнике'} · "
+                f"база «со слоем»: полей {len(l_cols)} из {n}, "
                 f"указатель {'есть' if l_index else 'НЕТ'}, запись журнала {'есть' if l_journal else 'НЕТ'} · "
                 f"схема источника: {source_said()}")
+
+
+# ── поломки САМОЙ приёмки: построитель базы «без слоя» снимает не то (карточка #815) ─────────────
+# Каждая получает копию базы «со слоем» и возвращает (отработала ли, что сделала словами).
+def keep_field(db):
+    """П11: построитель оставляет первое поле шага (layer)."""
+    keep = STEP["COLUMNS"][0]
+    strip_layer(db, STEP, keep=(keep,))
+    kept = layer_objects(db, STEP)[0]
+    return kept == [keep], (f"поломанный построитель отработал: в базе «без слоя» осталось полей шага "
+                            f"{kept or 'НИ ОДНОГО'} (ждали ['{keep}'])")
+
+
+def over_strip_journal(db):
+    """П12: построитель снимает записи журнала ВСЕХ шагов, а не одного (поломка К2 приёмки COORD)."""
+    strip_layer(db, STEP)
+    with contextlib.closing(sqlite3.connect(str(db))) as c:
+        if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'").fetchone():
+            return False, "в базе нет журнала шагов — снять лишнее нечего"
+        n = c.execute("SELECT count(*) FROM schema_migrations").fetchone()[0]
+        c.execute("DELETE FROM schema_migrations")
+        c.commit()
+    return n > 0, f"поломанный построитель отработал: снято записей журнала других шагов {n} (ждали больше 0)"
+
+
+def over_strip_index(db):
+    """П13: построитель снимает сверх шага ещё один указатель (не уникальный: тот меняет поведение записи)."""
+    strip_layer(db, STEP)
+    with contextlib.closing(sqlite3.connect(str(db))) as c:
+        row = c.execute("SELECT name FROM sqlite_master WHERE type='index' AND sql IS NOT NULL "
+                        "AND sql NOT LIKE 'CREATE UNIQUE%' AND name<>? ORDER BY name LIMIT 1",
+                        (STEP["INDEX"],)).fetchone()
+        if row:
+            c.execute(f'DROP INDEX "{row[0]}"')
+            c.commit()
+    return row is not None, (f"поломанный построитель отработал: снят сверх шага указатель {row[0]}" if row
+                             else "в схеме нет указателя сверх шага — снять лишнее нечего")
+
+
+def over_strip_field(db):
+    """П14: построитель снимает сверх шага ещё одно поле таблицы шага."""
+    strip_layer(db, STEP)
+    dropped = None
+    with contextlib.closing(sqlite3.connect(str(db))) as c:
+        for r in reversed(c.execute(f'PRAGMA table_info("{STEP["TABLE"]}")').fetchall()):
+            if r[5]:
+                continue                  # поле первичного ключа SQLite снять не даст
+            try:
+                c.execute(f'ALTER TABLE "{STEP["TABLE"]}" DROP COLUMN "{r[1]}"')
+            except sqlite3.Error:
+                continue                  # поле держит указатель или триггер — берём следующее
+            dropped = r[1]
+            break
+        c.commit()
+    return dropped is not None, (f"поломанный построитель отработал: снято сверх шага поле "
+                                 f"{STEP['TABLE']}.{dropped}" if dropped
+                                 else f"у {STEP['TABLE']} нет поля, которое можно снять сверх шага")
+
+
+def builder_break(label, what, mutate, own_nums, other_nums):
+    """Прогон одной поломки построителя: база «без слоя» подменяется поломанной, судят здоровые инструменты.
+
+    Поломанная база строится из базы «со слоем»: там заведённое шагом есть всегда, каков бы ни был
+    источник схемы. С источника без слоя поломка была бы слепой — снимать нечего.
+    """
+    bdir = STAND / "templates" / f"broken-{label}"
+    bdir.mkdir(parents=True)
+    broken_plain = bdir / "mezosync.db"
+    shutil.copy2(TEMPLATES["layered"], broken_plain)
+    started, said0 = mutate(broken_plain)
+    check(f"{label}-0", started, said0, "КОНТР.")
+    real_plain = TEMPLATES["plain"]
+    TEMPLATES["plain"] = broken_plain
+    try:
+        own_res = [(n,) + safe(BY_NUM[n], healthy) for n in own_nums]
+        other_res = [(n,) + safe(BY_NUM[n], healthy) for n in other_nums]
+    finally:
+        TEMPLATES["plain"] = real_plain
+    for n, ok_n, said_n in own_res:
+        print(f"   · на поломке {label}: {n} {'ПРОШЁЛ' if ok_n else 'не прошёл'} — {said_n}")
+    for n, ok_n, said_n in other_res:
+        print(f"   · на поломке {label}: {n} {'прошёл' if ok_n else 'НЕ ПРОШЁЛ'} — {said_n}")
+    # случай, УПАВШИЙ исключением, своей проверкой не судил — под такой поломкой он слеп (норма
+    # приёмки карточки #832: упал ≠ не прошёл)
+    blind = [n for n, ok_n, said_n in own_res if not ok_n and said_n.startswith("случай упал")]
+    good = started and not any(r[1] for r in own_res) and not blind and all(r[1] for r in other_res)
+    check(label, good,
+          f"поломка построителя ({what}) валит РОВНО свои случаи: не прошли "
+          f"{', '.join(n for n, ok_n, _s in own_res if not ok_n) or 'никто'} (ждали {', '.join(own_nums)}) · "
+          f"из них упали, а не провалились своей проверкой: {', '.join(blind) or 'ни один'} · "
+          f"прошли {', '.join(n for n, ok_n, _s in other_res if ok_n) or 'никто'} (ждали {', '.join(other_nums)})",
+          "РАЗЛ.")
+    return good
+
+
+BUILDER_BREAKS = [
+    ("П11", "оставляет поле слоя", keep_field, ["⑦-1", "④-8", "⑥-5"], ["④-1", "⑥-1"]),
+    # ④-8 и ⑥-5 судят на базе без слоя: пока ни один инструмент не читает журнал других шагов, они
+    # обязаны пройти — начнут проваливаться здесь, значит, инструмент стал от журнала зависеть
+    ("П12", "снимает записи журнала всех шагов", over_strip_journal, ["⑦-1"], ["④-8", "⑥-5", "④-1", "⑥-1"]),
+    ("П13", "снимает лишний указатель", over_strip_index, ["⑦-1"], ["④-1", "⑥-1"]),
+    ("П14", "снимает лишнее поле", over_strip_field, ["⑦-1"], ["④-1", "⑥-1"]),
+]
 
 
 CASES = [
@@ -1152,43 +1319,11 @@ try:
               f" (ждали {', '.join(others)})", "РАЗЛ.")
         breaks_ok += 1 if good else 0
 
-    # ── П11: поломка САМОЙ приёмки — построитель базы «без слоя» оставляет поле layer (карточка #815, ③).
-    # Строится из базы «со слоем»: там поле есть всегда, каков бы ни был источник схемы. С источника
-    # без слоя поломка была бы слепой — снимать нечего, значит, и оставлять нечего.
-    keep = STEP["COLUMNS"][0]
-    bdir = STAND / "templates" / "broken-П11"
-    bdir.mkdir(parents=True)
-    broken_plain = bdir / "mezosync.db"
-    shutil.copy2(TEMPLATES["layered"], broken_plain)
-    strip_layer(broken_plain, STEP, keep=(keep,))
-    kept = layer_objects(broken_plain, STEP)[0]
-    started = kept == [keep]
-    check("П11-0", started, f"поломанный построитель отработал: в базе «без слоя» осталось полей шага "
-                            f"{kept or 'НИ ОДНОГО'} (ждали ['{keep}'])", "КОНТР.")
-    own11, others11 = ["⑦-1", "④-8", "⑥-5"], ["④-1", "⑥-1"]
-    real_plain = TEMPLATES["plain"]
-    TEMPLATES["plain"] = broken_plain
-    try:
-        own_res = [(n,) + safe(BY_NUM[n], healthy) for n in own11]
-        other_res = [(n,) + safe(BY_NUM[n], healthy) for n in others11]
-    finally:
-        TEMPLATES["plain"] = real_plain
-    for n, ok_n, said_n in own_res:
-        print(f"   · на поломке П11: {n} {'ПРОШЁЛ' if ok_n else 'не прошёл'} — {said_n}")
-    for n, ok_n, said_n in other_res:
-        print(f"   · на поломке П11: {n} {'прошёл' if ok_n else 'НЕ ПРОШЁЛ'} — {said_n}")
-    # случай, УПАВШИЙ исключением, своей проверкой не судил — под такой поломкой он слеп (норма
-    # приёмки карточки #832: упал ≠ не прошёл)
-    blind = [n for n, ok_n, said_n in own_res if not ok_n and said_n.startswith("случай упал")]
-    good = started and not any(r[1] for r in own_res) and not blind and all(r[1] for r in other_res)
-    check("П11", good,
-          f"поломка построителя валит РОВНО случаи на базе без слоя: не прошли "
-          f"{', '.join(n for n, ok_n, _s in own_res if not ok_n) or 'никто'} (ждали {', '.join(own11)}) · "
-          f"из них упали, а не провалились своей проверкой: {', '.join(blind) or 'ни один'} · "
-          f"прошли {', '.join(n for n, ok_n, _s in other_res if ok_n) or 'никто'} (ждали {', '.join(others11)})",
-          "РАЗЛ.")
-    breaks_ok += 1 if good else 0
-    breaks_n = len(BREAKS) + 1
+    # ── П11…П14: поломки САМОЙ приёмки — построитель базы «без слоя» снимает не то (карточка #815, ③;
+    # П12…П14 — замечание Н1 приёмки COORD: снято ли ТОЛЬКО заведённое шагом, по трём частям сличения)
+    for _break in BUILDER_BREAKS:
+        breaks_ok += 1 if builder_break(*_break) else 0
+    breaks_n = len(BREAKS) + len(BUILDER_BREAKS)
 
     def part(prefix):
         nums = [c[0] for c in CASES if c[0].startswith(prefix)]
@@ -1217,6 +1352,10 @@ try:
           "не судит — это прогон на копиях памяти, карточка #796, пункт ③); не проверяет поиск на записях из слов "
           "с «ё» и на словах, написанных иным корнем; причину переноса (--why) в базе не хранит и "
           "потому не проверяет.")
+    if CONTOUR:
+        print(f"⚠️ Установленные в контуре инструменты памяти (vnext-tools) эта приёмка НЕ испытывает: "
+              f"в этом режиме они берутся из каталога приёмки {HERE.as_posix()}. Её итог говорит о них "
+              f"ровно столько, сколько о любом другом каталоге, — то есть ничего (замечание Н2 приёмки COORD).")
     sys.exit(mezo_stand.finish(1 if failures else 0))
 finally:
     mezo_stand.release(STAND)
