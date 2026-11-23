@@ -70,7 +70,7 @@ python .mezosync/scripts/rules-from-pack.py --summary --source <ws>/pack
 python pack/vnext/prototype/bite-fresh-circuit.py           # приёмка сборки с нуля, ≈40 с
 python pack/vnext/prototype/bite-core-fixture.py            # «ИТОГ: 16/16», ≈7 с
 python pack/vnext/prototype/bite-db-q.py                    # одна приёмка
-python pack/vnext/prototype/bite-all.py --set core          # 64 приёмки против «было» из core-bites.txt; ≈5 мин до этапа Э3 + ≈17 мин новой bite-guard-verify-line.py
+python pack/vnext/prototype/bite-all.py --set core          # 78 приёмок против «было» из core-bites.txt; ≈5 мин до этапа Э3 + ≈17 мин bite-guard-verify-line.py + ≈1,5 мин 14 приёмок выпуска 23.11
 ```
 
 Node:
