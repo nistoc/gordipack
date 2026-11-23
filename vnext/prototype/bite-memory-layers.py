@@ -9,15 +9,21 @@ r"""ПРИЁМКА СЛОЁВ ПАМЯТИ: сжатие по слоям, пои
 Приёмка судит ИХ ЖЕ запуском на подставной базе, а не чтением кода.
 
 ⛔ ЖИВОЙ БАЗЫ НЕ КАСАЕТСЯ. Подставная база — схема живого контура БЕЗ его строк
-(mezo_stand.empty_db), роль посажена seed_roles. Первая база — «со слоем»: на неё наводится шаг
-схемы запуском файла шага из ИСПЫТУЕМОГО дерева. Вторая — «без слоя»: шаг не наведён
-(так выглядит живая база, пока шаг на неё не наведён). С живой базы берётся только схема
-(переменная MEZO_LIVE_DB, на чтение). Каждый вызов инструмента идёт через ОДИН помощник,
-который ПАДАЕТ, если путь --db лежит вне стенда.
+(mezo_stand.empty_db), роль посажена seed_roles. С живой базы берётся только схема
+(переменная MEZO_LIVE_DB, на чтение), и годится ЛЮБАЯ — до шага слоя и после него (карточка #815):
+  · база «без слоя» — с этой схемы приёмка СНИМАЕТ то, что заводит шаг слоя: поля, указатель
+    и запись журнала шага. Перечень снимаемого берётся из САМОГО файла шага (имена VERSION, TABLE,
+    COLUMNS, INDEX — разбором текста, без запуска), а не впечатан сюда. Так выглядит база, на
+    которую шаг ещё не наведён. Что снялось на деле — судит случай ⑦-1 запросом к схеме;
+  · база «со слоем» — на базу «без слоя» наводится шаг запуском файла шага из ИСПЫТУЕМОГО дерева.
+До 23.11 приёмка требовала схему до шага и на живой базе со слоем отвечала кодом 2 — с 17.11
+(шаг применён к живой базе) она там не запускалась вовсе.
+Каждый вызов инструмента идёт через ОДИН помощник, который ПАДАЕТ, если путь --db лежит вне стенда.
 
 Какую копию испытываем: переменная MEZO_SCRIPTS_ROOT (каталог scripts дерева ИЛИ
-vnext/prototype того же дерева) — остальные каталоги выводятся от него. Не вышло — код 2
-и название нужного каталога.
+vnext/prototype того же дерева) — остальные каталоги выводятся от него. Либо каталог инструментов
+контура (.mezosync/scripts) — так зовёт общий прогон набора ядра; тогда инструменты памяти берутся
+из каталога самой приёмки (карточка #815). Не вышло — код 2 и название нужного каталога.
 
 Исходы: 0 — все случаи прошли · 1 — есть не прошедшие · 2 — не запустилась (нет стенда,
 не найден якорь поломки, инструмент не стартовал).
@@ -32,6 +38,8 @@ vnext/prototype того же дерева) — остальные катало�
                и вчера, свежие
   ⑥-1 … ⑥-6    поиск по трём слоям одним вызовом; ⑥-6 — запрос из трёх слов, которые вместе
                не встречаются (ступень частичного совпадения), с --layer warm
+  ⑦-1          подставные базы: «без слоя» на деле без полей, указателя и записи журнала шага,
+               «со слоем» — со всеми (карточка #815)
   ②-1, ②-2     запись раздела с устаревшей и со свежей ожидаемой версией
   ③-1, ③-2     файл старше последней записи раздела и свежий файл
 Поломки строит сама приёмка заменой текста в КОПИИ инструмента; якорь обязан найтись РОВНО
@@ -51,6 +59,10 @@ vnext/prototype того же дерева) — остальные катало�
      появлению не судится ............ не проходит ④-16; проходят ④-15, ④-13, ④-1
   П10 запись без часа свежая, только
      если появилась сегодня .......... не проходит ④-16; проходят ④-15, ④-13, ④-1
+  П11 построитель базы «без слоя»
+     оставляет поле layer ............ не проходят ⑦-1, ④-8, ⑥-5 (все, кто судит на базе без слоя);
+                                       проходят ④-1, ⑥-1. Это поломка САМОЙ приёмки, а не копии
+                                       инструмента: база «без слоя» подменяется на время прогона
 
 Зовут так:
     MEZO_SCRIPTS_ROOT=<дерево>/scripts MEZO_LIVE_DB=<живая база, схема> \
@@ -59,6 +71,7 @@ vnext/prototype того же дерева) — остальные катало�
 MEZO_CONTAINER нужна, когда дерево лежит вне контура (клон): без неё инструменты отвечают
 «контейнер группы НЕ НАЙДЕН», и приёмка честно кончается кодом 2.
 """
+import ast
 import contextlib
 import hashlib
 import itertools
@@ -125,36 +138,101 @@ BREAKS = {
 print(f"⚖️ испытуется: {mezo_target.label()}")
 
 
-def locate_tree():
-    """Корень дерева: в нём лежат и scripts/save-phoenix.py, и vnext/prototype/memory-records.py."""
+HERE = Path(__file__).resolve().parent
+
+
+def locate_halves():
+    """Две половины испытуемого: каталог scripts (save-phoenix.py, find-phoenix.py, шаг слоя) и каталог
+    инструментов памяти (memory-records.py, memory-archive.py, guard-phoenix-volume.py).
+      · дерево пакета — MEZO_SCRIPTS_ROOT указывает на его scripts или vnext/prototype: обе половины
+        из ОДНОГО дерева;
+      · каталог инструментов контура — так приёмки зовёт общий прогон набора ядра (bite-all.py
+        --set core, по умолчанию --target live): MEZO_SCRIPTS_ROOT = <контур>/.mezosync/scripts, рядом
+        с ним vnext/prototype нет. Тогда инструменты памяти берутся из каталога САМОЙ приёмки — как
+        у соседних приёмок набора (bite-memory-records.py). До карточки #815 приёмка здесь отвечала
+        кодом 2, и общий прогон показал бы её «не запустилась»."""
     root = mezo_target.scripts_root()
     for base in (root, root.parent, root.parent.parent):
         if (base / "scripts" / "save-phoenix.py").is_file() and \
                 (base / "vnext" / "prototype" / "memory-records.py").is_file():
-            return base
-    print(f"⛔ НЕ ЗАПУСТИЛАСЬ: от MEZO_SCRIPTS_ROOT={root.as_posix()} не нашлось дерево пакета.")
-    print("   Нужен каталог scripts либо vnext/prototype дерева, где рядом лежат обе половины:")
-    print("   scripts/save-phoenix.py и vnext/prototype/memory-records.py.")
+            return base / "scripts", base / "vnext" / "prototype", f"дерево пакета {base.as_posix()}", False
+    if (root / "save-phoenix.py").is_file() and (HERE / "memory-records.py").is_file():
+        return root, HERE, (f"каталог инструментов {root.as_posix()} · инструменты памяти — "
+                            f"из каталога приёмки {HERE.as_posix()}"), True
+    print(f"⛔ НЕ ЗАПУСТИЛАСЬ: от MEZO_SCRIPTS_ROOT={root.as_posix()} не нашлось ни дерева пакета, ни каталога")
+    print("   инструментов. Нужен каталог scripts либо vnext/prototype дерева, где рядом лежат")
+    print("   scripts/save-phoenix.py и vnext/prototype/memory-records.py, либо каталог, где лежит")
+    print("   save-phoenix.py, а memory-records.py — рядом с этой приёмкой.")
     print("   Это НЕ «сломано» и НЕ «в порядке»: испытывать нечего.")
     sys.exit(mezo_stand.finish(2))
 
 
-TREE = locate_tree()
-TOOLS = {
-    "save": TREE / "scripts" / "save-phoenix.py",
-    "find": TREE / "scripts" / "find-phoenix.py",
-    "records": TREE / "vnext" / "prototype" / "memory-records.py",
-}
-MIGRATION = TREE / "scripts" / "migrations" / LAYER_STEP
-GUARD = TREE / "vnext" / "prototype" / "guard-phoenix-volume.py"
+SCRIPTS, MEMORY_TOOLS, HALVES, CONTOUR = locate_halves()
+print(f"   половины испытуемого: {HALVES}")
+
+
+def tool_paths(scripts, memory_tools):
+    """(инструменты, файл шага слоя, проверка объёма) — от двух половин испытуемого."""
+    tools = {
+        "save": scripts / "save-phoenix.py",
+        "find": scripts / "find-phoenix.py",
+        "records": memory_tools / "memory-records.py",
+    }
+    return tools, scripts / "migrations" / LAYER_STEP, memory_tools / "guard-phoenix-volume.py"
+
+
+TOOLS, MIGRATION, GUARD = tool_paths(SCRIPTS, MEMORY_TOOLS)
 for _p in list(TOOLS.values()) + [MIGRATION, GUARD]:
     if not _p.is_file():
         print(f"⛔ НЕ ЗАПУСТИЛАСЬ: в дереве нет {_p.as_posix()} — испытывать нечего.")
         sys.exit(mezo_stand.finish(2))
 
+
+def step_declaration(path):
+    """Что заводит шаг слоя — из САМОГО файла шага: имена VERSION, TABLE, COLUMNS, INDEX, разбором текста.
+
+    Шаг не запускается. Перечень снимаемого не впечатан в приёмку (карточка #815): поменяет шаг свои
+    поля — база «без слоя» снимет ровно то, что он заводит теперь.
+    """
+    names = {"VERSION", "TABLE", "COLUMNS", "INDEX"}
+    found = {}
+    for node in ast.parse(Path(path).read_text(encoding="utf-8")).body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and \
+                isinstance(node.targets[0], ast.Name) and node.targets[0].id in names:
+            try:
+                found[node.targets[0].id] = ast.literal_eval(node.value)
+            except ValueError:
+                pass
+    missing = sorted(names - set(found))
+    if missing:
+        print(f"⛔ НЕ ЗАПУСТИЛАСЬ: в файле шага {Path(path).name} не нашлись имена {', '.join(missing)} — "
+              "что снимать с базы «без слоя», узнать неоткуда.")
+        sys.exit(mezo_stand.finish(2))
+    found["COLUMNS"] = tuple(found["COLUMNS"])
+    return found
+
+
+STEP = step_declaration(MIGRATION)
+SOURCE = {}    # что из заведённого шагом было в схеме источника (MEZO_LIVE_DB) — для печати
+
 STAND = mezo_stand.new("bite-memory-layers")
 STAND_REAL = STAND.resolve()
 COUNTER = itertools.count(1)
+
+if CONTOUR:
+    # Каталог инструментов контура испытывается КОПИЕЙ, разложенной на стенде деревом пакета.
+    # Почему не на месте: приёмка зовёт инструменты со средой стенда, и корнем контура у них
+    # становится стенд. find-phoenix.py ищет memory-archive.py от этого корня (vnext-tools), рядом
+    # с собой или в соседнем vnext/prototype — на месте не находил ни там, ни там и падал на загрузке:
+    # замер 23.11 ≈19:00 UTC, общий прогон набора ядра — все шесть случаев ⑥ с кодом 1.
+    # В дереве на стенде инструменты памяти лежат в соседнем vnext/prototype — как в клоне пакета.
+    _tree = STAND / "tree"
+    shutil.copytree(SCRIPTS, _tree / "scripts", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    for _name in ("memory-records.py", "memory-archive.py", "guard-phoenix-volume.py"):
+        mezo_stand.copy_tool(MEMORY_TOOLS / _name, _tree / "vnext" / "prototype")
+    SCRIPTS, MEMORY_TOOLS = _tree / "scripts", _tree / "vnext" / "prototype"
+    TOOLS, MIGRATION, GUARD = tool_paths(SCRIPTS, MEMORY_TOOLS)
+    print("   стенд: каталог инструментов скопирован на стенд деревом пакета, рядом — инструменты памяти")
 
 
 def call(tool, db, *args, role=ROLE, hand=ROLE, timeout=180):
@@ -191,22 +269,67 @@ def build_templates():
     plain = tdir / "plain" / "mezosync.db"
     mezo_stand.empty_db(live, plain)
     mezo_stand.seed_roles(plain, [ROLE])
-    with contextlib.closing(sqlite3.connect(str(plain))) as c:
-        cols = {r[1] for r in c.execute("PRAGMA table_info(phoenix_records)")}
-    if "layer" in cols:
-        print("⛔ НЕ ЗАПУСТИЛАСЬ: в схеме, взятой с MEZO_LIVE_DB, поле слоя УЖЕ есть — база «без слоя»"
-              " не получается. Назови другую MEZO_LIVE_DB (схема до шага слоя).")
+    SOURCE.update(zip(("cols", "index", "journal"), layer_objects(plain, STEP)))
+    try:
+        strip_layer(plain, STEP)
+    except sqlite3.Error as e:
+        print(f"⛔ НЕ ЗАПУСТИЛАСЬ: снять поля шага слоя со схемы источника не вышло: {e}")
         sys.exit(mezo_stand.finish(2))
+    # чистоту базы «без слоя» здесь НЕ проверяем: её судит случай ⑦-1 — иначе поломка П11
+    # построителя упиралась бы в отказ, а не в случаи, и обратный ход ничего бы не доказал
     layered = tdir / "layered" / "mezosync.db"
     layered.parent.mkdir(parents=True)
     shutil.copy2(plain, layered)
     code, out = run_plain(MIGRATION, "--db", layered)
-    with contextlib.closing(sqlite3.connect(str(layered))) as c:
-        cols = {r[1] for r in c.execute("PRAGMA table_info(phoenix_records)")}
-    if code != 0 or not {"layer", "layer_moved_at", "layer_moved_by"} <= cols:
+    cols, index, _journal = layer_objects(layered, STEP)
+    if code != 0 or tuple(cols) != STEP["COLUMNS"] or not index:
         print(f"⛔ НЕ ЗАПУСТИЛАСЬ: шаг схемы слоя на подставной базе не навёлся (код {code}):\n{out}")
         sys.exit(mezo_stand.finish(2))
     return {"plain": plain, "layered": layered}
+
+
+def layer_objects(db, step):
+    """Что из заведённого шагом есть в базе — ЗАПРОСОМ к её схеме: (поля, указатель есть, запись журнала есть)."""
+    with contextlib.closing(sqlite3.connect(str(db))) as c:
+        have = {r[1] for r in c.execute(f"PRAGMA table_info({step['TABLE']})")}
+        cols = [x for x in step["COLUMNS"] if x in have]
+        index = c.execute("SELECT 1 FROM sqlite_master WHERE type='index' AND name=?",
+                          (step["INDEX"],)).fetchone() is not None
+        journal = False
+        if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'").fetchone():
+            journal = c.execute("SELECT 1 FROM schema_migrations WHERE version=?",
+                                (step["VERSION"],)).fetchone() is not None
+    return cols, index, journal
+
+
+def strip_layer(db, step, keep=()):
+    """Снять с базы заведённое шагом слоя: указатель, поля (в обратном порядке), запись журнала шага.
+
+    Чего нет — того и не снимает: на схеме до шага это ничего не меняет. keep — поля, которые
+    НЕ снимать; нужен только нарочной поломке П11 построителя.
+    """
+    with contextlib.closing(sqlite3.connect(str(db))) as c:
+        c.execute(f"DROP INDEX IF EXISTS {step['INDEX']}")
+        have = {r[1] for r in c.execute(f"PRAGMA table_info({step['TABLE']})")}
+        for col in reversed(step["COLUMNS"]):
+            if col in have and col not in keep:
+                c.execute(f"ALTER TABLE {step['TABLE']} DROP COLUMN {col}")
+        if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'").fetchone():
+            c.execute("DELETE FROM schema_migrations WHERE version=?", (step["VERSION"],))
+        c.commit()
+
+
+def source_said():
+    """Схема источника словами: было ли в ней заведённое шагом слоя."""
+    cols, index, journal = SOURCE.get("cols") or [], SOURCE.get("index"), SOURCE.get("journal")
+    if not (cols or index or journal):
+        return "без слоя — снимать было нечего"
+    if not (cols or index):
+        # так выглядит копия, с которой поля сняли рукой, а журнал оставили (команда раздела 4
+        # документа выпуска карточки #796 делала именно так): журнал называет шаг применённым
+        return "полей и указателя слоя нет, но журнал называет шаг применённым — запись журнала снята приёмкой"
+    return (f"со слоем — снято приёмкой: полей {len(cols)} из {len(STEP['COLUMNS'])}, "
+            f"указатель {'да' if index else 'его не было'}, запись журнала шага {'да' if journal else 'её не было'}")
 
 
 def new_db(kind):
@@ -240,7 +363,11 @@ def plant(db, section, recs):
     """Посадить раздел и его записи. Вернуть номера записей по порядку."""
     ids = []
     with contextlib.closing(sqlite3.connect(str(db))) as c:
-        has_layer = any(r[1] == "layer" for r in c.execute("PRAGMA table_info(phoenix_records)"))
+        # поля слоя сажаются ПО ОДНОМУ, какие есть: на базе с частью полей (поломка П11 построителя)
+        # посадка не падает, и случай судит ответ инструмента, а не своё падение
+        have = {r[1] for r in c.execute("PRAGMA table_info(phoenix_records)")}
+        layer_fields = [(col, key) for col, key in (("layer", "layer"), ("layer_moved_at", "moved_at"),
+                                                    ("layer_moved_by", "moved_by")) if col in have]
         whole = "".join(r["body"] for r in recs)
         c.execute("DELETE FROM phoenix WHERE role=? AND section=?", (ROLE, section))
         c.execute("INSERT INTO phoenix (role, section, body) VALUES (?,?,?)", (ROLE, section, whole))
@@ -250,9 +377,9 @@ def plant(db, section, recs):
             vals = [ROLE, section, r["subject"], r["body"], len(r["body"]), r["happened_at"],
                     r["alive"], n, len(whole), "стенд приёмки",
                     r["created_at"] or f"{days_ago(400)} 00:00:00"]
-            if has_layer:
-                cols += ["layer", "layer_moved_at", "layer_moved_by"]
-                vals += [r["layer"], r["moved_at"], r["moved_by"]]
+            for col, key in layer_fields:
+                cols.append(col)
+                vals.append(r[key])
             cur = c.execute(f"INSERT INTO phoenix_records ({', '.join(cols)}) "
                             f"VALUES ({', '.join('?' * len(cols))})", vals)
             ids.append(cur.lastrowid)
@@ -860,6 +987,19 @@ def case_3_2(T):
                 f"{'да' if wrote else 'НЕТ'}")
 
 
+def case_7_1(T):
+    """Карточка #815, пункт ②: база «без слоя» на деле без слоя — ЗАПРОСОМ к её схеме, а не верой в построитель."""
+    p_cols, p_index, p_journal = layer_objects(new_db("plain"), STEP)
+    l_cols, l_index, l_journal = layer_objects(new_db("layered"), STEP)
+    n = len(STEP["COLUMNS"])
+    ok = not p_cols and not p_index and not p_journal and tuple(l_cols) == STEP["COLUMNS"] and l_index and l_journal
+    return ok, (f"база «без слоя»: полей шага {len(p_cols)} из {n} (ждали 0)"
+                f"{' — ' + ', '.join(p_cols) if p_cols else ''} · указатель {'ЕСТЬ' if p_index else 'нет'} · "
+                f"запись журнала шага {'ЕСТЬ' if p_journal else 'нет'} · база «со слоем»: полей {len(l_cols)} из {n}, "
+                f"указатель {'есть' if l_index else 'НЕТ'}, запись журнала {'есть' if l_journal else 'НЕТ'} · "
+                f"схема источника: {source_said()}")
+
+
 CASES = [
     ("④-1", "РАЗЛ.", case_4_1, "раздел выше порога → сжатие: печать и база сходятся"),
     ("④-2", "РАЗЛ.", case_4_2, "раздел ниже порога → уносить нечего"),
@@ -876,7 +1016,7 @@ CASES = [
     ("④-13", "РАЗЛ.", case_4_13, "свежие записи не уходят, пока есть старше"),
     ("④-14", "РАЗЛ.", case_4_14, "два раздела с противоположным направлением времени"),
     ("④-15", "РАЗЛ.", case_4_15, "свежие сами больше порога — не уходят вовсе"),
-    ("④-16", "РАЗЛ.", case_4_16, "запись без часа, появившаяся сегодня, свежая"),
+    ("④-16", "РАЗЛ.", case_4_16, "записи без часа, появившиеся сегодня и вчера, свежие"),
     ("⑥-1", "РАЗЛ.", case_6_1, "три слоя одним вызовом"),
     ("⑥-2", "РАЗЛ.", case_6_2, "ПРАВО и право"),
     ("⑥-3", "РАЗЛ.", case_6_3, "карточка #462"),
@@ -887,6 +1027,7 @@ CASES = [
     ("②-2", "РАЗЛ.", case_2_2, "свежая ожидаемая версия"),
     ("③-1", "РАЗЛ.", case_3_1, "файл старше записи раздела"),
     ("③-2", "РАЗЛ.", case_3_2, "свежий файл"),
+    ("⑦-1", "РАЗЛ.", case_7_1, "база «без слоя» на деле без слоя — запросом к схеме"),
 ]
 BY_NUM = {c[0]: c[2] for c in CASES}
 
@@ -915,6 +1056,7 @@ try:
     TEMPLATES = build_templates()
     print(f"   стенд: подставные базы «со слоем» и «без слоя» готовы; шаг схемы наведён файлом "
           f"{MIGRATION.name} из испытуемого дерева")
+    print(f"   схема источника (MEZO_LIVE_DB): {source_said()}")
 
     # предварительно: инструменты стартуют
     for key, tool in TOOLS.items():
@@ -949,10 +1091,10 @@ try:
         copy = mezo_stand.copy_tool(src, bdir)
         # соседи, подключаемые по пути файла, а не по имени, копируются отдельно
         if tool_name == "find-phoenix.py":
-            mezo_stand.copy_tool(TREE / "scripts" / "read-phoenix.py", bdir)
-            mezo_stand.copy_tool(TREE / "vnext" / "prototype" / "memory-archive.py", bdir)
+            mezo_stand.copy_tool(SCRIPTS / "read-phoenix.py", bdir)
+            mezo_stand.copy_tool(MEMORY_TOOLS / "memory-archive.py", bdir)
         if tool_name == "memory-records.py":
-            mezo_stand.copy_tool(TREE / "vnext" / "prototype" / "memory-archive.py", bdir)
+            mezo_stand.copy_tool(MEMORY_TOOLS / "memory-archive.py", bdir)
             mezo_stand.copy_tool(GUARD, bdir)
         text = copy.read_text(encoding="utf-8")
         hits = text.count(anchor)
@@ -1010,23 +1152,64 @@ try:
               f" (ждали {', '.join(others)})", "РАЗЛ.")
         breaks_ok += 1 if good else 0
 
+    # ── П11: поломка САМОЙ приёмки — построитель базы «без слоя» оставляет поле layer (карточка #815, ③).
+    # Строится из базы «со слоем»: там поле есть всегда, каков бы ни был источник схемы. С источника
+    # без слоя поломка была бы слепой — снимать нечего, значит, и оставлять нечего.
+    keep = STEP["COLUMNS"][0]
+    bdir = STAND / "templates" / "broken-П11"
+    bdir.mkdir(parents=True)
+    broken_plain = bdir / "mezosync.db"
+    shutil.copy2(TEMPLATES["layered"], broken_plain)
+    strip_layer(broken_plain, STEP, keep=(keep,))
+    kept = layer_objects(broken_plain, STEP)[0]
+    started = kept == [keep]
+    check("П11-0", started, f"поломанный построитель отработал: в базе «без слоя» осталось полей шага "
+                            f"{kept or 'НИ ОДНОГО'} (ждали ['{keep}'])", "КОНТР.")
+    own11, others11 = ["⑦-1", "④-8", "⑥-5"], ["④-1", "⑥-1"]
+    real_plain = TEMPLATES["plain"]
+    TEMPLATES["plain"] = broken_plain
+    try:
+        own_res = [(n,) + safe(BY_NUM[n], healthy) for n in own11]
+        other_res = [(n,) + safe(BY_NUM[n], healthy) for n in others11]
+    finally:
+        TEMPLATES["plain"] = real_plain
+    for n, ok_n, said_n in own_res:
+        print(f"   · на поломке П11: {n} {'ПРОШЁЛ' if ok_n else 'не прошёл'} — {said_n}")
+    for n, ok_n, said_n in other_res:
+        print(f"   · на поломке П11: {n} {'прошёл' if ok_n else 'НЕ ПРОШЁЛ'} — {said_n}")
+    # случай, УПАВШИЙ исключением, своей проверкой не судил — под такой поломкой он слеп (норма
+    # приёмки карточки #832: упал ≠ не прошёл)
+    blind = [n for n, ok_n, said_n in own_res if not ok_n and said_n.startswith("случай упал")]
+    good = started and not any(r[1] for r in own_res) and not blind and all(r[1] for r in other_res)
+    check("П11", good,
+          f"поломка построителя валит РОВНО случаи на базе без слоя: не прошли "
+          f"{', '.join(n for n, ok_n, _s in own_res if not ok_n) or 'никто'} (ждали {', '.join(own11)}) · "
+          f"из них упали, а не провалились своей проверкой: {', '.join(blind) or 'ни один'} · "
+          f"прошли {', '.join(n for n, ok_n, _s in other_res if ok_n) or 'никто'} (ждали {', '.join(others11)})",
+          "РАЗЛ.")
+    breaks_ok += 1 if good else 0
+    breaks_n = len(BREAKS) + 1
+
     def part(prefix):
         nums = [c[0] for c in CASES if c[0].startswith(prefix)]
         return sum(1 for n in nums if results.get(n)), len(nums)
 
     a, an = part("④")
     b, bn = part("⑥")
+    s, sn = part("⑦")
     k_nums = [c[0] for c in CASES if c[0][0] in "②③"]
     k = sum(1 for n in k_nums if results.get(n))
     print()
-    print(f"ИТОГ: ④ {a} из {an} · ⑥ {b} из {bn} · ② ③ {k} из {len(k_nums)} · поломки {breaks_ok} из {len(BREAKS)}")
+    print(f"ИТОГ: ④ {a} из {an} · ⑥ {b} из {bn} · ⑦ {s} из {sn} · ② ③ {k} из {len(k_nums)} · "
+          f"поломки {breaks_ok} из {breaks_n}")
     if failures:
         print(f"🔴 ПРОВАЛИЛОСЬ случаев: {len(failures)}")
         for f in failures:
             print(f"   · {f}")
     else:
         print("✅ ВСЕ СЛУЧАИ ПРОШЛИ — сжатие пишет то, что печатает, свежие записи не уносит, "
-              "поиск видит три слоя, защита записи раздела держит, каждая поломка валит ровно свой случай.")
+              "поиск видит три слоя, защита записи раздела держит, база «без слоя» на деле без слоя, "
+              "каждая поломка валит ровно свой случай.")
     print("⛔ Чего приёмка НЕ доказывает: она не гонит инструменты на живой базе и на её объёме "
           "(порог и слои судятся на посаженных записях); не судит, КАКИЕ записи роль захочет унести "
           "(порядок ухода проверен по номерам, а не по смыслу; час соседней записи на настоящей памяти "
