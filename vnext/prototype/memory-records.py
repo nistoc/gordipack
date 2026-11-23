@@ -29,6 +29,30 @@ guard-phoenix-volume.py (то же число, что судит объём ра
 Сжатие трогает ТОЛЬКО слой hot: warm и permanent остаются как есть, а текст записей и
 сплошной текст раздела не меняются ни на знак — меняется лишь поле слоя.
 
+ПОРЯДОК УХОДА ПРИ СЖАТИИ (карточка #796). Прежний порядок карточки #781 уносил любую запись с часом
+раньше любой записи без часа и при равенстве брал нижнюю — у разделов, где свежее внизу, это значило
+унести самое новое. Теперь:
+    ① снятые с хода;
+    ② все прочие, кроме свежих, — от старших к младшим. Старшинство записи с часом — её час; записи
+       без часа — час ближайшей по месту записи с часом (две на равном расстоянии — берётся свежая:
+       ошибка в эту сторону задерживает уход, а не ускоряет его). При равном часе первой уходит та,
+       что дальше от свежего края раздела;
+    ③ свежие записи сжатие не уносит вовсе. Свежая — запись с часом за последние сутки, а запись
+       без часа — появившаяся в слое записей за последние сутки (поле created_at: запись, бывшая
+       в слое раньше, моложе этого быть не может). Час у записи — дата без времени дня, поэтому
+       сутки считаются по дате UTC: сегодня и вчера. Без свежих порог не достигнут — код 3 и
+       строка «в слое остались только свежие записи» с их числом и знаками.
+       ⚖️ Почему «вовсе», а не «последними»: на копии памяти COORD 23.11 одна свежая запись раздела
+       state (45 226 знаков) одна больше порога, и правило «последними» унесло две другие свежие
+       записи, так и не уложив слой. Свежее, унесённое ради недостижимого порога, — потеря без пользы.
+    Последняя по порядку ухода запись остаётся всегда, если свежих в слое нет: слой hot не пустеет.
+    Свежий край раздела находится по записям с часом: в скольких парах старшая лежит выше младшей и
+    в скольких ниже. Перевеса нет (записей с часом нет или часы у всех одинаковы) — направление
+    «не определено», и записи без часа уходят снизу вверх, как прежде. Направление и число свежих
+    печатаются строкой «порядок ухода» у каждого сжимаемого раздела.
+    Цена появления как меры свежести: в день первого разбора раздела все его записи без часа
+    появились сегодня, и сжатие их не унесёт до послезавтра.
+
 ⚖️ ЗАПИСИ ЛЕЖАТ РЯДОМ С ТЕЛОМ, А НЕ ВМЕСТО НЕГО. Пробуждение роли читает то же тело,
 что и вчера, — этот слой сломать его не может. Цена выбора названа прямо: два места
 об одном предмете МОГУТ РАЗОЙТИСЬ, и потому здесь есть `--собрать`, который складывает
@@ -237,23 +261,124 @@ def volume_limit():
     return limit, file.name
 
 
-def removal_order(rows):
-    """Порядок ухода записей слоя hot. rows — (id, subject, body_chars, happened_at, alive, ord).
+FRESH_DAYS = 1      # свежая запись — не раньше «сегодня минус столько дней» (UTC): по часу, без часа — по появлению
 
-    ① снятые с хода · ② с часом, старшие первыми · ③ без часа, снизу раздела вверх
-    (больший ord раньше). Внутри ① — тем же правилом: сперва с часом по возрасту, потом без часа
-    снизу вверх. Возвращает список (запись, причина).
+
+def _day(value):
+    """Дата из поля часа записи: первые десять знаков ГГГГ-ММ-ДД. Не дата — None."""
+    if not value:
+        return None
+    try:
+        return datetime.date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
+
+
+def time_direction(rows):
+    """Куда идёт время в разделе → (направление, пар «свежее выше», пар «свежее ниже»).
+
+    Считаются пары живых записей с часом: в каждой паре старшая лежит выше младшей или ниже.
+    Перевес и есть направление; равенство — «не определено» (записей с часом меньше двух
+    либо часы у всех одинаковы).
     """
-    def key(row):
-        return (row[3] is None, row[3] or "", -row[5])
+    dated = sorted((r[5], _day(r[3])) for r in rows if r[4] == "active" and _day(r[3]))
+    newer_above = newer_below = 0
+    for i in range(len(dated)):
+        for j in range(i + 1, len(dated)):
+            if dated[i][1] > dated[j][1]:
+                newer_above += 1
+            elif dated[i][1] < dated[j][1]:
+                newer_below += 1
+    if newer_above > newer_below:
+        return "свежее сверху", newer_above, newer_below
+    if newer_below > newer_above:
+        return "свежее снизу", newer_above, newer_below
+    return "не определено", newer_above, newer_below
 
-    revoked = sorted((r for r in rows if r[4] != "active"), key=key)
-    dated = sorted((r for r in rows if r[4] == "active" and r[3]), key=key)
-    undated = sorted((r for r in rows if r[4] == "active" and not r[3]), key=key)
-    out = [(r, "снята с хода") for r in revoked]
-    out += [(r, f"старшая по часу: {r[3]}") for r in dated]
-    out += [(r, f"без часа, место в разделе {r[5]}") for r in undated]
+
+def estimated_days(rows):
+    """{id записи без часа: (место соседа, его дата, id соседа)} — по ближайшей по месту живой записи с часом.
+
+    Две на равном расстоянии — берётся свежая: ошибка в эту сторону задерживает уход, а не ускоряет.
+    Записей с часом в разделе нет — словарь пуст.
+    """
+    dated = [(r[5], _day(r[3]), r[0]) for r in rows if r[4] == "active" and _day(r[3])]
+    out = {}
+    if not dated:
+        return out
+    for r in rows:
+        if _day(r[3]):
+            continue
+        out[r[0]] = min(dated, key=lambda d: (abs(d[0] - r[5]), -d[1].toordinal()))
     return out
+
+
+def _edge(today=None):
+    """Край свежести: дата UTC, начиная с которой запись свежая."""
+    today = today or datetime.datetime.now(datetime.timezone.utc).date()
+    return today - datetime.timedelta(days=FRESH_DAYS)
+
+
+def is_fresh(row, edge):
+    """Свежая ли запись: живая и с часом не раньше края; без часа — появилась в слое не раньше края.
+
+    Появление — поле created_at: запись, бывшая в слое раньше края, моложе края быть не может.
+    """
+    if row[4] != "active":
+        return False
+    day = _day(row[3])
+    if day:
+        return day >= edge
+    seen = _day(row[6])
+    return bool(seen and seen >= edge)
+
+
+def fresh_rows(rows, today=None):
+    """Свежие записи слоя: сжатие их не уносит вовсе."""
+    edge = _edge(today)
+    return [r for r in rows if is_fresh(r, edge)]
+
+
+def removal_order(rows, today=None):
+    """Порядок ухода записей слоя hot.
+
+    rows — (id, subject, body_chars, happened_at, alive, ord, created_at).
+    Правило — в шапке файла, раздел «ПОРЯДОК УХОДА ПРИ СЖАТИИ» (карточка #796): ① снятые · ② прочие,
+    кроме свежих, от старших к младшим. Свежих в списке нет — сжатие их не уносит (fresh_rows).
+    today — дата отсчёта (по умолчанию сегодня, UTC). Возвращает список (запись, причина).
+    """
+    edge = _edge(today)
+    direction = time_direction(rows)[0]
+    step = 1 if direction == "свежее снизу" else -1
+    guess = estimated_days(rows)
+
+    def key(row):
+        day = _day(row[3]) or (guess[row[0]][1] if row[0] in guess else None)
+        return (day is None, day or datetime.date.min, step * row[5])
+
+    fresh_ids = {r[0] for r in rows if is_fresh(r, edge)}
+    revoked = sorted((r for r in rows if r[4] != "active"), key=key)
+    rest = sorted((r for r in rows if r[4] == "active" and r[0] not in fresh_ids), key=key)
+    out = [(r, "снята с хода") for r in revoked]
+    for r in rest:
+        if _day(r[3]):
+            out.append((r, f"старшая по часу: {r[3]}"))
+        elif r[0] in guess:
+            _place, day, near = guess[r[0]]
+            out.append((r, f"без часа, по соседней записи с часом #{near} ≈ {day}, место {r[5]}"))
+        else:
+            out.append((r, f"без часа, время в разделе не определено — снизу вверх, место {r[5]}"))
+    return out
+
+
+def order_line(rows, today=None):
+    """Строка «порядок ухода» для печати сжатия: направление времени и число свежих записей."""
+    edge = _edge(today)
+    direction, above, below = time_direction(rows)
+    fresh = fresh_rows(rows, today)
+    return (f"порядок ухода: время в разделе — {direction} (пар записей с часом: свежее выше {above}, "
+            f"ниже {below}) · свежих с {edge.isoformat()}: {len(fresh)}, "
+            f"{sum(r[2] for r in fresh)} знаков — сжатие их не уносит")
 
 
 def compact(conn, role, section, actor, dry_run):
@@ -282,7 +407,7 @@ def compact(conn, role, section, actor, dry_run):
     plan = []
     for sect in sections:
         rows = conn.execute(
-            "SELECT id, subject, body_chars, happened_at, alive, ord FROM phoenix_records "
+            "SELECT id, subject, body_chars, happened_at, alive, ord, created_at FROM phoenix_records "
             "WHERE role=? AND section=? AND layer='hot' ORDER BY ord", (role, sect)).fetchall()
         before_chars, before_n = sum(r[2] for r in rows), len(rows)
         if before_chars <= limit:
@@ -290,22 +415,30 @@ def compact(conn, role, section, actor, dry_run):
                   f"{limit} ({source}) — уносить нечего")
             continue
         order = removal_order(rows)
+        fresh = fresh_rows(rows)
+        # свежих в порядке ухода нет вовсе; без свежих последняя по порядку ухода остаётся всегда
+        movable = order if fresh else order[:-1]
         left, taken = before_chars, []
-        # последняя по порядку ухода запись остаётся всегда
-        for rec, why in order[:-1]:
+        for rec, why in movable:
             if left <= limit:
                 break
             taken.append((rec, why))
             left -= rec[2]
         print(f"· {sect}: слой hot было {before_chars} знаков в {before_n} записях → стало "
               f"{left} в {before_n - len(taken)} · порог {limit} ({source})")
+        print(f"    {order_line(rows)}")
         for rec, why in taken:
             print(f"    #{rec[0]} · {rec[1]} · {rec[2]} знаков · hot → warm · {why}")
         if left > limit:
             short = True
-            reason = ("в слое одна запись, и она сама больше порога" if before_n == 1 else
-                      "унесены все записи, кроме последней по порядку ухода (она остаётся "
-                      "всегда), и остаток всё равно больше порога")
+            if before_n == 1:
+                reason = "в слое одна запись, и она сама больше порога"
+            elif fresh and len(taken) == len(movable):
+                reason = (f"в слое остались только свежие записи — {len(fresh)}, "
+                          f"{sum(r[2] for r in fresh)} знаков: сжатие их не уносит")
+            else:
+                reason = ("унесены все записи, кроме последней по порядку ухода (она остаётся "
+                          "всегда), и остаток всё равно больше порога")
             print(f"    ⚠️ порог НЕ достигнут: осталось {left} знаков при пороге {limit} — {reason}")
         plan += [(sect, rec) for rec, _w in taken]
         moved_total += [rec for rec, _w in taken]
