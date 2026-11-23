@@ -110,7 +110,13 @@ mezo_stand.py — временные рабочие каталоги прове�
     стенд). Не помещается — «Корзина мала, не тронуто». Настроек Корзины тома нет, Корзина выключена
     или система не Windows — только показ;
   · строка уборки — одна и только когда есть что назвать: сколько перенесено и сколько ГБ, остатки,
-    занятые, «Корзина мала», не перенесённые (Корзина отказала — каталогу возвращается прежнее имя).
+    занятые, «Корзина мала», не перенесённые (Корзина отказала — каталогу возвращается прежнее имя);
+  · перенесённым засчитывается только каталог, который ПОЯВИЛСЯ в Корзине: в ней есть новая запись $I
+    с его прежним путём (карточка #831: Windows стирала насовсем каталог с путём от 260 знаков внутри,
+    вызов возвращал 0, и помощник считал каталог перенесённым). До переноса — отказ, каталог не тронут,
+    если внутри есть путь от 260 знаков UTF-16 или дерево не читается. После переноса записи нет —
+    строка «УДАЛЕНО МИМО КОРЗИНЫ», записи не прочитать — «приход не проверен»; в обоих случаях перенос
+    остальных каталогов этим помощником останавливается.
   Место освобождается, когда Корзина чистит себя сама: копии базы лежат в ней до её очистки (цена,
   названная владельцу). Приёмка подставляет вместо Корзины каталог: MEZO_STAND_TEST_BIN и его
   вместимость MEZO_STAND_TEST_BIN_MB — живая Корзина в приёмке не используется.
@@ -1579,6 +1585,162 @@ def _aged_candidates(temp: Path, limit_s: float):
     return marked, unmarked, leftovers
 
 
+LONG_PATH = 260   # предел MAX_PATH вместе с завершающим нулём, в знаках UTF-16 — граница та же, что у scratch-folders.py
+
+
+def _u16len(s: str) -> int:
+    """Длина пути в знаках UTF-16 — так меряет предел MAX_PATH Windows (знак вне BMP — два)."""
+    return len(s.encode("utf-16-le", "surrogatepass")) // 2
+
+
+def _extended(path: str) -> str:
+    """Путь с приставкой \\\\?\\ на Windows: без неё путь от 260 знаков не читается там, где длинные пути выключены."""
+    if os.name != "nt" or path.startswith("\\\\"):
+        return path
+    return "\\\\?\\" + path
+
+
+def _longest_inside(top: str):
+    """Самый длинный путь в дереве top: (путь, длина в знаках UTF-16, None) или (None, None, почему не измерен).
+
+    Длина считается от ОБЕИХ записей начала — как дано и полной (короткое имя 8.3 и длинное различаются
+    по длине), засчитывается бо́льшая: какой из них пользуется оболочка Windows, снаружи не видно. Внутрь
+    ссылок и соединений каталогов обход не идёт: Корзина берёт саму ссылку. Не читается хоть один каталог —
+    длина неизвестна, и это ответ «не измерено», а не «коротко».
+    """
+    starts = {top, os.path.realpath(top)}
+    worst = ""                      # самый длинный путь ВНУТРИ, от начала дерева
+    stack = [""]
+    while stack:
+        rel = stack.pop()
+        here = os.path.join(top, rel) if rel else top
+        try:
+            with os.scandir(_extended(here)) as it:
+                entries = list(it)
+        except OSError as e:
+            return None, None, f"каталог внутри не читается: {here} ({type(e).__name__})"
+        for entry in entries:
+            sub = os.path.join(rel, entry.name) if rel else entry.name
+            if _u16len(sub) > _u16len(worst):
+                worst = sub
+            try:
+                link = entry.is_symlink() or bool(getattr(entry, "is_junction", lambda: False)())
+                inner = not link and entry.is_dir(follow_symlinks=False)
+            except OSError as e:
+                return None, None, f"вид записи не определён: {os.path.join(top, sub)} ({type(e).__name__})"
+            if inner:
+                stack.append(sub)
+    longest = max(_u16len(os.path.join(s, worst) if worst else s) for s in starts)
+    return (os.path.join(top, worst) if worst else top), longest, None
+
+
+def _bin_records(volume_root: str):
+    """Записи Корзины тома: (множество путей файлов $I, None) или (None, почему не прочитаны).
+
+    Корзина тома — каталог $Recycle.Bin в его корне, в нём по каталогу на пользователя (имя — SID).
+    Чужие закрыты — пропускаются. Каталога $Recycle.Bin нет — Корзиной тома не пользовались, записей нет.
+    """
+    root = os.path.join(volume_root, "$Recycle.Bin")
+    found = set()
+    try:
+        with os.scandir(root) as it:
+            owners = [e.path for e in it if e.is_dir(follow_symlinks=False)]
+    except FileNotFoundError:
+        return found, None
+    except OSError as e:
+        return None, f"записи Корзины не читаются: {root} ({type(e).__name__})"
+    for owner in owners:
+        try:
+            with os.scandir(owner) as it:
+                found.update(e.path for e in it if e.name.startswith("$I"))
+        except PermissionError:
+            continue                # Корзина другого пользователя
+        except OSError as e:
+            return None, f"записи Корзины не читаются: {owner} ({type(e).__name__})"
+    return found, None
+
+
+def _bin_original(record: str):
+    """Прежний путь предмета из записи $I Корзины или None — запись не прочитана либо формат незнаком.
+
+    Формат 2 (Windows 10 и новее): версия, размер, час удаления — по 8 байт, длина имени в знаках — 4 байта,
+    затем имя в UTF-16 с завершающим нулём. Формат 1 (Vista — 8.1): то же без длины, имя — 520 байт.
+    """
+    try:
+        data = Path(record).read_bytes()
+    except OSError:
+        return None
+    if len(data) < 28:
+        return None
+    version = int.from_bytes(data[0:8], "little")
+    if version == 2:
+        size = int.from_bytes(data[24:28], "little")
+        raw = data[28:28 + 2 * size]
+    elif version == 1:
+        raw = data[24:24 + 520]
+    else:
+        return None
+    try:
+        return raw.decode("utf-16-le").split("\0", 1)[0]
+    except UnicodeDecodeError:
+        return None
+
+
+def _move_checked(paths, delete_one, volume_root: str, state: dict):
+    """Перенести каталоги в Корзину по одному; перенесённым засчитать только то, что в ней ПОЯВИЛОСЬ.
+
+    delete_one(путь) — сам перенос (у Windows — SHFileOperationW). state — общий для всех вызовов одного
+    помощника: после потери перенос останавливается и в следующих вызовах. → (перенесено, не перенесено [пути]),
+    вид тот же, что у _test_bin.
+
+    Перед каждым каталогом: путь внутри от 260 знаков UTF-16 или дерево не измерено — отказ, каталог не тронут
+    (опыт карточки #831: путь 259 знаков Корзина берёт, с 260 Windows стирает каталог насовсем, а вызов
+    возвращает 0). После: исчезнувший каталог засчитан, только если в Корзине появилась запись $I с его прежним
+    путём. Записи нет — «УДАЛЕНО МИМО КОРЗИНЫ»; записи не прочитать — «приход не проверен». В обоих случаях
+    перенос остальных останавливается: следующий каталог ушёл бы тем же путём.
+    """
+    moved, left = 0, []
+    for p in paths:
+        full = os.path.abspath(p)
+        if state.get("stop"):
+            print(f"⏸ не перенесено, каталог не тронут: {full} — перенос остановлен: {state['stop']}")
+            left.append(p)
+            continue
+        where, longest, why = _longest_inside(full)
+        if why is None and longest >= LONG_PATH:
+            why = (f"путь внутри — {longest} знаков UTF-16, а Windows берёт в Корзину не длиннее 259 "
+                   f"(самый длинный: {where}); Корзина такой каталог не берёт, Windows стёрла бы его насовсем")
+        if why is None:
+            before, why = _bin_records(volume_root)
+        if why is not None:
+            print(f"⛔ не перенесено в Корзину, каталог не тронут: {full} — {why}")
+            left.append(p)
+            continue
+        forms = {os.path.normcase(full), os.path.normcase(os.path.realpath(full))}
+        delete_one(full)
+        if os.path.lexists(full):
+            left.append(p)          # Корзина отказала: каталог на месте
+            continue
+        after, why = _bin_records(volume_root)
+        if why is None:
+            originals = [_bin_original(r) for r in sorted(after - before)]
+            if any(o is not None and os.path.normcase(o.rstrip("\\/")) in forms for o in originals):
+                moved += 1
+                continue
+            if None in originals:
+                why = "новая запись Корзины не прочитана"
+        if why is None:
+            print(f"⛔ УДАЛЕНО МИМО КОРЗИНЫ: {full} — каталога нет на месте, а записи с его прежним путём "
+                  f"в Корзине не появилось: вернуть его из Корзины нельзя. Перенос остальных остановлен")
+            state["stop"] = f"прежний каталог удалён мимо Корзины ({full})"
+        else:
+            print(f"⚠️ каталога нет на месте, а приход в Корзину не проверен: {full} — {why}. "
+                  f"Перенесённым не засчитан, перенос остальных остановлен")
+            state["stop"] = f"приход прежнего каталога в Корзину не проверен ({full})"
+        left.append(p)
+    return moved, left
+
+
 def _test_bin():
     """Приёмка: каталог вместо Корзины. (свободно байт, перенос, None) или (None, None, почему нет)."""
     folder = Path(os.environ[TEST_BIN_ENV].strip())
@@ -1608,7 +1770,10 @@ def _windows_bin(temp: Path):
     Предел Корзины — из настроек тома (MaxCapacity, МБ), занятость — SHQueryRecycleBinW. Перенос —
     SHFileOperationW с FOF_ALLOWUNDO (в Корзину) без окон и вопросов. ⚠️ Без окон Windows молча удаляет
     НАВСЕГДА то, что в Корзину не помещается, и вытесняет из неё старое: поэтому вызывающий переносит
-    только то, что помещается в свободное место целиком.
+    только то, что помещается в свободное место целиком. ⚠️ Так же насовсем уходит каталог с путём от 260
+    знаков внутри — и вызов возвращает 0 (опыт карточки #831). Поэтому перенос идёт через _move_checked:
+    отказ на длинном пути до переноса и сверка с записями Корзины после. Записи Корзины не читаются —
+    помощника нет, только показ: без сверки «перенесено» снова значило бы «исчезло».
     """
     import ctypes
     import winreg
@@ -1662,22 +1827,24 @@ def _windows_bin(temp: Path):
     info.cbSize = ctypes.sizeof(QueryInfo)
     if shell32.SHQueryRecycleBinW(root.value, ctypes.byref(info)) != 0:
         return None, None, f"занятость Корзины тома {root.value} не определена"
+    _records, why = _bin_records(root.value)
+    if why is not None:
+        return None, None, f"{why} — приход в Корзину не проверить"
+
+    def delete_one(full):
+        names = ctypes.create_unicode_buffer(full + "\0")   # список путей кончается двумя нулями
+        op = FileOp(hwnd=None, wFunc=3, pFrom=ctypes.addressof(names), pTo=None,   # 3 — FO_DELETE
+                    fFlags=0x40 | 0x10 | 0x4 | 0x400 | 0x200)
+        # 0x40 FOF_ALLOWUNDO (в Корзину) · 0x10 FOF_NOCONFIRMATION · 0x4 FOF_SILENT ·
+        # 0x400 FOF_NOERRORUI · 0x200 FOF_NOCONFIRMMKDIR — ни одного окна: прогон идёт без человека.
+        # Код возврата и «прервано» не судятся: при пути от 260 знаков они говорят «успех», а каталог стёрт.
+        # Судит _move_checked — по месту каталога и по записям Корзины
+        shell32.SHFileOperationW(ctypes.byref(op))
+
+    state: dict = {}
 
     def move(paths):
-        moved, left = 0, []
-        for p in paths:
-            full = os.path.abspath(p)
-            names = ctypes.create_unicode_buffer(full + "\0")   # список путей кончается двумя нулями
-            op = FileOp(hwnd=None, wFunc=3, pFrom=ctypes.addressof(names), pTo=None,   # 3 — FO_DELETE
-                        fFlags=0x40 | 0x10 | 0x4 | 0x400 | 0x200)
-            # 0x40 FOF_ALLOWUNDO (в Корзину) · 0x10 FOF_NOCONFIRMATION · 0x4 FOF_SILENT ·
-            # 0x400 FOF_NOERRORUI · 0x200 FOF_NOCONFIRMMKDIR — ни одного окна: прогон идёт без человека
-            rc = shell32.SHFileOperationW(ctypes.byref(op))
-            if rc == 0 and not op.fAnyOperationsAborted and not os.path.lexists(full):
-                moved += 1
-            else:
-                left.append(p)
-        return moved, left
+        return _move_checked(paths, delete_one, root.value, state)
     return capacity_mb * 1024 ** 2 - info.i64Size, move, None
 
 
