@@ -26,9 +26,11 @@ _windows_bin, у которого подменён только сам пере�
   ②б встречный: 259 знаков — до переноса дошло
   ③  каталог исчез, а новой записи нет — «УДАЛЕНО МИМО КОРЗИНЫ», не засчитан; второй каталог тем же
      помощником не тронут (перенос остановлен)
-  ③б каталог исчез, новая запись $I есть, но её прежний путь ЧУЖОЙ (соседний каталог) — «УДАЛЕНО МИМО
-     КОРЗИНЫ», не засчитан; второй не тронут. Без него сверку прежнего пути не судил ни один случай:
-     поломка «путь не сравнивается» (К1 COORD, здесь П9) проходила все остальные
+  ③б каталог исчез, новые записи $I есть, но все три ЧУЖИЕ: сосед в том же родителе, путь с общим началом
+     («<путь>-other» — так бывает у «<имя>.removing-<номер>» уборки по сроку) и тёзка в другом родителе —
+     «УДАЛЕНО МИМО КОРЗИНЫ», не засчитан; второй не тронут. Без него сверку прежнего пути не судил ни один
+     случай: поломки «путь не сравнивается», «по началу», «только имя» (К1, К3, К4 COORD; здесь П9–П11)
+     проходили все остальные
   ④  новая запись незнакомого формата — «приход в Корзину не проверен», не засчитан; второй не тронут
   ⑤  записи Корзины не читаются до переноса — отказ, перенос не звался, каталог на месте
   ⑥  уборка стендов по сроку (_sweep_aged) через настоящий _windows_bin, без своих правок: старый стенд
@@ -47,7 +49,13 @@ _windows_bin, у которого подменён только сам пере�
   П7  нечитаемые записи Корзины читаются как «записей нет» ... ⑤
   П8  _windows_bin переносит мимо _move_checked, как до правки ⑥
   П9  прежний путь новой записи не сравнивается (К1 COORD) ... ③б
+  П10 прежний путь сравнивается по началу (К3 COORD) ......... ③б
+  П11 сравнивается только имя каталога (К4 COORD) ............ ③б
 Поломка, которая провалила не ровно свой набор, — провал приёмки: значит, случаи слепы или задевают чужое.
+Подставная Корзина берёт номер записи по первому свободному месту в каталоге записей тома: под поломками
+П6 и П9 случаи ③б и ④ проваливаются своей проверкой («второй не тронут»), а не падением подставного
+переноса на занятом имени (Н1 COORD, карточка #832). Поломка, свои случаи которой провалились падением
+(«случай упал»), а не проверкой, считается непойманной: её поймал бы любой сбой подставного тома.
 Случай, не проверенный на этой машине, из набора поломки вычитается и называется.
 
 Безопасность. Всё живёт в своём каталоге приёмки (mezo_stand.new). ⑥ идёт потомком со своими TEMP, TMP,
@@ -113,6 +121,14 @@ BREAKS = [
     ("П9", "прежний путь новой записи не сравнивается (К1 COORD)",
      SAME_LINE,
      "            if any(o is not None for o in originals):\n", {"③б"}),
+    ("П10", "прежний путь сравнивается по началу, а не на равенство (К3 COORD)",
+     SAME_LINE,
+     "            if any(o is not None and any(os.path.normcase(o.rstrip(\"\\\\/\")).startswith(f) for f in forms) "
+     "for o in originals):\n", {"③б"}),
+    ("П11", "сравнивается только имя каталога, без родителя (К4 COORD)",
+     SAME_LINE,
+     "            if any(o is not None and os.path.basename(os.path.normcase(o.rstrip(\"\\\\/\"))) in "
+     "{os.path.basename(f) for f in forms} for o in originals):\n", {"③б"}),
 ]
 
 # Потомок ⑥: настоящий _windows_bin, но SHFileOperationW — счётчик. Перенос до Windows не доходит ни на
@@ -221,14 +237,30 @@ class Fake:
         if self.how == "past":
             mezo_stand.remove_tree(ext(full))
             return
-        k = len(self.calls)
         owner = self.vol / "$Recycle.Bin" / SID
         original = os.path.realpath(full)                 # Windows пишет полную запись пути
-        if self.how == "foreign":                         # запись есть, но о соседнем каталоге
-            original = os.path.join(os.path.dirname(original), "other-" + os.path.basename(original))
+        originals = [original]
+        if self.how == "foreign":                         # записи есть, но ни одна не о нём
+            parent, name = os.path.dirname(original), os.path.basename(original)
+            originals = [os.path.join(parent, "other-" + name),      # сосед в том же родителе (П9)
+                         original + "-other",                         # общее начало пути (П10, К3 COORD)
+                         os.path.join(parent + "-elsewhere", name)]   # тёзка в другом родителе (П11, К4 COORD)
+        # Номер — первый свободный в каталоге записей тома, а не счёт вызовов этого Fake: в ③б и ④ на одном
+        # томе работают два Fake, и под поломкой второй брал занятое $R00001 — случай падал, не дойдя до
+        # своей проверки (Н1 COORD, карточка #832)
+        k = self._free(owner)
         os.rename(ext(full), ext(owner / f"$R{k:05d}"))
         version = 9 if self.how == "unknown" else 2
-        (owner / f"$I{k:05d}").write_bytes(record_bytes(original, version))
+        for o in originals:
+            k = self._free(owner)
+            (owner / f"$I{k:05d}").write_bytes(record_bytes(o, version))
+
+    @staticmethod
+    def _free(owner: Path) -> int:
+        k = 1
+        while (owner / f"$I{k:05d}").exists() or (owner / f"$R{k:05d}").exists():
+            k += 1
+        return k
 
 
 def run_move(m, paths, fake: Fake, vol: Path, state: dict):
@@ -336,7 +368,7 @@ def c3b(m):
           and m2 == 0 and len(l2) == 1 and not fake2.calls and kept and "остановлен" in out2)
     drop(second)
     return ok, (f"первый: перенесено {m1}, строка «мимо»: {'есть' if 'УДАЛЕНО МИМО КОРЗИНЫ' in out1 else 'НЕТ'} "
-                f"(запись Корзины о соседнем каталоге) · второй: перенос звался {len(fake2.calls)} раз, "
+                f"(три чужие записи Корзины) · второй: перенос звался {len(fake2.calls)} раз, "
                 f"на месте: {'да' if kept else 'НЕТ'}")
 
 
@@ -483,8 +515,16 @@ def main() -> int:
         if not want:
             print(f"⚪ {tag} ({what}): не проверена — её случаи {' '.join(sorted(expect))} здесь не различают", flush=True)
             continue
-        if fell == want:
+        # провал падением случая — не его проверкой: поломку поймал бы любой сбой подставного тома (Н1 COORD)
+        crashed = [n for n in CASES if n in fell and got[n][1].startswith("случай упал")]
+        if fell == want and not crashed:
             print(f"✅ {tag} ({what}): провалились ровно {' '.join(n for n in CASES if n in fell)}", flush=True)
+        elif fell == want:
+            blind.append(tag)
+            print(f"🔴 {tag} ({what}): провалились ровно свои случаи, но {' '.join(crashed)} — падением случая, "
+                  f"а не его проверкой", flush=True)
+            for n in crashed:
+                print(f"      {n}: {got[n][1]}", flush=True)
         else:
             blind.append(tag)
             print(f"🔴 {tag} ({what}): ждали провала {' '.join(n for n in CASES if n in want)}, "

@@ -28,8 +28,8 @@
 #   карточка #831 . добавлена bite-recycle-bin-checks.py (своя: копию базы не берёт вовсе). Её «было» —
 #                17 знаков ✅: 8 случаев и 9 нарочных поломок. На томе без коротких имён 8.3 случай ①б
 #                и поломка П1б не различают — там код 2 и 15 знаков ✅, это не провал.
-#   карточка #832 . bite-recycle-bin-checks.py получила случай ③б и нарочную поломку П9 — «было» 0 17 0 → 0 19 0:
-#                9 случаев и 10 поломок. Без коротких имён 8.3 — код 2 и 17 знаков ✅.
+#   карточка #832 . bite-recycle-bin-checks.py получила случай ③б и нарочные поломки П9–П11 — «было»
+#                0 17 0 → 0 21 0: 9 случаев и 12 поломок. Без коротких имён 8.3 — код 2 и 19 знаков ✅.
 bite-actor-role-hint.py                  Г1     own  0 30 0
 bite-addressee-dictionary.py             Г2     done  0 12 0
 bite-addressee-field.py                  Г1     done  0 10 0
@@ -88,7 +88,7 @@ bite-r16-reissue.py                      Г1     done  0 3 0
 bite-read-broadcasts.py                  Г1     own  0 11 0
 bite-read-phoenix-sections.py            Г2+Г3  done  0 14 0
 bite-reader-empty-honesty.py             Г1     done  0 7 0
-bite-recycle-bin-checks.py               Г1     own   0 19 0
+bite-recycle-bin-checks.py               Г1     own   0 21 0
 bite-review-queue.py                     Г1     own  0 7 0
 bite-reviewed-repeat.py                  Г1     done  0 5 0
 bite-reviewer-named.py                   Г1     done  0 10 0
