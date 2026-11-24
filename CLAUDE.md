@@ -125,8 +125,9 @@ Pre-commit hook включается в каждом клоне отдельно
 - Мелкий клон (`--depth`): `bite-update-tools-rev.py` отказывает кодом 2 и требует полную историю.
   `rules-from-pack.py` без `--source` сам клонирует пак с GitHub, то есть ходит в сеть.
 - `bite-all.py --set core` на свежем контуре кончается кодом 1, поэтому в CI его нет. С «было» расходятся:
-  `bite-brief-views.py` и `bite-two-locks.py` (exit 0, но число ✅ зависит от данных живого контура);
-  `bite-printed-forms-sources.py` (exit 2: нет `<контейнер>/CLAUDE.md`).
+  `bite-two-locks.py` (exit 0, но число ✅ зависит от данных живого контура);
+  `bite-printed-forms-sources.py` (exit 2: нет `<контейнер>/CLAUDE.md`). `bite-brief-views.py` с выпуска 24.11
+  сходится и на свежем контуре (0 · 19 · 0): строк настоящих соседей в свою базу проверки она не берёт.
 - Код писан под Windows: `winreg`, `ctypes.windll`, `_winapi`. Импорты ленивые, на Linux не мешают. Случаи
   про файл, занятый процессом (`bite-scratch-folders.py` ⑮, `bite-stand-keep-last.py` ㉑ ㊶), на Linux красные.
   Файлы `.githooks/*` — только с LF (`.gitattributes`).
