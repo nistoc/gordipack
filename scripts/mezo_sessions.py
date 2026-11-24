@@ -267,7 +267,13 @@ def read_store(path: str | Path | None = None) -> SessionStore:
     current_found = None
     if store.found and _checkable(current):
         current_found = any(r.session_id == current for r in store.sessions)
-    return dataclasses.replace(store, source=source, choice_note=note,
+    error = store.error
+    if not store.found:
+        # Н3 приёмки COORD (карточка #833): «не найдено» называет, ОТКУДА взят путь и что
+        # показал поиск, — иначе «искала рядом с копией приложения — пусто» не отличить от
+        # «не искала». Одно место на всех вызывающих: проверку ролей, записку, запись адреса.
+        error = f"{error}; путь — {source}" + (f"; {note}" if note else "")
+    return dataclasses.replace(store, source=source, choice_note=note, error=error,
                                current_session=current, current_found=current_found)
 
 
