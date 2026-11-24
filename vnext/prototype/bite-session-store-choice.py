@@ -38,6 +38,8 @@
   записка (write-message.py)
     W1 чужое хранилище → «НЕ сверена» и «НЕ НАШЕ», а не «НЕДОСТИЖИМ» у адресата; записка легла
     W2 своё хранилище рядом с копией → адресат жив, предупреждений нет
+    W3 хранилища нет нигде → «НЕ сверена» называет источник пути и что рядом с копией пусто
+       (Н4 приёмки COORD: документ выпуска обещал эти слова и у записки, а она печатала голый путь)
   запись адреса и сигнал (signal-templates.py)
     S1 чужое хранилище, только имя → сессия по имени НЕ подобрана (заголовок есть в чужом)
     S2 чужое хранилище, --session-id нашей роли → не отказ «НЕ НАЙДЕН» с перечнем чужих сессий
@@ -86,6 +88,7 @@ SIGNAL_ROLES = ("ZZS1", "ZZS2", "ZZS3")
 MOD = "mezo_sessions.py"
 GUARD = "guard-role-sessions-live.py"
 SIGNAL = "signal-templates.py"
+WRITE = "write-message.py"
 BREAKS = {
     "П1": ("контрольное слово снято", MOD,
            "        current_found = any(r.session_id == current for r in store.sessions)\n",
@@ -123,8 +126,14 @@ BREAKS = {
     "П8": ("«не найдено» не называет, где искали", MOD,
            '        error = f"{error}; путь — {source}" + (f"; {note}" if note else "")\n',
            "        error = error\n",
-           # М7 судит заметку выбора в самом модуле, а не слова отказа, — цел
-           {"Г5"}),
+           # М7 судит заметку выбора в самом модуле, а не слова отказа, — цел; записка берёт
+           # слова отказа у модуля, поэтому W3 падает вместе с Г5
+           {"Г5", "W3"}),
+    "П9": ("записка печатает голый путь вместо причины", WRITE,
+           '        return None, store.error or f"хранилища сессий приложения нет ({store.path})"\n',
+           '        return None, f"хранилища сессий приложения нет ({store.path})"\n',
+           # прежняя строка записки; проверка ролей и запись адреса берут причину сами — целы
+           {"W3"}),
 }
 
 DRIVER = '''import json, sys
@@ -216,8 +225,12 @@ def copy_tools(dest: Path, vnext_dir: Path, write_tool: Path) -> dict:
 
 def put_break(t: dict, label: str) -> None:
     _, target, old, new, _ = BREAKS[label]
-    files = ([(t["tools"] / MOD, t["origin"]), (t["wtools"] / MOD, t["worigin"])] if target == MOD
-             else [(t["tools"] / target, t["origin"])])
+    if target == MOD:
+        files = [(t["tools"] / MOD, t["origin"]), (t["wtools"] / MOD, t["worigin"])]
+    elif target == WRITE:
+        files = [(t["write"], t["worigin"])]
+    else:
+        files = [(t["tools"] / target, t["origin"])]
     for f, origin in files:
         text = f.read_text(encoding="utf-8")
         if text.count(old) != 1:
@@ -312,6 +325,11 @@ def run_cases(stand: Path, tag: str, t: dict, w: dict, say: bool) -> dict:
     code, txt = run(write + ["--again", "приёмка W2"], env(exe=w["exeA"], host=CUR, appdata=w["roamF"]))
     out["W2"] = (code == 0 and "НЕДОСТИЖИМ" not in txt and "НЕ сверена" not in txt and "OK #" in txt,
                  f"код {code} · {txt.strip()[-260:]}")
+    code, txt = run(write + ["--again", "приёмка W3"], env(exe=w["exeC"], host=CUR, appdata=w["roamNone"]))
+    line = [ln.strip() for ln in txt.splitlines() if "НЕ сверена" in ln][:1]
+    out["W3"] = (code == 0 and "OK #" in txt and bool(line) and "запасной стандартный путь" in line[0]
+                 and "рядом с копией приложения каталога сессий нет" in line[0],
+                 f"код {code} · {(line[0] if line else txt.strip()[-260:])[-260:]}")
 
     signal = [sys.executable, "-B", str(t["signal"]), "--db", str(db)]
     code, txt = run(signal + ["--role", "ZZS1", "--set-address", "ZZ-A1 [111111]", "--source", "self"],
@@ -367,6 +385,7 @@ TITLES = {
     "Г5": "проверка ролей, хранилища нет нигде: «сверить нечем» называет, где искали",
     "W1": "записка, чужое хранилище: «НЕ сверена», а не «НЕДОСТИЖИМ»",
     "W2": "записка, своё хранилище рядом с копией: адресат жив",
+    "W3": "записка, хранилища нет нигде: «НЕ сверена» называет, где искали",
     "S1": "запись адреса, чужое хранилище: сессия по имени не подобрана",
     "S2": "запись адреса, чужое хранилище: нет отказа «НЕ НАЙДЕН» с чужим перечнем",
     "S3": "запись адреса, своё хранилище: номер записи разговора взят сам",
