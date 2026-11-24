@@ -46,6 +46,12 @@
 #                (замечания приёмки COORD: Н1 — знак в заголовке Г1 давал 24 при записанных 23;
 #                Н2 — случаи S4, S5 и поломка П7; Н3 — случай Г5 и поломка П8; Н4 — случай W3 и
 #                поломка П9: записка называет, где искали хранилище; до Н4 было 0 28 0).
+#   карточка #834 . bite-brief-views.py: «было» 0 18 0 → 0 19 0 — новая нарочная поломка (г): знак «ℹ️»
+#                у строки, печатаемой только с --full, проваливает ровно случай ⑧. Строки cross_links живой
+#                базы в базу проверки больше не берутся: числа не зависят от писем настоящих соседей контура
+#                (у AIA на 1ffadf1 было 1 16 2 при наших 0 18 0 — два наших письма старого вида в общей папке).
+#                Граница: формы писем настоящих соседей эта приёмка не судит — судит посаженные подставному
+#                соседу; свою папку моста guard-all.py по-прежнему читает с диска контура, в числа она не входит.
 bite-actor-role-hint.py                  Г1     own  0 30 0
 bite-addressee-dictionary.py             Г2     done  0 12 0
 bite-addressee-field.py                  Г1     done  0 10 0
@@ -53,7 +59,7 @@ bite-archive-move-look.py                Г4     done  0 38 9
 bite-archive-move-records.py             Г1     done  0 27 0
 bite-backfill-addressee.py               Г1     own  0 11 0
 bite-bridge-own-letters.py               Г1     done  0 32 0
-bite-brief-views.py                      Г2     done  0 18 0
+bite-brief-views.py                      Г2     done  0 19 0
 bite-call-form-counterexample.py         Г1     done  0 7 0
 bite-card-edit.py                        Г1     own  0 9 0
 bite-card-tags.py                        Г1     own  0 9 0
