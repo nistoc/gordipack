@@ -689,7 +689,14 @@ def unreachable_addressees(conn, names_list, writer_role):
         return None, f"помощника чтения хранилища сессий нет рядом ({exc.name})"
     store = mezo_sessions.read_store()
     if not store.found:
-        return None, f"хранилища сессий приложения нет ({store.path})"
+        # Н4 приёмки COORD (карточка #833): причину берём у read_store() — она называет, откуда
+        # взят путь и что показал поиск, как у проверки ролей и записи адреса. Голый путь не
+        # отличал «искала рядом с копией приложения — пусто» от «не искала».
+        return None, store.error or f"хранилища сессий приложения нет ({store.path})"
+    if store.foreign:
+        # Контрольное слово (issue 34 пакета, карточка #833): в прочитанном хранилище нет даже
+        # ТЕКУЩЕЙ сессии — «не найдена» у каждого адресата было бы ложью о живых чатах.
+        return None, mezo_sessions.foreign_words(store)
     try:
         recorded = dict(conn.execute(
             f"SELECT role, session_id FROM role_sessions WHERE role IN "

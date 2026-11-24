@@ -37,7 +37,9 @@ DEFAULT_ROLES = ("COORD", "CORE", "STUD")
 
 # Переменные среды, по которым скрипты находят ЖИВОЙ контур или живую роль.
 _ENV_DROP_PREFIXES = ("MEZO_",)
-_ENV_DROP_NAMES = {"CLAUDE_CODE_SESSION_ID", "CLAUDE_PROJECT_DIR", "PYTHONSTARTUP"}
+_ENV_DROP_NAMES = {"CLAUDE_CODE_SESSION_ID", "CLAUDE_PROJECT_DIR", "PYTHONSTARTUP",
+                   # карточка #833: по ним mezo_sessions.py ищет настоящее хранилище сессий
+                   "CLAUDE_CODE_HOST_SESSION_ID", "CLAUDE_CODE_EXECPATH"}
 
 
 def pytest_addoption(parser):

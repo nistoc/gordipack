@@ -399,9 +399,17 @@ def stand_env(container, **extra) -> dict:
     того, ИЗ КАКОГО чата её гонят: из незаписанного чата соседние приёмки получали бы возврат,
     которого не ждут (так в первом круге той карточки провалились две). Кому номер нужен,
     тот ставит его явно — через extra или поверх результата.
+
+    ⚖️ ТЕКУЩАЯ СЕССИЯ И КОПИЯ ПРИЛОЖЕНИЯ (CLAUDE_CODE_HOST_SESSION_ID, CLAUDE_CODE_EXECPATH) —
+    тоже не передаются, карточка #833. По ним mezo_sessions.py находит СВОЁ хранилище сессий и
+    сверяет контрольное слово. Унаследованные, они повели бы инструменты стенда в НАСТОЯЩЕЕ
+    хранилище приложения, а подложное объявили бы чужим — итог приёмки зависел бы от того,
+    из какого чата её гонят. Кому они нужны, тот ставит их явно через extra.
     """
     env = dict(os.environ, MEZO_CONTAINER=str(container))
     env.pop("CLAUDE_CODE_SESSION_ID", None)
+    env.pop("CLAUDE_CODE_HOST_SESSION_ID", None)
+    env.pop("CLAUDE_CODE_EXECPATH", None)
     env.update(extra)
     return env
 
