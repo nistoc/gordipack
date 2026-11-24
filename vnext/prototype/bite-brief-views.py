@@ -13,7 +13,7 @@ r"""bite-brief-views.py — приёмка карточки #593, задание
   · краткий вид НЕ ВРЁТ ЧИСЛАМИ — сводная строка («прошли N: …», «мост соседей: N …»)
     называет ровно то число, что можно пересчитать по полному виду.
 
-═══ ЧТО ПРОВЕРЯЕТ (12 случаев + 3 нарочные поломки) ═══
+═══ ЧТО ПРОВЕРЯЕТ (12 случаев + 4 нарочные поломки) ═══
   ①…⑤, ⑫  backlog.py list --status all --actor PROTO: шапка, первые строки карточек,
            срез критерия («🎯 …», второй строкой) виден только под --full, причины
            dropped/frozen видны В ОБОИХ видах, блок пула дословно тот же, подсказка
@@ -21,7 +21,8 @@ r"""bite-brief-views.py — приёмка карточки #593, задание
   ⑥…⑩      guard-all.py: последняя строка итога, множество красных («⛔»), множество
            предупреждений («⚠️»/«ℹ️»), сводка «прошли N: …», сводка моста соседей
            (⑩: N в кратком = числу строк об отвеченных вопросах в --full, из них два —
-           от подставного соседа, этап Э6).
+           от подставного соседа, этап Э6). ⑧ судит и построчный перечень наших писем старого
+           вида: такое письмо посажено в общую папку подставного соседа (карточка #834).
   ⑪        role-brief.py: четыре постоянных хвоста (порядок пробуждения, ритм, свод,
            ответы владельцу) — та же подсказка mezo_hints, три вызова подряд.
   (а)      НАРОЧНАЯ ПОЛОМКА guard-all.py: check() без учёта `ok` в кратком виде глотает
@@ -30,6 +31,9 @@ r"""bite-brief-views.py — приёмка карточки #593, задание
            кратком виде — случай ② на такой копии обязан покраснеть.
   (в)      НАРОЧНАЯ ПОЛОМКА guard-all.py: ответ по полю reply-to не входит в краткий счёт
            моста — случай ⑩ на такой копии обязан покраснеть (этап Э6, карточка #680).
+  (г)      НАРОЧНАЯ ПОЛОМКА guard-all.py: строка перечня наших писем старого вида, которая
+           печатается только с --full, снова несёт знак «ℹ️» — на такой копии обязан покраснеть
+           ровно случай ⑧; ⑥ ⑦ ⑨ ⑩ на ней проходят (карточка #834).
 
 ═══ ГРАНИЦЫ — чего эта приёмка НЕ проверяет (сказано вслух, а не скрыто) ═══
   · дословный текст подсказок mezo_hints — эта приёмка проверена отдельно (bite-tool-
@@ -38,18 +42,27 @@ r"""bite-brief-views.py — приёмка карточки #593, задание
     здесь важно ТОЛЬКО то, что краткий/полный вид ОДИНАКОВО честны про их исход;
   · «пул», «тебя ждут», «ты сдал» и прочие ДИНАМИЧЕСКИЕ разделы role-brief.py по
     содержанию — они читаются живыми данными контура, а не флагом --full;
-  · конкурентную запись во временную копию базы (два процесса разом).
+  · конкурентную запись во временную копию базы (два процесса разом);
+  · письма НАСТОЯЩИХ соседей контура (карточка #834): строки cross_links живой базы в подставную
+    не берутся, и папки соседей guard-all.py здесь не читает. Форма письма, которой нет у
+    подставного соседа, остаётся непроверенной — её сажают сюда новым случаем. Посажены: вопрос
+    с полями, наш ответ по полю reply-to, наше письмо старого вида в общей папке соседа;
+  · СВОЮ папку моста контура guard-all.py по-прежнему находит на диске от корня контура: её
+    строки входят в обе стороны сравнения, а в числа случаев — нет.
 
 ⛔ Живая база (<КОНТУР>/.mezosync/mezosync.db) НЕ изменяется: все прогоны — на
 ПОДСТАВНОЙ базе (mezo_stand.empty_db: схема живой без строк — этап Э6, карточка #680); роль
 PROTO, два правила свода, от которых зависит форма хвостов role-brief.py, и набор задач для
 блока пула приёмка сажает сама (seed_stand). Соседей для сводки моста (⑩) guard-all.py берёт
-из таблицы cross_links — её строки подставная база берёт из живой (keep), и сверх них приёмка
-сажает ПОДСТАВНОГО соседа zzbrief (seed_neighbour): два вопроса и два ответа по полю reply-to
-в рабочем каталоге стенда. ⚖️ Граница: до Э6 на контуре без соседей ⑩ судил ветку «вопросов
-нет вовсе» и давал другой итог приёмки; теперь итог один на любом контуре, а настоящие соседи
-только добавляют строк к обеим сторонам сравнения. Копия каталога инструментов для нарочных поломок —
-через mezo_stand.copy_tool (со всеми соседями по import), поломки (а) и (в) зовутся ВНЕ
+из таблицы cross_links — в подставной базе она пуста, и приёмка сажает в неё ОДНОГО соседа,
+ПОДСТАВНОГО zzbrief (seed_neighbour): два вопроса и два ответа по полю reply-to и наше письмо
+старого вида в общей папке — всё в рабочем каталоге стенда. ⚖️ Граница: до Э6 на контуре без
+соседей ⑩ судил ветку «вопросов нет вовсе» и давал другой итог приёмки. С Э6 по 24.11 строки
+настоящих соседей брались из живой базы (keep) «в обе стороны сравнения» — и у контура с нашими
+письмами старого вида случай ⑧ проваливался, а у контура без них проходил: одна версия пакета
+давала в наборе ядра разные числа (нашёл контур AIA, карточка #834). Теперь настоящих соседей
+в базе проверки нет, итог решает испытуемый код. Копия каталога инструментов для нарочных поломок —
+через mezo_stand.copy_tool (со всеми соседями по import), поломки (а), (в) и (г) зовутся ВНЕ
 контейнера и потому с переменной среды MEZO_CONTAINER (тот же приём, что у случая ⑱-бис
 в bite-tool-brevity.py) — без неё модуль mezo_paths при запуске из копии не находит
 mezosync.db и падает на самом импорте, до первой же проверки.
@@ -179,9 +192,15 @@ STAND_POOL = ("ZZPOOL-BRIEF", "набор подставной базы приё
 # строк cross_links ЖИВОЙ базы (keep), и на контуре без соседей (onto, свежий) ⑩ судил ветку
 # «вопросов нет вовсе» — с другим итогом приёмки. Теперь сосед сажается всегда: строка cross_links
 # в копии базы и его папка моста в стенде, в ней два вопроса к нам с годной шапкой и наши ответы
-# по полю reply-to. Строки живых соседей остаются (keep): у кого они есть, ⑩ судит и их.
+# по полю reply-to. Строк настоящих соседей в базе проверки нет (карточка #834, разбор — в шапке).
 STAND_NEIGHBOUR = "zzbrief"
 STAND_ASKS = ("e6-brief-first", "e6-brief-second")
+# Наше письмо старого вида для случая ⑧ (карточка #834): общая папка старого обмена у соседа —
+# «<мы>-<сосед>-exchange» (наше имя — отдельное слово, имя папки не начинается с «<сосед>-»), имя
+# письма — «ask.<мы>-<тема>.md»: точек две, второе слово — АВТОР. guard-all.py называет такое
+# письмо построчно только с --full, а счёт писем печатает строкой «ℹ️» в обоих видах.
+STAND_OLD_BOX_TAIL = "exchange"
+STAND_OLD_TOPIC = "old-style-probe"
 
 
 def seed_stand(db: Path) -> None:
@@ -193,8 +212,13 @@ def seed_stand(db: Path) -> None:
     c.close()
 
 
+def old_letter_place(own: str) -> str:
+    """«<папка>/<имя>» посаженного нашего письма старого вида — так его называет guard-all.py."""
+    return f"{own}-{STAND_NEIGHBOUR}-{STAND_OLD_BOX_TAIL}/ask.{own}-{STAND_OLD_TOPIC}.md"
+
+
 def seed_neighbour(db: Path, stand: Path) -> str:
-    """Посадить подставного соседа для ⑩; вернуть имя своей группы.
+    """Посадить подставного соседа для ⑧ и ⑩; вернуть имя своей группы.
 
     Имя своей группы guard-all.py берёт из ДВУХ мест: адресата вопроса сверяет с meta копии (--db),
     автора нашего ответа — с meta ЖИВОЙ базы (_own_name). Поэтому имя читается из живой (только
@@ -228,6 +252,16 @@ def seed_neighbour(db: Path, stand: Path) -> str:
             when, ("PROTO", own), [("COORD", STAND_NEIGHBOUR)], "answer",
             bridge_letter.place_id(own, folder, answer_name), reply_to=ask_id,
             body="Наш ответ подставному соседу."), encoding="utf-8")
+    # Наше письмо старого вида (⑧): без шапки с полями, в общей папке старого обмена у соседа.
+    # Время изменения файла — август: старый обмен старше писем с полями, и счёт «писем БЕЗ полей
+    # после первого письма с полями того же контура» это письмо не берёт.
+    old_letter = root / "bridges" / old_letter_place(own)
+    old_letter.parent.mkdir(parents=True)
+    old_letter.write_text(
+        f"2026-08-01 12:00 UTC · пишет **PROTO контура {own.capitalize()}**: подставное наше письмо "
+        "старого вида.\n\nПриёмка bite-brief-views.py, случай ⑧.\n", encoding="utf-8")
+    old_when = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc).timestamp()
+    os.utime(old_letter, (old_when, old_when))
     con = sqlite3.connect(str(db))
     with con:
         con.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('group_name', ?)", (own,))
@@ -447,11 +481,14 @@ def main() -> int:
     # указание на живую базу не привело бы к записи, но копия здесь и не нужна как
     # предохранитель, а нужна как СТАБИЛЬНОЕ состояние: между кратким и полным вызовом
     # база не должна сама измениться (в живой она меняется постоянно).
+    # ⚖️ Строки cross_links живой базы НЕ берутся (карточка #834): с ними guard-all.py читал папки
+    # настоящих соседей, и числа приёмки зависели от их писем. Сосед в базе один — подставной.
     db_guard = stand / "guard.db"
-    mezo_stand.empty_db(LIVE_DB, db_guard, keep=("cross_links",))
+    mezo_stand.empty_db(LIVE_DB, db_guard)
     mezo_stand.seed_roles(db_guard, ["PROTO"])
     seed_stand(db_guard)
     own_group = seed_neighbour(db_guard, stand)
+    old_place = old_letter_place(own_group)
 
     def run_guard(tool: str, db_: Path, full: bool, env: dict | None = None) -> tuple[int, str]:
         args = ["--db", str(db_)] + (["--full"] if full else [])
@@ -499,12 +536,30 @@ def main() -> int:
            f"кратко {len(failed_brief)} строк, полно {len(failed_full)} строк"
            + ("" if matched_7 else f"; разница {failed_brief ^ failed_full}"))
 
-    warn_brief = set_with(out_g_brief, "⚠️", "ℹ️")
-    warn_full = set_with(out_g_full, "⚠️", "ℹ️")
+    # ⚡ ⑧ судит и строку, которая печатается только с --full (карточка #834): наше письмо старого
+    # вида посажено в общую папку подставного соседа, guard-all.py называет его построчно в --full.
+    # Предпосылки названы числом: письмо названо в полном виде ровно раз, а счёт таких писем
+    # («ℹ️ … наших писем 1 …») стоит в обоих видах. Без них равенство множеств ничего бы не значило —
+    # не узнанное письмо молчит в обоих видах одинаково.
+    OLD_COUNT_MARK = "в общих папках старого вида у соседа — наших писем 1 "
+
+    def warn_verdict(output_brief: str, output_full: str) -> tuple[bool, str, set[str]]:
+        warn_brief = set_with(output_brief, "⚠️", "ℹ️")
+        warn_full = set_with(output_full, "⚠️", "ℹ️")
+        named = sum(1 for line in output_full.splitlines()
+                    if old_place in line and "НАШЕ письмо старого" in line)
+        counted_in = [sum(1 for line in warn if f"[{STAND_NEIGHBOUR}]" in line and OLD_COUNT_MARK in line)
+                      for warn in (warn_brief, warn_full)]
+        return (warn_brief == warn_full and named == 1 and counted_in == [1, 1],
+                f"кратко {len(warn_brief)} строк, полно {len(warn_full)} строк"
+                + ("" if warn_brief == warn_full else f"; разница {warn_brief ^ warn_full}")
+                + f"; наше письмо старого вида «{old_place}» названо в полном виде {named} раз (ждали 1), "
+                  f"строка счёта таких писем: кратко {counted_in[0]}, полно {counted_in[1]} (ждали по 1)",
+                warn_brief ^ warn_full)
+
+    ok8, word8, _ = warn_verdict(out_g_brief, out_g_full)
     case("⑧ множество строк с «⚠️» или «ℹ️» одинаково между кратким и полным видом",
-           warn_brief == warn_full,
-           f"кратко {len(warn_brief)} строк, полно {len(warn_full)} строк"
-           + ("" if warn_brief == warn_full else f"; разница {warn_brief ^ warn_full}"))
+         ok8, word8)
 
     PASSED_RE = re.compile(r"^✅ прошли (\d+): (.+)$")
 
@@ -523,19 +578,22 @@ def main() -> int:
                 names.append(line[2:].strip())
         return names
 
-    passed = passed_line(out_g_brief)
-    at_once_brief = passed_at_once(out_g_brief)
-    at_once_full = passed_at_once(out_g_full)
-    union = (set(passed[1]) if passed else set()) | set(at_once_brief)
-    n_passed = passed[0] if passed else None
+    def passed_verdict(output_brief: str, output_full: str) -> tuple[bool, str]:
+        passed = passed_line(output_brief)
+        at_once_brief = passed_at_once(output_brief)
+        at_once_full = passed_at_once(output_full)
+        union = (set(passed[1]) if passed else set()) | set(at_once_brief)
+        n_passed = passed[0] if passed else None
+        return (passed is not None and n_passed == len(passed[1]) and union == set(at_once_full),
+                f"строка «прошли» есть: {passed is not None}"
+                + (f", N={n_passed}, имён в ней {len(passed[1]) if passed else 0}" if passed else "")
+                + f"; объединение (кратко) {len(union)} имён, сразу-зелёных (полно) {len(at_once_full)} имён"
+                + ("" if union == set(at_once_full) else f"; разница {union ^ set(at_once_full)}"))
+
+    ok9, word9 = passed_verdict(out_g_brief, out_g_full)
     case("⑨ «✅ прошли N: …» ∪ имена сразу-зелёных строк (кратко, без строк моста) = "
-           "имена сразу-зелёных строк (полно, без строк моста); N = числу имён",
-           passed is not None and n_passed == len(passed[1])
-           and union == set(at_once_full),
-           f"строка «прошли» есть: {passed is not None}"
-           + (f", N={n_passed}, имён в ней {len(passed[1]) if passed else 0}" if passed else "")
-           + f"; объединение (кратко) {len(union)} имён, сразу-зелёных (полно) {len(at_once_full)} имён"
-           + ("" if union == set(at_once_full) else f"; разница {union ^ set(at_once_full)}"))
+         "имена сразу-зелёных строк (полно, без строк моста); N = числу имён",
+         ok9, word9)
 
     BRIDGE_SUMMARY_RE = re.compile(r"^✅ мост соседей: (\d+) вопросов отвечены \(соседей (\d+)\)$")
 
@@ -638,6 +696,41 @@ def main() -> int:
           "🔴 поломка (в) покрасила: нет — приёмка не ловит эту беду; ") + word_c)
     mezo_stand.release(broken_stand_c)
 
+    # ═══ ПОЛОМКА (г) — guard-all.py: строка, печатаемая только с --full, несёт знак «ℹ️» ════════
+    # Карточка #834: так стояло до 24.11 у построчного перечня наших писем старого вида. Копия
+    # guard-all.py с прежним знаком обязана провалить РОВНО ⑧: разница множеств — одна строка,
+    # она о посаженном письме; ⑥ ⑦ ⑨ ⑩ на той же копии проходят. Среда — как у (а).
+    broken_stand_d = mezo_stand.new("bite-brief-views-broken-sign-")
+    broken_d = mezo_stand.copy_tool(Path(GUARD_ALL), broken_stand_d)
+    text_d = broken_d.read_text(encoding="utf-8")
+    ANCHOR_D = 'print(f"🗂 мост соседей [{group}]: «{box.name}/{ask.name}» — НАШЕ письмо старого "'
+    if text_d.count(ANCHOR_D) != 1:
+        raise SystemExit("ПРИЁМКА НЕ СОСТОЯЛАСЬ: якорь строки перечня наших писем старого вида в guard-all.py "
+                         f"найден {text_d.count(ANCHOR_D)} раз (нужен ровно один) — поломку (г) ставить не на чем")
+    broken_d.write_text(text_d.replace(ANCHOR_D, ANCHOR_D.replace("🗂", "ℹ️", 1), 1), encoding="utf-8")
+    rc_d1, out_d_brief = run_guard(str(broken_d), db_guard, full=False, env=env_a)
+    rc_d2, out_d_full = run_guard(str(broken_d), db_guard, full=True, env=env_a)
+    ok_d8, word_d8, diff_d = warn_verdict(out_d_brief, out_d_full)
+    if not any(old_place in line for line in out_d_full.splitlines()):
+        raise SystemExit("ПРИЁМКА НЕ СОСТОЯЛАСЬ: копия guard-all.py с поломкой (г) не назвала в --full посаженное "
+                         "письмо старого вида — это отказ ЗАПУСКА копии, а не сигнал поломки. " + word_d8)
+    last_d_brief, last_d_full = last_line(out_d_brief), last_line(out_d_full)
+    others_d = {"⑥": bool(last_d_brief) and last_d_brief == last_d_full,
+                "⑦": compare_failed(out_d_brief, out_d_full)[0],
+                "⑨": passed_verdict(out_d_brief, out_d_full)[0],
+                "⑩": bridge_verdict(out_d_brief, out_d_full)[0]}
+    only_old_line = len(diff_d) == 1 and all(old_place in line and "ℹ️" in line for line in diff_d)
+    flagged_d = not ok_d8 and only_old_line and all(others_d.values())
+    case("поломка (г): строка перечня наших писем старого вида со знаком «ℹ️» только в --full → "
+         "на этой копии ОБЯЗАН покраснеть ровно случай ⑧",
+         flagged_d,
+         ("поломка (г) покрасила: да — " if flagged_d else
+          "🔴 поломка (г) покрасила НЕ ТАК: ждали провал одного ⑧ на одной строке о посаженном письме; ")
+         + f"⑧ на копии {'прошёл' if ok_d8 else 'провален'}, строк в разнице {len(diff_d)}, "
+         + "остальные: " + " · ".join(f"{k} {'прошёл' if v else 'провален'}" for k, v in others_d.items())
+         + f"; {word_d8}")
+    mezo_stand.release(broken_stand_d)
+
     # ═══ ПОЛОМКА (б) — backlog.py: cmd_list пропускает frozen-карточку в кратком виде ═══
     # 🪤 ПЕРЕМЕРЕНО ПЕРЕД ПРАВКОЙ, А НЕ ДОГАДКОЙ: --db у нас АБСОЛЮТНЫЙ, и resolve_db
     # с абсолютным --db корень контейнера НЕ ищет — но resolve_db всё равно БЕЗУСЛОВНО
@@ -691,7 +784,7 @@ def main() -> int:
     print("")
     print("=" * 78)
     failed = [item for item, ok in results if not ok]
-    print(f"РАЗЛИЧАЮЩИХ СЛУЧАЕВ {len(results)} (①…⑫ + поломки (а), (б) и (в))")
+    print(f"РАЗЛИЧАЮЩИХ СЛУЧАЕВ {len(results)} (①…⑫ + поломки (а), (б), (в) и (г))")
     print("⚖️ ГРАНИЦА: дословный текст подсказок mezo_hints, содержание отдельных гардов "
           "guard-all.py и динамические разделы role-brief.py этой приёмкой НЕ проверяются.")
     if failed:
